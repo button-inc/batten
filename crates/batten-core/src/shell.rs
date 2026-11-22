@@ -6,13 +6,9 @@
 //! names no policy, so the modules that only need the words (`testing`, the
 //! census) do not reach up into the hooks.
 //!
-//! [`logic`] is the one detector deciding whether a text is shell logic on the
-//! same parser's AST (CLOUD-2625, ported from #1278's `crate::shell`), beside
-//! the parse it reads rather than above it.
-
-mod detector;
-
-pub use detector::{ShellKind, Verdict, kind_name, logic, shebang, shell_path};
+//! Whether a text is shell LOGIC is [`crate::shell_logic`]'s, a sibling that
+//! reads this parse: kept out of this module so every reader of the words does
+//! not also reach the interpreter grammar the detector needs.
 
 /// Every command a shell text runs, each as its words with quotes resolved and
 /// comments dropped, with the here-doc and here-string text fed to its stdin,

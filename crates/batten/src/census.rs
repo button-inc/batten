@@ -20,11 +20,11 @@
 //!   so a task runner's tasks are named.
 //! * **A workflow's steps** — every code line of a `run: |` / `run: >` block
 //!   that is shell logic, bounded by indentation, and a one-line `run:` that is.
-//! * **A shell file** — a tracked path [`crate::shell::shell_path`] names, or
-//!   one whose shebang [`crate::shell::shebang`] reads as a shell. Its code
+//! * **A shell file** — a tracked path [`batten_core::shell_logic::shell_path`] names, or
+//!   one whose shebang [`batten_core::shell_logic::shebang`] reads as a shell. Its code
 //!   lines.
 //!
-//! Whether a text is shell logic is [`crate::shell::logic`]'s answer on the
+//! Whether a text is shell logic is [`batten_core::shell_logic::logic`]'s answer on the
 //! parser's AST (CLOUD-2625), never a scan here. The ban — the `shell-hygiene`
 //! preset's `no-new-shell` module, which reads this same `[census.shell]` table
 //! as its list of homes, through a glob language [`ShellCensus::validate`] holds
@@ -155,7 +155,7 @@ const QUOTES: [&str; 2] = ["\"\"\"", "'''"];
 
 /// A line that is not blank and not a comment.
 ///
-/// Whether a text is shell is the detector's (`batten_core::shell::logic`);
+/// Whether a text is shell is the detector's (`batten_core::shell_logic::logic`);
 /// this file decides only WHERE a home's lines are.
 #[must_use]
 pub fn code_line(line: &str) -> bool {
@@ -165,8 +165,8 @@ pub fn code_line(line: &str) -> bool {
 
 /// The detector's reason when `text` is shell logic, `None` when it is argv.
 fn shell_reason(text: &str) -> Option<&'static str> {
-    match crate::shell::logic(text) {
-        crate::shell::Verdict::Shell(reason) => Some(reason),
+    match batten_core::shell_logic::logic(text) {
+        batten_core::shell_logic::Verdict::Shell(reason) => Some(reason),
         // `Argv`, and any answer a later detector adds (`#[non_exhaustive]`):
         // only a named shell reason counts.
         _ => None,
@@ -572,7 +572,8 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
         };
         // Decoding every tracked file to ask about its first two bytes would
         // cost the whole tree for the few files that can be shell at all.
-        if !is_workflow && !crate::shell::shell_path(path) && !bytes.starts_with(b"#!") {
+        if !is_workflow && !batten_core::shell_logic::shell_path(path) && !bytes.starts_with(b"#!")
+        {
             continue;
         }
         let text = String::from_utf8_lossy(&bytes);
@@ -597,7 +598,9 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
             continue;
         }
         let first = lines.first().copied().unwrap_or_default();
-        if !(crate::shell::shell_path(path) || crate::shell::shebang(first).is_some()) {
+        if !(batten_core::shell_logic::shell_path(path)
+            || batten_core::shell_logic::shebang(first).is_some())
+        {
             continue;
         }
         let count = lines.iter().filter(|line| code_line(line)).count();
@@ -708,9 +711,9 @@ impl Homes {
                 let first = lines
                     .and_then(|lines| lines.first().copied())
                     .unwrap_or_default();
-                let reason = if crate::shell::shell_path(path) {
+                let reason = if batten_core::shell_logic::shell_path(path) {
                     "path"
-                } else if crate::shell::shebang(first).is_some() {
+                } else if batten_core::shell_logic::shebang(first).is_some() {
                     "shebang"
                 } else {
                     return None;

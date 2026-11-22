@@ -7609,28 +7609,6 @@ pub(crate) fn comparable(value: &str) -> String {
         .collect()
 }
 
-/// The wrapper programs [`effective_program`] looks through **unconditionally**.
-///
-/// Declared once because two surfaces read it: the matcher, to step past a
-/// wrapper and judge what it wraps, and [`crate::config_check::rules::validate`], to refuse a
-/// `pattern` naming one — by the time a pattern is compared the wrapper has
-/// already been stepped past, so `pattern = "nohup rm"` is a row that can never
-/// fire (CLOUD-401). A second copy of this list in the validator would drift,
-/// and a drifted copy refuses rows the matcher would have honoured.
-///
-/// `mise` is deliberately **not** here: only `mise exec`/`mise x` is looked
-/// through, so `mise run` is judged as `mise` and `pattern = "mise run"` is a
-/// row the matcher honours.
-pub(crate) const LOOKTHROUGH_WRAPPERS: [&str; 10] = [
-    "env", "command", "nice", "stdbuf", "timeout", "xargs", "sudo", "doas", "nohup", "exec",
-];
-
-/// Is this token a program [`effective_program`] always looks through?
-#[must_use]
-pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
-    LOOKTHROUGH_WRAPPERS.contains(&token)
-}
-
 pub(crate) fn is_env_assignment(token: &str) -> bool {
     let mut chars = token.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')

@@ -82,6 +82,7 @@ row here, so a new module lands with its line.
 - `forge_event.rs` — the forge's event vocabulary (CLOUD-2689): GitHub's 73 webhook events as a catalog, the webhook and Events API normalizers onto `Event::Forge`, and the content-derived dedupe key. Reads no source; `forge intake` is its door.
 - `githook.rs` — batten AS every git hook (CLOUD-2339): argv[0] dispatch through `[hook.git]`, the `BATTEN_GATE_PID` re-entry guard, and the table's load-time validation; `wiring::link_git_hooks` writes the links.
 - `gitwrite.rs` (crate `batten-core`) — the LOCAL git writes: a loose object into the odb, and a ref moved (CLOUD-1274's D2).
+- `interpreter.rs` (crate `batten-core`) — how an interpreter's argv names its program (CLOUD-2304): each family's option `Grammar`, `script_operand`, `inline_values`, `declares`/`family`, and `program_token`'s group stripping; moved down out of `hook` so the shell detector ported from #1278 reads it from below (plan item 4d).
 - `grammar.rs` (crate `batten-core`) — the finding line's grammar: `PROVENANCE`, the line `Severity`, `head` and `is_headed`, in a leaf so the modules below `refusal` spell a head without reaching up (CLOUD-2789).
 - `land.rs` — the landing lap's REPLAY half, and the first consumer of `gitwrite.rs` and `lease.rs` (CLOUD-1335).
 - `lease.rs` (crate `batten-core`) — the landing lease's compare-and-swap, spoken as git smart-HTTP over `fetch.rs` (CLOUD-1274).
