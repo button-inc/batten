@@ -20,11 +20,11 @@
 //!   so a task runner's tasks are named.
 //! * **A workflow's steps** — every code line of a `run: |` / `run: >` block
 //!   that is shell logic, bounded by indentation, and a one-line `run:` that is.
-//! * **A shell file** — a tracked path [`batten_core::shell_logic::shell_path`] names, or
-//!   one whose shebang [`batten_core::shell_logic::shebang`] reads as a shell. Its code
+//! * **A shell file** — a tracked path [`crate::shell_logic::shell_path`] names, or
+//!   one whose shebang [`crate::shell_logic::shebang`] reads as a shell. Its code
 //!   lines.
 //!
-//! Whether a text is shell logic is [`batten_core::shell_logic::logic`]'s answer on the
+//! Whether a text is shell logic is [`crate::shell_logic::logic`]'s answer on the
 //! parser's AST (CLOUD-2625), never a scan here. The ban — the `shell-hygiene`
 //! preset's `no-new-shell` module, which reads this same `[census.shell]` table
 //! as its list of homes, through a glob language [`ShellCensus::validate`] holds
@@ -59,7 +59,7 @@ use crate::error::UsageError;
 use crate::exit::ExitCode;
 use crate::selector::Selector;
 // The section's declaration lives with the model (CLOUD-2789).
-use crate::config_model::{Manifest, ShellCensus};
+use crate::config_model::{MANIFEST_CARRIERS, Manifest, ShellCensus, manifest_carrier};
 
 /// `ShellCensus` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
 pub trait ShellCensusExt: Sized {
@@ -67,10 +67,11 @@ pub trait ShellCensusExt: Sized {
     ///
     /// # Errors
     ///
-    /// A [`UsageError`] (→ exit `1`) for a manifest with no path or no key, a
-    /// key that is empty or carries whitespace, an empty unit header, a glob
-    /// `globset` cannot parse, or a glob spelling an operator the ban cannot read
-    /// (`BAN_UNREAD_OPERATORS`).
+    /// A [`UsageError`] (→ exit `1`) for a manifest with no path, with both or
+    /// neither of `carrier` and `keys`, naming a carrier with no manifest
+    /// reader, a key that is empty or carries whitespace, an empty unit header,
+    /// a glob `globset` cannot parse, or a glob spelling an operator the ban
+    /// cannot read (`BAN_UNREAD_OPERATORS`).
     fn validate(&self) -> Result<()>;
 }
 
@@ -82,12 +83,30 @@ impl ShellCensusExt for ShellCensus {
                     "census.shell.manifest: `path` must name a file",
                 ));
             }
-            if manifest.keys.is_empty() {
-                return Err(UsageError::raise(format!(
-                    "census.shell.manifest {}: `keys` is empty — a manifest with no command key \
-                     counts nothing",
-                    manifest.path
-                )));
+            match (&manifest.carrier, manifest.keys.is_empty()) {
+                (Some(_), false) => {
+                    return Err(UsageError::raise(format!(
+                        "census.shell.manifest {}: both `carrier` and `keys` — a row names its \
+                         command fields one way",
+                        manifest.path
+                    )));
+                }
+                (None, true) => {
+                    return Err(UsageError::raise(format!(
+                        "census.shell.manifest {}: neither `carrier` nor `keys` — a manifest \
+                         with no command key counts nothing",
+                        manifest.path
+                    )));
+                }
+                (Some(id), true) if manifest_carrier(id).is_none() => {
+                    let known: Vec<&str> = MANIFEST_CARRIERS.iter().map(|c| c.id).collect();
+                    return Err(UsageError::raise(format!(
+                        "census.shell.manifest {}: carrier {id:?} has no manifest reader; one \
+                         of {known:?}",
+                        manifest.path
+                    )));
+                }
+                _ => {}
             }
             for key in &manifest.keys {
                 if key.is_empty() || key.chars().any(char::is_whitespace) {
@@ -155,7 +174,7 @@ const QUOTES: [&str; 2] = ["\"\"\"", "'''"];
 
 /// A line that is not blank and not a comment.
 ///
-/// Whether a text is shell is the detector's (`batten_core::shell_logic::logic`);
+/// Whether a text is shell is the detector's (`crate::shell_logic::logic`);
 /// this file decides only WHERE a home's lines are.
 #[must_use]
 pub fn code_line(line: &str) -> bool {
@@ -165,8 +184,8 @@ pub fn code_line(line: &str) -> bool {
 
 /// The detector's reason when `text` is shell logic, `None` when it is argv.
 fn shell_reason(text: &str) -> Option<&'static str> {
-    match batten_core::shell_logic::logic(text) {
-        batten_core::shell_logic::Verdict::Shell(reason) => Some(reason),
+    match crate::shell_logic::logic(text) {
+        crate::shell_logic::Verdict::Shell(reason) => Some(reason),
         // `Argv`, and any answer a later detector adds (`#[non_exhaustive]`):
         // only a named shell reason counts.
         _ => None,
@@ -179,21 +198,36 @@ fn body_reason(lines: &[&str], body: std::ops::Range<usize>) -> Option<&'static 
     shell_reason(&lines.get(body)?.join("\n"))
 }
 
+/// The reason a carrier's verdict on one spelling carries, `None` for argv.
+fn judged(
+    carrier: Option<&crate::shell_logic::Carrier>,
+    spelling: &crate::shell_logic::Spelling<'_>,
+) -> Option<&'static str> {
+    match crate::shell_logic::judge(carrier, spelling) {
+        crate::shell_logic::Verdict::Shell(reason) => Some(reason),
+        // `Argv`, and any answer a later detector adds (`#[non_exhaustive]`).
+        _ => None,
+    }
+}
+
 /// A TOML value's shell reason, judged on the string it holds rather than on
 /// its quoting: `run = "a | b"` is a pipeline, not one quoted word. An inline
-/// array is shell when any of its strings is. A value TOML cannot read is
-/// judged as written, which leaves the detector to call a stray quote
-/// unparseable rather than reading it clean.
-fn toml_reason(value: &str) -> Option<&'static str> {
+/// array is judged in the carrier's list form — for a mise task a list of
+/// shell strings, shell when any is. A value TOML cannot read is judged as
+/// written, which leaves the detector to call a stray quote unparseable rather
+/// than reading it clean.
+fn toml_reason(value: &str, carrier: Option<&crate::shell_logic::Carrier>) -> Option<&'static str> {
     let parsed = toml::from_str::<toml::Table>(&format!("v = {value}"))
         .ok()
         .and_then(|mut table| table.remove("v"));
     match parsed {
-        Some(toml::Value::String(text)) => shell_reason(&text),
-        Some(toml::Value::Array(items)) => items
-            .iter()
-            .filter_map(toml::Value::as_str)
-            .find_map(shell_reason),
+        Some(toml::Value::String(text)) => {
+            judged(carrier, &crate::shell_logic::Spelling::Text(&text))
+        }
+        Some(toml::Value::Array(items)) => {
+            let texts: Vec<&str> = items.iter().filter_map(toml::Value::as_str).collect();
+            judged(carrier, &crate::shell_logic::Spelling::List(&texts))
+        }
         _ => shell_reason(value),
     }
 }
@@ -211,20 +245,31 @@ fn yaml_scalar(value: &str) -> String {
         .unwrap_or_else(|| value.to_owned())
 }
 
-/// Every line index of `lines` a manifest's `keys` make shell, in order.
+/// Every line index of `lines` a manifest's `keys` make shell, in order, read
+/// in `carrier`'s forms (`None`: every spelling is shell).
 #[must_use]
-pub fn manifest_lines(lines: &[&str], keys: &[String]) -> BTreeSet<usize> {
-    manifest_reasons(lines, keys).into_keys().collect()
+pub fn manifest_lines(
+    lines: &[&str],
+    keys: &[String],
+    carrier: Option<&crate::shell_logic::Carrier>,
+) -> BTreeSet<usize> {
+    manifest_reasons(lines, keys, carrier).into_keys().collect()
 }
 
 /// Every line index of `lines` a manifest's `keys` make shell, with the
 /// detector's reason.
 ///
 /// A key's triple-quoted body is parsed as one text, and when it is shell every
-/// code line of it counts; a one-line value and a multi-line array's entries
-/// count themselves when the string each holds is shell.
+/// code line of it counts. A one-line value counts when the carrier's form of
+/// it is shell. A multi-line array is a list: in shell form each entry counts
+/// itself when the string it holds is shell; in exec form the entries are one
+/// argv, and every entry counts when that argv runs a script.
 #[must_use]
-pub fn manifest_reasons(lines: &[&str], keys: &[String]) -> BTreeMap<usize, &'static str> {
+pub fn manifest_reasons(
+    lines: &[&str],
+    keys: &[String],
+    carrier: Option<&crate::shell_logic::Carrier>,
+) -> BTreeMap<usize, &'static str> {
     let mut shell = BTreeMap::new();
     for key in keys {
         let assign = format!("{key} = ");
@@ -263,17 +308,12 @@ pub fn manifest_reasons(lines: &[&str], keys: &[String]) -> BTreeMap<usize, &'st
                     .find(|(_, other)| other.trim().starts_with(']'))
                     .map(|(j, _)| j);
                 if let Some(closer) = closer {
-                    for j in i + 1..closer {
-                        let entry = lines.get(j).map_or("", |l| l.trim().trim_end_matches(','));
-                        if let Some(reason) = toml_reason(entry) {
-                            shell.entry(j).or_insert(reason);
-                        }
-                    }
+                    array_reasons(lines, i + 1..closer, carrier, &mut shell);
                 }
                 continue;
             }
             // A one-line value, judged on the string it holds.
-            if let Some(reason) = toml_reason(value) {
+            if let Some(reason) = toml_reason(value, carrier) {
                 shell.entry(i).or_insert(reason);
             }
         }
@@ -281,18 +321,56 @@ pub fn manifest_reasons(lines: &[&str], keys: &[String]) -> BTreeMap<usize, &'st
     shell
 }
 
+/// A multi-line array's entries over `entries`, read in `carrier`'s list form.
+fn array_reasons(
+    lines: &[&str],
+    entries: std::ops::Range<usize>,
+    carrier: Option<&crate::shell_logic::Carrier>,
+    shell: &mut BTreeMap<usize, &'static str>,
+) {
+    let entry = |j: usize| lines.get(j).map_or("", |l| l.trim().trim_end_matches(','));
+    let strings: Vec<(usize, String)> = entries
+        .clone()
+        .filter_map(|j| {
+            let parsed = toml::from_str::<toml::Table>(&format!("v = {}", entry(j))).ok()?;
+            Some((j, parsed.get("v")?.as_str()?.to_owned()))
+        })
+        .collect();
+    let texts: Vec<&str> = strings.iter().map(|(_, text)| text.as_str()).collect();
+    let list = crate::shell_logic::Spelling::List(&texts);
+    if carrier.is_none_or(|carrier| {
+        crate::shell_logic::form(carrier, &list) == crate::shell_logic::Form::Shell
+    }) {
+        // Shell form: each entry is its own script, judged as written so a
+        // stray quote is the detector's to call.
+        for j in entries {
+            if let Some(reason) = toml_reason(entry(j), None) {
+                shell.entry(j).or_insert(reason);
+            }
+        }
+    } else if let Some(reason) = judged(carrier, &list) {
+        for (j, _) in strings {
+            shell.entry(j).or_insert(reason);
+        }
+    }
+}
+
 /// The run of leading spaces, in characters.
 fn indent(line: &str) -> usize {
     line.chars().count() - line.trim_start_matches(' ').chars().count()
 }
 
-/// The value of a `run:` key on this line, if the line is one.
+/// The value of a `run:` key on this line, if the line is one: a field of
+/// the `gha-run` carrier, a workflow's or a composite action's step, either
+/// of which has only a shell form.
 fn run_key(line: &str) -> Option<&str> {
     let text = line.trim();
-    ["- run:", "run:"]
-        .iter()
-        .find_map(|prefix| text.strip_prefix(prefix))
-        .map(str::trim)
+    let text = text.strip_prefix("- ").unwrap_or(text);
+    crate::shell_logic::GHA_RUN.fields.iter().find_map(|field| {
+        text.strip_prefix(field)
+            .and_then(|rest| rest.strip_prefix(':'))
+            .map(str::trim)
+    })
 }
 
 /// The column a block's lines must exceed: the `run:` key's own.
@@ -469,7 +547,7 @@ fn unit_name(header: &str, prefix: &str) -> String {
 
 /// Group a manifest's shell lines into its units, or into lone lines.
 fn manifest_entries(path: &str, lines: &[&str], manifest: &Manifest) -> Vec<ManifestEntry> {
-    let shell = manifest_lines(lines, &manifest.keys);
+    let shell = manifest_lines(lines, &manifest.fields(), manifest.carrier());
     let headers: Vec<usize> = match manifest.unit.as_deref() {
         Some(prefix) => lines
             .iter()
@@ -511,8 +589,10 @@ fn manifest_entries(path: &str, lines: &[&str], manifest: &Manifest) -> Vec<Mani
 
 /// Take the census of the tree at `root` under `declared`.
 ///
-/// An exempt file is set apart and never totalled; the row below reads the
-/// exempt list as empty, and the compiled tier's pinned totals go red.
+/// An exempt file is set apart and never totalled.
+///
+/// A workflow glob selects a composite action's metadata as readily as a
+/// workflow: both carry `gha-run` steps.
 ///
 /// `tracked` is the tree's tracked paths, which is where workflows and shell
 /// files are found; a declared manifest is read by its path whether or not it
@@ -564,6 +644,8 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
         if declared_manifests.contains(path.as_str()) {
             continue;
         }
+        // A workflow glob may name a composite action as readily as a workflow:
+        // both carry `gha-run` steps (`composite-action-unread` above).
         let is_workflow = workflows.iter().any(|selector| selector.matches(path));
         // A path that is not a file — a submodule's gitlink, a file deleted from
         // the working tree — has no lines to count.
@@ -572,8 +654,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
         };
         // Decoding every tracked file to ask about its first two bytes would
         // cost the whole tree for the few files that can be shell at all.
-        if !is_workflow && !batten_core::shell_logic::shell_path(path) && !bytes.starts_with(b"#!")
-        {
+        if !is_workflow && !crate::shell_logic::shell_path(path) && !bytes.starts_with(b"#!") {
             continue;
         }
         let text = String::from_utf8_lossy(&bytes);
@@ -598,9 +679,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
             continue;
         }
         let first = lines.first().copied().unwrap_or_default();
-        if !(batten_core::shell_logic::shell_path(path)
-            || batten_core::shell_logic::shebang(first).is_some())
-        {
+        if !(crate::shell_logic::shell_path(path) || crate::shell_logic::shebang(first).is_some()) {
             continue;
         }
         let count = lines.iter().filter(|line| code_line(line)).count();
@@ -643,8 +722,9 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
 /// `census.shell`. Read leniently, field by field, for the same reason the
 /// module did: a row that hands over no such table has declared no homes.
 struct Homes {
-    /// Manifest path -> its command keys, unioned across rows naming one path.
-    manifests: BTreeMap<String, Vec<String>>,
+    /// Manifest path -> its command fields, unioned across rows naming one
+    /// path, and the carrier the last row naming one declared.
+    manifests: BTreeMap<String, (Vec<String>, Option<&'static crate::shell_logic::Carrier>)>,
     /// The workflow globs.
     workflows: Vec<Selector>,
 }
@@ -665,15 +745,25 @@ impl Homes {
                 let Some(path) = row.get("path").and_then(serde_json::Value::as_str) else {
                     continue;
                 };
+                let carrier = row
+                    .get("carrier")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(manifest_carrier);
                 let keys = row.get("keys").and_then(serde_json::Value::as_array);
-                let entry = homes.manifests.entry(path.to_owned()).or_default();
-                for key in keys
+                let (fields, read_as) = homes.manifests.entry(path.to_owned()).or_default();
+                if carrier.is_some() {
+                    *read_as = carrier;
+                }
+                let named = carrier
+                    .into_iter()
+                    .flat_map(|carrier| carrier.fields.iter().copied());
+                let listed = keys
                     .into_iter()
                     .flatten()
-                    .filter_map(serde_json::Value::as_str)
-                {
-                    if !entry.iter().any(|known| known == key) {
-                        entry.push(key.to_owned());
+                    .filter_map(serde_json::Value::as_str);
+                for key in named.chain(listed) {
+                    if !fields.iter().any(|known| known == key) {
+                        fields.push(key.to_owned());
                     }
                 }
             }
@@ -696,8 +786,8 @@ impl Homes {
     /// row did not hand the path over as lines.
     fn entry(&self, path: &str, lines: Option<&[&str]>) -> Option<serde_json::Value> {
         let (kind, reasons): (&str, BTreeMap<usize, &'static str>) =
-            if let Some(keys) = self.manifests.get(path) {
-                ("manifest", manifest_reasons(lines?, keys))
+            if let Some((fields, carrier)) = self.manifests.get(path) {
+                ("manifest", manifest_reasons(lines?, fields, *carrier))
             } else if self.workflows.iter().any(|selector| selector.matches(path)) {
                 let owned = workflow_owned(lines?);
                 (
@@ -711,9 +801,9 @@ impl Homes {
                 let first = lines
                     .and_then(|lines| lines.first().copied())
                     .unwrap_or_default();
-                let reason = if batten_core::shell_logic::shell_path(path) {
+                let reason = if crate::shell_logic::shell_path(path) {
                     "path"
-                } else if batten_core::shell_logic::shebang(first).is_some() {
+                } else if crate::shell_logic::shebang(first).is_some() {
                     "shebang"
                 } else {
                     return None;
@@ -845,14 +935,14 @@ mod tests {
             "echo two",
             "'''",
         ];
-        let shell = manifest_lines(&lines, &keys(&["run"]));
+        let shell = manifest_lines(&lines, &keys(&["run"]), None);
         assert_eq!(shell, BTreeSet::from([4, 5]));
     }
 
     #[test]
     fn a_body_that_closes_on_its_opening_line_is_no_body() {
         let lines = ["run = '''echo one'''", "echo two"];
-        assert!(manifest_lines(&lines, &keys(&["run"])).is_empty());
+        assert!(manifest_lines(&lines, &keys(&["run"]), None).is_empty());
     }
 
     /// Through the detector (CLOUD-2625): a plain command is argv, a list and
@@ -865,7 +955,7 @@ mod tests {
             "run = \"FOO=1 cargo test\"",
         ];
         assert_eq!(
-            manifest_lines(&lines, &keys(&["run"])),
+            manifest_lines(&lines, &keys(&["run"]), None),
             BTreeSet::from([1, 2])
         );
     }
@@ -883,7 +973,7 @@ mod tests {
             "  \"set -e\",",
             "]",
         ];
-        assert!(manifest_lines(&lines, &keys(&["run"])).is_empty());
+        assert!(manifest_lines(&lines, &keys(&["run"]), None).is_empty());
     }
 
     #[test]
@@ -896,7 +986,7 @@ mod tests {
             "run = \"a | b\"",
             "run = '''ls *.rs'''",
         ];
-        let reasons = manifest_reasons(&lines, &keys(&["run"]));
+        let reasons = manifest_reasons(&lines, &keys(&["run"]), None);
         assert_eq!(
             reasons.into_iter().collect::<Vec<_>>(),
             [(2, "Pipeline"), (3, "glob")]
@@ -906,13 +996,16 @@ mod tests {
     #[test]
     fn a_body_of_one_plain_command_is_not_shell() {
         let lines = ["run = '''", "cargo build \\", "  --release", "'''"];
-        assert!(manifest_lines(&lines, &keys(&["run"])).is_empty());
+        assert!(manifest_lines(&lines, &keys(&["run"]), None).is_empty());
     }
 
     #[test]
     fn an_array_entry_counts_only_when_it_carries_shell() {
         let lines = ["run = [", "  \"cargo build\",", "  \"a | b\",", "]"];
-        assert_eq!(manifest_lines(&lines, &keys(&["run"])), BTreeSet::from([2]));
+        assert_eq!(
+            manifest_lines(&lines, &keys(&["run"]), None),
+            BTreeSet::from([2])
+        );
     }
 
     #[test]
@@ -920,7 +1013,10 @@ mod tests {
         // A key spelled `]` opens with a line that itself starts with `]`; a
         // closer search that began AT the opener would end the array there.
         let lines = ["] = [", "  \"a | b\",", "]"];
-        assert_eq!(manifest_lines(&lines, &keys(&["]"])), BTreeSet::from([1]));
+        assert_eq!(
+            manifest_lines(&lines, &keys(&["]"]), None),
+            BTreeSet::from([1])
+        );
     }
 
     #[test]
@@ -928,14 +1024,17 @@ mod tests {
         // `set` is a shell keyword, so the opener would read as shell syntax if
         // the entry range began at it rather than after it.
         let lines = ["set = [", "  \"a | b\",", "]"];
-        assert_eq!(manifest_lines(&lines, &keys(&["set"])), BTreeSet::from([1]));
+        assert_eq!(
+            manifest_lines(&lines, &keys(&["set"]), None),
+            BTreeSet::from([1])
+        );
     }
 
     #[test]
     fn a_second_key_is_read_on_the_same_terms() {
         let lines = ["check = \"x && y\"", "fix = \"z\"", "run = \"a | b\""];
         assert_eq!(
-            manifest_lines(&lines, &keys(&["check", "fix"])),
+            manifest_lines(&lines, &keys(&["check", "fix"]), None),
             BTreeSet::from([0])
         );
     }
@@ -992,6 +1091,7 @@ mod tests {
         ];
         let manifest = Manifest {
             path: "m.toml".to_owned(),
+            carrier: None,
             keys: keys(&["run"]),
             unit: Some("[tasks.".to_owned()),
         };
@@ -1011,6 +1111,7 @@ mod tests {
         let empty_keys = ShellCensus {
             manifests: vec![Manifest {
                 path: "m".to_owned(),
+                carrier: None,
                 keys: Vec::new(),
                 unit: None,
             }],
@@ -1020,6 +1121,7 @@ mod tests {
         let spaced_key = ShellCensus {
             manifests: vec![Manifest {
                 path: "m".to_owned(),
+                carrier: None,
                 keys: keys(&["a b"]),
                 unit: None,
             }],
@@ -1029,12 +1131,57 @@ mod tests {
         let empty_unit = ShellCensus {
             manifests: vec![Manifest {
                 path: "m".to_owned(),
+                carrier: None,
                 keys: keys(&["run"]),
                 unit: Some(String::new()),
             }],
             ..ShellCensus::default()
         };
         assert!(empty_unit.validate().is_err());
+    }
+
+    fn row(carrier: Option<&str>, names: &[&str]) -> ShellCensus {
+        ShellCensus {
+            manifests: vec![Manifest {
+                path: "m".to_owned(),
+                carrier: carrier.map(str::to_owned),
+                keys: keys(names),
+                unit: None,
+            }],
+            ..ShellCensus::default()
+        }
+    }
+
+    #[test]
+    fn a_row_names_its_fields_by_exactly_one_of_carrier_and_keys() {
+        assert!(row(Some("mise-task"), &["run"]).validate().is_err(), "both");
+        assert!(row(None, &[]).validate().is_err(), "neither");
+        assert!(row(Some("mise-task"), &[]).validate().is_ok());
+        assert!(row(None, &["run"]).validate().is_ok());
+        // A cited carrier with no manifest reader, and an unknown one.
+        assert!(row(Some("dockerfile"), &[]).validate().is_err());
+        assert!(row(Some("make"), &[]).validate().is_err());
+        // A carrier's fields are the keys it reads.
+        let hk = &row(Some("hk-step"), &[]).manifests[0];
+        assert_eq!(hk.fields(), keys(&["check", "fix"]));
+    }
+
+    #[test]
+    fn a_carrier_reads_a_list_in_its_own_form() {
+        let lines = ["run = [", "  \"cargo build\",", "  \"a && b\",", "]"];
+        let mise = Some(&crate::shell_logic::MISE_TASK);
+        assert_eq!(
+            manifest_lines(&lines, &keys(&["run"]), mise),
+            BTreeSet::from([2])
+        );
+        assert_eq!(
+            manifest_lines(
+                &["run = [\"cargo build\", \"a | b\"]"],
+                &keys(&["run"]),
+                mise
+            ),
+            BTreeSet::from([0])
+        );
     }
 
     #[test]
@@ -1084,6 +1231,7 @@ mod tests {
         let declared = ShellCensus {
             manifests: vec![Manifest {
                 path: "m.toml".to_owned(),
+                carrier: None,
                 keys: keys(&["run"]),
                 unit: None,
             }],
@@ -1109,7 +1257,12 @@ mod tests {
         // Non-negotiable rule 1: which manifest, which workflow directory and
         // which files stay shell are the consumer's. Assembled so this test's own
         // text is not a match.
-        let source = include_str!("census.rs");
+        // The carrier table holds no path either (CLOUD-2627); it is checked
+        // in `batten_core::shell_logic`'s own tests, beside it.
+        assert_no_consumer_path(include_str!("census.rs"));
+    }
+
+    fn assert_no_consumer_path(source: &str) {
         for baked in [
             ["mise", ".toml"].concat(),
             [".github", "/workflows"].concat(),

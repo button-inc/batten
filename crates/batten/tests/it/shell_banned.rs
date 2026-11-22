@@ -80,7 +80,7 @@ fn config() -> String {
          exempt = [\"bootstrap.sh\"]\n\
          \n[[census.shell.manifest]]\n\
          path = \"mise.toml\"\n\
-         keys = [\"run\"]\n\
+         carrier = \"mise-task\"\n\
          unit = \"[tasks.\"\n\
          \n[[census.shell.manifest]]\n\
          path = \"tasks.toml\"\n\

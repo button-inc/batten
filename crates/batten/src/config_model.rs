@@ -2849,13 +2849,51 @@ pub struct Unclaimed {
 pub struct Manifest {
     /// The manifest's repo-relative path.
     pub path: String,
-    /// The keys whose values are commands, as they are spelled before ` = `.
+    /// The carrier whose fields this manifest's commands are, by its id in
+    /// `shell_logic::CARRIERS` (`mise-task` or `hk-step`, the two with a
+    /// manifest reader). Exactly one of `carrier` and `keys` (CLOUD-2627).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<String>,
+    /// The keys whose values are commands, as they are spelled before ` = `,
+    /// for a manifest no carrier describes. Exactly one of `carrier` and
+    /// `keys`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<String>,
     /// The header prefix that opens one named unit — a task table, say. Every
     /// shell line between one such header and the next is that unit's. Absent,
     /// each shell line is reported on its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
+}
+
+/// The carriers a manifest row may name: the ones the census has a manifest
+/// reader for. Every other `shell_logic::CARRIERS` row is cited data only.
+pub(crate) const MANIFEST_CARRIERS: [&crate::shell_logic::Carrier; 2] =
+    [&crate::shell_logic::MISE_TASK, &crate::shell_logic::HK_STEP];
+
+impl Manifest {
+    /// The carrier this row names, when it names one the census reads.
+    #[must_use]
+    pub fn carrier(&self) -> Option<&'static crate::shell_logic::Carrier> {
+        manifest_carrier(self.carrier.as_deref()?)
+    }
+
+    /// The command fields: the carrier's, or the row's own `keys`.
+    #[must_use]
+    pub fn fields(&self) -> Vec<String> {
+        match self.carrier() {
+            Some(carrier) => carrier.fields.iter().map(|&f| f.to_owned()).collect(),
+            None => self.keys.clone(),
+        }
+    }
+}
+
+/// A manifest-readable carrier by id.
+pub(crate) fn manifest_carrier(id: &str) -> Option<&'static crate::shell_logic::Carrier> {
+    MANIFEST_CARRIERS
+        .iter()
+        .copied()
+        .find(|carrier| carrier.id == id)
 }
 
 /// One `[[budget.<name>.embedded]]` entry: a string inside a config file that a
