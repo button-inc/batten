@@ -48,7 +48,7 @@ pub struct Coupling {
     /// Decoupling Level, 0 to 1 (Mo et al. 2016). Reported, never gated.
     pub decoupling_level: f64,
     /// Propagation cost: the mean share of files each file reaches, itself
-    /// included (MacCormack et al.). Reported, never gated (see module docs).
+    /// included (`MacCormack` et al.). Reported, never gated (see module docs).
     pub propagation_cost: f64,
     /// Files in the largest strongly connected component.
     pub largest_component: usize,
