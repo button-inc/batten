@@ -125,6 +125,13 @@ fn reach(graph: &FileGraph, from: &str) -> BTreeSet<String> {
     seen
 }
 
+/// Each file's reach, keyed by owned path so a member lookup cannot miss.
+type Reaches = BTreeMap<String, BTreeSet<String>>;
+
+/// A component's (size, dependents, depth): its file count, the files outside
+/// it that reach it, and the files it reaches outside itself.
+type Shape = (usize, usize, usize);
+
 /// The measures over `graph`. An edge to a file the graph does not hold as a
 /// key is still a file: the node set is the keys and every edge target.
 #[must_use]
@@ -143,21 +150,38 @@ pub fn measure(graph: &FileGraph) -> Coupling {
             files: 0,
         };
     }
-    let reaches: BTreeMap<&String, BTreeSet<String>> = files
+    let reaches: Reaches = files
         .iter()
-        .map(|file| (file, reach(graph, file)))
+        .map(|file| (file.clone(), reach(graph, file)))
         .collect();
+    let components = components_of(&files, &reaches);
+    let shapes: Vec<Shape> = components
+        .iter()
+        .map(|component| shape_of(component, &files, &reaches))
+        .collect();
+    #[allow(clippy::cast_precision_loss)]
+    let propagation_cost =
+        reaches.values().map(BTreeSet::len).sum::<usize>() as f64 / (all as f64 * all as f64);
+    Coupling {
+        mscore: mscore_of(graph, &components, &shapes, all),
+        decoupling_level: decoupling_level_of(&shapes, all),
+        propagation_cost,
+        largest_component: components.iter().map(BTreeSet::len).max().unwrap_or(0),
+        files: all,
+    }
+}
 
-    // Components: the files mutually reachable with each file.
+/// The strongly connected components: the files mutually reachable with each file.
+fn components_of(files: &BTreeSet<String>, reaches: &Reaches) -> Vec<BTreeSet<String>> {
     let mut components: Vec<BTreeSet<String>> = Vec::new();
-    let mut placed: BTreeSet<&String> = BTreeSet::new();
-    for file in &files {
-        if placed.contains(file) {
+    let mut placed: BTreeSet<&str> = BTreeSet::new();
+    for file in files {
+        if placed.contains(file.as_str()) {
             continue;
         }
         let component: BTreeSet<String> = reaches[file]
             .iter()
-            .filter(|other| reaches[*other].contains(file))
+            .filter(|other| reaches.get(*other).is_some_and(|back| back.contains(file)))
             .cloned()
             .collect();
         for member in &component {
@@ -167,36 +191,43 @@ pub fn measure(graph: &FileGraph) -> Coupling {
         }
         components.push(component);
     }
+    components
+}
 
-    // Per component: the files outside it that reach it (its dependents), and
-    // its depth (the files it reaches outside itself).
-    let dependents = |component: &BTreeSet<String>| -> usize {
-        files
-            .iter()
-            .filter(|file| !component.contains(*file))
-            .filter(|file| {
-                component
-                    .iter()
-                    .any(|member| reaches[*file].contains(member))
-            })
-            .count()
-    };
-    let depth = |component: &BTreeSet<String>| -> usize {
-        let any = component.iter().next().expect("a component holds a file");
-        reaches[files.get(any).expect("a member is a file")]
-            .iter()
-            .filter(|reached| !component.contains(*reached))
-            .count()
-    };
-    let shape: Vec<(usize, usize, usize)> = components
+/// A component's [`Shape`].
+fn shape_of(component: &BTreeSet<String>, files: &BTreeSet<String>, reaches: &Reaches) -> Shape {
+    let dependents = files
         .iter()
-        .map(|component| (component.len(), dependents(component), depth(component)))
-        .collect();
+        .filter(|file| !component.contains(*file))
+        .filter(|file| {
+            component
+                .iter()
+                .any(|member| reaches[*file].contains(member))
+        })
+        .count();
+    let depth = component
+        .iter()
+        .next()
+        .and_then(|any| reaches.get(any))
+        .map_or(0, |reached| {
+            reached
+                .iter()
+                .filter(|other| !component.contains(*other))
+                .count()
+        });
+    (component.len(), dependents, depth)
+}
 
-    #[allow(clippy::cast_precision_loss)]
-    let share = |size: usize| size as f64 / all as f64;
+/// A component's share of all files.
+#[allow(clippy::cast_precision_loss)]
+fn weight(size: usize, all: usize) -> f64 {
+    size as f64 / all as f64
+}
+
+/// Decoupling Level (Mo et al. 2016, equations 2 to 5) over the components' shapes.
+fn decoupling_level_of(shapes: &[Shape], all: usize) -> f64 {
     let mut level = 0.0;
-    for &(size, deps, own_depth) in &shape {
+    for &(size, deps, own_depth) in shapes {
         if deps == 0 {
             // Last layer: SizeFactor (equations 3 to 5).
             #[allow(clippy::cast_precision_loss)]
@@ -205,11 +236,11 @@ pub fn measure(graph: &FileGraph) -> Coupling {
             } else {
                 1.0
             };
-            level += share(size) * penalty;
+            level += weight(size, all) * penalty;
         } else {
             // Upper layer (equation 2). Lower layers: every file outside the
             // upper components no deeper than this one.
-            let upper_not_lower: usize = shape
+            let upper_not_lower: usize = shapes
                 .iter()
                 .filter(|(_, d, depth)| *d > 0 && *depth <= own_depth)
                 .map(|(size, ..)| size)
@@ -221,22 +252,30 @@ pub fn measure(graph: &FileGraph) -> Coupling {
             } else {
                 deps as f64 / lower as f64
             };
-            level += share(size) * (1.0 - ratio);
+            level += weight(size, all) * (1.0 - ratio);
         }
     }
+    level
+}
 
-    // M-SCORE (ESEM 2024, formulas 1 to 7), on the same hierarchy: every
-    // module of every layer contributes SF·CLDDF·IMCF. SF carries the size
-    // penalty in EVERY layer (DL's lowest-layer-only penalty is the flaw it
-    // fixes); CLDDP is the density of lower-layer files' edges into the module;
-    // IMCP the density of the module's own internal edges (five files and up).
+/// M-score (ESEM 2024, formulas 1 to 7), on the same hierarchy: every module
+/// of every layer contributes SF·CLDDF·IMCF. SF carries the size penalty in
+/// EVERY layer (DL's lowest-layer-only penalty is the flaw it fixes); CLDDP is
+/// the density of lower-layer files' edges into the module; IMCP the density
+/// of the module's own internal edges (five files and up).
+fn mscore_of(
+    graph: &FileGraph,
+    components: &[BTreeSet<String>],
+    shapes: &[Shape],
+    all: usize,
+) -> f64 {
     let edges: Vec<(&String, &String)> = graph
         .iter()
         .flat_map(|(from, to)| to.iter().map(move |target| (from, target)))
         .filter(|(from, target)| from != target)
         .collect();
     let mut mscore = 0.0;
-    for (component, &(size, deps, own_depth)) in components.iter().zip(&shape) {
+    for (component, &(size, deps, own_depth)) in components.iter().zip(shapes) {
         #[allow(clippy::cast_precision_loss)]
         let penalty = if size >= 5 {
             (size as f64).log(5.0).recip()
@@ -248,7 +287,7 @@ pub fn measure(graph: &FileGraph) -> Coupling {
         } else {
             let upper: BTreeSet<&String> = components
                 .iter()
-                .zip(&shape)
+                .zip(shapes)
                 .filter(|(_, (_, d, depth))| *d > 0 && *depth <= own_depth)
                 .flat_map(|(members, _)| members.iter())
                 .collect();
@@ -276,22 +315,13 @@ pub fn measure(graph: &FileGraph) -> Coupling {
         } else {
             0.0
         };
-        mscore += share(size) * penalty * (1.0 - cross) * (1.0 - inner);
+        mscore += weight(size, all) * penalty * (1.0 - cross) * (1.0 - inner);
     }
-
-    #[allow(clippy::cast_precision_loss)]
-    let propagation_cost =
-        reaches.values().map(BTreeSet::len).sum::<usize>() as f64 / (all as f64 * all as f64);
-    Coupling {
-        mscore,
-        decoupling_level: level,
-        propagation_cost,
-        largest_component: components.iter().map(BTreeSet::len).max().unwrap_or(0),
-        files: all,
-    }
+    mscore
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
