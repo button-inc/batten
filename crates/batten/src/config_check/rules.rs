@@ -297,6 +297,8 @@ pub(crate) struct Declared<'a> {
     pub invocations: &'a [String],
     /// Rust files a row declared as a `use` graph.
     pub uses: &'a [String],
+    /// The source files to acquire as unit nodes (CLOUD-1008).
+    pub units: &'a [String],
     /// The paths this row declared a STAGED read of (CLOUD-1203).
     ///
     /// The ROW's own list rather than the run's, which is what scopes the read to
@@ -654,7 +656,7 @@ pub trait RuleExt: Sized {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 63];
+    fn columns(&self) -> [(&'static str, bool); 64];
 
     /// What makes this row fire, with the pinned default applied — the one place
     /// absence is resolved, so no call site reads it a second way.
@@ -1863,7 +1865,7 @@ impl RuleExt for Rule {
         )))
     }
 
-    fn columns(&self) -> [(&'static str, bool); 63] {
+    fn columns(&self) -> [(&'static str, bool); 64] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -1940,6 +1942,7 @@ impl RuleExt for Rule {
             ("invocation_sources", !self.invocation_sources.is_empty()),
             ("uses", !self.uses.is_empty()),
             ("use_sources", !self.use_sources.is_empty()),
+            ("unit_sources", !self.unit_sources.is_empty()),
         ]
     }
 
@@ -2704,6 +2707,12 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         field: "use_sources",
         declares: Declares::Fact(crate::facts::Fact::Uses, |rule| {
             !rule.use_sources.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "unit_sources",
+        declares: Declares::Fact(crate::facts::Fact::Units, |rule| {
+            !rule.unit_sources.is_empty()
         }),
     },
     ColumnCensus {

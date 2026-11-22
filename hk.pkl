@@ -302,62 +302,35 @@ local gate = new Mapping<String, Step> {
     // `slow` tier: it builds the engine, so a commit would pay a compile
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
     profiles = List("slow")
+    // EXACTLY the source files that derive `JsonSchema`, in every crate. The
+    // census (`config_schema.rs`) walks the whole workspace, so a derive that
+    // moves between crates moves this list or fails the test (CLOUD-59). It
+    // read only `crates/batten/src` until the crate split, and the list drifted
+    // both ways unseen: 35 dead entries, and `config_model` and
+    // `preset_catalog` missing.
     glob =
       List(
-        "crates/batten/src/action.rs",
-        "crates/batten/src/advisory.rs",
-        "crates/batten/src/attribution.rs",
-        // CLOUD-1623: `Board` derives `JsonSchema` here rather than in
-        // `config.rs`, so this file is a schema input now. The census test
-        // named it the moment the type moved.
         "crates/batten-base/src/board.rs",
-        "crates/batten/src/bot.rs",
-        "crates/batten/src/budget.rs",
-        "crates/batten/src/capture.rs",
-        "crates/batten/src/census.rs",
-        "crates/batten/src/sbom.rs",
-        "crates/batten/src/hk.rs",
-        "crates/batten-base/src/outcome.rs",
-        "crates/batten/src/hookcost.rs",
         "crates/batten-base/src/ci.rs",
-        "crates/batten/src/commit.rs",
-        "crates/batten/src/config.rs",
-        "crates/batten/src/defects.rs",
         "crates/batten-base/src/deferral.rs",
-        "crates/batten/src/design.rs",
         "crates/batten-base/src/doc.rs",
-        "crates/batten/src/drain.rs",
         "crates/batten-base/src/effect.rs",
-        "crates/batten/src/engine.rs",
-        "crates/batten/src/exec.rs",
-        "crates/batten/src/facts.rs",
-        "crates/batten/src/handler.rs",
-        "crates/batten/src/hook.rs",
-        "crates/batten/src/judge.rs",
-        "crates/batten/src/markers.rs",
-        "crates/batten/src/mcp.rs",
-        "crates/batten/src/mint.rs",
-        "crates/batten/src/outputs.rs",
+        "crates/batten-base/src/outcome.rs",
         "crates/batten-base/src/pattern.rs",
-        "crates/batten/src/provision.rs",
-        "crates/batten/src/prune.rs",
-        "crates/batten/src/record.rs",
-        "crates/batten/src/recorder.rs",
-        "crates/batten/src/redirect.rs",
-        "crates/batten/src/refusal.rs",
-        "crates/batten/src/register.rs",
         "crates/batten-base/src/rest.rs",
-        "crates/batten/src/rules.rs",
-        "crates/batten-core/src/severity.rs",
-        "crates/batten/src/startup.rs",
-        "crates/batten-core/src/step_table.rs",
         "crates/batten-base/src/task.rs",
-        "crates/batten/src/transcript.rs",
         "crates/batten-base/src/traversal.rs",
         "crates/batten-base/src/verbs.rs",
-        "crates/batten/src/verdict.rs",
-        "crates/batten/src/waiver.rs",
-        "crates/batten/src/wiring.rs",
+        "crates/batten-core/src/severity.rs",
+        "crates/batten-core/src/sink.rs",
+        "crates/batten-core/src/step_table.rs",
+        "crates/batten-facts/src/facts.rs",
+        "crates/batten-facts/src/register.rs",
+        "crates/batten/src/config.rs",
+        "crates/batten/src/config_model.rs",
+        "crates/batten/src/defects.rs",
+        "crates/batten/src/design.rs",
+        "crates/batten/src/preset_catalog.rs",
         "schema/*",
       )
     check = "mise run test:config-schema"

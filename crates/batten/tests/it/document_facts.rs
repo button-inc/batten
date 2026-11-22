@@ -747,7 +747,9 @@ const STATED_RESIDUE: &[(&str, &str)] = &[
     ("src/hook.rs", "mise.toml"),
     ("src/commit.rs", "mise.toml"),
     ("src/receipt.rs", "mise.toml"),
-    ("src/provision.rs", "mise.lock"),
+    // Moved with the config model out of `provision.rs` (3e0ea8b9): a doc
+    // comment comparing a declared lock to `mise.lock`, never a path read.
+    ("src/config_model.rs", "mise.lock"),
 ];
 
 #[test]
