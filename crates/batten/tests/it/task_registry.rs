@@ -566,9 +566,9 @@ fn the_reader_sends_no_signal() {
     // refuses the one probe this module is supposed to use — measured, this case
     // failed on its own subject. Each occurrence is judged by what precedes it
     // instead: a `test_` prefix is the probe, anything else delivers.
-    let source =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/task.rs"))
-            .expect("the reader module");
+    // `task` is `batten-base`'s since the split (CLOUD-2789).
+    let source = std::fs::read_to_string(crate::common::at_root("crates/batten-base/src/task.rs"))
+        .expect("the reader module");
     for banned in ["kill_process(", "kill_process_group(", "signal_group("] {
         for (at, _) in source.match_indices(banned) {
             assert!(

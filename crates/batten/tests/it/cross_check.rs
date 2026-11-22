@@ -60,12 +60,47 @@ fn cross_check_type_checks_test_code_not_only_the_library_and_bins() {
     }
 }
 
+/// Every check is target-scoped, and together they cover the WHOLE workspace.
+///
+/// Per-package rows since the split (CLOUD-2789: `cross-check:facts`, `:base`,
+/// `:core`, each keyed on its own package so it re-runs only when that package
+/// moves), so "every command says `--workspace`" stopped being the property.
+/// The property is the union: exactly one `--workspace` row, and every package
+/// it `--exclude`s is checked by a `-p` row of its own — an exclude nothing
+/// picks up is a package the task silently stopped checking.
 #[test]
 fn the_check_is_still_target_scoped_so_the_flag_widened_coverage() {
-    for check in checks() {
+    let checks = checks();
+    let mut packages = std::collections::BTreeSet::new();
+    let mut excluded = std::collections::BTreeSet::new();
+    let mut workspace_rows = 0;
+    for check in &checks {
         assert!(check.contains("--target"), "an unscoped check: {check}");
-        assert!(check.contains("--workspace"), "a partial check: {check}");
+        let words: Vec<&str> = check.split_whitespace().collect();
+        for pair in words.windows(2) {
+            match pair[0] {
+                "-p" | "--package" => {
+                    packages.insert(pair[1].to_owned());
+                }
+                "--exclude" => {
+                    excluded.insert(pair[1].to_owned());
+                }
+                _ => {}
+            }
+        }
+        if words.contains(&"--workspace") {
+            workspace_rows += 1;
+        }
     }
+    assert_eq!(
+        workspace_rows, 1,
+        "exactly one row checks the workspace: {checks:?}"
+    );
+    let unchecked: Vec<&String> = excluded.difference(&packages).collect();
+    assert!(
+        unchecked.is_empty(),
+        "excluded from the workspace row and checked by no package row: {unchecked:?}"
+    );
 }
 
 #[test]
