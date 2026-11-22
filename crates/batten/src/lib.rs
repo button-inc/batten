@@ -116,6 +116,7 @@ pub use batten_facts::identity;
 pub mod init;
 pub mod install;
 pub mod item_index;
+pub use batten_facts::coupling;
 /// Rust call sites, parsed — where a token sits, not merely that it appears.
 pub use batten_facts::invocation;
 pub use batten_facts::units;

@@ -4727,6 +4727,9 @@ pub(crate) struct Projected {
     /// `base` rev, resolved against the base root's table. Absent like
     /// [`Self::base_units`] for a path the base does not hold.
     pub base_uses: serde_json::Map<String, serde_json::Value>,
+    /// [`crate::facts::Fact::Coupling`] — the measures over the head and base
+    /// `use` graphs, computed once from the two maps above.
+    pub coupling: serde_json::Value,
     /// [`crate::facts::Fact::Uses`] — path -> its resolved `use` edges.
     pub use_edges: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::External`] — declared id -> parsed node.
@@ -4773,6 +4776,7 @@ fn project_paths(
         units: serde_json::Map::new(),
         base_units: serde_json::Map::new(),
         base_uses: serde_json::Map::new(),
+        coupling: serde_json::Value::Null,
         use_edges: serde_json::Map::new(),
         external_files: serde_json::Map::new(),
         staged_nodes: serde_json::Map::new(),
@@ -4858,6 +4862,18 @@ fn project_paths(
             &mut absent,
             &mut why,
         );
+    }
+    // The measures, from the two edge maps just projected: one graph per side,
+    // so head and base are measured by the same function over the same shape.
+    if !declared.uses.is_empty() {
+        let measure = |uses: &serde_json::Map<String, serde_json::Value>| {
+            serde_json::json!(crate::coupling::measure(&crate::coupling::file_graph(uses)))
+        };
+        let mut coupling = serde_json::json!({"head": measure(&out.use_edges)});
+        if declared.base.is_some() {
+            coupling["base"] = measure(&out.base_uses);
+        }
+        out.coupling = coupling;
     }
     // The out-of-root family, keyed by a declared ID rather than by a path — see
     // `project_external` (CLOUD-1167).
@@ -5426,6 +5442,7 @@ pub(crate) fn tree_document(
             }
             crate::facts::Fact::Uses => serde_json::Value::Object(std::mem::take(&mut projected.use_edges)),
             crate::facts::Fact::Units => serde_json::Value::Object(std::mem::take(&mut projected.units)),
+            crate::facts::Fact::Coupling => std::mem::take(&mut projected.coupling),
             crate::facts::Fact::Base => {
                 serde_json::json!({
                     "units": std::mem::take(&mut projected.base_units),
@@ -18077,6 +18094,7 @@ mod half_tests {
                 Fact::Invocations,
                 Fact::Units,
                 Fact::Base,
+                Fact::Coupling,
                 Fact::Uses,
             ],
             "a fact joins the tree half only by an edit here, never by default"
