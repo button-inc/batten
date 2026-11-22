@@ -233,6 +233,7 @@ mod hk_fix_selection;
 mod hk_observation;
 mod hk_plan;
 mod hk_selection;
+mod hook_compaction;
 mod hook_cost;
 mod hook_latency;
 mod hook_pin_check;
