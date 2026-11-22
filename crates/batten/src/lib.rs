@@ -28882,6 +28882,18 @@ fn report_transcript_capability(
                 &format!("{} ({owes})", transcript::UNSURVEYED_NOTICE),
             )?;
         }
+        // A TORN LINE IS SAID, NOT SKIPPED SILENTLY: the stream was read past it,
+        // so the rules ran, but one record per torn line is lost and a rule that
+        // reads for an absence may answer over less than the session.
+        transcript::Capability::Present(stream) if !stream.torn.is_empty() => {
+            let lines: Vec<String> = stream.torn.iter().map(usize::to_string).collect();
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("{} ({})", transcript::TORN_NOTICE, lines.join(",")),
+            )?;
+        }
         transcript::Capability::Unconfigured | transcript::Capability::Present(_) => {}
     }
     Ok(())
