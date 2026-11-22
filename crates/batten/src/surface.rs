@@ -1020,7 +1020,6 @@ mod tests {
     #[cfg(test)]
     use crate::output::VerbosityExt as _;
     #[cfg(test)]
-
     /// [`command_path`]'s argv handling, which the mediated boundary depends on
     /// to stop reading our own subcommand words as paths (CLOUD-1804).
     #[test]

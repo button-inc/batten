@@ -311,7 +311,6 @@ pub fn render(
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// A row declaring a selector mints only for the value it names.
     ///
     /// Fails by: comparing with `starts_with`, or returning `true` on an

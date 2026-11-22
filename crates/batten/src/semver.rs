@@ -790,7 +790,6 @@ pub fn reconcile(compared: &Compared, commits: &[Commit]) -> Verdict {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// CLOUD-2099: the dependency build survives; the tree and the last
     /// document, which belong to the previous run, do not.
     #[test]

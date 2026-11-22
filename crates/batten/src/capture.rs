@@ -3196,7 +3196,6 @@ pub fn prune(repo_root: &Path) -> Result<usize> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// Fails by: a leaf per array element named, a third key kept, or a range,
     /// byte or token count taken from one leaf instead of summed.
     #[test]

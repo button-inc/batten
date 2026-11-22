@@ -511,7 +511,6 @@ impl Default for Pipeline {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// **A WAIT THAT DID NOT SUCCEED STILL OWES ITS ABANDON, AND A READY THAT
     /// DID NOT SUCCEED OWES NOTHING.**
     ///

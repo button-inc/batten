@@ -2382,7 +2382,6 @@ pub fn run_journal_show(family: &str, out: &mut dyn std::io::Write) -> Result<Ex
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// A committed repository carrying `files`, entered as this case's working
     /// directory. nextest runs each case in its own process, so the move is
     /// this case's; its state root is contained for the same reason.

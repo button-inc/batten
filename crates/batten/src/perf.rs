@@ -3414,7 +3414,6 @@ pub fn latency_verdict(median: u64, budget: u64, slack: u64, loose_factor: u64) 
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// The sweep refuses a checkout with no release build, and gets past that
     /// check for one that has it, whatever the host's instrument then says.
     ///
