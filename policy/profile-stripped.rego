@@ -13,6 +13,13 @@
 # Only valgrind is judged; `hyperfine` on `release` is right, since the absolute
 # gate measures `release`.
 
+# METADATA
+# description: |
+#   Bound to the MEDIATED-CALL surface: this row is `scope = "mediated_call"`, so
+#   it reads the `{call, facts}` document and never the tree.
+#   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
+# schemas:
+#   - input: schema["policy-call.schema"]
 package batten.profile_stripped
 
 import rego.v1

@@ -14,6 +14,13 @@
 # Only an in-place run inside a repository is judged: `sed -n 5,9p` reads, and a
 # scratch file outside every root is nobody's tree.
 
+# METADATA
+# description: |
+#   Bound to the MEDIATED-CALL surface: this row is `scope = "mediated_call"`, so
+#   it reads the `{call, facts}` document and never the tree.
+#   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
+# schemas:
+#   - input: schema["policy-call.schema"]
 package batten.sed_line_address
 
 import rego.v1
