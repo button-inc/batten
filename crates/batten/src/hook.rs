@@ -9669,7 +9669,16 @@ pub(crate) fn step_programs(bodies: &crate::taskset::TaskBodies) -> Value {
     let found = bodies
         .iter()
         .flat_map(|(task, lines)| lines.iter().map(move |line| (task, line)))
-        .filter(|(_, line)| line.contains("step run"))
+        // A NECESSARY CONDITION, NOT THE DECISION: the words `step` then `run`,
+        // whitespace-separated, before the line is parsed. A substring test on
+        // `"step run"` missed `step  run` and `step\trun`, and a missed line is a
+        // stage nobody counts (the under-read is the unsafe direction here).
+        .filter(|(_, line)| {
+            line.split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["step", "run"])
+        })
         .flat_map(|(task, line)| {
             reach_into(line, true, Some("task"), REACH_DEPTH)
                 .into_iter()
@@ -22043,7 +22052,7 @@ deny contains "refused by themodule" if {
                         "cargo clippy --fix",
                     ],
                 ),
-                ("deny", vec!["batten step run deny -- cargo deny check"]),
+                ("deny", vec!["batten step  run deny -- cargo deny check"]),
                 (
                     "semver",
                     vec!["cargo run -p batten -- step run semver -- cargo run -p batten -- semver check"],
