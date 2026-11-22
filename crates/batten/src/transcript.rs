@@ -120,6 +120,12 @@ pub const ABSENT_NOTICE: &str =
 pub const UNREADABLE_NOTICE: &str =
     "transcript: configured but could not be decoded, so the rules that read it did not run";
 
+/// What a verb says when the host tore lines of the transcript: the stream was
+/// read past each one, and the record each cut short is lost. Followed by the
+/// torn line numbers, never their bytes (rule 4).
+pub const TORN_NOTICE: &str =
+    "transcript: the host tore lines, so the record each cut short was not read";
+
 /// What a verb says when `[transcript]` names a path and no harness
 /// (CLOUD-1624).
 ///
@@ -509,6 +515,16 @@ pub struct Stream {
     /// never fingerprinted. [`parse`] is unkeyed and says so here;
     /// [`parse_keyed`] is the entry that mints.
     pub keyed: bool,
+    /// Lines the host tore: a record cut short with the next one written onto
+    /// the same line. The tail record is read; the cut one is lost, and its line
+    /// number is here so the run can say so (pointer-only, rule 4).
+    ///
+    /// Measured on this repository's own session: line 34197 of a Claude Code
+    /// transcript held a `compact_boundary` record cut mid-array with a
+    /// `hook_success` record appended, and aborting the whole parse on it turned
+    /// every transcript rule off for the rest of the session. A line that does
+    /// not decode at all is still [`Capability::Unreadable`] (CLOUD-819).
+    pub torn: Vec<usize>,
 }
 
 /// The agent's own composition, as far as a transcript states it.
@@ -1345,29 +1361,37 @@ pub fn parse_keyed(
     let mut session = None;
     let mut records = Vec::new();
     let mut agent = AgentContext::default();
+    let mut torn = Vec::new();
     for (index, text) in body.lines().enumerate() {
         let line = index + 1;
         if text.trim().is_empty() {
             continue;
         }
-        let parsed: Line = serde_json::from_str(text).map_err(|_| {
-            UsageError::raise(format!(
-                // THE FACT, AND ONLY THE FACT. The consequence — "so the rules
-                // that read it did not run" — belongs to [`UNREADABLE_NOTICE`],
-                // which is what a caller renders this pointer INSIDE. Saying it
-                // here too produced the clause twice in one line, measured live:
-                //
-                //   transcript: configured but could not be decoded, so the rules
-                //   that read it did not run (.claude/.transcript.jsonl:5204:
-                //   transcript line did not decode; the rules that read it did
-                //   not run)
-                //
-                // A parse error is a statement about one line; what follows from
-                // it is a statement about the run, and only the caller knows
-                // which rules those were.
-                "{label}:{line}: transcript line did not decode"
-            ))
-        })?;
+        let whole: Option<Line> = serde_json::from_str(text).ok();
+        let parsed: Line = whole
+            .or_else(|| {
+                let tail = torn_tail(text)?;
+                torn.push(line);
+                Some(tail)
+            })
+            .ok_or_else(|| {
+                UsageError::raise(format!(
+                    // THE FACT, AND ONLY THE FACT. The consequence — "so the rules
+                    // that read it did not run" — belongs to [`UNREADABLE_NOTICE`],
+                    // which is what a caller renders this pointer INSIDE. Saying it
+                    // here too produced the clause twice in one line, measured live:
+                    //
+                    //   transcript: configured but could not be decoded, so the rules
+                    //   that read it did not run (.claude/.transcript.jsonl:5204:
+                    //   transcript line did not decode; the rules that read it did
+                    //   not run)
+                    //
+                    // A parse error is a statement about one line; what follows from
+                    // it is a statement about the run, and only the caller knows
+                    // which rules those were.
+                    "{label}:{line}: transcript line did not decode"
+                ))
+            })?;
         if session.is_none() {
             // Borrowed, not moved: `collect` reads the same value below, and an
             // empty id is normalized to absent here so `Some("")` never reaches a
@@ -1387,7 +1411,21 @@ pub fn parse_keyed(
         agent,
         bytes: body.len(),
         keyed: key.is_some(),
+        torn,
     })
+}
+
+/// The complete record a torn line ends with, if it ends with one.
+///
+/// A host that cuts a write short and appends the next record leaves one line
+/// holding a truncated object followed by a whole one. The leftmost `{"` after
+/// the start from which the rest of the line decodes as a whole record is that
+/// record; anything else is not this shape and stays undecodable.
+fn torn_tail(text: &str) -> Option<Line> {
+    text.match_indices("{\"")
+        .map(|(at, _)| at)
+        .filter(|at| *at > 0)
+        .find_map(|at| serde_json::from_str::<Line>(&text[at..]).ok())
 }
 
 /// Accumulate one line's agent-context facts.
@@ -3188,6 +3226,29 @@ mod tests {
         assert!(pointer.contains("s.jsonl:2"), "names the line: {pointer}");
         assert!(!pointer.contains("not json"), "never the line: {pointer}");
         assert_eq!(Capability::Unreadable(pointer).as_str(), "unreadable");
+    }
+
+    /// The torn-append shape (measured on this repository's session): a record
+    /// cut short with the next written onto the same line. Fails by: the whole
+    /// parse aborting (every transcript rule off), the appended record dropped,
+    /// or the torn line not recorded.
+    #[test]
+    fn a_torn_line_is_read_past_and_named() {
+        let body = concat!(
+            "{\"type\":\"user\"}\n",
+            "{\"type\":\"system\",\"content\":[\"a\",\"b{\"type\":\"user\"}\n",
+            "{\"type\":\"user\"}\n",
+        );
+        let stream = parse(body, "s.jsonl", RecordShape::Jsonl).expect("a torn line is read past");
+        assert_eq!(stream.torn, [2]);
+        assert!(
+            parse(
+                "{\"type\":\"user\"}\nnot json\n",
+                "s.jsonl",
+                RecordShape::Jsonl
+            )
+            .is_err()
+        );
     }
 
     #[test]
