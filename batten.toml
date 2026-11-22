@@ -1741,12 +1741,16 @@ regex = '(^|[^|])\|[[:space:]]*grep([[:space:]]|$)'
 id = "sed-in-place-cluster"
 regex = '^-[A-Za-z]*i'
 
-# A sed script whose first address is a line number or numeric range followed
-# by a command or brace (`52s/a/b/`, `3,5d`, `1{`, `7!d`), never a file name
-# such as `1.txt`.
+# A sed script with a command addressed by line number, numeric range or step
+# (`52s/a/b/`, `3,5d`, `1{`, `7!d`, `0~3d`, `5,+2d`) at ANY command start: the
+# script's start, `--expression=`, or after `;`, a newline or a brace — so
+# `s/a/b/;52d` is read, not only its first command. Never a file name such as
+# `1.txt`: an address is followed by a command letter or a brace, never a dot.
+# A `;` inside an `s///` regex can read as a command start; that over-reads
+# toward a refusal, never past an address.
 [[pattern]]
 id = "sed-line-address"
-regex = '^[0-9]+(,([0-9]+|\$))?\s*!?\s*[A-Za-z{]'
+regex = '(^|^--expression=|[;\n{}])\s*[0-9]+(~[0-9]+)?(\s*,\s*[+~]?([0-9]+|\$))?\s*!?\s*[A-Za-z{=]'
 
 # CLOUD-843's port of `awk-regex-check`. The NAME is a capture rather than the
 # whole match: the module compares full identifiers so that a name which merely
