@@ -1,3 +1,6 @@
+#MUTANT-SUITE crates/batten/tests/it/source_facts.rs
+#MUTANT score-unread|s@^\tinput.tree.coupling.head.mscore < input.tree.coupling.base.mscore$@\tfalse@|the_preset_refuses_a_lowered_mscore
+#MUTANT cycle-unread|s@^\tinput.tree.coupling.head.largest_component > input.tree.coupling.base.largest_component$@\tfalse@|the_preset_refuses_a_grown_cycle
 # The module graph is no worse than the row's base (plan step 3, CLOUD-2821).
 #
 # Two refusals, each from the engine's `coupling` fact (head and base), each

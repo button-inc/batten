@@ -316,6 +316,66 @@ fn a_module_refuses_a_lowered_mscore() {
     );
 }
 
+/// The vendored `rust-quality` preset enabled over `src/*.rs`, judged against
+/// `base`. The preset's own module, not a copy, so its `#MUTANT` rows reach it.
+fn rust_quality_row(base: &str) -> Rule {
+    serde_json::from_value(serde_json::json!({
+        "id": "module graph worse",
+        "kind": "policy",
+        "scope": "tree",
+        "preset": "rust-quality",
+        "use_sources": ["src/*.rs"],
+        "base": base,
+        "severity": "deny",
+    }))
+    .expect("a tree-scoped preset row declaring `use_sources` and `base`")
+}
+
+/// Three independent modules committed as the base; returns the root and base.
+fn three_module_base(name: &str) -> (PathBuf, String) {
+    let root = scratch(name);
+    fs::create_dir_all(root.join("src")).expect("src");
+    fs::write(root.join("src/lib.rs"), "mod a;\nmod b;\nmod c;\n").expect("root");
+    fs::write(root.join("src/a.rs"), "pub fn f() {}\n").expect("a");
+    fs::write(root.join("src/b.rs"), "pub fn g() {}\n").expect("b");
+    fs::write(root.join("src/c.rs"), "pub fn h() {}\n").expect("c");
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
+    let base = common::git_in(&root, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    (root, base)
+}
+
+/// Fails by: the preset's M-score clause unread (`#MUTANT score-unread`). A
+/// new edge with no cycle lowers M-score and leaves the largest cycle at 1, so
+/// only that clause can refuse it.
+#[test]
+fn the_preset_refuses_a_lowered_mscore() {
+    let (root, base) = three_module_base("rq-score");
+    fs::write(root.join("src/c.rs"), "pub fn h() { crate::a::f() }\n").expect("c");
+    let found = scan(&root, &[rust_quality_row(&base)]);
+    let rules: Vec<&str> = found.findings.iter().map(|f| f.rule.as_str()).collect();
+    assert_eq!(rules, ["module score dropped"], "{:?}", found.findings);
+}
+
+/// Fails by: the preset's largest-cycle clause unread (`#MUTANT cycle-unread`).
+#[test]
+fn the_preset_refuses_a_grown_cycle() {
+    let (root, base) = three_module_base("rq-cycle");
+    fs::write(root.join("src/a.rs"), "pub fn f() { crate::b::g() }\n").expect("a");
+    fs::write(root.join("src/b.rs"), "pub fn g() { crate::a::f() }\n").expect("b");
+    let found = scan(&root, &[rust_quality_row(&base)]);
+    assert!(
+        found
+            .findings
+            .iter()
+            .any(|f| f.rule == "module cycle grown"),
+        "{:?}",
+        found.findings
+    );
+}
+
 /// Fails by: the Rego arm missing a partial helper bound with `:=`, or
 /// reading a defaulted helper as partial (CLOUD-2777's shape).
 #[test]
