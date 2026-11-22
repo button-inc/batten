@@ -267,6 +267,55 @@ fn a_module_compares_module_edges_against_its_base() {
     );
 }
 
+/// Refuses a change that lowers Decoupling Level against the row's base: the
+/// ratchet plan step 3 retires `modules.lock` into.
+const NO_DL_DROP: &str = r#"
+package batten
+
+import rego.v1
+
+rules contains "module decoupling dropped"
+
+violation contains {"rule": "module decoupling dropped", "verdict": "module decoupling dropped"} if {
+  input.tree.coupling.head.decoupling_level < input.tree.coupling.base.decoupling_level
+}
+"#;
+
+/// Fails by: `input.tree.coupling` absent or measured on one side only, the
+/// base read from the working tree (both sides would agree), or a cycle that
+/// does not lower the level.
+#[test]
+fn a_module_refuses_a_lowered_decoupling_level() {
+    let root = scratch("coupling");
+    fs::create_dir_all(root.join("src")).expect("src");
+    fs::write(root.join("policy/gate.rego"), NO_DL_DROP).expect("module");
+    fs::write(root.join("src/lib.rs"), "mod a;\nmod b;\nmod c;\n").expect("root");
+    fs::write(root.join("src/a.rs"), "pub fn f() {}\n").expect("a");
+    fs::write(root.join("src/b.rs"), "pub fn g() {}\n").expect("b");
+    fs::write(root.join("src/c.rs"), "pub fn h() {}\n").expect("c");
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
+    let base = common::git_in(&root, &["rev-parse", "HEAD"]);
+    let base = base.trim();
+
+    // `c` now depends on `a`, so `a` gains a dependent and leaves the last layer:
+    // DL falls from 1.0. (A two-file cycle with no dependents would not lower
+    // it: the paper's size penalty starts above five files.)
+    fs::write(root.join("src/c.rs"), "pub fn h() { crate::a::f() }\n").expect("c");
+    let coupled = scan(&root, &[based_uses_row(&["src/*.rs"], base)]);
+    assert_eq!(coupled.findings.len(), 1, "{:?}", coupled.findings);
+    assert_eq!(coupled.findings[0].rule, "module decoupling dropped");
+
+    // Decoupled again: the level is the base's, nothing refused.
+    fs::write(root.join("src/c.rs"), "pub fn h() {}\n").expect("c");
+    let same = scan(&root, &[based_uses_row(&["src/*.rs"], base)]);
+    assert!(same.findings.is_empty(), "{:?}", same.findings);
+    assert!(
+        !same.not_evaluated.contains_key("uses-row"),
+        "and it evaluated, over a real base side"
+    );
+}
+
 /// Fails by: the Rego arm missing a partial helper bound with `:=`, or
 /// reading a defaulted helper as partial (CLOUD-2777's shape).
 #[test]
