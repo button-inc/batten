@@ -1590,6 +1590,7 @@
             "shell-hygiene",
             "tracker-hygiene",
             "supply-chain",
+            "lease-asserted",
             "trunk-based",
             "linear-history",
             "rust-quality",
