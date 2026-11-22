@@ -178,8 +178,8 @@ const CONTENT: &[Canary] = &[
     },
     Canary {
         tag: "modsource",
-        // CLOUD-2789. `modules cycle` reads every source file under its root to
-        // draw the graph; it may print one count, and this is the byte it read.
+        // CLOUD-2789. `modules metrics` reads every source file under its root to
+        // draw the graph; it may print its counts, and this is the byte it read.
         source: "a comment inside a Rust module the module graph reads",
         columns: &[],
     },
@@ -578,7 +578,7 @@ impl Corpus {
                 ),
             )
             .file("counted.txt", &format!("{}\n", canary("counted")))
-            // A two-module crate `modules cycle` reads (CLOUD-2789): `a` and `b`
+            // A two-module crate `modules metrics` reads (CLOUD-2789): `a` and `b`
             // reach each other, so the answer is a live count of 2, and the
             // comment it read past is a content canary it must never print.
             .file("crate/src/lib.rs", "mod a;\nmod b;\n")
@@ -2164,28 +2164,6 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "step run",
         args: &["a-step", "--", "true"],
-        stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
-    },
-    // `modules cycle` (CLOUD-2789) prints one count of modules; it reads source
-    // files only to draw their edges, and never prints a byte of one.
-    Verb {
-        path: "modules cycle",
-        args: &["--root", "crate/src"],
-        stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
-    },
-    // `modules impls` and `modules shims` (CLOUD-2792) print one count line
-    // each over the same crate, and never a byte of a source they read.
-    Verb {
-        path: "modules impls",
-        args: &["--root", "crate/src"],
-        stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
-    },
-    Verb {
-        path: "modules shims",
-        args: &["--root", "crate/src"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
