@@ -1014,7 +1014,7 @@ pub fn load(
 
         // The module comes from wherever the RULES came from, and that is the
         // whole of this branch. Under `--config-from <ref>` the authority is
-        // read from the ref (`trust::load_base`), so reading the module off disk
+        // read from the ref (`trust_pin::load_base`), so reading the module off disk
         // would pair a base's rules with the working tree's predicates — and an
         // agent editing an enabled `.rego` would change what the BASE policy
         // decides. That is exactly the influence `--config-from` exists to

@@ -102,7 +102,18 @@ pub struct UseEdge {
     /// of the case below. Only the edges resolution CHANGED are the ones a line
     /// predicate gets wrong, and only this field knows which those are.
     pub via_root: bool,
-    /// 1-indexed line of the `use` statement.
+    /// Whether the edge was written as a qualified path in code (`crate::m::f()`,
+    /// a `crate::m::T` type) rather than a `use` item.
+    ///
+    /// Both are edges a crate boundary has to cut, and before this field existed
+    /// only the `use` half was collected: `config.rs` reached about thirty modules
+    /// through inline paths while its `use` edges named seven, so every closure and
+    /// layering verdict over this fact judged a graph missing most of its edges.
+    /// Kept as a field rather than folded in silently, so a consumer can tell the
+    /// two spellings apart. One edge per distinct `(to, item)` per file: a path
+    /// written forty times is one dependency, not forty.
+    pub qualified: bool,
+    /// 1-indexed line of the `use` statement, or of the path's first occurrence.
     pub line: usize,
 }
 
@@ -236,6 +247,54 @@ impl<'ast> syn::visit::Visit<'ast> for Edges {
         collect_edges(&item.tree, None, line, &mut self.found);
         syn::visit::visit_item_use(self, item);
     }
+
+    // A qualified path anywhere outside a `use` item: an expression callee, a
+    // type, a trait bound, a pattern. `visit_item_use` above never reaches this,
+    // because a `use` tree is a `UseTree`, not a `syn::Path`, so no edge is
+    // counted twice. Paths inside a macro's token stream are NOT seen: syn keeps
+    // them as tokens, which is the same blind spot every syntactic reader here
+    // states.
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        if path.leading_colon.is_none()
+            && let Some(first) = path.segments.first()
+            && first.ident == "crate"
+            && path.segments.len() >= 2
+        {
+            let line = first.ident.span().start().line;
+            let second = path.segments[1].ident.to_string();
+            let edge = if path.segments.len() == 2 {
+                // `crate::Item`: through the root's table, exactly as a `use`.
+                UseEdge {
+                    to: String::new(),
+                    item: second,
+                    origin: Origin::RootItem,
+                    via_root: false,
+                    qualified: true,
+                    line,
+                }
+            } else {
+                UseEdge {
+                    item: path
+                        .segments
+                        .last()
+                        .map_or_else(|| second.clone(), |s| s.ident.to_string()),
+                    to: second,
+                    origin: Origin::Internal,
+                    via_root: false,
+                    qualified: true,
+                    line,
+                }
+            };
+            if !self
+                .found
+                .iter()
+                .any(|seen| seen.qualified && seen.to == edge.to && seen.item == edge.item)
+            {
+                self.found.push(edge);
+            }
+        }
+        syn::visit::visit_path(self, path);
+    }
 }
 
 /// Every `use` edge in a Rust source text, or the reason there are none.
@@ -280,6 +339,7 @@ fn collect_edges(tree: &syn::UseTree, first: Option<&str>, line: usize, out: &mu
                     item: leaf_name(&path.tree).unwrap_or_else(|| segment.clone()),
                     origin: Origin::Internal,
                     via_root: false,
+                    qualified: false,
                     line,
                 }),
                 Some(_) => collect_edges(&path.tree, first, line, out),
@@ -337,6 +397,7 @@ fn push_leaf(name: &str, first: Option<&str>, line: usize, out: &mut Vec<UseEdge
         item: name.to_owned(),
         origin,
         via_root: false,
+        qualified: false,
         line,
     });
 }

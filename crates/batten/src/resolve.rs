@@ -125,7 +125,7 @@ impl Serialize for Source {
 /// sixth `Source` variant would have to be ordered somewhere in a chain whose
 /// order is the specification, and there is no honest place to put it.
 ///
-/// `#[non_exhaustive]` from birth, exactly as [`crate::trust::Provenance`] is:
+/// `#[non_exhaustive]` from birth, exactly as [`crate::trust_pin::Provenance`] is:
 /// CLOUD-128's ingesting adapters and CLOUD-720's pin token are then additive
 /// forever, which is the break `Source` — public, exhaustive, and named in every
 /// `config show` document — cannot take.
@@ -824,7 +824,7 @@ pub struct Resolved {
     /// document is the config, and this is a fact about where the config came
     /// from.
     #[serde(skip_serializing)]
-    pub base: Option<crate::trust::Loaded>,
+    pub base: Option<crate::trust_pin::Loaded>,
 }
 
 /// One emitted key: its value, the layer that won it, and every layer that set
@@ -924,7 +924,7 @@ impl Resolved {
 /// same one authority, not a third place configuration may live. Telling the two
 /// apart is CLOUD-720's, and it stays free because [`Origin`] is
 /// `#[non_exhaustive]`.
-fn authority_origin(base: Option<&crate::trust::Loaded>) -> Origin {
+fn authority_origin(base: Option<&crate::trust_pin::Loaded>) -> Origin {
     match base {
         None => Origin::Committed,
         Some(_) => Origin::BaseRef,
@@ -1179,7 +1179,7 @@ fn authority(
 ) -> Result<(
     crate::config_model::Config,
     config::Authority,
-    Option<crate::trust::Loaded>,
+    Option<crate::trust_pin::Loaded>,
 )> {
     // WHERE the authority lives is `config.rs`'s question, not this module's:
     // this module owns the §8 precedence chain, and the chain is unchanged —
@@ -1200,27 +1200,32 @@ fn authority(
     let dir = named.unwrap_or(dir);
     // §4's lifecycle, and the one place in the engine that takes it: an
     // unreachable REFERENCE may be answered from the last validated config,
-    // where a ref that resolves and declares none may not. `trust::load` is
+    // where a ref that resolves and declares none may not. `trust_pin::load` is
     // where that asymmetry lives; here it is only consumed.
     //
-    // `Permitted` is the CALL SITE's answer, not the policy's — `trust::load`
+    // `Permitted` is the CALL SITE's answer, not the policy's — `trust_pin::load`
     // still requires a pin that verifies and a pinned config whose own
     // `[trust] offline_fallback` is on, so passing it here widens nothing.
-    match crate::trust::load(dir, reference, crate::trust::OfflineFallback::Permitted)? {
+    match crate::trust_pin::load(
+        dir,
+        reference,
+        crate::trust_pin::OfflineFallback::Permitted,
+        config::parse_base,
+    )? {
         // `Authority::Present` either way, and a pin does not weaken that: it is
         // a previously validated instance of the same one authority, so every
         // key it declares is attributed to `Source::RepoConfig` exactly as a ref
         // read would be. The provenance travels beside the config rather than in
         // the precedence ladder, whose `Ord` IS §8's order.
-        crate::trust::Load::Loaded(loaded) => Ok((
+        crate::trust_pin::Load::Loaded(loaded) => Ok((
             loaded.config.clone(),
             config::Authority::Present,
             Some(*loaded),
         )),
-        crate::trust::Load::RefUnreachable { reference } => Err(UsageError::raise(format!(
+        crate::trust_pin::Load::RefUnreachable { reference } => Err(UsageError::raise(format!(
             "cannot resolve {reference} in this repository"
         ))),
-        crate::trust::Load::AbsentAtRef { reference } => Err(UsageError::raise(format!(
+        crate::trust_pin::Load::AbsentAtRef { reference } => Err(UsageError::raise(format!(
             "{} is absent at {reference}",
             crate::config_model::CONFIG_FILE
         ))),
@@ -1740,7 +1745,7 @@ fn assemble(
     fail_on_warning: Layered<bool>,
     tables: Tables,
     paths: Paths,
-    base: Option<crate::trust::Loaded>,
+    base: Option<crate::trust_pin::Loaded>,
 ) -> Resolved {
     // Re-read from `base` rather than taken as a parameter: `authority_origin` is
     // a pure function of the load's outcome, and this function is already at the
