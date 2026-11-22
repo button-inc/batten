@@ -93,7 +93,7 @@ pub trait HarnessExt: Sized {
     /// without building a command; `tests::every_harness_token_matches_its_clap_spelling`
     /// is what keeps the two from drifting.
     #[must_use]
-    fn as_str(self) -> &'static str;
+    fn as_str(&self) -> &'static str;
 
     /// Where this host reads its hook registrations, and which events to
     /// register under — or `None` for a variant that is a contract, not a host.
@@ -307,7 +307,7 @@ impl HarnessExt for Harness {
         Harness::ExitCode,
     ];
 
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Harness::ClaudeCode => "claude-code",
             Harness::Cursor => "cursor",
@@ -2519,7 +2519,7 @@ pub trait EventExt: Sized {
     /// word for an event travels in [`Envelope::raw_event`] and is echoed back
     /// verbatim, so this one is free to name the concept.
     #[must_use]
-    fn as_str(self) -> &'static str;
+    fn as_str(&self) -> &'static str;
 
     /// Normalize a host's spelling.
     ///
@@ -2648,7 +2648,7 @@ impl EventExt for Event {
         !matches!(self, Event::Forge)
     }
 
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Event::PreTool => "pre-tool",
             Event::PostTool => "post-tool",

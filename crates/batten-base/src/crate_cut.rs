@@ -680,7 +680,11 @@ fn workspace_sources(root: &std::path::Path) -> std::io::Result<Vec<std::path::P
                 if name != "target" && name != "fixtures" && !name.starts_with('.') {
                     pending.push(path);
                 }
-            } else if name == "Cargo.toml" || name.ends_with(".rs") {
+            } else if name == "Cargo.toml"
+                || path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+            {
                 found.push(path);
             }
         }

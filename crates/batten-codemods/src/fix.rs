@@ -127,8 +127,11 @@ pub fn only_package(stream: &str, package: &str) -> String {
                     .is_some_and(|id| id.contains(&by_dir) || id.contains(&by_name))
             })
         })
-        .map(|line| format!("{line}\n"))
-        .collect()
+        .fold(String::new(), |mut kept, line| {
+            kept.push_str(line);
+            kept.push('\n');
+            kept
+        })
 }
 
 /// Plan one pass from the three streams. `read` returns a file's current
@@ -250,6 +253,7 @@ pub fn read_nothing(succeeded: bool, stream: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -304,6 +308,8 @@ mod tests {
 
     const SRC: &str = "use std::fmt;\nuse std::io;\nfn f() {}\n";
 
+    // The `Option` is `plan`'s reader signature: a file it cannot read is `None`.
+    #[allow(clippy::unnecessary_wraps)]
     fn read(_: &str) -> Option<String> {
         Some(SRC.to_owned())
     }
