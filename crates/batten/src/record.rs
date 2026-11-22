@@ -1664,6 +1664,7 @@ fn derive_reading(
         }
         "evaluator-closure" => evaluator_closure_reading(inputs, family, overrides, document)?,
         "macos-link" => macos_link_reading(inputs, family, overrides, document)?,
+        "crate-reach" => crate_reach_reading(inputs, family, document)?,
         // The `tracker-hygiene` preset's five readings (CLOUD-843). The module
         // owns the reading; this arm hands it the consumer's pattern table, the
         // checkout it walks, and stdin — nothing here spawns.
@@ -1774,6 +1775,53 @@ fn evaluator_closure_reading(
         lines
     };
     Ok(reading)
+}
+
+/// Which workspace packages each workspace package reaches (CLOUD-2798).
+///
+/// One `reach <package> <reached,…>` line per member, both sorted, the reached
+/// list holding only OTHER workspace members in the activated graph
+/// ([`crate::cargo_graph`]'s activation rule). `crate reach unsafe` compares
+/// each line with that package's `crate-allow-<package>` pattern, so a
+/// `Cargo.toml` edge that regrows a cycle across a crate split is refused. No
+/// package name is written here: the members are the graph's own (rule 1).
+///
+/// # Errors
+///
+/// A [`UsageError`] for an unaccepted input or stdin that is not a `cargo
+/// metadata` document; an internal error when a `resolve` the engine ran could
+/// not look.
+fn crate_reach_reading(
+    inputs: &BTreeMap<String, String>,
+    family: &str,
+    document: Option<&str>,
+) -> Result<String> {
+    only_these_inputs(inputs, family, &["resolve"])?;
+    let graph = graph_for(inputs, family, document)?;
+    let members: BTreeMap<String, String> = graph
+        .member_roots()
+        .into_iter()
+        .filter_map(|id| graph.name_of(&id).map(|name| (name.to_owned(), id)))
+        .collect();
+    let member_ids: std::collections::BTreeSet<&str> =
+        members.values().map(String::as_str).collect();
+    let mut lines = String::new();
+    for (name, id) in &members {
+        let reached: std::collections::BTreeSet<&str> = graph
+            .reachable([id.clone()])
+            .iter()
+            .filter(|other| other.as_str() != id && member_ids.contains(other.as_str()))
+            .filter_map(|other| graph.name_of(other))
+            .collect();
+        lines.push_str("reach ");
+        lines.push_str(name);
+        if !reached.is_empty() {
+            lines.push(' ');
+            lines.push_str(&reached.into_iter().collect::<Vec<_>>().join(","));
+        }
+        lines.push('\n');
+    }
+    Ok(lines)
 }
 
 /// What this tree BUILDS, and which of it needs a platform SDK to link.
@@ -2611,6 +2659,55 @@ mod tests {
             refusal(derive_reading("nope", &inputs(&[]), &none, None))
                 .is_some_and(|error| error.contains(UNDECLARED))
         );
+    }
+
+    /// Fails by: a member's own name in its reach, an external package listed,
+    /// a transitive member missed, or the lines out of sorted order (CLOUD-2798).
+    #[test]
+    fn the_crate_reach_reading_lists_each_members_reached_members_sorted() {
+        enter_repo("record-crate-reach", &[("batten.toml", PATTERNS)]);
+        let package = |name: &str, deps: &[&str]| {
+            serde_json::json!({
+                "id": format!("{name} 1.0.0"),
+                "name": name,
+                "dependencies": deps.iter().map(|dep| serde_json::json!({ "name": dep })).collect::<Vec<_>>(),
+            })
+        };
+        let node = |name: &str, deps: &[&str]| {
+            serde_json::json!({
+                "id": format!("{name} 1.0.0"),
+                "features": [],
+                "deps": deps
+                    .iter()
+                    .map(|dep| serde_json::json!({ "pkg": format!("{dep} 1.0.0") }))
+                    .collect::<Vec<_>>(),
+            })
+        };
+        // `top` reaches `mid` directly and `low` through it; `ext` is not a
+        // member and is never listed.
+        let meta = serde_json::json!({
+            "packages": [
+                package("top", &["mid", "ext"]),
+                package("mid", &["low"]),
+                package("low", &[]),
+                package("ext", &[]),
+            ],
+            "resolve": { "nodes": [
+                node("top", &["mid", "ext"]),
+                node("mid", &["low"]),
+                node("low", &[]),
+                node("ext", &[]),
+            ] },
+            "workspace_members": ["top 1.0.0", "mid 1.0.0", "low 1.0.0"],
+        });
+        let reading = derive_reading(
+            "crate-reach",
+            &inputs(&[]),
+            &Overrides::default(),
+            Some(&meta.to_string()),
+        )
+        .unwrap();
+        assert_eq!(reading, "reach low\nreach mid low\nreach top low,mid\n");
     }
 
     /// Fails by: a vendored `links` crate reported, an unvendored one missed,

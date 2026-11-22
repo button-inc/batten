@@ -7052,6 +7052,52 @@ no_fix_reason = "class 3 (a dependency-graph decision): an IO crate reaching the
 record = "evaluator-closure"
 writer = "mise run evaluator-closure-record"
 
+# CLOUD-2798: which workspace crate may reach which. A crate boundary stops a
+# module cycle, but a `Cargo.toml` edit can add an edge that turns the wide crate
+# graph back into a deep one; each package's allowed reach is one reviewable
+# `crate-allow-<package>` pattern, and a package with none is refused. The lists
+# encode the target layering (plan step 10, CLOUD-2799–2801): the leaves reach
+# nothing, `batten-facts` only `batten-fsio`, upward to `batten`.
+[[rule]]
+id = "crate reach unsafe"
+kind = "policy"
+scope = "tree"
+module = "policy/crate-reach.rego"
+severity = "deny"
+no_fix_reason = "class 3 (a dependency-graph decision): the edge is removed where it was declared, in the reaching crate's Cargo.toml, or the allow row is widened in review; nothing here can repair either"
+
+[[record]]
+record = "crate-reach"
+writer = "mise run crate-reach-record"
+
+[[pattern]]
+id = "crate-allow-batten-fsio"
+regex = '^$'
+
+[[pattern]]
+id = "crate-allow-batten-stream"
+regex = '^$'
+
+[[pattern]]
+id = "crate-allow-batten-facts"
+regex = '^batten-fsio$'
+
+[[pattern]]
+id = "crate-allow-batten-base"
+regex = '^batten-(facts|fsio)$'
+
+[[pattern]]
+id = "crate-allow-batten-core"
+regex = '^batten-(base|facts|fsio|stream)$'
+
+[[pattern]]
+id = "crate-allow-batten"
+regex = '^batten-(base|core|facts|fsio|stream)$'
+
+[[pattern]]
+id = "crate-allow-batten-codemods"
+regex = '^batten(-(base|core|facts|fsio|stream))?$'
+
 # The macOS link gate, ported under CLOUD-1717 from `mise-tasks/macos-link-check.sh`
 # and from an `hk` step that spawned it. The release artifacts for macOS are
 # linked on Linux by zig with no Apple SDK present, and `cross-check` runs
@@ -12824,6 +12870,9 @@ gloss = "one CI job"
 word = "lane"
 gloss = "a privileged execution lane"
 [[vocabulary.subject]]
+word = "crate"
+gloss = "a workspace package, as a dependency-graph node"
+[[vocabulary.subject]]
 word = "layer"
 gloss = "a module layering position"
 [[vocabulary.subject]]
@@ -15043,6 +15092,34 @@ no diff a reviewer of the pin would see. Close it where it was enabled.
 id = "module read first"
 kind = "document"
 target = "policy/evaluator-closure.rego"
+
+[[verdict]]
+id = "crate reach unsafe"
+gloss = "a workspace crate reaches one its crate-allow pattern does not admit"
+class = """
+A crate split stops a module cycle only while the crate graph stays wide. A \
+`Cargo.toml` edge from a lower crate to a higher one turns it back into a deep \
+graph and lets the cycle regrow across crates (CLOUD-2798). The allowed reach of \
+each crate is its `crate-allow-<package>` pattern; this reached name is not in it.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/crate-reach.rego"
+
+[[verdict]]
+id = "crate declare absent"
+gloss = "a workspace crate has no crate-allow pattern, so its reach is undeclared"
+class = """
+A new workspace crate with no `crate-allow-<package>` row would dodge \
+`crate reach unsafe` by being undeclared. Declare what it may reach.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/crate-reach.rego"
 
 [[verdict]]
 id = "layer read absent"
