@@ -155,6 +155,54 @@ fn a_script_written_by_an_earlier_stage_is_opaque() {
     assert!(refused(&written), "{written}");
 }
 
+/// A file `source` or `.` runs that is absent where its stage runs is program
+/// text nothing read, as a script operand's is. Fails by: the sourced file
+/// skipped when absent, as only a shell's or an interpreter's operand was
+/// made opaque.
+#[test]
+fn a_sourced_file_absent_at_its_resolved_path_is_opaque() {
+    let dir = staged("script-spawn-source");
+    for command in ["source missing.sh", ". missing.sh", "cd tools && . root.sh"] {
+        let said = decision(&dir, command);
+        assert!(refused(&said), "{command}: {said}");
+    }
+    let present = decision(&dir, "source root.sh");
+    assert!(
+        !present.contains(VERDICT),
+        "a tracked, unchanged sourced file runs: {present}"
+    );
+}
+
+/// A script an EARLIER stage of the same call writes is opaque even where an
+/// older copy sits at that path: the bytes judged are not the bytes run. Each
+/// write a stage makes counts: an output redirection, `tee`, and a `cp` or
+/// `mv` destination, placed through the `cd`s before it. Fails by: the
+/// tracked, unchanged copy read and trusted in place of what the call writes.
+#[test]
+fn a_script_an_earlier_stage_writes_is_opaque_over_an_older_copy() {
+    let dir = staged("script-spawn-overwritten");
+    for command in [
+        "echo 'git push --force origin main' > root.sh && sh root.sh",
+        "echo 'git push' >> root.sh; sh root.sh",
+        "echo 'git push' | tee root.sh && sh root.sh",
+        "cp tools/reviewed.sh root.sh && sh root.sh",
+        "mv tools/reviewed.sh root.sh && bash root.sh",
+        "cp tools/reviewed.sh . && sh reviewed.sh",
+        "echo 'git push' > tools/reviewed.sh && cd tools && sh reviewed.sh",
+        "cd tools && echo 'git push' > ../root.sh && cd .. && sh root.sh",
+        "echo 'git push' > root.sh && source root.sh",
+        "cp OPAQUE.py tools/reviewed.py && python3 tools/reviewed.py",
+    ] {
+        let said = decision(&dir, command);
+        assert!(refused(&said), "{command}: {said}");
+    }
+    let elsewhere = decision(&dir, "echo hi > other.sh && sh root.sh");
+    assert!(
+        !elsewhere.contains(VERDICT),
+        "a write to another path leaves the tracked script trusted: {elsewhere}"
+    );
+}
+
 /// A `cd` the reach cannot place (an expansion) leaves the next stage's
 /// directory unknown, so a relative script there is opaque even where a file
 /// of that name sits beside the call. Fails by: the operand read beside the
