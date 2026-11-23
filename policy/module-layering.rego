@@ -928,6 +928,34 @@ declared_modules := {
 	# `githook` arrived with it: argv[0] dispatch makes batten every git hook,
 	# routing through `[hook.git]`, an entry point like `main`.
 	"forge_event", "githook",
+	# THE CRATE SPLIT'S MODULES (#1276), named once `layer place wrong` read every
+	# package's top-level source rather than `crates/batten/src` alone. The crate
+	# DAG is the first placement: `batten-facts` < `batten-base` < `batten-core` <
+	# `batten`, with `batten-codemods` above `batten`, and Cargo refuses an edge
+	# up it, so each sits below every `batten` module that depends on its crate
+	# without a forbidden edge here to say so. Within its crate each is placed by
+	# its own non-test imports, measured.
+	#
+	# `batten-facts`: `digest` (hex and SHA-256) and `coupling` (DL and
+	# propagation cost over a dependency graph) reach nothing in the crate, so
+	# both are LEAVES. `units` reaches `facts` and `source` and sits above them:
+	# it is the Rust producer of the `Units` fact the model declares.
+	"digest", "coupling", "units",
+	# `batten-base`: `clock` and `low_water` say they are leaves in their own
+	# headers and reach nothing. `crate_cut` reaches `exit`, `fsio`,
+	# `module_graph`, `durable` and `source`, so it is a producer above the
+	# module graph it reads, and nothing in the crate reads it.
+	"clock", "low_water", "crate_cut",
+	# `batten-core`: `grammar` is a leaf by its header. `selector` reaches only
+	# `error`; `path_set` reaches `selector` and `error` and sits above it, below
+	# `rules` by its header. `shell`, `shell_logic` and `interpreter` are the
+	# shell parse and reach one another (the crate's recorded cycle of 3 in
+	# `modules.lock`) and `facts` below them; nothing in the crate above them is
+	# reached.
+	"grammar", "selector", "path_set", "shell", "shell_logic", "interpreter",
+	# `batten-codemods`: `fix` reaches nothing in its crate, only `std` and
+	# `rustfix`, so it is a LEAF.
+	"fix",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
