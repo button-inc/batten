@@ -2554,7 +2554,7 @@ fn git_stamp() -> String {
 /// be wrong too — `objects/info`, `objects/pack`, `refs/heads`, `refs/tags` and
 /// `branches` are all empty in a fresh `init`, and dropping them silently would
 /// hand every fixture a repository git has to repair.
-fn copy_tree(from: &Path, to: &Path) {
+pub(crate) fn copy_tree(from: &Path, to: &Path) {
     fs::create_dir_all(to).expect("create the copy destination");
     for entry in fs::read_dir(from).expect("read the template directory") {
         let entry = entry.expect("a template entry");
