@@ -359,6 +359,7 @@ clean_record := {
 	"passthrough": "2.2",
 	"posttool": "2.3",
 	"stop": "2.6",
+	"session-start": "4.1",
 	"wired": "8.4",
 	"cargo-fmt": "9.0",
 	"taplo": "9.0",
@@ -456,8 +457,8 @@ test_a_readme_publishing_a_different_budget_is_refused if {
 }
 
 test_a_readme_with_no_row_for_a_budgeted_path_is_refused if {
-	count(violation) == 1 with input as readme_tree(readme_without_row(8))
-	disagreeing == {"wired"} with input as readme_tree(readme_without_row(8))
+	count(violation) == 1 with input as readme_tree(readme_without_row(9))
+	disagreeing == {"wired"} with input as readme_tree(readme_without_row(9))
 }
 
 # THE UNGATED CELL IS THE DISAGREEMENT WRITTEN THE OTHER WAY ROUND. `—` publishes
@@ -491,6 +492,7 @@ test_a_reordered_budget_column_is_still_found if {
 				"| `passthrough` | ≤ 100 ms | — | — |",
 				"| `posttool` | ≤ 100 ms | — | — |",
 				"| `stop` | ≤ 100 ms | — | — |",
+				"| `session-start` | ≤ 100 ms | — | — |",
 				"| `wired` | ≤ 100 ms | 8.0 ms | 8.4 ms |",
 			],
 			commit_rows,
