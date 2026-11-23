@@ -1,0 +1,29 @@
+# Each vendored preset's version, pinned to the digest of what it decides
+# (CLOUD-2822): `<name> <version> <sha256 of its modules, verdicts and patterns>`.
+#
+# `every_manifest_matches_its_recorded_digest` fails when a preset's sources
+# change under an unchanged version, or when a version has no row here. Bump the
+# manifest's `version` (major: refuses something it admitted; minor: admits more
+# or a verdict gains a route; patch: prose only) and add its row. Rows for older
+# versions stay as history.
+check-verdict 0.0.1 9e3425bb1a838b3496073edec9a740eda7c39432983a6e86220da109e9ae6889
+ci-hygiene 0.0.1 a2fa104b5f054aea8fd9bee29407585dea5e1fc6ae25e5647b7d756f9c7b5dbb
+ci-signal 0.0.1 e66ce2d585faeca8845dc168504e9f373ab02132795cda7bf52fa13b4cde67b8
+claude-code-cloud 0.0.3 17cce21d44f6bd7cfacea5c9fd248e7824bf0c94ad13a88210eef3cb9d526fdf
+claude-code-plan 0.0.1 51d58ba76ed18422948c70191e4ce7e4b17b8452feb5d6b6ab7e0f940b81debe
+commit-hygiene 0.0.2 16eac0445b992267166189b3dd1a49bc6c4f8a6ce2b52ac99012a7426618763e
+engine-hygiene 0.0.1 85a8558d404fa3a99bf535dedc7a26018413c4fe320819836b2bd973c2b88220
+git 0.0.1 579b84087d625e585754fab11009ab03eb4edd9c356ee9465d91dbac0e19fc1f
+landing-loop 0.0.1 5753500f362c6bc82fff27b2ea0fd8f672babbb41e942d747bf6789a656e4790
+lease-asserted 0.0.1 d1ad46341cfed4ffa918d1e217f555e425d298a943ffdd3bde6a85dfc78c4771
+linear-history 0.0.2 c42174a673a895a6f13570202ac5a0489c7afe860db57ac97422c1e58b21c55d
+mise 0.0.2 f407755cd3ee37f1f33ea59e81cecc0da9eb543f94138159984334cd071573d1
+pinned-toolchain 0.0.1 503370b6b7a674e5d6c9dc63c7e109ab3d2a06a9b93171dec0b6921e3bc4aade
+red-head 0.0.1 db65476b620a9b1419d727d8a2ac769b9d0c21ca5048a6b3e66db13ef756221c
+release-hygiene 0.0.1 2ced252d2c254355648c0490ee7f84d8126e57e7c88b0a695116dbf67150733e
+rust 0.0.1 d33857423c9ed591ba5d5a0050aa145dc0355f068fde5fa93fff9e5f10c7daf7
+rust-quality 0.0.1 411933fa1422e9678503ca78594f817488a956cff5de07bab12f24b887c1874d
+shell-hygiene 0.0.3 1d37f27ed8e1ccf4bc77e3c5bb49d50d308028b6317ff8ca0daa9ee56ac7ec38
+supply-chain 0.0.1 fad33ac0427b563e43519b748814a2b62a8ae6535607d5c4ed775f7b6c93a6c9
+tracker-hygiene 0.0.1 bcedcfb74bbeec05fd971039ae6bc9bd38da048c68c2a05d5e2d8fe67dc0cd67
+trunk-based 0.0.1 dc2bc85031d606a032d647cc73f27b2bb84a344284408d428a586cebfb8cfa6a
