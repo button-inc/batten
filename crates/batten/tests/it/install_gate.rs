@@ -47,6 +47,9 @@ fn bench(name: &str) -> PathBuf {
 /// Record the setup task under `pid` in `phase`, keyed as the registry keys it.
 fn setup(dir: &Path, pid: &str, phase: &str) {
     let git_dir = batten::git::git_dir(dir).expect("the bench has a git dir");
+    // THE SETUP DIRECTORY `session_setup::start` WRITES BEFORE IT REGISTERS:
+    // the gate reads no registry where no setup was ever started.
+    std::fs::create_dir_all(git_dir.join("batten-session-setup")).expect("the setup dir");
     let registry = git_dir.join("batten-tasks");
     std::fs::create_dir_all(&registry).expect("a registry");
     for stale in std::fs::read_dir(&registry).expect("the registry lists") {

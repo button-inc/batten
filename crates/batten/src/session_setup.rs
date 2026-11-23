@@ -70,6 +70,35 @@ fn dir(git_dir: &Path) -> PathBuf {
     git_dir.join(DIR)
 }
 
+/// The git dir the setup task lives under for the authority at `root`, or
+/// `None` where `root` holds no repository of its own.
+///
+/// ONE STAT ON THE HOT PATH (CLOUD-2840's perf-gate). Every mediated call asks
+/// this, and `git::git_dir` opens the repository: from a directory that is not a
+/// repository root it walks up and opens the enclosing one, on every call of the
+/// `hook` and `passthrough` arms. A setup task is started only where the
+/// authority is a repository root, so a `.git` directory answers here, a `.git`
+/// file (a linked worktree) is the one case that opens, and no `.git` at all is
+/// no setup to read.
+#[must_use]
+pub fn git_dir_of(root: &Path) -> Option<PathBuf> {
+    let dot = root.join(".git");
+    if dot.is_dir() {
+        return Some(dot);
+    }
+    if dot.is_file() {
+        return crate::git::git_dir(root).ok();
+    }
+    None
+}
+
+/// Whether a setup task was ever started under `git_dir`: one stat, so a
+/// reader with nothing to read opens no registry.
+#[must_use]
+pub fn started(git_dir: &Path) -> bool {
+    dir(git_dir).exists()
+}
+
 /// The spooled payload the task's handlers read.
 #[must_use]
 pub fn payload_path(git_dir: &Path) -> PathBuf {
