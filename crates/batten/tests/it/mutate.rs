@@ -1732,6 +1732,133 @@ fn answered(command: &mut common::Batten) -> (i32, String, String) {
     )
 }
 
+/// `two_gate_repo` with the enforced set committed as `before` in `path`, then
+/// rewritten to `after` and left uncommitted: a change that enrolls a gate and
+/// touches none of its sources or suites.
+fn enrolling(name: &str, path: &str, before: &str, after: &str) -> PathBuf {
+    let root = two_gate_repo(name);
+    write(&root, path, before);
+    track(&root);
+    common::git_in(&root, &["commit", "-m", "enroll toy"]);
+    write(&root, path, after);
+    root
+}
+
+/// A GATE ENROLLED SINCE THE BASE IS SWEPT (#1276): `other` joins the set the
+/// task manifest declares, and nothing of `other`'s changed. Fails by: the
+/// narrowing reading sources and suites alone, so the change answered "no
+/// enforced gate's source or suite changed" and the new gate's survivor was
+/// never reached.
+#[test]
+fn a_gate_enrolled_in_the_manifest_since_the_base_is_swept() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = enrolling(
+        "since-enrolled-env",
+        "mise.toml",
+        "[env]\nMUTANT_GATES = \"toy\"\n",
+        "[env]\nMUTANT_GATES = \"toy,other\"\n",
+    );
+    let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("other/pipefail-dropped SURVIVED"),
+        "{out}{err}"
+    );
+}
+
+/// The committed table's arm of the same: `other` joins `[mutate].gates`.
+#[test]
+fn a_gate_enrolled_in_the_committed_table_since_the_base_is_swept() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = enrolling(
+        "since-enrolled-table",
+        "batten.toml",
+        "version = 1\n\n[mutate]\ngates = [\"toy\"]\n",
+        "version = 1\n\n[mutate]\ngates = [\"toy\", \"other\"]\n",
+    );
+    let (code, out, err) = sweep_since(&root, "", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("other/pipefail-dropped SURVIVED"),
+        "{out}{err}"
+    );
+}
+
+/// `toy`'s cases moved out of its declared suite into a module of the same
+/// target, as a `tests/<dir>/main.rs` layout has them: libtest selects a case
+/// wherever it compiled, so the case file is not the declared one. Committed.
+fn split_suite_repo(name: &str) -> PathBuf {
+    let root = toy(name);
+    let gate = TOY_GATE.replace("tests/toy.rs", "tests/toy/main.rs");
+    write_program(&root, "mise-tasks/toy.sh", &format!("{gate}{CAUGHT}\n"));
+    write(
+        &root,
+        "tests/toy/main.rs",
+        &format!("{}mod cases;\n", runs("toy.sh")),
+    );
+    write(&root, "tests/toy/cases.rs", &split_cases(true));
+    cargo_package(&root);
+    track(&root);
+    common::git_in(&root, &["commit", "-m", "base"]);
+    root
+}
+
+/// The module holding `toy`'s cases: the over-the-limit case asserts the
+/// refusal where `strict`, and only that the gate ran where not, so the row's
+/// mutation survives it.
+fn split_cases(strict: bool) -> String {
+    let over = if strict {
+        "assert_eq!(gate(\"99\"), Some(1));"
+    } else {
+        "assert!(gate(\"99\").is_some());"
+    };
+    format!(
+        "use super::gate;\n{}{}",
+        case("over_the_limit_is_refused", over),
+        case(
+            "under_the_limit_passes",
+            "assert_eq!(gate(\"1\"), Some(0));"
+        ),
+    )
+}
+
+/// A CASE OUTSIDE ITS DECLARED SUITE IS PART OF WHAT A CHANGE CAN MOVE
+/// (#1276): weakening the case file touches the gate. Fails by: the touch set
+/// reading the declared suite's path alone, so the weakened case answered "no
+/// enforced gate's source or suite changed".
+#[test]
+fn a_weakened_case_outside_its_suite_touches_the_gate() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = split_suite_repo("since-case-file");
+    write(&root, "tests/toy/cases.rs", &split_cases(false));
+    let (code, out, err) = sweep_since(&root, "toy", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(out.contains("toy/limit-ignored SURVIVED"), "{out}{err}");
+}
+
+/// And it is part of the row's key, so a recorded catch is not replayed over a
+/// case weakened since. Fails by: the key reading the declared suite alone.
+#[test]
+fn a_weakened_case_outside_its_suite_runs_its_row_again() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = split_suite_repo("recorded-case-file");
+    let (code, out, err) = sweep(&root, "toy");
+    assert_eq!(code, 0, "{out}{err}");
+    write(&root, "tests/toy/cases.rs", &split_cases(false));
+    let (code, out, err) = sweep(&root, "toy");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(!err.contains("(recorded)"), "{err}");
+    assert!(out.contains("toy/limit-ignored SURVIVED"), "{out}{err}");
+}
+
 /// `toy`'s gate, edited: the one change most cases below judge.
 fn edit_toy(root: &Path) {
     write_program(
