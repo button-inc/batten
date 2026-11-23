@@ -248,6 +248,12 @@ fn a_destructive_git_call_is_left_to_the_host() {
 /// CLOUD-2354: `-C -c` is directory `-c`, so the verb is `reset`. The preset's
 /// own copy of git's option table skipped `reset` as `-c`'s value and granted
 /// the hard reset; the engine's projected subcommand does not.
+///
+/// JUDGED UNDER THE PRESET ALONE TOO (CLOUD-2836): under the committed config
+/// another rule already leaves `git reset --hard` to the host, so with the
+/// preset's own `reset` arm gone the case still passed and its declared mutant
+/// survived. Under a config carrying only the git preset row, `destructive` is
+/// the one thing withholding the grant.
 #[test]
 fn a_global_option_never_hides_a_destructive_git_call() {
     for call in ["git -C -c reset --hard HEAD~1", "git reset --hard HEAD~1"] {
@@ -255,9 +261,19 @@ fn a_global_option_never_hides_a_destructive_git_call() {
             !granted("default", call),
             "must be left to the host: {call}"
         );
+        assert!(
+            !granted_under_the_preset_alone("git-preset-alone-reset", "default", call),
+            "the git preset alone must leave it to the host: {call}"
+        );
     }
-    // Anti-vacuity: the same globals before a read are granted.
+    // Anti-vacuity: the same globals before a read are granted, under the
+    // committed config and under the preset alone.
     assert!(granted("default", "git -C -c status"));
+    assert!(granted_under_the_preset_alone(
+        "git-preset-alone-status",
+        "default",
+        "git -C -c status"
+    ));
 }
 
 /// The preset alone, so its own plan-mode guard is what decides: in this
