@@ -517,6 +517,28 @@ fn test_shapes(
         .collect()
 }
 
+/// The items the branch moved, for the comparison and for the splice
+/// (CLOUD-2789). The comparison's are proven moves: a moved file's items, an
+/// item HEAD's own `use` chain binds its old path to, and a declaration equal
+/// on both sides. FOR THE SPLICE ONLY, an item also pairs by a name declared
+/// once on each side: an edited item is still compared as modified, and its
+/// base body then runs against HEAD's item rather than failing to compile.
+fn item_moves(
+    base: &crate::item_index::Index,
+    head: &crate::item_index::Index,
+    files: &BTreeMap<String, String>,
+) -> (
+    BTreeMap<crate::item_index::Key, crate::item_index::Key>,
+    BTreeMap<crate::item_index::Key, crate::item_index::Key>,
+) {
+    let mut compared = crate::item_index::moved_with_files(base, head, files);
+    compared.extend(crate::item_index::moved_through_uses(base, head));
+    compared.extend(crate::item_index::moved_items(base, head));
+    let mut spliced = crate::item_index::relocated_items(base, head);
+    spliced.extend(compared.iter().map(|(from, to)| (from.clone(), to.clone())));
+    (compared, spliced)
+}
+
 /// The crate cuts the branch made, read off its file moves: each pair of
 /// crates a library file moved between, to the crate-root modules that moved.
 /// What `crate_cut` was given, recovered from what it did.
@@ -614,21 +636,7 @@ pub fn run(
     // names, so a path respelled at an item's new home is no change.
     let base_index = crate::item_index::Index::new(&before, &manifests(root, &fork)?);
     let head_index = crate::item_index::Index::new(&after, &manifests(root, "HEAD")?);
-    let mut item_moves = crate::item_index::moved_with_files(&base_index, &head_index, &moves);
-    item_moves.extend(crate::item_index::moved_through_uses(
-        &base_index,
-        &head_index,
-    ));
-    item_moves.extend(crate::item_index::moved_items(&base_index, &head_index));
-    // FOR THE SPLICE ONLY, an item also pairs by a name declared once on each
-    // side: an edited item is still compared as modified, and its base body
-    // then runs against HEAD's item rather than failing to compile.
-    let mut splice_moves = crate::item_index::relocated_items(&base_index, &head_index);
-    splice_moves.extend(
-        item_moves
-            .iter()
-            .map(|(from, to)| (from.clone(), to.clone())),
-    );
+    let (item_moves, splice_moves) = item_moves(&base_index, &head_index, &moves);
     let cuts = cuts(&moves, &base_index, &head_index);
     let no_moves = BTreeMap::new();
     // `crate::` names a file's own crate only for a library source the index
