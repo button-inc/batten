@@ -544,6 +544,15 @@ pub enum Verdict {
     /// case does, so a sweep reading the code would call every mutation that
     /// breaks the parse `caught`. Only the case's own failure kills a mutant.
     CaseErrored { want: String },
+    /// The suite never read the mutated copy the overlay held for this row, so
+    /// it judged the UNMUTATED module (CLOUD-2839). Its reader leaves a receipt
+    /// beside a copy it read ([`crate::preset::OVERLAY_READ`]), and none was
+    /// there.
+    ///
+    /// **A COULD-NOT-LOOK, NEVER A SURVIVOR.** A reader that fell back to the
+    /// embedded text in silence ran green over code nobody mutated, and that
+    /// green run was reported `SURVIVED`: CLOUD-2836's one-off survivor.
+    OverlayUnread { want: String },
     /// The case was already red before the mutation, so its redness afterwards
     /// is not evidence.
     CaseAlreadyRed { want: String },
@@ -606,6 +615,7 @@ impl Verdict {
                 | Verdict::SuiteTimedOut { .. }
                 | Verdict::SuiteDidNotRun { .. }
                 | Verdict::CaseErrored { .. }
+                | Verdict::OverlayUnread { .. }
                 | Verdict::CaseAlreadyRed { .. }
                 | Verdict::UnappliableMutation
                 | Verdict::RunnerAbsent
@@ -630,6 +640,7 @@ impl fmt::Display for Verdict {
             }
             Verdict::SuiteDidNotRun { want } => write!(out, "suite-did-not-run ({want})"),
             Verdict::CaseErrored { want } => write!(out, "case-errored ({want})"),
+            Verdict::OverlayUnread { want } => write!(out, "overlay-unread ({want})"),
             Verdict::CaseAlreadyRed { want } => write!(out, "case-already-red ({want})"),
             Verdict::FilterNamesEveryCase { want } => {
                 write!(out, "filter-names-every-case ({want})")
@@ -777,6 +788,7 @@ impl Verdict {
             | Verdict::SuiteTimedOut { .. }
             | Verdict::SuiteDidNotRun { .. }
             | Verdict::CaseErrored { .. }
+            | Verdict::OverlayUnread { .. }
             | Verdict::CaseAlreadyRed { .. }
             | Verdict::UnappliableMutation
             | Verdict::RunnerAbsent
@@ -2772,6 +2784,31 @@ impl Overlay {
         vec![String::from("--features"), self.features.clone()]
     }
 
+    /// Name `copy`, a path [`Overlay::path_of`] answered, as the one module this
+    /// row mutated ([`crate::preset::OVERLAY_TARGET`]). A reader of that module
+    /// whose copy will not read then refuses rather than judging the embedded
+    /// text (CLOUD-2839).
+    ///
+    /// # Errors
+    ///
+    /// The marker cannot be written.
+    fn mark(&self, copy: &Path) -> Result<()> {
+        let relative = copy.strip_prefix(&self.dir).unwrap_or(copy);
+        crate::durable::replace(
+            self.dir.join(crate::preset::OVERLAY_TARGET),
+            relative.to_string_lossy().into_owned(),
+        )
+        .context("mutate: could not name the overlay's target")
+    }
+
+    /// Whether a suite left its receipt beside `copy`, so its run read the
+    /// mutation (CLOUD-2839).
+    fn read(copy: &Path) -> bool {
+        let mut receipt = copy.as_os_str().to_owned();
+        receipt.push(crate::preset::OVERLAY_READ);
+        Path::new(&receipt).is_file()
+    }
+
     /// Where the mutated copy of `source` is written, or `None` for a source
     /// outside [`Overlay::root`], which is mutated in place.
     #[must_use]
@@ -3664,15 +3701,17 @@ fn apply(staged: &Staged, overlay: Option<&Overlay>, row: &Row) -> Result<Option
     };
     // Into the overlay for a source a build embeds, so the staged tree, the
     // build's input, never moves ([`Overlay`]).
-    let target = overlay
-        .and_then(|overlay| overlay.path_of(&row.source))
-        .unwrap_or(path);
+    let copy = overlay.and_then(|overlay| Some((overlay, overlay.path_of(&row.source)?)));
+    let target = copy.as_ref().map_or(path, |(_, copy)| copy.clone());
     if let Some(dir) = target.parent() {
         fs::create_dir_all(dir)
             .with_context(|| format!("mutate: could not create {}", dir.display()))?;
     }
     crate::durable::replace(&target, after)
         .with_context(|| format!("mutate: could not write the mutated {}", row.source))?;
+    if let Some((overlay, copy)) = copy {
+        overlay.mark(&copy)?;
+    }
     Ok(None)
 }
 
@@ -4040,6 +4079,17 @@ fn judge_row(
     }
     if mutated.selected == 0 {
         return Ok(Verdict::NamesNoCase {
+            want: row.want.clone(),
+        });
+    }
+    // WHICH SOURCE THE RUN JUDGED, read before EITHER verdict (CLOUD-2839). A
+    // suite that never read the overlay's copy ran the unmutated module: green
+    // is no survivor, and red (its reader refusing an unreadable copy) is no
+    // catch. Only a receipt beside the copy says the mutation was judged.
+    if let Some(copy) = overlay.as_ref().and_then(|o| o.path_of(&row.source))
+        && !Overlay::read(&copy)
+    {
+        return Ok(Verdict::OverlayUnread {
             want: row.want.clone(),
         });
     }
@@ -7091,6 +7141,12 @@ mod tests {
         );
         assert!(
             Verdict::CaseErrored {
+                want: String::new()
+            }
+            .could_not_look()
+        );
+        assert!(
+            Verdict::OverlayUnread {
                 want: String::new()
             }
             .could_not_look()

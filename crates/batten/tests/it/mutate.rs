@@ -2741,6 +2741,102 @@ fn a_preset_a_test_embeds_is_mutated_in_place_and_rebuilt() {
     assert!(out.contains("every one caught"), "{out}{err}");
 }
 
+/// A toy preset row whose suite reads its module through the overlay, the way
+/// `PresetModuleExt::text` does: the mutated copy at `$TOY_OVERLAY/<looked>`
+/// where one reads, leaving the receipt the sweep requires beside it, else the
+/// staged module. `looked` is the overlay path the reader consults.
+fn overlay_reader_toy(name: &str, looked: &str) -> PathBuf {
+    let root = toy(name);
+    write(
+        &root,
+        "Cargo.toml",
+        &format!("{TOY_MANIFEST}\n[features]\noverlay = []\n"),
+    );
+    write(&root, "src/lib.rs", "");
+    write(
+        &root,
+        &format!("{PRESETS}/demo/a.rego"),
+        "#MUTANT-SUITE tests/preset.rs\n\
+         #MUTANT limit-moved|s/^limit := 10$/limit := 99/|demo_limit_is_ten\n\
+         package batten.demo\n\
+         \n\
+         limit := 10\n",
+    );
+    let reader = format!(
+        "fn module() -> String {{\n\
+         \x20   if let Ok(dir) = std::env::var(\"TOY_OVERLAY\") {{\n\
+         \x20       let copy = std::path::Path::new(&dir).join({looked:?});\n\
+         \x20       if let Ok(text) = std::fs::read_to_string(&copy) {{\n\
+         \x20           let mut receipt = copy.into_os_string();\n\
+         \x20           receipt.push({read:?});\n\
+         \x20           std::fs::write(receipt, \"\").expect(\"leave the receipt\");\n\
+         \x20           return text;\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         \x20   std::fs::read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{PRESETS}/demo/a.rego\"))\n\
+         \x20       .expect(\"the staged module\")\n\
+         }}\n",
+        read = batten::preset::OVERLAY_READ,
+    );
+    write(
+        &root,
+        "tests/preset.rs",
+        &format!(
+            "{reader}{}{}",
+            case(
+                "demo_limit_is_ten",
+                "assert!(module().contains(\"\\nlimit := 10\\n\"));"
+            ),
+            case("demo_other_case", "assert!(true);"),
+        ),
+    );
+    track(&root);
+    root
+}
+
+/// The sweep of [`overlay_reader_toy`]'s one row, with the overlay declared.
+fn overlay_sweep(root: &Path) -> (i32, String, String) {
+    run_with(
+        root,
+        "sweep",
+        "demo",
+        &[
+            ("MUTANT_OVERLAY_ENV", Path::new("TOY_OVERLAY")),
+            ("MUTANT_OVERLAY_FEATURES", Path::new("overlay")),
+        ],
+    )
+}
+
+/// A SUITE THAT READ THE MUTATED COPY IS JUDGED AS IT ALWAYS WAS (CLOUD-2839).
+/// The reader found the copy and left its receipt, so the red run is a catch.
+/// Fails by: requiring a receipt the protocol does not name, which would read
+/// every overlay row as unjudged.
+#[test]
+fn a_suite_that_read_the_overlay_copy_is_judged() {
+    let root = overlay_reader_toy("overlay-read", "demo/a.rego");
+    let (code, out, err) = overlay_sweep(&root);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}{err}");
+}
+
+/// A SUITE THAT NEVER READ THE MUTATED COPY JUDGED UNMUTATED CODE, SO ITS GREEN
+/// RUN IS NO SURVIVOR (CLOUD-2839). With the variable set and the copy absent
+/// where the reader looks, the reader falls back to the embedded module, as
+/// `PresetModuleExt::text` once did in silence. That is could-not-look, exit 3,
+/// never a coverage gap. Fails by: reading the green run as `SURVIVED`, the
+/// verdict CLOUD-2836's one-off survivor carried.
+#[test]
+fn a_suite_that_never_read_the_overlay_copy_is_unjudged() {
+    let root = overlay_reader_toy("overlay-unread", "demo/absent.rego");
+    let (code, out, err) = overlay_sweep(&root);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(
+        out.contains("demo/limit-moved overlay-unread"),
+        "{out}{err}"
+    );
+    assert!(!out.contains("SURVIVED"), "{out}{err}");
+}
+
 #[cfg(unix)]
 #[test]
 fn anti_vacuity_a_case_that_is_red_before_the_mutation_is_not_evidence() {
