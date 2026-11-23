@@ -2646,6 +2646,7 @@ impl EventExt for Event {
         Event::TabFileRead,
         Event::TabFileEdit,
         Event::Forge,
+        Event::ChildSession,
         Event::Unrecognized,
     ];
 
@@ -2706,7 +2707,7 @@ impl EventExt for Event {
     }
 
     fn host_emitted(self) -> bool {
-        !matches!(self, Event::Forge)
+        !matches!(self, Event::Forge | Event::ChildSession)
     }
 
     fn as_str(&self) -> &'static str {
@@ -2755,6 +2756,7 @@ impl EventExt for Event {
             Event::TabFileRead => "tab-file-read",
             Event::TabFileEdit => "tab-file-edit",
             Event::Forge => "forge",
+            Event::ChildSession => "child-session",
             Event::Unrecognized => "unrecognized",
         }
     }
@@ -5106,7 +5108,9 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // A FORGE EVENT IS JUDGED BY THE MODULES ALONE (CLOUD-2690). It carries a
     // verdict, so a rule over `input.call.forge` decides; it names no command
     // and no write, and the command and write gates stay `pre-tool`'s.
-    if envelope.event == Event::Forge {
+    // A CHILD-SESSION EVENT (CLOUD-2826) is a lifecycle source of the same
+    // kind: no command, no write, judged by the modules over its tokens.
+    if matches!(envelope.event, Event::Forge | Event::ChildSession) {
         return policy_rules(policy, envelope, facts);
     }
     if let Some(decided) = event_decides(envelope.event) {
@@ -5222,6 +5226,8 @@ fn event_decides(event: Event) -> Option<Decision> {
         // A forge event is judged by the policy modules, in their own arm of
         // `adjudicated_gates`, before this table is read.
         | Event::Forge
+        // `ChildSession` (CLOUD-2826): `Forge`'s reason, one arm up.
+        | Event::ChildSession
         // `Unrecognized`: the host said something this build cannot normalize.
         // Allow, loudly elsewhere — an unrecognized event is a fact about the
         // host, never a reason to refuse a call (CLOUD-45), and guessing which
