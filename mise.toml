@@ -703,18 +703,10 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # the job the same verb excludes.
 CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 
-# The gates `mise run mutant` ENFORCES (CLOUD-418). A gate named here with no
-# `#MUTANT` declaration in its own file fails the sweep — that is the anti-vacuity
-# term, and without it the task reports success over a set it never touched.
-#
-# A gate NOT named here is a FILED ROW, never a silent exemption: the remaining
-# names are carried on CLOUD-480, `relatedTo` CLOUD-418. The property this buys is
-# "coverage cannot be silently zero", which a visible list with filed gaps has and
-# which forty hastily-written declarations would not — while adding branch age,
-# the thing that multiplies laps and CI runs, to the change that reduces them.
-#
-# Seeded with the gates this bundle touches, so every "mutation-checked per
-# CLOUD-418" obligation in it is cashed rather than cited.
+# The gates `mise run mutant` ENFORCES live in `batten.toml`'s `[mutate] gates`
+# (CLOUD-2010), the one committed authority. `$MUTANT_GATES` is a raise-only
+# override and is deliberately not set here: a set in the variable left the
+# census without a table, so its declaration arm never ran.
 # Upstream regorus's declared OPA compliance level, and the regorus line it was
 # read against (CLOUD-876). Both are read by the `opa-tracks-regorus-compliance`
 # policy row, which holds the `[tools]` opa pin to the first and the `Cargo.toml`
@@ -728,7 +720,6 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.15"
-MUTANT_GATES = ".config/nextest.toml,action.yml,connector-not-granted,agentic-experiment-record,answer-the-operator,claude-code-cloud,claude-code-plan,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,crate-reach,rust,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,digest-major-agreement,egress-fencing,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,lease-asserted,leased-push,license-table,linear-history,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,red-head,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,rust-quality,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,run-arg-shape,branch-age,evaluator-closure,evaluator-io-probe,agent-spawn,dispatch-tier,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,release-assets,durable-write,spawn-factory,turn-ask,turn-defer,ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,hk-fix-selection.pkl,hk.pkl,supply-chain,sweep-exit-table,tracker-hygiene,task-duplicate-close-check,task-cross-check,release-hygiene,hook-profile,finding-sink,check-verdict,git,forge-read-first,land-stage-direct,batten.toml,task-verify,task-alive,.github/workflows/release-plz.yml,.github/workflows/release-land.yml,.github/workflows/release-artifacts.yml,.github/workflows/renovate.yml,engine-hygiene,admit-ask,script-spawn-opaque,lap-tree-held,profile-read-first,profile-stripped,sed-line-address"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
