@@ -1511,22 +1511,40 @@ pub(crate) fn require_bin(tool: &str, bin: &str) -> PathBuf {
     path
 }
 
-/// The `--ca-certificates` selection every `pkl` spawn in this suite carries, so
-/// a case evaluating a `package://` amend fetches the way the tasks do.
+/// The `--ca-certificates` selection a `pkl` spawn carries, given the two
+/// candidates: `batten_ca` (`BATTEN_CA_BUNDLE`) when it names a file, else
+/// `ssl_cert` (`SSL_CERT_FILE`) when it names a file, else nothing.
 ///
 /// THE SAME RULE AS `mise.toml`'s `vars.pkl_ca`, WHICH OWNS IT (CLOUD-2409):
-/// `BATTEN_CA_BUNDLE` when it names a file, else `SSL_CERT_FILE` when it names a
-/// file, else nothing — the flag REPLACES pkl's roots, so a set-but-missing
-/// bundle is never passed. A case that spawns bare `pkl` in a TLS-intercepting
-/// sandbox fails the handshake cold and reads a could-not-fetch as its verdict.
+/// the flag REPLACES pkl's roots, so a set-but-missing bundle, or a set-but-empty
+/// one, is never passed. Pure over its arguments, so `pkl_ca.rs` covers it
+/// without mutating the process environment parallel cases read (CLOUD-2841).
 #[must_use]
-pub(crate) fn pkl_ca_args() -> Vec<std::ffi::OsString> {
-    ["BATTEN_CA_BUNDLE", "SSL_CERT_FILE"]
+pub(crate) fn pkl_ca_selection(
+    batten_ca: Option<std::ffi::OsString>,
+    ssl_cert: Option<std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    [batten_ca, ssl_cert]
         .into_iter()
-        .filter_map(std::env::var_os)
+        .flatten()
         .find(|bundle| Path::new(bundle).is_file())
         .map(|bundle| vec!["--ca-certificates".into(), bundle])
         .unwrap_or_default()
+}
+
+/// `pkl eval`, with the CA selection already applied: THE ONE WAY THIS SUITE
+/// SPAWNS `pkl` (CLOUD-2841). A case that spawns bare `pkl` in a
+/// TLS-intercepting sandbox fails the handshake on a cold cache and reads a
+/// could-not-fetch as its verdict; one helper means no spawn can forget the
+/// flag, and `pkl_ca.rs`'s census holds every other test file to it.
+#[must_use]
+pub(crate) fn pkl_command() -> Command {
+    let mut command = Command::new(require_tool("pkl"));
+    command.arg("eval").args(pkl_ca_selection(
+        std::env::var_os("BATTEN_CA_BUNDLE"),
+        std::env::var_os("SSL_CERT_FILE"),
+    ));
+    command
 }
 
 /// A path the committed protected set guards TODAY: the policy authority while the
