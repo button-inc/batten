@@ -345,12 +345,12 @@ fn no_module_reaches_deeper_than_the_recorded_worst() {
 /// these with closures of 12 to 23 — a tier a crate boundary can now be drawn
 /// under, which is what the split is for. Same discipline as [`PLUMBING`]: a
 /// subset, recorded by [`print_the_distribution`], and a module LEAVING it for
-/// the core is the regression, while a module arriving is progress.
+/// the core is the regression, while a module arriving fails until recorded.
 ///
 /// EMPTY on the corrected graph: the 34 modules recorded here sat in the gap
 /// only on the `use`-only graph, and every one is in the core once qualified
 /// paths count. The gap is real (nothing lives between 9 and 80), so a module
-/// arriving in it is progress and reported, exactly as before.
+/// arriving in it fails until it is recorded here, exactly as on `main`.
 const MIDDLE: &[&str] = &[];
 
 #[test]
@@ -360,9 +360,10 @@ fn the_gap_holds_only_the_recorded_middle() {
     // scan reported and what a split plan was written on. The cycle break
     // (CLOUD-2789) put [`MIDDLE`] in it, which is the plan working.
     //
-    // Two failures are still news. A module of [`MIDDLE`] climbing back to the
-    // core undoes a break. A module arriving in the gap from the core is
-    // progress, reported and recorded deliberately, never asserted on.
+    // Two failures are news. A module of [`MIDDLE`] climbing back to the core
+    // undoes a break. A module arriving in the gap that [`MIDDLE`] does not
+    // record fails too: it may be progress, but recording it is a deliberate
+    // edit, never a report line.
     let graph = module_graph();
     let sizes = distribution(&graph);
     let middle: BTreeSet<&str> = MIDDLE.iter().copied().collect();
@@ -405,17 +406,23 @@ fn the_gap_holds_only_the_recorded_middle() {
          grew an edge back into the largest cycle; re-read the split plan.",
     );
 
+    // A module in the gap that MIDDLE does not record FAILS, as
+    // `the_gap_between_the_two_populations_stays_empty` failed on `main`: the
+    // split plan rests on the two populations, so a straddler is news somebody
+    // has to look at and record, never a line in a report nobody reads. With
+    // MIDDLE empty this is that assertion verbatim.
     let arrived: Vec<&(usize, String)> = sizes
         .iter()
         .filter(|(size, module)| {
             *size > PLUMBING_CEILING && *size < CORE_FLOOR && !middle.contains(module.as_str())
         })
         .collect();
-    if !arrived.is_empty() {
-        report(&format!(
-            "arrived in the gap since MIDDLE was recorded: {arrived:?}"
-        ));
-    }
+    assert!(
+        arrived.is_empty(),
+        "modules now sit between plumbing and core and MIDDLE does not record them: \
+         {arrived:?}. Re-read the split plan before moving either boundary — this \
+         is the shape it rests on — and record each in MIDDLE deliberately.",
+    );
 }
 
 #[test]
