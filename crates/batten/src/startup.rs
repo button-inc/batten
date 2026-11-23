@@ -331,56 +331,20 @@ pub fn repair(root: &Path, rows: &[Startup]) -> Vec<Outcome> {
         .collect()
 }
 
-/// Every declared row, with each `preset` row's argv derived from the preset's
-/// install and its enabling rule's parameters (CLOUD-2633).
-///
-/// In declaration order, so the consumer decides where the install runs — after
-/// the rows that bootstrap the tool, before the rows whose repairs need it.
-/// Pure: whether a listed environment is configured is a question about the
-/// tree, decided when the row runs ([`ENVIRONMENT_UNCONFIGURED`]), so a tree
-/// lacking one still resolves for every other verb. A preset row no rule
-/// parameterises is refused at load, and passes through unchanged here.
-#[must_use]
-pub fn derive(rows: &[Startup], rules: &[crate::config_model::Rule]) -> Vec<Startup> {
-    rows.iter()
-        .map(|row| {
-            let Some((install, rule)) = row.preset.as_deref().and_then(|name| {
-                install_of(name).zip(rules.iter().find(|rule| {
-                    rule.preset.as_deref() == Some(name) && rule.environments.is_some()
-                }))
-            }) else {
-                return row.clone();
-            };
-            let environments = rule.environments.as_deref().unwrap_or_default();
-            let (check, repair) = install_argv(install, environments, &rule.install_env);
-            Startup {
-                check,
-                repair: Some(repair),
-                decided_by: Decided::SilentExit,
-                ..row.clone()
-            }
-        })
-        .collect()
-}
-
-/// The install the named preset declares, if any.
-fn install_of(name: &str) -> Option<&'static crate::preset_catalog::Install> {
-    crate::preset_catalog::MANIFESTS
-        .iter()
-        .find(|manifest| manifest.name == name)
-        .and_then(|manifest| manifest.install.as_ref())
-}
-
 /// Whether a derived row lists an environment no entry of `root` configures.
 ///
-/// Read off the selector assignment [`install_argv`] wrote, so the list decided
+/// Read off the selector assignment [`crate::config_model::install_argv`] wrote, so the list decided
 /// is the list that runs. Configured means some entry of `root` carries the
 /// name as an inner `.`-separated segment of its own name — the tool's
 /// spelling read off the tree, never written down here (non-negotiable rule
 /// 1). A name configured only under a subdirectory reads as unconfigured: the
 /// loud direction.
 fn unconfigured(root: &Path, row: &Startup) -> bool {
-    let Some(install) = row.preset.as_deref().and_then(install_of) else {
+    let Some(install) = row
+        .preset
+        .as_deref()
+        .and_then(crate::config_model::install_of)
+    else {
         return false;
     };
     let assignment = format!("{}=", install.selector);
@@ -402,32 +366,6 @@ fn unconfigured(root: &Path, row: &Startup) -> bool {
     listed
         .split(install.separator)
         .any(|environment| !configured(&named, environment))
-}
-
-/// The derived check and repair argv: one `env` prefix — the selector naming
-/// exactly `environments`, then the consumer's `install_env` — before the
-/// tool's own operands.
-#[must_use]
-pub fn install_argv(
-    install: &crate::preset_catalog::Install,
-    environments: &[String],
-    install_env: &[String],
-) -> (Vec<String>, Vec<String>) {
-    let prefix = || {
-        let mut argv = vec![
-            String::from("env"),
-            format!("{}={}", install.selector, environments.join(install.separator)),
-        ];
-        argv.extend(install_env.iter().cloned());
-        argv.push(install.program.to_owned());
-        argv
-    };
-    let tail = |operands: &[&str]| {
-        let mut argv = prefix();
-        argv.extend(operands.iter().map(|operand| (*operand).to_owned()));
-        argv
-    };
-    (tail(install.check), tail(install.repair))
 }
 
 /// Whether some name in `names` carries `environment` as an inner segment.
@@ -765,15 +703,28 @@ mod tests {
     #[test]
     fn the_agent_install_sets_the_agent_env_and_the_locked_flags_and_nothing_else() {
         let config = placed("[\"agent\"]");
-        let rows = derive(&config.startup, &config.rules);
-        let prefix = ["env", "MISE_ENV=agent", LOCKED[0], LOCKED[1], LOCKED[2], "mise"];
-        assert_eq!(rows[0].check, owned(&[&prefix[..], &["ls", "--current", "--missing"]].concat()));
+        let rows = crate::config_model::derive_startup(&config.startup, &config.rules);
+        let prefix = [
+            "env",
+            "MISE_ENV=agent",
+            LOCKED[0],
+            LOCKED[1],
+            LOCKED[2],
+            "mise",
+        ];
+        assert_eq!(
+            rows[0].check,
+            owned(&[&prefix[..], &["ls", "--current", "--missing"]].concat())
+        );
         assert_eq!(
             rows[0].repair.as_deref(),
             Some(&owned(&[&prefix[..], &["install", "--yes"]].concat())[..])
         );
         assert_eq!(rows[0].decided_by, Decided::SilentExit);
-        assert_eq!((rows[0].id.as_str(), rows[0].preset.as_deref()), ("toolchain", Some("mise")));
+        assert_eq!(
+            (rows[0].id.as_str(), rows[0].preset.as_deref()),
+            ("toolchain", Some("mise"))
+        );
     }
 
     /// Fails by: a listed env missing from the selector, or an unlisted one
@@ -781,11 +732,16 @@ mod tests {
     #[test]
     fn an_env_not_listed_is_not_installed() {
         let config = placed("[\"agent\", \"dev\"]");
-        let rows = derive(&config.startup, &config.rules);
+        let rows = crate::config_model::derive_startup(&config.startup, &config.rules);
         let repair = rows[0].repair.clone().unwrap();
-        assert!(repair.contains(&String::from("MISE_ENV=agent,dev")), "{repair:?}");
         assert!(
-            !repair.iter().any(|arg| arg.split(['=', ',']).any(|part| part == "ci")),
+            repair.contains(&String::from("MISE_ENV=agent,dev")),
+            "{repair:?}"
+        );
+        assert!(
+            !repair
+                .iter()
+                .any(|arg| arg.split(['=', ',']).any(|part| part == "ci")),
             "{repair:?}"
         );
     }
@@ -798,16 +754,17 @@ mod tests {
         let root = configured_root("derive-unknown", &["agent"]);
         let config = placed("[\"agent\", \"prod\"]");
         let marker = root.join("repaired");
-        let rows: Vec<Startup> = derive(&config.startup, &config.rules)
-            .into_iter()
-            .map(|row| Startup {
-                // The derived selector kept, the tool swapped for one that
-                // passes, so only the configuration question can fail the row.
-                check: owned(&["env", "MISE_ENV=agent,prod", "true"]),
-                repair: Some(owned(&["touch", marker.to_str().unwrap()])),
-                ..row
-            })
-            .collect();
+        let rows: Vec<Startup> =
+            crate::config_model::derive_startup(&config.startup, &config.rules)
+                .into_iter()
+                .map(|row| Startup {
+                    // The derived selector kept, the tool swapped for one that
+                    // passes, so only the configuration question can fail the row.
+                    check: owned(&["env", "MISE_ENV=agent,prod", "true"]),
+                    repair: Some(owned(&["touch", marker.to_str().unwrap()])),
+                    ..row
+                })
+                .collect();
         assert_eq!(
             repair(&root, &rows)[0].line(),
             "toolchain failed environment-unconfigured"
@@ -829,7 +786,10 @@ mod tests {
     #[test]
     fn a_config_with_no_preset_row_derives_nothing() {
         let rows = [row("one", &["true"], None)];
-        assert_eq!(derive(&rows, &[]), rows.to_vec());
+        assert_eq!(
+            crate::config_model::derive_startup(&rows, &[]),
+            rows.to_vec()
+        );
     }
 
     /// A fixture standing in for the tool, run by `sh`: `ls` names each env in
@@ -867,7 +827,7 @@ mod tests {
         let fixture = dir.join("tool");
         std::fs::write(&fixture, FIXTURE_TOOL).unwrap();
         let config = placed("[\"agent\"]");
-        let derived = derive(&config.startup, &config.rules);
+        let derived = crate::config_model::derive_startup(&config.startup, &config.rules);
         let rows = [Startup {
             check: through_fixture(&derived[0].check, &fixture),
             repair: derived[0]
@@ -876,12 +836,24 @@ mod tests {
                 .map(|argv| through_fixture(argv, &fixture)),
             ..derived[0].clone()
         }];
-        assert_eq!(evaluate(&dir, &rows)[0].line(), "toolchain failed not-provisioned");
-        assert!(!dir.join("installed.agent").exists(), "evaluate must not install");
+        assert_eq!(
+            evaluate(&dir, &rows)[0].line(),
+            "toolchain failed not-provisioned"
+        );
+        assert!(
+            !dir.join("installed.agent").exists(),
+            "evaluate must not install"
+        );
         assert_eq!(repair(&dir, &rows)[0].line(), "toolchain ok repaired");
         assert!(dir.join("installed.agent").exists());
-        assert!(!dir.join("installed.ci").exists(), "an unlisted env was installed");
-        assert_eq!(std::fs::read_to_string(dir.join("locked")).unwrap().trim(), "1");
+        assert!(
+            !dir.join("installed.ci").exists(),
+            "an unlisted env was installed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("locked")).unwrap().trim(),
+            "1"
+        );
         assert_eq!(evaluate(&dir, &rows)[0].line(), "toolchain ok");
     }
 }
