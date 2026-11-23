@@ -402,3 +402,91 @@ fn a_test_switched_to_another_item_of_its_name_is_reported() {
         text(&output)
     );
 }
+
+/// A two-crate workspace for the cross-crate move (CLOUD-2804): `one` and `two`,
+/// each with a `testing` module, and `one`'s holding a test over its helper.
+fn two_crates(name: &str) -> (PathBuf, String) {
+    let dir = common::scratch(name);
+    common::write(
+        &dir,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"one\", \"two\"]\nresolver = \"2\"\n",
+    );
+    for krate in ["one", "two"] {
+        common::write(
+            &dir,
+            &format!("{krate}/Cargo.toml"),
+            &format!("[package]\nname = \"{krate}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+        );
+        common::write(&dir, &format!("{krate}/src/lib.rs"), "pub mod testing;\n");
+    }
+    common::write(
+        &dir,
+        "one/src/testing.rs",
+        &format!("pub fn kept() {{}}\n{MOVED}"),
+    );
+    common::write(&dir, "two/src/testing.rs", "pub fn other() {}\n");
+    common::write(&dir, ".gitignore", "target/\nCargo.lock\n");
+    common::init_repo(&dir);
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-qm", "base"]);
+    let base = common::git_in(&dir, &["rev-parse", "HEAD"]);
+    (dir, base)
+}
+
+/// The helper and its test, moved together between the crates.
+const MOVED: &str = "\
+pub fn helper() -> u8 {
+    1
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn moved_across() {
+        assert_eq!(crate::testing::helper(), 1);
+    }
+}
+";
+
+/// Fails by: a test whose name and body reappear in another crate read as
+/// removed, because its old file still exists (no file-level move pairs it) and
+/// the item index never saw a `cfg(test)` item. Measured on #1276: the
+/// `batten-core` cut moved `testing.rs`' test and the structural replay refused it.
+#[test]
+fn a_test_moved_to_another_crate_is_not_removed() {
+    let (dir, base) = two_crates("replay-cross-crate");
+    common::write(&dir, "one/src/testing.rs", "pub fn kept() {}\n");
+    common::write(
+        &dir,
+        "two/src/testing.rs",
+        &format!("pub fn other() {{}}\n{MOVED}"),
+    );
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-qm", "head"]);
+    let output = common::batten()
+        .state_dir(&data_dir(&dir))
+        .args(["test", "replay", "--structural", "--base", base.trim()])
+        .current_dir(&dir)
+        .streamed_output()
+        .expect("run batten");
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(output.stdout.is_empty(), "{}", text(&output));
+    // Anti-vacuity: the same test deleted outright is still refused.
+    common::write(&dir, "two/src/testing.rs", "pub fn other() {}\n");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-qm", "gone"]);
+    let output = common::batten()
+        .state_dir(&data_dir(&dir))
+        .args(["test", "replay", "--structural", "--base", base.trim()])
+        .current_dir(&dir)
+        .streamed_output()
+        .expect("run batten");
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("test-removed one/src/testing.rs::tests::moved_across"),
+        "{}",
+        text(&output)
+    );
+}
