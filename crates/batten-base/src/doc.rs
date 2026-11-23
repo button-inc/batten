@@ -1534,6 +1534,24 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["add unconnected files to lift the number; M-score does not reward it"],
     },
     VendoredDoc {
+        id: "crate reach unknown",
+        why: Some("One unreviewed `Cargo.toml` edge can turn a wide crate graph back into a deep one"),
+        act: &[
+            "remove the dependency, or move the code using it into a package its pattern admits",
+            "widen `crate-allow-<package>` in the same change when the edge is the design",
+            "or split what needs the edge into its own package: `batten modules cut --dry-run` first",
+        ],
+        dont: &["widen the pattern to `.*` to clear the line"],
+    },
+    VendoredDoc {
+        id: "crate declare missing",
+        why: Some("A package with no allow pattern would reach anything unreviewed"),
+        act: &[
+            "add a `[[pattern]]` row `crate-allow-<package>` matching the packages it may reach, `^$` for none",
+        ],
+        dont: &["give it `.*` to clear the line"],
+    },
+    VendoredDoc {
         id: "directive read missing",
         why: Some("A summary is lossy by construction, and a directive it drops is work repeated"),
         act: &[
