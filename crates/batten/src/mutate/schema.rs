@@ -4603,14 +4603,9 @@ fn judge_handbacks(
             )?;
             name.to_owned()
         };
-        match verdict.as_str() {
-            "unviable" => unviable += 1,
-            "caught" => verdicts.push((id, Verdict::Caught)),
-            "missed" => verdicts.push((id, Verdict::Missed)),
-            "timeout" => verdicts.push((id, Verdict::Timeout)),
-            "uncovered" => verdicts.push((id, Verdict::Uncovered)),
-            "unjudged" => verdicts.push((id, Verdict::Unjudged)),
-            _ => verdicts.push((id, Verdict::Error)),
+        match handback_tally(&verdict) {
+            Some(verdict) => verdicts.push((id, verdict)),
+            None => unviable += 1,
         }
     }
     writeln!(
@@ -4619,6 +4614,21 @@ fn judge_handbacks(
         classic.len()
     )?;
     Ok((verdicts, unviable))
+}
+
+/// The [`Verdict`] a hand-back's journaled verdict `name` reports as; `None`
+/// for `unviable`, which [`judge_handbacks`] counts rather than reports. A
+/// name no verdict carries is an `error`.
+fn handback_tally(name: &str) -> Option<Verdict> {
+    Some(match name {
+        "unviable" => return None,
+        "caught" => Verdict::Caught,
+        "missed" => Verdict::Missed,
+        "timeout" => Verdict::Timeout,
+        "uncovered" => Verdict::Uncovered,
+        "unjudged" => Verdict::Unjudged,
+        _ => Verdict::Error,
+    })
 }
 
 /// Journal `line`, or say on `out` that it could not be: the verdict it holds
@@ -4771,33 +4781,13 @@ pub fn sweep(
     // tree, rebuild into the target and judge under the first, and each would
     // read the other's half-written records as its own. Held until return.
     let Some(_held) = hold(&state)? else {
-        writeln!(
-            out,
-            "mutate schema: another sweep holds {}; could not look, run again once it ends",
-            state.join(LOCK).display()
-        )?;
-        return Ok(Swept {
-            // Could not look, as [`exit_of`] reads it.
-            code: 3,
-            classic: Vec::new(),
-        });
+        return held_elsewhere(&state, out);
     };
     // WHAT THE HAND-BACKS NEED IS CHECKED BEFORE THE BUILD, NEVER AFTER IT: on
     // #1276 they were judged 40 minutes in, behind the build, the reach run and
     // every schema verdict, and a missing input there threw all of it away.
     if let Some(handback) = handback {
-        anyhow::ensure!(
-            handback.runner.is_file(),
-            "the provisioned cargo-mutants at {} is not a file, so no handed-back mutant \
-             could be judged; run `batten provision apply`",
-            handback.runner.display()
-        );
-        anyhow::ensure!(
-            handback.diff.is_file(),
-            "the change the mutants were listed from, {}, is not a file, so no handed-back \
-             mutant could be judged",
-            handback.diff.display()
-        );
+        handback_inputs(handback)?;
     }
     let work = state.join("tree");
     // INSIDE THE TREE, where cargo-mutants' copies keep theirs: a case's
@@ -4892,6 +4882,46 @@ pub fn sweep(
         code,
         classic: names,
     })
+}
+
+/// The sweep a held [`LOCK`] refuses: said on `out`, and answered as could
+/// not look (exit 3, as [`exit_of`] reads it) with nothing handed back.
+///
+/// # Errors
+///
+/// `out` cannot be written.
+fn held_elsewhere(state: &std::path::Path, out: &mut dyn std::io::Write) -> anyhow::Result<Swept> {
+    writeln!(
+        out,
+        "mutate schema: another sweep holds {}; could not look, run again once it ends",
+        state.join(LOCK).display()
+    )?;
+    Ok(Swept {
+        code: 3,
+        classic: Vec::new(),
+    })
+}
+
+/// Check what judging `handback`'s mutants needs, before the build that
+/// precedes them: the provisioned runner and the listed change, each a file.
+///
+/// # Errors
+///
+/// Either is not a file.
+fn handback_inputs(handback: &Handback<'_>) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        handback.runner.is_file(),
+        "the provisioned cargo-mutants at {} is not a file, so no handed-back mutant \
+         could be judged; run `batten provision apply`",
+        handback.runner.display()
+    );
+    anyhow::ensure!(
+        handback.diff.is_file(),
+        "the change the mutants were listed from, {}, is not a file, so no handed-back \
+         mutant could be judged",
+        handback.diff.display()
+    );
+    Ok(())
 }
 
 /// The build's line: how many mutants, how many it found unviable and how
@@ -8058,16 +8088,9 @@ mod tests {
         mutant
     }
 
-    /// Every case's key holds what its record cannot name: the sources of
-    /// each package the sweep never probed, the lockfile and manifests, the
-    /// toolchain and the flags. An edit to any of them moves the pair key and
-    /// drops the carried record, so the case runs again.
-    ///
-    /// Fails by: a helper crate's edit, a lockfile bump or a new compiler
-    /// leaving a carried pass and a reused pair outcome in place, though the
-    /// code the case runs is no longer the code it passed on.
-    #[test]
-    fn an_unprobed_package_or_the_lockfile_moves_every_case_key() {
+    /// A scratch checkout of two packages and a lockfile: `p`, whose
+    /// `src/lib.rs` holds one comparison to mutate, and `b` beside it.
+    fn two_package_tree() -> std::path::PathBuf {
         let root = crate::scratch::scratch("schema-build-key");
         for (path, text) in [
             ("Cargo.toml", "[package]\nname = \"p\"\n"),
@@ -8083,6 +8106,20 @@ mod tests {
             std::fs::create_dir_all(at.parent().unwrap()).unwrap();
             std::fs::write(at, text).unwrap();
         }
+        root
+    }
+
+    /// Every case's key holds what its record cannot name: the sources of
+    /// each package the sweep never probed, the lockfile and manifests, the
+    /// toolchain and the flags. An edit to any of them moves the pair key and
+    /// drops the carried record, so the case runs again.
+    ///
+    /// Fails by: a helper crate's edit, a lockfile bump or a new compiler
+    /// leaving a carried pass and a reused pair outcome in place, though the
+    /// code the case runs is no longer the code it passed on.
+    #[test]
+    fn an_unprobed_package_or_the_lockfile_moves_every_case_key() {
+        let root = two_package_tree();
         let ids: std::collections::BTreeMap<String, String> = [
             "Cargo.toml",
             "src/lib.rs",
