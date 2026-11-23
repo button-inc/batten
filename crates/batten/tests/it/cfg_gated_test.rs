@@ -333,6 +333,69 @@ fn an_added_file_carrying_a_gated_test_is_refused() {
     );
 }
 
+/// The rule run over a CHANGE-SET, as `batten check --staged` narrows it: the
+/// verdict classes a run scoped to `changed` reaches.
+fn verdicts_scoped(root: &Path, changed: &[&str]) -> Vec<String> {
+    let verdicts = common::verdicts_in(root);
+    let scope = rules::Scope::Changed(changed.iter().map(|path| (*path).to_owned()).collect());
+    rules::run_static_over(
+        &[row()],
+        &[],
+        batten::policy::Vocabulary {
+            patterns: &[],
+            verdicts: &verdicts,
+            words: None,
+            recorders: &[],
+            registers: &[],
+            traversals: &[],
+            records: &[],
+        },
+        root,
+        rules::RunOptions {
+            checks: batten::policy::ModuleChecks::Run,
+            scope: &scope,
+            surface: batten::facts::Surface::Check,
+            now: None,
+            half: None,
+            keyed_bases: &[],
+        },
+    )
+    .expect("the read surface runs a policy row over a change-set")
+    .findings
+    .into_iter()
+    .map(|finding| finding.rule)
+    .collect()
+}
+
+/// A COMMIT IS JUDGED ON WHAT IT STAGES, never on an unstaged file beside it
+/// (CLOUD-2789). The pre-commit step runs `check --staged`, and the module read
+/// `lines` for every tracked `.rs` file whatever the scope said: 4.4 s p50 at
+/// every commit, and a refusal of this commit for a gated test that is not in it.
+///
+/// Fails by: a scoped run reading an unstaged file's lines (the first assertion
+/// refuses `subject.rs`, which is not in the change-set), or the narrowing
+/// dropping the staged file itself (the second sees nothing).
+#[test]
+fn a_staged_run_reads_only_the_staged_files_lines() {
+    let root = repo(
+        "cfg-gated-staged-only",
+        &["#[test]", "fn a() {}"],
+        &["#[cfg(unix)]", "#[test]", "fn a() {}"],
+    );
+    let staged = root.join("crates/batten/src/staged.rs");
+    fs::write(&staged, join(&["fn b() {}"])).expect("write the staged file");
+    assert_eq!(
+        verdicts_scoped(&root, &["crates/batten/src/staged.rs"]),
+        Vec::<String>::new(),
+        "the unstaged gated test in subject.rs is not this commit's"
+    );
+    assert_eq!(
+        verdicts_scoped(&root, &["crates/batten/src/subject.rs"]),
+        vec![GATED_ADDED.to_owned()],
+        "the same edit, staged, is refused as the unnarrowed run refuses it"
+    );
+}
+
 /// COULD NOT LOOK IS REPORTED, NEVER PASSED. With no `origin/main` the engine
 /// resolves no delta, and a rule that refused nothing there would be
 /// byte-identical to a clean tree on the decision surface — over a branch it
