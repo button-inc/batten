@@ -19681,7 +19681,19 @@ tools = [
 
 [[step]]
 id = "deny"
-inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "deny.toml"]
+inputs = [
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  "batten.toml",
+  "deny.toml",
+  # cargo reads its config under `.cargo`, and cargo-deny looks for an
+  # exceptions file beside `deny.toml` and in `.cargo`; the trace refused
+  # all six probes as undeclared, so `deny` exited 2 on the #1276 tip.
+  ".cargo",
+  "deny.exceptions.toml",
+  ".deny.exceptions.toml",
+]
 tools = [["cargo", "deny", "--version"]]
 
 # CLOUD-1891: keyed on BOTH sides of the comparison. This tree's crates are the
