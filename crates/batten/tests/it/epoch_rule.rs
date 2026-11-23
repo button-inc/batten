@@ -107,10 +107,60 @@ fn a_rules_own_module_moves_its_epoch() {
         epoch(&before, "shape-refuses"),
         epoch(&after, "shape-refuses")
     );
+    // A pattern the module READS counts for it.
+    let reads = repo("module-reads-before", CONFIG, READS_UNRELATED);
     let pattern = CONFIG.replace("regex = 'one'", "regex = 'two'");
-    let repatterned = repo("module-pattern", &pattern, MODULE);
+    let repatterned = repo("module-pattern", &pattern, READS_UNRELATED);
+    assert_ne!(
+        epoch(&reads, "module-refuses"),
+        epoch(&repatterned, "module-refuses")
+    );
+}
+
+/// A module that reads the `unrelated` pattern by its literal id.
+const READS_UNRELATED: &str = "package fixture\n\nimport rego.v1\n\nhit if regex.match(data.batten.patterns[\"unrelated\"], \"one\")\n";
+
+/// The #1276 shape over a MODULE rule (`issue file held` is one): editing a
+/// `[[pattern]]` row the rule's module never reads leaves its admissions bound.
+///
+/// Fails by: the projection keeping every `[[pattern]]` row whenever the rule
+/// has a module, so narrowing `admit-asked` (read only by `admit-ask.rego`)
+/// unbound `filed-here.rego`'s held admissions.
+#[test]
+fn an_unrelated_pattern_leaves_a_module_rules_epoch_unchanged() {
+    let config = format!("{CONFIG}\n[[pattern]]\nid = \"other\"\nregex = 'x'\n");
+    let before = repo("module-unrelated-before", &config, READS_UNRELATED);
+    let after = repo(
+        "module-unrelated-after",
+        &config.replace("regex = 'x'", "regex = 'y'"),
+        READS_UNRELATED,
+    );
+    assert_eq!(
+        epoch(&before, "module-refuses"),
+        epoch(&after, "module-refuses"),
+        "a pattern the module never reads must not unbind its admissions"
+    );
+    // ...and the one it reads still does, so the case is not an empty projection.
+    let read = repo(
+        "module-unrelated-read",
+        &config.replace("regex = 'one'", "regex = 'two'"),
+        READS_UNRELATED,
+    );
     assert_ne!(
         epoch(&before, "module-refuses"),
-        epoch(&repatterned, "module-refuses")
+        epoch(&read, "module-refuses")
+    );
+    // A module whose id is not a literal can read any row, so every row counts.
+    let dynamic = "package fixture\n\nimport rego.v1\n\nhit(id) if regex.match(data.batten.patterns[id], \"one\")\n";
+    let dyn_before = repo("module-dynamic-before", &config, dynamic);
+    let dyn_after = repo(
+        "module-dynamic-after",
+        &config.replace("regex = 'x'", "regex = 'y'"),
+        dynamic,
+    );
+    assert_ne!(
+        epoch(&dyn_before, "module-refuses"),
+        epoch(&dyn_after, "module-refuses"),
+        "a computed id may name any row"
     );
 }
