@@ -697,6 +697,7 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
         "MUTANT_GATES",
         "MUTANT_TASKS",
         "MUTANT_CHANGED_SINCE",
+        batten::mutate::WHOLE_TREE,
         batten::mutate::RUNNERS,
         batten::mutate::RUNNER,
         batten::mutate::SHARD,

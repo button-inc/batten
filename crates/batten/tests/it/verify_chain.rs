@@ -225,6 +225,29 @@ fn the_pkl_validator_runs_only_after_its_package_is_fetched() {
     }
 }
 
+/// CLOUD-2849: the scheduled sweep judges the whole Rust tree, not only the
+/// declared Rego, Pkl and manifest gates. `mutant` declares `MUTANT_WHOLE_TREE`
+/// for the subtasks it starts, names `mutant:rust` beside `mutant:declared`, and
+/// carries no base. Fails by: the cargo runner dropped from the schedule, the
+/// whole-tree switch blanked, or a base that narrows it to one change.
+#[test]
+fn the_scheduled_sweep_judges_the_whole_rust_tree() {
+    assert!(
+        !env_of("mutant", "MUTANT_WHOLE_TREE").trim().is_empty(),
+        "mutant sets MUTANT_WHOLE_TREE to a value"
+    );
+    let run = steps("mutant");
+    step_at(&run, "mutant:rust");
+    step_at(&run, "mutant:declared");
+    assert!(
+        task("mutant")
+            .get("env")
+            .and_then(|env| env.get("MUTANT_CHANGED_SINCE"))
+            .is_none(),
+        "the whole-tree sweep carries no base"
+    );
+}
+
 /// CLOUD-2311: the CA bundle names `vars.pkl_ca` reads must come from the
 /// shell, never from `[env]`.
 ///
