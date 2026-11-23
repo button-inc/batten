@@ -1712,4 +1712,40 @@ mod tests {
             assert!(table(blank).validate().is_err(), "{blank:?} is refused");
         }
     }
+
+    /// A root is read LITERALLY: outer padding, `.` segments and slashes go, so
+    /// every spelling of one directory names it, and each loads. Carries the
+    /// normalization half of `main`'s `a_root_is_trimmed_and_a_blank_one_reads_alive`,
+    /// whose corroboration half left with `corroborates` (6b79edf5).
+    ///
+    /// Fails by: the outer `trim` dropped (a padded root then refused at load),
+    /// a `.` segment kept, or a `..` or blank root read as a directory.
+    #[test]
+    fn every_spelling_of_one_root_names_that_directory() {
+        for spelled in [
+            "scripts",
+            " scripts/ ",
+            "./scripts",
+            " ./scripts/",
+            "././scripts",
+            "scripts/.",
+        ] {
+            assert_eq!(
+                normalized_root(spelled).as_deref(),
+                Some("scripts"),
+                "{spelled:?} names the scripts directory"
+            );
+        }
+        assert_eq!(normalized_root("a//b/").as_deref(), Some("a/b"));
+        for blank in [
+            "  /  ",
+            ".",
+            "./",
+            " /./ ",
+            "../scripts",
+            "tasks/../scripts",
+        ] {
+            assert_eq!(normalized_root(blank), None, "{blank:?} names no directory");
+        }
+    }
 }
