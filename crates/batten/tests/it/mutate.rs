@@ -1566,6 +1566,37 @@ fn anti_vacuity_a_mutation_that_changes_nothing_is_not_a_pass() {
     );
 }
 
+/// A ROW THAT PROVES NOTHING COSTS NO SUITE RUN (#1276): the mutation is
+/// applied and diffed in memory before the clean run, so an inert or
+/// self-mutating row is refused as such even where its case filter names
+/// nothing. Fails by: the shape read only after the clean run, so a suite ran
+/// for a row that could prove nothing, and these rows answered
+/// `names-no-case` from that run instead.
+#[test]
+fn a_row_that_proves_nothing_is_refused_before_its_suite_runs() {
+    if !cfg!(unix) {
+        return;
+    }
+    for (name, row, verdict) in [
+        (
+            "inert-first",
+            "#MUTANT inert|s/^NOTHING_MATCHES_THIS$/x/|no_case_is_named_this",
+            "toy/inert inert-mutation",
+        ),
+        (
+            "self-first",
+            "#MUTANT self|s/MUTANT self/MUTANT other/|no_case_is_named_this",
+            "toy/self self-mutating-row",
+        ),
+    ] {
+        let root = toy_repo(name, &[row]);
+        let (code, out, err) = sweep(&root, "toy");
+        assert_eq!(code, 2, "{out}{err}");
+        assert!(out.contains(verdict), "{out}");
+        assert!(!out.contains("names-no-case"), "no suite ran: {out}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn an_unset_enforced_set_is_fatal_rather_than_an_empty_one() {

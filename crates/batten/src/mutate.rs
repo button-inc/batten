@@ -1202,10 +1202,21 @@ fn changed_by(
     code_changed: &std::collections::BTreeSet<String>,
 ) -> bool {
     let by_source = gate.sources.iter().any(|path| changed.contains(path));
+    // A suite whose every row is judged by its module's own case is never run
+    // (#1276), so it touches nothing; any other declaration still does,
+    // including one no row sits under yet (CLOUD-2193).
+    let unrun = |suite: &Suite| {
+        let mut judged = gate
+            .rows
+            .iter()
+            .filter(|row| gate.suite_for(row) == Some(suite))
+            .peekable();
+        judged.peek().is_some() && judged.all(|row| judged_by_module(root, row))
+    };
     let by_suite = || {
         gate.suites()
             .iter()
-            .any(|s| code_changed.contains(s.path()))
+            .any(|s| code_changed.contains(s.path()) && !unrun(s))
     };
     let by_preset = || {
         presets_dir().is_some_and(|presets| {
@@ -3804,6 +3815,63 @@ fn code_lines_changed(before: &str, after: &str) -> usize {
         .sum()
 }
 
+/// The refusal a row earns from its mutation's shape alone, read in memory
+/// before anything is staged or run (#1276): a script that will not apply, a
+/// mutation that changes nothing, or one that changes only declaration lines.
+/// Each proves nothing whatever the suite says, so a clean run spent first
+/// bought nothing — and where the case filter was also wrong, it named that
+/// lesser defect instead. `None` where the mutation changes code, and the row
+/// goes on to be judged. The staged [`apply`] and [`diff_shape`] stay the
+/// verdict's word for the bytes the suite actually runs against.
+fn unproving(root: &Path, row: &Row) -> Option<Verdict> {
+    let Ok(before) = crate::fsio::read_to_string(root.join(&row.source)) else {
+        return Some(Verdict::UnappliableMutation);
+    };
+    let Some(after) = substitute(&before, &row.script) else {
+        return Some(Verdict::UnappliableMutation);
+    };
+    if before == after {
+        return Some(Verdict::InertMutation);
+    }
+    (code_lines_changed(&before, &after) == 0).then_some(Verdict::SelfMutatingRow)
+}
+
+/// Whether a row is judged by its module's own test tier rather than its
+/// declared suite: [`judge_by_module`]'s conditions short of running it, a
+/// `.rego` row naming its own `test_` rule ([`declares_own_case`]) in a module
+/// the committed config registers as a policy row. Such a row never runs its
+/// suite, so its key and its touch set leave the suite out (#1276). A config
+/// that does not resolve registers nothing, and the suite stays in both.
+fn judged_by_module(root: &Path, row: &Row) -> bool {
+    declares_own_case(root, row) && registered_modules(root).contains(&row.source)
+}
+
+/// The modules the committed config registers as policy rows, read once per
+/// process per root: every row of a sweep asks.
+fn registered_modules(root: &Path) -> std::collections::BTreeSet<String> {
+    type Index = std::collections::HashMap<PathBuf, std::collections::BTreeSet<String>>;
+    static INDEX: std::sync::OnceLock<std::sync::Mutex<Index>> = std::sync::OnceLock::new();
+    let index = INDEX.get_or_init(Default::default);
+    if let Some(found) = index.lock().ok().and_then(|held| held.get(root).cloned()) {
+        return found;
+    }
+    let modules: std::collections::BTreeSet<String> =
+        crate::resolve::resolve(root, &crate::resolve::Overrides::default())
+            .map(|config| {
+                config
+                    .rules
+                    .iter()
+                    .filter(|rule| rule.kind == crate::config_model::RuleKind::Policy)
+                    .filter_map(|rule| rule.module.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+    if let Ok(mut held) = index.lock() {
+        held.insert(root.to_path_buf(), modules.clone());
+    }
+    modules
+}
+
 /// Judge one row.
 fn judge_row(
     root: &Path,
@@ -3816,6 +3884,9 @@ fn judge_row(
         return Ok(Verdict::MalformedRow {
             why: why.to_owned(),
         });
+    }
+    if let Some(refused) = unproving(root, row) {
+        return Ok(refused);
     }
     // The previous row's subject first — it may be a DIFFERENT gate's file, and
     // this row's suite may compose over it.
@@ -4024,7 +4095,7 @@ fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
     material.push(0);
     material.extend(crate::fsio::read(root.join(&row.source)).unwrap_or_default());
     material.push(0);
-    if let Some(suite) = gate.suite_for(row) {
+    if let Some(suite) = gate.suite_for(row).filter(|_| !judged_by_module(root, row)) {
         let path = suite.path();
         let text = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
         material.extend(crate::git::without_comments(path, &text).into_bytes());
@@ -7742,6 +7813,80 @@ mod tests {
         assert_eq!(
             judge_by_module(&root, &mut staged, row).expect("the module judges"),
             Some(Verdict::Caught)
+        );
+    }
+
+    /// AN OWN-CASE ROW'S DECLARED SUITE IS NEVER RUN, SO IT IS NEITHER ITS KEY
+    /// NOR WHAT TOUCHES IT (#1276). The module declares a conftest suite above
+    /// its row, and the row is judged by the module's own `test_` rule; a code
+    /// change to that suite alone must keep the row's recorded verdict and
+    /// sweep nothing. Fails by: the key and the touch set reading the suite
+    /// whatever judges the row, so every edit to it re-ran rows it never judges.
+    #[test]
+    fn an_own_case_rows_suite_is_neither_its_key_nor_its_touch() {
+        let root = fixture("own-module-suite");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        put(
+            &root,
+            "batten.toml",
+            "version = 1\n\n[[rule]]\nid = \"limit-probe\"\nkind = \"policy\"\n\
+             scope = \"tree\"\nmodule = \"policy/limit.rego\"\nseverity = \"warn\"\n\
+             no_fix_reason = \"this row exists to carry its module's own case\"\n\n\
+             [[verdict]]\nid = \"the limit moved\"\ngloss = \"the limit is not ten\"\n\
+             class = \"What this fixture's probe asserts, at the length explain answers with.\"\n\n\
+             [[verdict.route]]\nid = \"read the limit\"\nkind = \"document\"\n\
+             target = \"policy/limit.rego\"\n",
+        );
+        put(
+            &root,
+            "policy/limit.rego",
+            &format!(
+                "#MUTANT-SUITE policy/suite/limit_test.rego\n\
+                 #{ROW}limit-moved|s/^limit := 10$/limit := 11/|limit_is_ten\n\
+                 package batten\n\nrules contains \"limit-probe\"\n\nlimit := 10\n\n\
+                 violation contains {{\n\t\"rule\": \"limit-probe\",\n\t\"verdict\": \"the limit moved\",\n\
+                 }} if {{\n\tlimit != 10\n}}\n\n\
+                 test_limit_is_ten if {{\n\tlimit == 10\n}}\n"
+            ),
+        );
+        let suite = "policy/suite/limit_test.rego";
+        put(
+            &root,
+            suite,
+            "package batten\n\ntest_other if {\n\ttrue\n}\n",
+        );
+        crate::gitwrite::commit_paths(
+            &root,
+            &[
+                String::from("batten.toml"),
+                String::from("policy/limit.rego"),
+                String::from(suite),
+            ],
+            "fixture",
+        )
+        .expect("commit");
+        let Some(gate) = resolve(&root, "limit") else {
+            panic!("the module resolves to a gate");
+        };
+        let [row] = gate.rows.as_slice() else {
+            panic!("the module declares exactly one row");
+        };
+        assert_eq!(
+            gate.suite_for(row).map(Suite::path),
+            Some(suite),
+            "the row declares the suite this case is about"
+        );
+        let key = row_key(&root, &gate, row);
+        put(
+            &root,
+            suite,
+            "package batten\n\ntest_other if {\n\tfalse\n}\n",
+        );
+        assert_eq!(row_key(&root, &gate, row), key, "the suite is not keyed");
+        let code_changed = std::collections::BTreeSet::from([String::from(suite)]);
+        assert!(
+            !changed_by(&root, &gate, "limit", &code_changed, &code_changed),
+            "the suite does not touch the gate"
         );
     }
 }
