@@ -1535,21 +1535,50 @@ fn blamed(
 /// with no readable report, or one naming no failed case (a build that broke,
 /// a crash), refuses the sweep, since nothing says which cases are green.
 ///
+/// The refusal names each case whose own record (`recorded`, a non-zero
+/// [`DONE`]) says it failed, so a blind run still points at what to fix.
+///
 /// # Errors
 ///
 /// The run failed and its report names no failed case.
-fn baseline_red(passed: bool, junit: Option<&str>) -> anyhow::Result<Red> {
+fn baseline_red(
+    passed: bool,
+    junit: Option<&str>,
+    recorded: &BTreeSet<Case>,
+) -> anyhow::Result<Red> {
     if passed {
         return Ok(Red::new());
     }
     let red: Red = junit.and_then(junit_failures).unwrap_or_default();
-    anyhow::ensure!(
-        !red.is_empty(),
-        "the unmutated suite failed on the schema build and its report names no failed case, \
-         so no verdict would mean anything; every case that passed is sealed and carries to \
-         the next run"
-    );
+    if red.is_empty() {
+        let named = if recorded.is_empty() {
+            String::from("no case record names one either")
+        } else {
+            let cases: Vec<String> = recorded.iter().map(case_label).collect();
+            format!("the case records name {}", cases.join(", "))
+        };
+        anyhow::bail!(
+            "the unmutated suite failed on the schema build and its report names no failed \
+             case ({named}), so no verdict would mean anything; every case that passed is \
+             sealed and carries to the next run"
+        );
+    }
     Ok(red)
+}
+
+/// Every case under the reach directory `base` whose record finished with a
+/// non-zero exit.
+fn failed_records(base: &std::path::Path) -> BTreeSet<Case> {
+    std::fs::read_dir(base)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|dir| {
+            crate::fsio::read_to_string(dir.join(DONE)).is_ok_and(|code| code.trim() != "0")
+        })
+        .filter_map(|dir| kept_case(&dir))
+        .collect()
 }
 
 /// Every failed or hung case a nextest `JUnit` report names, with its failure
@@ -3708,12 +3737,13 @@ fn judge_all(
                         break;
                     };
                     let reached = judging.reach.get(&id).unwrap_or(nobody);
-                    let key = verdict_key(judging.root, mutant, reached, judging.digests);
-                    // A RED CASE REACHING THE SITE IS NEVER RUN AND NEVER A
-                    // KILL: only the green cases judge, and a stored verdict
-                    // over the whole set is not reused while one is red.
+                    // A RED CASE REACHING THE SITE IS NEVER RUN, NEVER A KILL
+                    // AND NEVER IN A KEY: only the green cases judge, a stored
+                    // verdict is not reused while one is red, and what is
+                    // journaled is keyed on the cases that decided it.
                     let (green, red) = split_red(reached, judging.red);
                     let cases = if red.is_some() { &green } else { reached };
+                    let key = verdict_key(judging.root, mutant, cases, judging.digests);
                     let reused = key
                         .as_ref()
                         .filter(|_| red.is_none())
@@ -4143,11 +4173,11 @@ fn judge_handbacks(
         };
         let observing = handback_cases(id, mutant, schema, reach);
         let cases = observing.clone().unwrap_or_else(|| every.clone());
-        let key = verdict_key(judging.root, mutant, &cases, judging.digests);
-        // THE SAME RULE AS THE SCHEMA'S: a red case is never run and never a
-        // kill, so a hand-back runs only its green cases, and one whose run
-        // could not leave the red cases out (the whole suite) is unjudged.
+        // THE SAME RULE AS THE SCHEMA'S: a red case is never run, never a
+        // kill and never in a key, so a hand-back runs only its green cases,
+        // and one whose run could not leave the red cases out is unjudged.
         let (green, red) = split_red(&cases, judging.red);
+        let key = verdict_key(judging.root, mutant, &green, judging.digests);
         let green_observing = observing.as_ref().map(|_| green.clone());
         let stored = key
             .as_ref()
@@ -4610,6 +4640,7 @@ fn reached(
         )
         .ok()
         .as_deref(),
+        &failed_records(&base),
     )?;
     writeln!(
         out,
@@ -6494,26 +6525,53 @@ mod tests {
     #[test]
     fn a_failed_baseline_names_its_red_cases_and_a_blind_one_refuses() {
         let pair = |name: &str, binary: &str| (String::from(name), String::from(binary));
-        let red = baseline_red(false, Some(JUNIT_FIXTURE)).expect("two red cases");
+        let red =
+            baseline_red(false, Some(JUNIT_FIXTURE), &BTreeSet::new()).expect("two red cases");
         assert_eq!(
             red.keys().cloned().collect::<Vec<_>>(),
             [pair("m::b", "batten::it"), pair("m::slow", "batten::it")]
         );
         assert_eq!(red[&pair("m::b", "batten::it")], "panicked");
         assert_eq!(red[&pair("m::slow", "batten::it")], "test timeout");
-        assert!(baseline_red(true, None).expect("passed").is_empty());
-        assert!(baseline_red(false, None).is_err(), "no report");
-        assert!(baseline_red(false, Some("not xml")).is_err());
+        assert!(
+            baseline_red(true, None, &BTreeSet::new())
+                .expect("passed")
+                .is_empty()
+        );
+        assert!(
+            baseline_red(false, None, &BTreeSet::new()).is_err(),
+            "no report"
+        );
+        assert!(baseline_red(false, Some("not xml"), &BTreeSet::new()).is_err());
         let green = "<testsuites><testsuite><testcase name=\"a\" classname=\"b\"/>\
                      </testsuite></testsuites>";
-        assert!(baseline_red(false, Some(green)).is_err(), "no case failed");
+        assert!(
+            baseline_red(false, Some(green), &BTreeSet::new()).is_err(),
+            "no case failed"
+        );
+        // THE REFUSAL NAMES EACH CASE ITS OWN RECORD SAYS FAILED (U4), so a
+        // blind run still points at what to fix.
+        let recorded: BTreeSet<Case> = [pair("m::x", "batten::it"), pair("y", "fix")].into();
+        let why = format!(
+            "{:#}",
+            baseline_red(false, None, &recorded).expect_err("blind")
+        );
+        assert!(
+            why.contains("batten::it m::x") && why.contains("fix y"),
+            "{why}"
+        );
+        let why = format!(
+            "{:#}",
+            baseline_red(false, None, &BTreeSet::new()).expect_err("blind")
+        );
+        assert!(why.contains("no case record names one either"), "{why}");
         let panicked = "<testsuites><testsuite><testcase name=\"r\" classname=\"fix\">\
                         <failure message=\"test failure\" type=\"test failure\"/>\
                         <system-err>thread 'r' panicked at src/lib.rs:2:9:\nred first\n\
                         note: run with `RUST_BACKTRACE=1`</system-err></testcase>\
                         </testsuite></testsuites>";
         assert_eq!(
-            baseline_red(false, Some(panicked)).expect("red")[&pair("r", "fix")],
+            baseline_red(false, Some(panicked), &BTreeSet::new()).expect("red")[&pair("r", "fix")],
             "red first",
             "the panic message is the failure line"
         );
@@ -8144,6 +8202,63 @@ mod tests {
         assert_eq!(
             journaled,
             journal_line(Some(&key(&mutants[102])), "uncovered", "none")
+        );
+    }
+
+    /// A RED CASE NEVER KEYS A VERDICT (U4): a mutant only a red case reaches
+    /// is unjudged and journaled under the key of the cases that judged it —
+    /// none — so a stored verdict keyed over the red case is not reused, and
+    /// nothing journaled names the red case as a dependency.
+    ///
+    /// Fails by: a verdict stored over the red case reused, or the unjudged
+    /// line keyed over the red case.
+    #[test]
+    fn a_red_case_never_keys_a_verdict() {
+        let base = crate::scratch::scratch("schema-red-key");
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        std::fs::write(
+            base.join("src/lib.rs"),
+            "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n",
+        )
+        .unwrap();
+        let mut mutant = in_function(
+            listed("BinaryOperator", "!=", (2, 7), (2, 9)),
+            (1, 1),
+            (3, 2),
+        );
+        mutant.name = String::from("poisoned");
+        let mutants = vec![mutant];
+        let red_case = (String::from("tests::red"), String::from("fix"));
+        let digests: std::collections::BTreeMap<Case, String> =
+            [(red_case.clone(), String::from("d"))].into();
+        let reached: BTreeSet<Case> = [red_case.clone()].into();
+        let over_red = verdict_key(&base, &mutants[0], &reached, &digests).unwrap();
+        let over_green = verdict_key(&base, &mutants[0], &BTreeSet::new(), &digests).unwrap();
+        assert_ne!(over_red, over_green);
+        let cache = [(over_red, String::from("missed"))].into();
+        let store = base.join("verdicts");
+        let _ = std::fs::remove_file(&store);
+        let reach = [(0, reached)].into();
+        let seconds = std::collections::BTreeMap::new();
+        let red: Red = [(red_case, String::from("red"))].into();
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &store,
+            red: &red,
+        };
+        let verdicts = judge_all(&judging, &[0], 1, &mut Vec::new());
+        assert_eq!(verdicts, [(0, Verdict::Unjudged)]);
+        assert_eq!(
+            std::fs::read_to_string(&store).unwrap(),
+            journal_line(Some(&over_green), "unjudged", "poisoned")
         );
     }
 
