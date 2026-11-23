@@ -587,6 +587,10 @@ impl Corpus {
                 &format!("// {}\nuse crate::b::B;\npub struct A;\n", canary("modsource")),
             )
             .file("crate/src/b.rs", "use crate::a::A;\npub struct B;\n")
+            // The package `modules cut --dry-run` plans from (CLOUD-2812): its
+            // plan holds `a.rs`'s canary in a file it would write, and prints
+            // only that file's path.
+            .file("crate/Cargo.toml", "[package]\nname = \"corpus\"\n")
             // `modules ratchet --check`'s record over the same crate
             // (CLOUD-2821). Deliberately loose, so the verb runs to a verdict
             // and its refusal (two numbers and a metric name) is what the
@@ -2179,6 +2183,16 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "modules ratchet",
         args: &["--record", "modules.lock", "--check"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `modules cut` (CLOUD-2812) prints `write`/`remove` paths, `path:line`
+    // refusal and remainder sites and three counts. The files it would write
+    // carry the moved modules' source, `a.rs`'s canary included; `--dry-run`
+    // keeps the tree, and none of those bytes may reach a channel.
+    Verb {
+        path: "modules cut",
+        args: &["--dry-run", "crate", "cut", "a", "b"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
