@@ -86,8 +86,10 @@ impl VendoredDoc {
 /// The docs of the engine's own classes, vendored and preset alike, keyed by id.
 ///
 /// A separate table rather than a field on each `VendoredVerdict` literal, so
-/// the interaction text is one file to author and review, and
-/// `every_vendored_class_has_a_doc` keeps it whole against both tables.
+/// the interaction text is one file to author and review.
+/// `verdict_vocabulary.rs`'s
+/// `every_vendored_and_declared_doc_is_within_160_o200k_tokens` keeps it whole
+/// against both tables: a vendored class with no `do` here fails it.
 pub const VENDORED_DOCS: &[VendoredDoc] = &[
     // ── native ──────────────────────────────────────────────────────────────
     VendoredDoc {
