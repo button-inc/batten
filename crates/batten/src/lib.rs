@@ -216,6 +216,7 @@ pub mod speculation;
 pub mod symbols;
 pub mod tokens;
 
+pub mod session_setup;
 pub mod startup;
 pub use batten_core::state;
 /// The step cache (CLOUD-424): a step answered from its receipt when its exact
@@ -561,7 +562,10 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Design { command }) => match command {
             DesignCommand::Audit { json } => run_design_audit(json, &overrides, out),
         },
-        Some(Command::Startup { repair, json }) => run_startup(repair, json, &overrides, out, err),
+        Some(Command::Startup { session: true, .. }) => run_session_setup(&overrides),
+        Some(Command::Startup { repair, json, .. }) => {
+            run_startup(repair, json, &overrides, out, err)
+        }
         Some(Command::Provision { command }) => match command {
             ProvisionCommand::Status { json } => run_provision_status(json, &overrides, out),
             ProvisionCommand::Apply { dry_run } => run_provision_apply(dry_run, &overrides, err),
@@ -3262,6 +3266,29 @@ fn run_design_audit(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
 /// order, so the output is byte-stable for a given tree (§6). Silence means
 /// there were no rows to decide — which is not the same as every row passing,
 /// and is why the count is always the last line.
+/// The session's setup task (CLOUD-2840), started detached by `SessionStart`.
+///
+/// Silent on both channels: its streams are null, and what it found is recorded
+/// for the next call by [`session_setup::run`]. Exit `0` when every step passed,
+/// `1` otherwise, for a person who runs it by hand.
+fn run_session_setup(overrides: &Overrides) -> Result<ExitCode> {
+    let here = Path::new(".");
+    let resolved = resolve::resolve(here, overrides)?;
+    let git_dir = git::git_dir(here)?;
+    let handlers = resolved
+        .hook
+        .as_ref()
+        .map(|table| table.handlers.clone())
+        .unwrap_or_default();
+    Ok(
+        if session_setup::run(here, &git_dir, &handlers, &resolved.startup) {
+            ExitCode::Success
+        } else {
+            ExitCode::Usage
+        },
+    )
+}
+
 fn run_startup(
     repair: bool,
     json: bool,
@@ -22780,10 +22807,10 @@ fn collect_batch_advice(
         drain_advisories(envelope, overrides, mode, err, advice)?;
     }
     report_contract_drift(envelope, overrides, advice);
-    // ORDER IS LOAD-BEARING: `refresh_pinned` rebuilds the record the health
-    // report then reads, so a session whose pin record went stale between
-    // sessions reports the repaired state rather than the state it started in.
-    refresh_pinned(envelope, overrides);
+    // THE PIN RECORD, THE REPAIRS AND THE HEALTH REPORT ARE THE SETUP TASK'S
+    // (CLOUD-2840), in that order, and their findings arrive here on the next
+    // call: each spawns, and a spawn at `SessionStart` held the first response.
+    surface_session_setup(envelope, advice);
     // EXPIRY BEFORE REPAIR, and the order is the whole of the race argument
     // `expire_wiring_record` used to give for the repair living elsewhere: in one
     // process, in this order, the record describing what this session LOADED is
@@ -22792,9 +22819,7 @@ fn collect_batch_advice(
     expire_sightings(envelope);
     expire_history_reads(envelope);
     report_directives(envelope, advice);
-    repair_startup_rows(envelope, overrides);
     adopt_engine_pin(envelope, overrides, advice);
-    report_container_health(envelope, overrides, advice);
     Ok(())
 }
 
@@ -22822,102 +22847,11 @@ fn stamp_session(envelope: &hook::Envelope) {
     let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
 }
 
-/// Record what the pin provides, once per session (CLOUD-1028).
-///
-/// **Here because this is where an effect is admissible.** Asking the pin runs a
-/// program, which the fact model bars from the mediated path — so the spawn
-/// happens on the one event that is not a call being adjudicated, and every
-/// mediated call afterwards reads the record instead.
-///
-/// `SessionStart` only, and `PostToolBatch` deliberately not: a per-batch spawn
-/// buys news that a per-session one already has, since the record is keyed to the
-/// pin's own configuration rather than to a clock. The cost of that choice is
-/// stated rather than hidden — a tool installed MID-session moves the key, so the
-/// next read misses and the fact reads could-not-look until the following session
-/// start. Could-not-look allows, so the failure mode is a quiet gate rather than
-/// a false refusal, which is the direction this fact must always fail in: it
-/// names every program in the project.
-///
-/// Fails open on everything, and returns nothing there is to branch on: a
-/// session whose pin cannot be reached is a session where this fact answers
-/// could-not-look, which is exactly what an absent record already says.
-fn refresh_pinned(envelope: &hook::Envelope, overrides: &Overrides) {
-    if envelope.event != crate::config_model::Event::SessionStart {
-        return;
-    }
-    let here = hook_authority_root();
-    // Narrowed to a repository that has a consumer, read the same way
-    // `report_contract_drift` reads its own declaration: a config this reporter
-    // cannot resolve is one where the fact answers could-not-look anyway, so
-    // every arm here returns rather than erroring on an event nothing is meant
-    // to be blocked at.
-    let Ok(resolved) = resolve::resolve(here, overrides) else {
-        return;
-    };
-    if !resolved
-        .rules
-        .iter()
-        .any(|rule| rule.kind == crate::config_model::RuleKind::Policy)
-    {
-        return;
-    }
-    let _refreshed = pinned::refresh(here);
-}
-
-/// Run this repository's declared `[[startup]]` repairs, once per session
-/// (CLOUD-1324).
-///
-/// # Repair rather than refusal, and the measurement behind that
-///
-/// A launcher that re-provisions its own hook registrations does it on its own
-/// schedule: observed here rewriting two surfaces at 03:49 that were emptied at
-/// 01:08, mid-session. A gate keyed on the count is therefore red at
-/// unpredictable moments and blocks work that has nothing to do with it — which
-/// is exactly what `[hook] exclusive = true` did to this repository before it was
-/// withdrawn. A repair has no such failure mode: it runs at the one moment the
-/// environment is about to be used, and a later drift is repaired at the next
-/// session start instead of refusing a commit in the middle of this one.
-///
-/// # Why no flag is needed here, and one is needed on the verb
-///
-/// `batten startup --repair` makes a person say what they are asking for.
-/// Nothing asks here, because the consumer already did: **a `repair` written in
-/// the committed authority IS the authorisation to run it.** A row with no
-/// `repair` is untouched, which is how a consumer declares a precondition it
-/// wants reported and not acted on.
-///
-/// Rewriting anything under a person's `$HOME` therefore requires a row saying
-/// so. That is non-negotiable rule 1's posture one layer up: which repairs a
-/// container needs is the project's statement, never the engine's.
-///
-/// # Never a verdict, and silent on every failure
-///
-/// `SessionStart` is not a call being adjudicated. What is still wrong after the
-/// repairs is reported by [`report_container_health`], which runs next; nothing
-/// here can refuse a session, because a session refused over its own environment
-/// is one that cannot run the repair the report names.
-fn repair_startup_rows(envelope: &hook::Envelope, overrides: &Overrides) {
-    if envelope.event != crate::config_model::Event::SessionStart {
-        return;
-    }
-    let here = hook_authority_root();
-    if !here.join(crate::config_model::CONFIG_FILE).exists() {
-        return;
-    }
-    let Ok(resolved) = resolve::resolve(here, overrides) else {
-        return;
-    };
-    // Discarded deliberately: what the repairs found is `report_container_health`'s
-    // to say, off a fresh reading. Reporting it from here would describe a state
-    // that the very next call re-decides.
-    let _outcomes = startup::repair(here, &resolved.startup);
-}
-
 /// Pin this engine into a config that pins nothing, at the session's start
 /// (CLOUD-2595 §2c), and say so once on the advisory channel.
 ///
 /// `SessionStart` rather than any call: it is the one hook event that may write
-/// (a session's first moment, the same one `repair_startup_rows` repairs at), and
+/// (a session's first moment, the same one the setup task starts at), and
 /// it fires once per session, so the record is said once.
 fn adopt_engine_pin(
     envelope: &hook::Envelope,
@@ -22998,76 +22932,6 @@ fn adopt_engine_key(root: &Path, overrides: &Overrides) -> Result<Option<String>
     };
     durable::replace(&path, adopted)?;
     Ok(Some(tag))
-}
-
-/// Say at session start whether this container is misconfigured (CLOUD-1324).
-///
-/// # Why the report is pushed rather than waited for
-///
-/// `batten doctor` already answers this, and answering it is not the problem:
-/// **nobody runs it.** A container that is missing a program, wired to hooks the
-/// tree does not declare, or carrying a pin record that stopped validating looks
-/// exactly like a healthy one until some gate silently decides nothing — which is
-/// the failure this whole file exists to refuse, one level up. The session's
-/// first moment is the only point where the news is still cheap: everything after
-/// it is work done on an unknown machine.
-///
-/// So the diagnosis rides the advisory channel at `SessionStart`, and the agent
-/// learns what is broken before it has spent anything on it.
-///
-/// # Silent on a healthy container, which is what keeps it credible
-///
-/// Every check passing emits nothing. An advisory that speaks every session is
-/// one every reader learns to scroll past, and the drift notice above already
-/// pays for that lesson.
-///
-/// # Pointer-only (non-negotiable rule 4)
-///
-/// [`doctor::Check::line`] is the §6 rendering — a check name, a verdict token,
-/// and the consumer's own declared subjects. No path off the disk, no file
-/// contents, no host identity. It is the same bytes `batten doctor` prints, from
-/// the same producer, so the advisory and the verb cannot disagree.
-///
-/// # Never a verdict
-///
-/// A `Warning`, not a refusal. `SessionStart` is not a call being adjudicated,
-/// and a broken container is a provisioning failure rather than a policy one —
-/// refusing the session would leave the reader unable to run the very repair the
-/// advisory names.
-fn report_container_health(
-    envelope: &hook::Envelope,
-    overrides: &Overrides,
-    advice: &mut Vec<advisory::Advice>,
-) {
-    if envelope.event != crate::config_model::Event::SessionStart {
-        return;
-    }
-    let here = hook_session_home();
-    // A tree with no consumer has nothing to be misconfigured FOR, which is
-    // `refresh_pinned`'s narrowing and for the same reason.
-    if !here.join(crate::config_model::CONFIG_FILE).exists() {
-        return;
-    }
-    let report = doctor::diagnose(here);
-    // THE CONSUMER'S OWN ROWS, RE-DECIDED AFTER THE REPAIRS RAN. `evaluate`
-    // rather than `repair`: `repair_startup_rows` already had its turn, and a
-    // second repair pass here would report the state of a third one. What is
-    // left is what a reader actually has to deal with.
-    let rows = resolve::resolve(here, overrides)
-        .map(|resolved| startup::evaluate(here, &resolved.startup))
-        .unwrap_or_default();
-    // ONE CLASSED FINDING PER FAILING CHECK AND ROW (CLOUD-2078): the
-    // paragraph that used to follow the list is `workspace state broken`'s
-    // class text now, where `batten policy explain` serves it, and its full arm
-    // arrives once per context per window.
-    for finding in report
-        .checks
-        .iter()
-        .filter_map(doctor::Check::finding)
-        .chain(rows.iter().filter_map(startup::Outcome::finding))
-    {
-        push_finding(advice, severity::AdvisoryTier::Warning, finding);
-    }
 }
 
 /// Drop the at-load wiring record at the one moment it stops being true
@@ -23616,6 +23480,39 @@ fn mediated_payload(raw: &str, tool: &str, params: &serde_json::Value) -> Option
     Some(value.to_string())
 }
 
+/// Start this session's setup task (CLOUD-2840), where a consumer declares one.
+///
+/// Fails open and silently, like every side effect at this boundary: a session
+/// whose setup cannot start is one where `batten doctor` names what is missing.
+fn start_session_setup(raw: &str) {
+    let here = hook_authority_root();
+    if !here.join(crate::config_model::CONFIG_FILE).exists() {
+        return;
+    }
+    let Ok(git_dir) = git::git_dir(here) else {
+        return;
+    };
+    let _ = session_setup::start(here, &git_dir, raw, boundary_epoch());
+}
+
+/// Say what the setup task found, once, on the first call after it finished
+/// (CLOUD-2840): a `PreToolUse` or a `UserPromptSubmit`, the two moments that
+/// reach the agent before it acts.
+fn surface_session_setup(envelope: &hook::Envelope, advice: &mut Vec<advisory::Advice>) {
+    if !matches!(
+        envelope.event,
+        crate::config_model::Event::PreTool | crate::config_model::Event::UserPromptSubmit
+    ) {
+        return;
+    }
+    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+        return;
+    };
+    for finding in session_setup::surface(&git_dir) {
+        push_finding(advice, severity::AdvisoryTier::Warning, finding);
+    }
+}
+
 /// Run the declared handlers for this envelope's event (CLOUD-898).
 ///
 /// Returns the decision a handler forced, if any, and appends its advice and its
@@ -23639,6 +23536,14 @@ fn dispatch_handlers(
     // the completion rung above it AND skip the seam writes that ride that
     // routine — CLOUD-1372's defect, reached through a different door.
     if envelope.event == crate::config_model::Event::Stop {
+        return None;
+    }
+    // NOT INLINE AT `SessionStart` (CLOUD-2840): every declared session-start
+    // row runs in the setup task, under its own bound, and what it says reaches
+    // the session on the next call. Started here because this is where the
+    // host's bytes are in hand, and they are what each row reads on stdin.
+    if session_setup::detaches(envelope.event) {
+        start_session_setup(raw);
         return None;
     }
     let hook_config = hook_table(overrides)?;

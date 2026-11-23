@@ -384,11 +384,18 @@ pub fn report_refusal(id: &str, text: &str) -> crate::refusal::Refusal {
 /// A broken contract as the class it belongs to (CLOUD-2078).
 #[must_use]
 pub fn violation_refusal(id: &str, violation: &Violation) -> crate::refusal::Refusal {
+    broken_refusal(id, &violation.token())
+}
+
+/// [`violation_refusal`] over a token already taken, for an outcome recorded by
+/// one process and surfaced by another (CLOUD-2840).
+#[must_use]
+pub fn broken_refusal(id: &str, token: &str) -> crate::refusal::Refusal {
     crate::refusal::Refusal::engine(
         crate::error::Native::HookAnswerBroken,
         &[
             crate::verdict::artifact(&format!("hook.handler.{id}")),
-            crate::verdict::artifact(&violation.token()),
+            crate::verdict::artifact(token),
         ],
         crate::refusal::Fix::None,
     )

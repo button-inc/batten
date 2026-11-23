@@ -202,6 +202,7 @@ pub(crate) fn agreeing_readme() -> String {
      | `passthrough` | a call no rule selects | — | — | ≤ 100 ms |\n\
      | `posttool` | a PostToolUse call | — | — | ≤ 100 ms |\n\
      | `stop` | an end of turn | — | — | ≤ 100 ms |\n\
+     | `session-start` | a session's first moment | — | — | ≤ 100 ms |\n\
      | `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |\n"
         .to_owned()
         + &COMMIT_STEPS
@@ -232,7 +233,7 @@ pub(crate) const COMMIT_STEPS: [&str; 8] = [
 /// Every budgeted path measured comfortably inside its ceiling, as the producer
 /// takes them: `<name> <token>` per line.
 pub(crate) fn clean_record() -> String {
-    "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nstop 2.6\nwired 8.4\n".to_owned()
+    "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nstop 2.6\nsession-start 4.1\nwired 8.4\n".to_owned()
         + &COMMIT_STEPS
             .iter()
             .flat_map(|step| [*step, " 9.0\n"])
@@ -471,6 +472,7 @@ fn measured() -> String {
         ("passthrough", "2.2"),
         ("posttool", "2.3"),
         ("stop", "2.6"),
+        ("session-start", "4.1"),
         ("wired", "8.4"),
     ]
     .into_iter()
