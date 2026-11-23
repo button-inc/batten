@@ -335,6 +335,23 @@ filtered(program) if {
 	word in {"-E", "--filterset", "--filter-expr"}
 }
 
+# A HELP REQUEST RUNS NO CASE: `cargo nextest run --help` prints the verb's
+# options and exits, so it re-executes nothing a lap runs. Measured on #1276:
+# refused as `gate run twice`, so a session could not read nextest's options.
+filtered(program) if {
+	some word in tail(program)
+	word in {"--help", "-h"}
+}
+
+test_a_help_request_is_allowed if {
+	count(violation) == 0 with input as {"call": {
+		"command": "cargo nextest run --help",
+		"segments": [],
+		"programs": [{"program": "cargo", "name": "cargo", "arguments": ["nextest", "run", "--help"], "subcommand": "nextest", "nested": "run", "global-options": [], "mediated": false}],
+		"task-programs": [],
+	}}
+}
+
 filtered(program) if {
 	some word in tail(program)
 	some prefix in {"-E", "--filterset=", "--filter-expr="}

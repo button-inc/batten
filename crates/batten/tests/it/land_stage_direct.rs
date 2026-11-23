@@ -445,6 +445,9 @@ fn the_development_forms_stay_allowed() {
         ("cargo nextest run -p batten forced_push", true),
         ("cargo nextest run -p batten -- forced_push", true),
         ("cargo test -p batten forced_push", true),
+        // A help request runs no case.
+        ("mise exec -- cargo nextest run --help", true),
+        ("cargo test --help", true),
         // One `--test <target>` selects that target.
         ("mise exec -- cargo nextest run -p batten --test it", true),
         ("mise exec -- cargo test --test=it", true),
