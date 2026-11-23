@@ -3434,7 +3434,14 @@ silent = "stdout"
 # the whole manifest into an empty data directory went through the agent proxy,
 # installed all 38 tools and left `mise.lock` byte-identical, where an unlocked
 # resolve is refused 403 for every third-party repository.
-env = { MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent" }
+#
+# NO ATTESTATION READ, EITHER BACKEND (CLOUD-2395, CLOUD-2845). Verifying
+# provenance reads api.github.com for the upstream repo, which the proxy refuses
+# for a third party. `aqua:` and `github:` tools each have their own setting;
+# without this pair, `cargo-llvm-cov`, `cargo-semver-checks` and
+# `cargo-auditable` downloaded, passed their checksums, then 403'd. The lock's
+# sha256 still pins every byte.
+env = { MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent", MISE_AQUA_GITHUB_ATTESTATIONS = "false", MISE_GITHUB_GITHUB_ATTESTATIONS = "false" }
 run = ["mise install", "mise run toolchain-check"]
 
 [tasks."toolchain-check"]
