@@ -55,13 +55,54 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: batten-profile record ARM [--rate HZ] [--iterations N] [--out P.json] \
+const USAGE: &str = "usage: batten-profile record ARM [--rate HZ (default 10000; 500 for a slow arm)] [--iterations N] [--out P.json] \
                      | hot P.json [--top N] [--min PCT] [--all] \
                      | callers P.json NAME [--top N] | diff A.json B.json [--top N] \
                      | calls CALLGRIND.out NAME";
 
-/// The arms `batten perf measure` times, as (payload under the hook fixtures,
-/// arguments after the binary, whether it runs in the staged `check-repo`).
+/// Where an arm runs: the checkout, or one of the fixtures `mise run perf`
+/// stages under `target/perf`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fixture {
+    Root,
+    /// `target/perf/check-repo`, the one-rule repository.
+    Check,
+    /// `target/perf/commit-repo`, the shared clone carrying one staged change
+    /// to a `.rs` file and `batten.toml` (CLOUD-2789).
+    Commit,
+}
+
+impl Fixture {
+    fn dir(self, repo: &Path) -> std::path::PathBuf {
+        match self {
+            Self::Root => repo.to_path_buf(),
+            Self::Check => repo.join("target/perf/check-repo"),
+            Self::Commit => repo.join("target/perf/commit-repo"),
+        }
+    }
+}
+
+/// The default sampling rate for a fast arm.
+const FAST_RATE: u32 = 10_000;
+
+/// The default for a SLOW arm (CLOUD-2789). A whole-tree commit-time step ran
+/// long enough that 10 kHz wrote a 363 MB profile, and `hot` — which parses the
+/// whole profile into memory — was OOM-killed at 13.9 GB reading it. 500 Hz is
+/// still a sample every 2 ms: hundreds per iteration on an arm this slow, and
+/// a profile `hot` can read. `--rate` overrides either default.
+const SLOW_RATE: u32 = 500;
+
+/// One arm: (name, payload, arguments, where it runs, default sample rate).
+type Arm = (
+    &'static str,
+    Option<&'static str>,
+    &'static [&'static str],
+    Fixture,
+    u32,
+);
+
+/// The arms `batten perf measure` times, as (name, payload under the hook
+/// fixtures, arguments after the binary, where it runs, default sample rate).
 /// The same commands, so a profile describes what the gate measured.
 ///
 /// The last four are the lap's slow rows rather than hook paths, each at the
@@ -70,45 +111,117 @@ const USAGE: &str = "usage: batten-profile record ARM [--rate HZ] [--iterations 
 /// (the two halves of `batten-check`), and `state-record` (the detached
 /// `batten state record` the hooks spawn). Each runs for seconds to minutes,
 /// so record them with `--iterations 1`.
-const ARMS: [(&str, Option<&str>, &[&str], bool); 10] = [
-    ("noop", None, &["--help"], false),
-    ("check", None, &["check"], true),
+const ARMS: [Arm; 15] = [
+    ("noop", None, &["--help"], Fixture::Root, FAST_RATE),
+    ("check", None, &["check"], Fixture::Check, FAST_RATE),
     (
         "hook",
         Some("claude-code.json"),
         &["adjudicate", "--harness", "claude-code"],
-        false,
+        Fixture::Root,
+        FAST_RATE,
     ),
     (
         "passthrough",
         Some("claude-code-passthrough.json"),
         &["adjudicate", "--harness", "claude-code"],
-        false,
+        Fixture::Root,
+        FAST_RATE,
     ),
     (
         "posttool",
         Some("claude-code-posttool.json"),
         &["adjudicate", "--harness", "claude-code"],
-        false,
+        Fixture::Root,
+        FAST_RATE,
     ),
     (
         "stop",
         Some("claude-code-stop.json"),
         &["adjudicate", "--harness", "claude-code"],
-        true,
+        Fixture::Check,
+        FAST_RATE,
     ),
-    ("policy-test", None, &["policy", "test"], false),
+    // The commit-time hk steps that run `batten` (CLOUD-2789); the others run
+    // `cargo fmt` and `taplo`, which this binary's symbols do not describe.
+    (
+        "config-lint-pinned",
+        None,
+        &["config", "lint"],
+        Fixture::Commit,
+        SLOW_RATE,
+    ),
+    (
+        "cfg-gated-test-pinned",
+        None,
+        &["check", "--rule", "test cover missing"],
+        Fixture::Commit,
+        SLOW_RATE,
+    ),
+    // Measured 2026-11-23 (30 runs): the two above at 2.6 s and 5.0 s p50 are
+    // slow; these three run 27-244 ms and keep the fast rate's resolution.
+    (
+        "merge-conflict-markers",
+        None,
+        &["enforce", "--rule", "source carry broken"],
+        Fixture::Commit,
+        FAST_RATE,
+    ),
+    (
+        "conventional-commit",
+        None,
+        &["commit", "check", "--message", ".git/COMMIT_EDITMSG"],
+        Fixture::Commit,
+        FAST_RATE,
+    ),
+    (
+        "commit-attribution",
+        None,
+        &["attribution", "check", "--message", ".git/COMMIT_EDITMSG"],
+        Fixture::Commit,
+        FAST_RATE,
+    ),
+    (
+        "policy-test",
+        None,
+        &["policy", "test"],
+        Fixture::Root,
+        SLOW_RATE,
+    ),
     (
         "enforce-tree",
         None,
         &["enforce", "--half", "tree", "--keyed-base", "origin/main"],
-        false,
+        Fixture::Root,
+        SLOW_RATE,
     ),
     // `-vv` so the recording also prints the per-rule cost census and the
     // per-bundle evaluator census on stderr, which samply leaves attached.
-    ("enforce-live", None, &["enforce", "--half", "live", "-vv"], false),
-    ("state-record", None, &["state", "record"], false),
+    (
+        "enforce-live",
+        None,
+        &["enforce", "--half", "live", "-vv"],
+        Fixture::Root,
+        SLOW_RATE,
+    ),
+    (
+        "state-record",
+        None,
+        &["state", "record"],
+        Fixture::Root,
+        SLOW_RATE,
+    ),
 ];
+
+/// The rate `record` samples `arm` at: `--rate` when given, else the arm's own
+/// default.
+fn rate_for(arm: &str, args: &[String]) -> Result<u32, String> {
+    let (.., default) = ARMS.iter().find(|(name, ..)| *name == arm).ok_or_else(|| {
+        let names: Vec<&str> = ARMS.iter().map(|(name, ..)| *name).collect();
+        format!("unknown arm `{arm}`; one of {}", names.join(", "))
+    })?;
+    Ok(flag(args, "--rate", *default))
+}
 
 fn flag<T: std::str::FromStr>(args: &[String], name: &str, default: T) -> T {
     args.iter()
@@ -151,7 +264,7 @@ fn run(args: &[String]) -> Result<String, String> {
                 .unwrap_or_else(|| format!("target/profile/{arm}.json"));
             record(
                 arm,
-                flag(args, "--rate", 10_000_u32),
+                rate_for(arm, args)?,
                 flag(args, "--iterations", 10_u32),
                 Path::new(&out),
             )?;
@@ -272,16 +385,12 @@ fn wrapped(command: &[String]) -> String {
 )]
 fn record(arm: &str, rate: u32, iterations: u32, out: &Path) -> Result<(), String> {
     let repo = std::env::current_dir().map_err(|e| e.to_string())?;
-    let (_, payload, argv, staged) =
+    let (_, payload, argv, fixture, _) =
         ARMS.iter().find(|(name, ..)| *name == arm).ok_or_else(|| {
             let names: Vec<&str> = ARMS.iter().map(|(name, ..)| *name).collect();
             format!("unknown arm `{arm}`; one of {}", names.join(", "))
         })?;
-    let dir = if *staged {
-        repo.join("target/perf/check-repo")
-    } else {
-        repo.clone()
-    };
+    let dir = fixture.dir(&repo);
     if !dir.is_dir() {
         return Err(format!(
             "{} is missing: run `mise run perf` once to stage it",
@@ -308,7 +417,7 @@ fn record(arm: &str, rate: u32, iterations: u32, out: &Path) -> Result<(), Strin
     if !status.success() {
         return Err("the profiling build failed".to_owned());
     }
-    let binary = repo.join("target/profiling/batten");
+    let binary = profiling_binary(&repo, std::env::var_os("CARGO_TARGET_DIR").as_deref());
     let mut command: Vec<String> = vec![quote(&binary.to_string_lossy())];
     command.extend(argv.iter().map(|word| quote(word)));
     if let Some(payload) = payload {
@@ -348,6 +457,17 @@ fn record(arm: &str, rate: u32, iterations: u32, out: &Path) -> Result<(), Strin
         return Err(format!("samply exited {status}"));
     }
     Ok(())
+}
+
+/// Where the `profiling` build put the binary: under `CARGO_TARGET_DIR` when
+/// it is set (relative to the checkout when relative), as cargo resolves it,
+/// else under the checkout's `target/`. A fixed `target/profiling` sampled a
+/// path that did not exist whenever the build was told to write elsewhere.
+fn profiling_binary(repo: &Path, target_dir: Option<&std::ffi::OsStr>) -> std::path::PathBuf {
+    target_dir
+        .filter(|dir| !dir.is_empty())
+        .map_or_else(|| repo.join("target"), |dir| repo.join(dir))
+        .join("profiling/batten")
 }
 
 /// Frames a reader of batten's own code does not act on: the runtime, libc,
@@ -853,6 +973,53 @@ mod tests {
         assert!(report.contains("       2  store::resolve -> git::root_commits<…>"));
         assert!(report.contains("       1  run_state_record -> git::root_commits<…>"));
         assert!(calls(text, "absent").is_err());
+    }
+
+    /// A slow arm samples at 500 Hz unless `--rate` says otherwise; a fast one
+    /// keeps 10 kHz. At 10 kHz a slow arm's profile was 363 MB, and `hot`,
+    /// which loads the whole profile, was OOM-killed at 13.9 GB reading it.
+    ///
+    /// Fails by: a slow arm defaulting to 10 kHz, a fast one losing its
+    /// resolution, `--rate` no longer overriding, or a commit-time step missing.
+    #[test]
+    fn a_slow_arm_samples_at_a_rate_its_profile_can_be_read_at() {
+        let args = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+        assert_eq!(rate_for("cfg-gated-test-pinned", &args(&[])), Ok(500));
+        assert_eq!(rate_for("hook", &args(&[])), Ok(10_000));
+        assert_eq!(
+            rate_for("cfg-gated-test-pinned", &args(&["--rate", "2000"])),
+            Ok(2000)
+        );
+        assert!(rate_for("absent", &args(&[])).is_err());
+        for step in [
+            "config-lint-pinned",
+            "cfg-gated-test-pinned",
+            "merge-conflict-markers",
+            "conventional-commit",
+            "commit-attribution",
+        ] {
+            let (.., dir, _) = ARMS.iter().find(|(name, ..)| *name == step).unwrap();
+            assert_eq!(*dir, Fixture::Commit, "{step} runs in the commit fixture");
+        }
+    }
+
+    /// Fails by: the binary looked for under `target/` while the build wrote
+    /// to `CARGO_TARGET_DIR`, or a relative one resolved against the wrong root.
+    #[test]
+    fn the_profiling_binary_is_where_cargo_wrote_it() {
+        let repo = Path::new("/repo");
+        assert_eq!(
+            profiling_binary(repo, None),
+            Path::new("/repo/target/profiling/batten")
+        );
+        assert_eq!(
+            profiling_binary(repo, Some(std::ffi::OsStr::new("/elsewhere"))),
+            Path::new("/elsewhere/profiling/batten")
+        );
+        assert_eq!(
+            profiling_binary(repo, Some(std::ffi::OsStr::new("t"))),
+            Path::new("/repo/t/profiling/batten")
+        );
     }
 
     /// Fails by: a quote in a path breaking out of the `sh -c` word.
