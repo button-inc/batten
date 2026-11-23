@@ -42,6 +42,9 @@ struct Module {
     /// Each `use p::*;` here, as `p` written: a name no declaration or alias
     /// binds may be one of its target's.
     globs: Vec<Vec<String>>,
+    /// `#[cfg(test)] use` aliases: bound only in the test build, which is
+    /// where a replayed test body compiles.
+    test_aliases: BTreeMap<String, Vec<String>>,
 }
 
 /// Every module of every crate in one tree.
@@ -199,6 +202,15 @@ impl Index {
                 .or_default();
             for item in items {
                 if crate::module_graph::cfg_test(item.syntax()) {
+                    if let ast::Item::Use(declaration) = item
+                        && let Some(tree) = declaration.use_tree()
+                    {
+                        entry.test_aliases.extend(
+                            crate::module_graph::use_leaves(&tree)
+                                .into_iter()
+                                .map(|leaf| (leaf.name, leaf.path)),
+                        );
+                    }
                     continue;
                 }
                 if let Some(name) = declared_name(item) {
@@ -295,11 +307,17 @@ impl Index {
         self.resolve_through(segments, depth, false)
     }
 
-    /// [`Index::resolve_from`], reading through a glob re-export too when
-    /// `globs` is set: only where HEAD's own `use` chain is being followed
-    /// ([`moved_through_uses`]). A canonical reading never does — a glob names
-    /// nothing a reader can see (`a_glob_names_nothing`).
-    fn resolve_through(&self, segments: &[String], depth: u8, globs: bool) -> Option<(Key, usize)> {
+    /// [`Index::resolve_from`], reading as the TEST BUILD binds when
+    /// `test_build` is set: through a glob re-export, and through a
+    /// `#[cfg(test)] use`. Only where HEAD's own `use` chain is followed for a
+    /// replayed test body ([`moved_through_uses`]); a canonical reading never
+    /// does — a glob names nothing a reader can see (`a_glob_names_nothing`).
+    fn resolve_through(
+        &self,
+        segments: &[String],
+        depth: u8,
+        test_build: bool,
+    ) -> Option<(Key, usize)> {
         if depth == 0 {
             return None;
         }
@@ -317,12 +335,16 @@ impl Index {
                 let file = self.file_of(krate, &module)?;
                 return Some(((file, segment.clone()), at + 2));
             }
-            let Some(target) = here.aliases.get(segment) else {
+            let alias = here
+                .aliases
+                .get(segment)
+                .or_else(|| test_build.then(|| here.test_aliases.get(segment)).flatten());
+            let Some(target) = alias else {
                 // A GLOB RE-EXPORT (`pub use batten_facts::error::*;`) binds
                 // every public name of its target (CLOUD-2789).
                 // EXACTLY ONE glob may bind it: two that both do are the
                 // ambiguity rustc refuses, so neither is taken.
-                if !globs {
+                if !test_build {
                     return None;
                 }
                 let bound: Vec<(Key, usize)> = here
@@ -332,7 +354,7 @@ impl Index {
                         let mut absolute = Self::anchored(krate, &module, glob)?;
                         let glob_len = absolute.len();
                         absolute.extend(rest[at..].iter().cloned());
-                        let (key, used) = self.resolve_through(&absolute, depth - 1, globs)?;
+                        let (key, used) = self.resolve_through(&absolute, depth - 1, test_build)?;
                         (used > glob_len).then(|| (key, at + 1 + used - glob_len))
                     })
                     .collect();
@@ -354,7 +376,7 @@ impl Index {
             };
             let alias_len = absolute.len();
             absolute.extend(rest[at + 1..].iter().cloned());
-            let (key, used) = self.resolve_through(&absolute, depth - 1, globs)?;
+            let (key, used) = self.resolve_through(&absolute, depth - 1, test_build)?;
             // The original path consumed everything through this segment,
             // plus whatever of its remainder the alias's resolution used.
             return Some((key, at + 2 + used.saturating_sub(alias_len)));
@@ -1707,6 +1729,44 @@ mod tests {
             "{ two::error::Native::A; }"
         );
         Ok(())
+    }
+
+    /// Fails by: an old home that keeps the moved item only through a
+    /// `#[cfg(test)] use` pairs with nothing, since the index skips test-only
+    /// items — yet the test build, where a replayed body compiles, binds it
+    /// (#1276: `rules.rs`' `#[cfg(test)] use crate::config_check::rules::validate`).
+    /// A canonical reading still does not see the test-only import.
+    #[test]
+    fn a_test_only_import_at_the_old_home_pairs_the_moved_item() {
+        let lib = (
+            "src/lib.rs",
+            "pub mod rules;\npub mod check;\npub mod other;\n",
+        );
+        let base = index(&[
+            ROOT,
+            lib,
+            ("src/rules.rs", "pub fn validate(x: u8) -> u8 { x }\n"),
+            ("src/check.rs", ""),
+        ]);
+        let head = index(&[
+            ROOT,
+            lib,
+            (
+                "src/rules.rs",
+                "#[cfg(test)]\nuse crate::check::validate;\n",
+            ),
+            (
+                "src/check.rs",
+                "pub fn validate(x: u8, y: u8) -> u8 { x + y }\n",
+            ),
+        ]);
+        let moves = moved_through_uses(&base, &head);
+        assert_eq!(
+            moves.get(&("src/rules.rs".to_owned(), "validate".to_owned())),
+            Some(&("src/check.rs".to_owned(), "validate".to_owned()))
+        );
+        let path: Vec<String> = ["crate", "rules", "validate"].map(String::from).to_vec();
+        assert!(head.resolve("app", &path).is_none());
     }
 
     /// Fails by: a base body naming an item the branch moved, leaving a private
