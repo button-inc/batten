@@ -5380,12 +5380,21 @@ struct ShowRequest<'a> {
 /// line selectors address it — and any other value is pretty-printed JSON. A
 /// capture that is not JSON, or a pointer that names nothing, is a usage error:
 /// the caller asked about a field that is not there.
-fn field_text(parsed: &capture::Handle, bytes: &[u8], pointer: &str) -> Result<Vec<u8>> {
-    let document: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| {
-        UsageError::raise(format!(
-            "capture show: {parsed} is not a JSON document, so --field has nothing to name"
-        ))
-    })?;
+fn field_text(
+    repo: &Path,
+    parsed: &capture::Handle,
+    bytes: &[u8],
+    pointer: &str,
+) -> Result<Vec<u8>> {
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        // A SPILLED LEAF IS ITS RAW TEXT (CLOUD-2284), so its field is read
+        // from the view its index names: the lines the pointer printed.
+        return capture::view_field(repo, &parsed.digest, pointer).ok_or_else(|| {
+            UsageError::raise(format!(
+                "capture show: {parsed} is not a JSON document, so --field has nothing to name"
+            ))
+        });
+    };
     let value = document.pointer(pointer).ok_or_else(|| {
         UsageError::raise(format!(
             "capture show: {parsed} has no field at `{pointer}` — a pointer starts with `/`, \
@@ -5513,7 +5522,7 @@ fn run_capture_show(
         ))
     })?;
     let bytes = match field {
-        Some(pointer) => field_text(&parsed, &bytes, pointer)?,
+        Some(pointer) => field_text(repo, &parsed, &bytes, pointer)?,
         None => bytes,
     };
     let answer = capture::select(&parsed, &bytes, &selection);
@@ -22894,6 +22903,11 @@ fn point_at_spills(
     let (_, first) = stored.first()?;
     let (path, index) = capture::result_view_spilled(&root, first, result, &markers).ok()?;
     let leaves: Vec<&capture::Capture> = stored.iter().map(|(_, leaf)| leaf).collect();
+    // EVERY LEAF'S HANDLE RESOLVES `--field` (CLOUD-2284): a leaf is stored as
+    // its raw text, no JSON document, so its index names the view's lines.
+    for leaf in &leaves {
+        let _ = capture::write_view_index(&root, &leaf.digest, &path, &index);
+    }
     let pointer = capture::pointer(&path, &index, &leaves);
     let line = pointer.render_finding(refusal::Arm::Pointer);
     let mut bounded = result.clone();
