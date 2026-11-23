@@ -217,6 +217,7 @@ the launcher's own share is attributable.
 | `passthrough`            | a call no rule selects — decode, allow, no config load    | —      | —      | ≤ 100 ms |
 | `posttool`               | a PostToolUse call — decode, capture the response         | —      | —      | ≤ 100 ms |
 | `stop`                   | an end of turn — decode, state record, drain detached     | —      | —      | ≤ 100 ms |
+| `session-start`          | a session start — payload write, setup task spawned       | —      | —      | ≤ 100 ms |
 | `wired`                  | the hook as `.claude/settings.json` invokes it            | 8.0 ms | 8.4 ms | ≤ 100 ms |
 | `cargo-fmt`              | pre-commit: `rustfmt --check` over the staged `.rs` files | —      | —      | ≤ 100 ms |
 | `taplo`                  | pre-commit: `taplo lint` over the staged unbound TOML     | —      | —      | ≤ 100 ms |

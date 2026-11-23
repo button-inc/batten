@@ -42,7 +42,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "batten adjudicate --harness claude-code"
+            "command": "batten adjudicate --harness claude-code",
+            "timeout": 10
           }
         ]
       }

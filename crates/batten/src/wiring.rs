@@ -151,8 +151,14 @@ fn nested_commands(entry: &serde_json::Value) -> Vec<&str> {
         .collect()
 }
 
-/// One new entry carrying `command`, in `shape` (CLOUD-2694).
-fn new_entry(shape: hook::EntryShape, command: &str) -> serde_json::Value {
+/// One new entry carrying `command`, in `shape` (CLOUD-2694), bounded where
+/// [`hook::entry_timeout`] says the host's event is (CLOUD-2840).
+fn new_entry(
+    harness: crate::config_model::Harness,
+    shape: hook::EntryShape,
+    spelling: &str,
+    command: &str,
+) -> serde_json::Value {
     match shape {
         hook::EntryShape::Flat { write, .. } => {
             let mut entry = serde_json::Map::new();
@@ -160,9 +166,12 @@ fn new_entry(shape: hook::EntryShape, command: &str) -> serde_json::Value {
             entry.insert(write.to_owned(), serde_json::Value::from(command));
             serde_json::Value::Object(entry)
         }
-        hook::EntryShape::Nested => {
-            serde_json::json!({"hooks": [{"type": "command", "command": command}]})
-        }
+        hook::EntryShape::Nested => match hook::entry_timeout(harness, spelling) {
+            Some(seconds) => serde_json::json!({
+                "hooks": [{"type": "command", "command": command, "timeout": seconds}]
+            }),
+            None => serde_json::json!({"hooks": [{"type": "command", "command": command}]}),
+        },
     }
 }
 
@@ -781,7 +790,7 @@ fn add_missing(
         } else {
             command.to_owned()
         };
-        let entry = new_entry(shape, &named);
+        let entry = new_entry(harness, shape, spelling, &named);
         match events
             .get_mut(*spelling)
             .and_then(serde_json::Value::as_array_mut)

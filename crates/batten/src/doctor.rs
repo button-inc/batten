@@ -131,18 +131,25 @@ impl Check {
     /// passed (CLOUD-2078): its name, its reason and its subjects as pointers.
     #[must_use]
     pub fn finding(&self) -> Option<crate::refusal::Refusal> {
-        let reason = self.reason?;
-        let subjects = finding_subjects(self.name, reason, &self.subjects);
-        // A MISSING CONFIG IS NOT A BROKEN ONE (CLOUD-2657): `startup --repair`
-        // repairs what a config declares, and there is none, so the class's own
-        // routes would loop. The route keeps `run batten init` on every firing;
-        // the fix replaces the class's `Do:` on the full arm.
-        if reason != "config-missing" {
-            return Some(workspace_refusal(&subjects, crate::refusal::Fix::None));
-        }
-        let fix = crate::refusal::Fix::Run(INIT_REMEDY.to_owned());
-        Some(workspace_refusal(&subjects, fix).with_command_route("batten init"))
+        Some(workspace_finding(self.name, self.reason?, &self.subjects))
     }
+}
+
+/// A failing check or `[[startup]]` row as `workspace state broken`, from its
+/// name, reason and declared subjects: the one constructor both inline readers
+/// and a recorded outcome surfaced later go through (CLOUD-2840).
+#[must_use]
+pub fn workspace_finding(name: &str, reason: &str, declared: &[String]) -> crate::refusal::Refusal {
+    let subjects = finding_subjects(name, reason, declared);
+    // A MISSING CONFIG IS NOT A BROKEN ONE (CLOUD-2657): `startup --repair`
+    // repairs what a config declares, and there is none, so the class's own
+    // routes would loop. The route keeps `run batten init` on every firing;
+    // the fix replaces the class's `Do:` on the full arm.
+    if reason != "config-missing" {
+        return workspace_refusal(&subjects, crate::refusal::Fix::None);
+    }
+    let fix = crate::refusal::Fix::Run(INIT_REMEDY.to_owned());
+    workspace_refusal(&subjects, fix).with_command_route("batten init")
 }
 
 /// The subjects a failing doctor check or startup row carries, in that order.

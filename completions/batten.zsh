@@ -5679,6 +5679,7 @@ verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '--repair[Run each failing row'\''s declared repair, then re-decide its check]' \
+'--session[Run this session'\''s setup task\: its declared session-start handlers, repairs and health report, recorded for the next call]' \
 '-J[Emit byte-stable JSON instead of pointer lines]' \
 '--json[Emit byte-stable JSON instead of pointer lines]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \

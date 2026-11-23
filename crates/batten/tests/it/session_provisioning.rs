@@ -232,6 +232,14 @@ impl Bench {
         }
     }
 
+    /// What the session hears once the setup task has finished: the first call
+    /// after it, which carries the recorded outcome (CLOUD-2840). The door's
+    /// own reply no longer can, because it returns before any row runs.
+    fn settled(&self) -> String {
+        let _ = crate::session_start::settle(&self.repo);
+        crate::session_start::pre_tool(&self.repo)
+    }
+
     /// Write one stub step and declare it as a `session-start` handler body.
     fn step(&self, id: &str, body: &str) {
         let path = format!("steps/{id}");
@@ -373,6 +381,7 @@ fn the_steps_run_in_declaration_order() {
 
     let door = bench.session_start();
     assert_eq!(door.code, Some(0), "session start allows: {}", door.err);
+    let _ = bench.settled();
 
     let ran = std::fs::read_to_string(&log).expect("every step ran");
     assert_eq!(
@@ -407,6 +416,7 @@ fn a_session_start_writes_the_stamp_before_any_row_runs() {
             .is_file(),
         "a session start through the door dates the session"
     );
+    let _ = bench.settled();
     assert_eq!(
         std::fs::read_to_string(bench.repo.join("observed")).expect("the step ran"),
         "present\n",
@@ -439,7 +449,9 @@ fn a_failed_step_is_reported_rather_than_silent() {
         Some(0),
         "a failed provisioning step never blocks the session"
     );
-    let said = format!("{}{}", door.out, door.err);
+    // RECORDED, AND SAID ON THE NEXT CALL (CLOUD-2840): the door returns before
+    // the step runs, so its reason arrives with the first call after the task.
+    let said = bench.settled();
     assert!(
         said.contains("session-start: failing failed"),
         "the step's own reason reaches the session, not just its exit code: {said}"
@@ -469,6 +481,11 @@ fn a_step_that_passes_says_nothing() {
         !door.err.contains("quiet"),
         "a passing step is not named on stderr either: {}",
         door.err
+    );
+    let said = bench.settled();
+    assert!(
+        !said.contains("quiet"),
+        "nor on the call that carries the task's outcome: {said}"
     );
 }
 
@@ -512,7 +529,7 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     let door = bench.session_start();
 
     assert_eq!(door.code, Some(0), "a timed-out step allows: {}", door.err);
-    let said = format!("{}{}", door.out, door.err);
+    let said = bench.settled();
     assert!(
         said.contains("hook.handler.hanging timed-out-300ms"),
         "the declared bound is imposed by the parent, not hoped for: {said}"
@@ -563,6 +580,11 @@ fn a_steps_stdout_is_interpreted_never_forwarded() {
         !door.out.contains("{\"async\": true}"),
         "a handler's stdout is never forwarded to the host verbatim: {}",
         door.out
+    );
+    let said = bench.settled();
+    assert!(
+        !said.contains("{\"async\": true}"),
+        "nor on the call that carries the task's outcome: {said}"
     );
 }
 

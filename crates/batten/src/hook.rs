@@ -2057,6 +2057,18 @@ pub(crate) fn wiring_command(harness: Harness) -> String {
     parts.join(" ")
 }
 
+/// The bound, in seconds, Claude Code's `SessionStart` entry carries
+/// (CLOUD-2840).
+///
+/// The hook only starts the setup task and returns, inside its 100 ms ceiling.
+/// With no `timeout` the host waits up to its 600 s default for a hook that has
+/// gone wrong, and that wait is the first response's. Claude Code only: it
+/// reads `timeout` in seconds, and the other nested hosts do not share that
+/// unit, so a number planted there would mean something else.
+pub(crate) fn entry_timeout(harness: Harness, spelling: &str) -> Option<u64> {
+    (harness == Harness::ClaudeCode && spelling == "SessionStart").then_some(10)
+}
+
 /// Render one harness's registrations as the JSON its host reads.
 ///
 /// Byte-stable (§6): the events come back from [`Wiring::registrations`] in
@@ -2086,7 +2098,8 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
     // and a key's value, which differ only by one level.
     // ONE ENTRY IN THE SHAPE THE HOST READS (CLOUD-2694): flat on Cursor and
     // Copilot, nested everywhere else.
-    let entry = |spelling: &str, indent: &str| match (shape, command_for(spelling)) {
+    let entry = |spelling: &str, indent: &str| {
+        match (shape, command_for(spelling)) {
         (EntryShape::Flat { write, .. }, command) => [
             format!("{indent}{}: [", json_string(spelling)),
             format!("{indent}  {{"),
@@ -2102,13 +2115,19 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
             format!("{indent}    \"hooks\": ["),
             format!("{indent}      {{"),
             format!("{indent}        \"type\": \"command\","),
-            format!("{indent}        \"command\": {command}"),
+            match entry_timeout(harness, spelling) {
+                Some(seconds) => format!(
+                    "{indent}        \"command\": {command},\n{indent}        \"timeout\": {seconds}"
+                ),
+                None => format!("{indent}        \"command\": {command}"),
+            },
             format!("{indent}      }}"),
             format!("{indent}    ]"),
             format!("{indent}  }}"),
             format!("{indent}]"),
         ]
         .join("\n"),
+    }
     };
 
     match wiring.file {
