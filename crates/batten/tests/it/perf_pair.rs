@@ -681,8 +681,19 @@ fn a_measurement_times_every_path_off_its_release_build() {
         "posttool",
         "stop",
         "wired",
+        "cargo-fmt",
+        "taplo",
+        "taplo-format",
+        "config-lint-pinned",
+        "cfg-gated-test-pinned",
+        "merge-conflict-markers",
+        "conventional-commit",
+        "commit-attribution",
     ] {
-        assert!(records.contains(id), "the {id} path is recorded: {records}");
+        assert!(
+            records.contains(&format!("path={id} ")),
+            "the {id} path is recorded: {records}"
+        );
     }
     let argv = instrumented(&repo);
     assert!(argv.contains("--profile release"), "{argv}");
@@ -690,7 +701,17 @@ fn a_measurement_times_every_path_off_its_release_build() {
         .lines()
         .filter(|line| line.starts_with("hyperfine "))
         .collect();
-    assert_eq!(timed.len(), 7, "{argv}");
+    assert_eq!(timed.len(), 15, "{argv}");
+    // A multi-word argument reaches hyperfine quoted, or it splits the rule
+    // name into three words and the arm measures a usage error.
+    assert!(argv.contains("check --rule 'test cover missing'"), "{argv}");
+    // The commit fixture carries its one staged change per subject.
+    let commit = repo.join("target/perf/commit-repo");
+    let staged = common::git_in(&commit, &["diff", "--cached", "--name-only"]);
+    assert_eq!(
+        staged.lines().collect::<Vec<_>>(),
+        ["batten.toml", "crates/batten/src/lib.rs"]
+    );
     for line in timed {
         assert_eq!(
             line.contains("--prepare"),
