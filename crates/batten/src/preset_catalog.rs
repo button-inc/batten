@@ -958,9 +958,13 @@ than its producer, which writes whole or removes, and reads the same way.",
     //
     // VERSION 3 (CLOUD-2157): a backgrounded call that names no timeout is
     // rewritten to the host's maximum.
+    // VERSION 0.1.0, a minor bump (admits more): `dispatch-is-preapproved`
+    // grants at `permission-request` and `permission-denied` as well as at
+    // pre-tool, in every mode but plan (71a7be4b0). The source changed under
+    // 0.0.4, which `every_manifest_matches_its_recorded_digest` refused.
     Manifest {
         name: "claude-code-cloud",
-        version: semver::Version::new(0, 0, 4),
+        version: semver::Version::new(0, 1, 0),
         suggested: true,
         install: None,
         modules: &[
