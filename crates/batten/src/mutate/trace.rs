@@ -14,7 +14,11 @@ use std::path::{Path, PathBuf};
 /// every non-Rust file, which is the sound answer, not a cheaper one.
 #[must_use]
 pub fn tracer() -> Option<String> {
-    if !cfg!(target_os = "linux") || traced_already() {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let record = std::env::var_os(super::schema::RECORD).map(PathBuf::from);
+    if refused(traced_already(), record.as_deref()) {
         return None;
     }
     std::env::var_os("PATH").and_then(|path| {
@@ -23,6 +27,26 @@ pub fn tracer() -> Option<String> {
             .find(|candidate| candidate.is_file())
             .map(|found| found.to_string_lossy().into_owned())
     })
+}
+
+/// The file a case's reach record holds once a process in the case asked for
+/// a tracer while the recorder's own held it ([`refused`]).
+pub const REFUSED: &str = "tracer-refused";
+
+/// Whether a tracer is refused to a process `traced` already; and when it is
+/// and the process runs inside a case the reach recorder traces (`record`,
+/// the case's record directory), say so there ([`REFUSED`]).
+///
+/// THE RECORDER'S TRACE MUST NOT CHANGE THE CASE (U3): a case that traces its
+/// own work took its untraced branch under reach and its traced one when
+/// judged, so the sites reach recorded for it were not the ones a judging run
+/// executes. No second tracer can attach under `-f`, so the recorder runs such
+/// a case again untraced, which is the branch judging takes.
+pub(crate) fn refused(traced: bool, record: Option<&Path>) -> bool {
+    if traced && let Some(record) = record {
+        let _ = crate::durable::replace(record.join(REFUSED), "");
+    }
+    traced
 }
 
 /// Whether this process is itself under a tracer, which refuses a second one:
