@@ -22,12 +22,14 @@
 //! by reading a clean exit — which is why the acceptance case below seeds rather
 //! than asserts absence.
 //!
-//! # The pair that carries the rule
+//! # The case that carries the rule
 //!
-//! `an_added_spawn_escape_is_refused` and `an_added_spawn_placement_is_refused`
-//! are the two halves, and the second is the one that actually failed in the
+//! `an_added_spawn_placement_is_refused` is the one that actually failed in the
 //! field: the placement table is deny-by-omission, so widening it is a two-word
-//! edit whose justification lives in a comment nothing reads.
+//! edit whose justification lives in a comment nothing reads. The escape half
+//! is retired into the `spawn count ahead` ratchet (CLOUD-2778,
+//! `spawn_count.rs`); the clean cases below stay as the module's anti-vacuity
+//! mirrors.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -147,35 +149,7 @@ const CLEAN_MODULE: &str = "fn ordinary() {}\n";
 
 const ADAPTERS: &str = "package batten.spawn_adapters\n\nadapters := {\n\t\"exec\",\n}\n";
 
-/// **THE CASE THE RULE EXISTS FOR, half one — and it SEEDS.**
-///
-/// Asserting a clean tree stays clean would have passed over three of the four
-/// defects this module shipped with. The only reading that tells a live gate
-/// from a dead one is a refusal that arrives.
-#[test]
-fn an_added_spawn_escape_is_refused() {
-    let root = repo(
-        "escape-added",
-        &[
-            ("crates/batten/src/thing.rs", CLEAN_MODULE),
-            ("policy/spawn-adapters.rego", ADAPTERS),
-        ],
-        &Head {
-            written: &[(
-                "crates/batten/src/thing.rs",
-                "fn ordinary() {}\n#[expect(clippy::disallowed_types)]\nfn spawner() {}\n",
-            )],
-            removed: &[],
-        },
-    );
-    assert_eq!(
-        verdicts(&root),
-        vec![String::from("spawn add other")],
-        "an escape this change added is the whole subject of the rule"
-    );
-}
-
-/// **THE CASE THAT ACTUALLY FIRED IN THE FIELD, half two.**
+/// **THE CASE THAT ACTUALLY FIRED IN THE FIELD.**
 ///
 /// `adapter place missing` refuses a spawn in an unplaced module; adding the module to
 /// its set answers that refusal in one edit, and nothing read the edit. Two
@@ -276,32 +250,6 @@ fn the_test_module_idiom_is_not_an_escape() {
     assert!(
         verdicts(&root).is_empty(),
         "panicking loudly is how a test fails, and the whole crate says so this way"
-    );
-}
-
-/// **AND THE EXEMPTION IS THREE NAMED LINTS RATHER THAN A SHAPE.** Without this
-/// the case above is satisfied by an exemption that waives every `#[allow]`,
-/// which would take the rule with it.
-#[test]
-fn another_lints_allow_is_still_an_escape() {
-    let root = repo(
-        "other-lint",
-        &[
-            ("crates/batten/src/thing.rs", CLEAN_MODULE),
-            ("policy/spawn-adapters.rego", ADAPTERS),
-        ],
-        &Head {
-            written: &[(
-                "crates/batten/src/thing.rs",
-                "fn ordinary() {}\n#[expect(clippy::too_many_arguments)]\nfn wide() {}\n",
-            )],
-            removed: &[],
-        },
-    );
-    assert_eq!(
-        verdicts(&root),
-        vec![String::from("spawn add other")],
-        "`too_many_arguments` is a claim about the code, not about how a test reports failure"
     );
 }
 
