@@ -61,11 +61,15 @@ fn a_journaled_step_runs_each_passed_case_once_per_input_state() {
     common::git_in(&repo, &["add", "-A"]);
     common::git_in(&repo, &["commit", "-qm", "seed"]);
     let log = common::scratch("step-journal-log");
+    // THE RECEIPT IS BYPASSED, the journal is not: this fixture's failure
+    // switch is a file outside the tree, which no step key can see, so a step
+    // receipt would answer the red run's re-run from its failure (CLOUD-2253).
     let step = || {
         let output = common::batten()
             .args(["step", "run", "suite", "--", "cargo", "nextest", "run"])
             .current_dir(&repo)
             .env("FIXTURE_LOG", &log)
+            .env("BATTEN_STEP_RECEIPT_BYPASS", "1")
             .streamed_output()
             .expect("run batten");
         (output.status.success(), common::stderr(&output))
@@ -417,4 +421,96 @@ fn a_failure_off_the_change_is_labelled_flaky_suspect() {
         "a failing case whose function moved is the change's to answer for\n{err}"
     );
     assert_eq!(listing, "", "{err}");
+}
+
+/// `step run suite -- cargo nextest run` in `repo`, `uses_alpha` failing iff
+/// `fail`: whether it passed and what it said.
+fn suite_step(repo: &std::path::Path, log: &std::path::Path, fail: bool) -> (bool, String) {
+    let mut command = common::batten();
+    command
+        .args(["step", "run", "suite", "--", "cargo", "nextest", "run"])
+        .current_dir(repo)
+        .env("FIXTURE_LOG", log)
+        .env_remove("CI")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS");
+    if fail {
+        command.env("FIXTURE_FAIL", "1");
+    } else {
+        command.env_remove("FIXTURE_FAIL");
+    }
+    let output = command.streamed_output().expect("run batten");
+    (output.status.success(), common::stderr(&output))
+}
+
+/// A failure whose every failing case is a flaky suspect (its recorded reach
+/// misses the change) is re-run over the same inputs, and a pass at that key
+/// replaces the failure receipt (CLOUD-2253, CLOUD-2786).
+///
+/// Fails by: a flaky-suspect failure answered from its receipt (red reused
+/// where the change cannot have caused it), or a later pass leaving the
+/// failure in place so the next run re-runs or reports red.
+#[test]
+fn a_flaky_suspect_failure_re_runs_and_a_pass_replaces_it() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = selected_repo_with("step-red-flaky", &flaky_source());
+    let log = common::scratch("step-red-flaky-log");
+    let (passed, err) = suite_step(&repo, &log, true);
+    assert!(!passed, "{err}");
+    assert_eq!(flaky_line(&err).0, "1 of 1", "{err}");
+    let (passed, err) = suite_step(&repo, &log, true);
+    assert!(!passed, "{err}");
+    assert_eq!(counts(&log)[0], 2, "a flaky-suspect failure re-runs\n{err}");
+    let (passed, err) = suite_step(&repo, &log, false);
+    assert!(passed, "{err}");
+    assert_eq!(counts(&log)[0], 3, "{err}");
+    let (passed, err) = suite_step(&repo, &log, true);
+    assert!(passed, "the pass replaced the failure receipt\n{err}");
+    assert_eq!(err.split_whitespace().next(), Some("hit"), "{err}");
+    assert_eq!(counts(&log)[0], 3, "a hit runs nothing\n{err}");
+}
+
+/// A failing suite names exactly its failing cases and the focused command
+/// that confirms a fix, as one pointer line, and says it again when the
+/// failure is answered from its receipt; the command runs the failing case
+/// and no other.
+///
+/// Fails by: the line missing or naming a passing case, a filter that does
+/// not select the failing case alone, or a receipt-answered failure losing it.
+#[test]
+fn a_failing_suite_names_its_cases_and_a_focused_command() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = selected_repo_with("step-red-focus", &flaky_source());
+    // THE CHANGE REACHES THE FAILING CASE, committed so the step has a key: a
+    // failure the change may have caused is the change's, never flaky.
+    common::write(
+        &repo,
+        "src/lib.rs",
+        &flaky_source().replace(
+            "u8::from(!TEMPLATE.is_empty())",
+            "u8::from(TEMPLATE.len() > 0)",
+        ),
+    );
+    common::git_in(&repo, &["commit", "-qam", "move alpha"]);
+    let log = common::scratch("step-red-focus-log");
+    let expected = "step run: suite failed 1 case(s): fix tests::uses_alpha; confirm a fix with: \
+                    cargo nextest run -E '(binary_id(fix) & test(=tests::uses_alpha))'";
+    let (passed, err) = suite_step(&repo, &log, true);
+    assert!(!passed, "{err}");
+    assert_eq!(flaky_line(&err).0, "0 of 1", "the change reaches it\n{err}");
+    assert!(err.lines().any(|line| line == expected), "{err}");
+    let (passed, again) = suite_step(&repo, &log, true);
+    assert!(!passed, "{again}");
+    assert_eq!(again.split_whitespace().next(), Some("red"), "{again}");
+    assert!(again.lines().any(|line| line == expected), "{again}");
+    assert_eq!(counts(&log), [1, 1, 1, 1], "answered from the receipt\n{again}");
+    let command = expected.split_once("confirm a fix with: ").unwrap().1;
+    let confirmed = std::process::Command::new("sh")
+        .args(["-c", command])
+        .current_dir(&repo)
+        .env("FIXTURE_LOG", &log)
+        .env("FIXTURE_FAIL", "1")
+        .output()
+        .expect("run the focused command");
+    assert!(!confirmed.status.success(), "it still fails");
+    assert_eq!(counts(&log), [2, 1, 1, 1], "the failing case and no other");
 }
