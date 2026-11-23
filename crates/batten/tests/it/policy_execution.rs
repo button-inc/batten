@@ -178,11 +178,14 @@ fn verdicts(bundle: &policy::Bundle, input: &str) -> String {
     format!("{:?}", policy::deny(bundle, input))
 }
 
-/// Every repository policy row answers alike on bytecode and on its own
+/// Every repository policy row, and every module every shipped preset carries
+/// at each selection it answers to, answers alike on bytecode and on its own
 /// interpreter, over the inputs its own cases prove decisions over (#1276).
 ///
 /// `policy_cache` holds this for the mediated rows, which were the only ones
 /// on bytecode; every tree row moved onto it here, so every row is compared.
+/// The presets are compared beside them because a consumer gets a preset this
+/// repository may not enable, and it decides on the same bytecode.
 /// Fails by: a construct the bytecode compiler reads differently from the
 /// interpreter, which would change a verdict `check` or `enforce` reports.
 #[test]
@@ -197,8 +200,38 @@ fn every_repository_policy_row_answers_alike_on_bytecode_and_the_interpreter() {
         traversals: &resolved.traversals,
         records: &resolved.records,
     };
-    let bundles = policy::load(&repo, &resolved.rules, vocabulary, ModuleChecks::Run, None)
+    let mut bundles = policy::load(&repo, &resolved.rules, vocabulary, ModuleChecks::Run, None)
         .expect("this repository's policy loads");
+    let root = common::scratch("policy-execution-preset-parity");
+    let mut presets = 0;
+    for preset in batten::preset_catalog::MANIFESTS {
+        for (scope, provider) in selections(preset) {
+            let row: Rule = serde_json::from_value(serde_json::json!({
+                "id": format!("preset {} {} {}", preset.name, scope.as_str(), provider.unwrap_or("none")),
+                "kind": "policy",
+                "scope": scope.as_str(),
+                "preset": preset.name,
+                "provider": provider,
+                "severity": "deny",
+            }))
+            .expect("a preset row the loader accepts");
+            // A selection with nothing in it is the loader's refusal to make.
+            if let Ok(loaded) = policy::load(
+                &root,
+                &[row],
+                policy::Vocabulary::EMPTY,
+                ModuleChecks::Run,
+                None,
+            ) {
+                presets += loaded.iter().filter(|bundle| bundle.is_bytecode()).count();
+                bundles.extend(loaded);
+            }
+        }
+    }
+    assert!(
+        presets >= 20,
+        "the shipped presets' bytecode bundles reach the comparison: {presets}"
+    );
     let mut split = Vec::new();
     let mut corpus = 0;
     for bundle in &bundles {

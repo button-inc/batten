@@ -66,7 +66,7 @@ rules contains "test cover unseen"
 # `undefined`: the engine emits `null` where the base would not resolve, and
 # `not input.tree["base-delta"]` is dead for exactly that value.
 delta := d if {
-	d := input.tree["base-delta"]
+	d = input.tree["base-delta"]
 	is_object(d)
 }
 
@@ -209,7 +209,7 @@ gated_tests(lines) := count([index |
 # than unreadable: a new file carrying a platform-gated test is the same defect
 # arriving in one commit instead of two.
 base_lines_of(path) := lines if {
-	lines := delta["base-lines"][path]
+	lines = delta["base-lines"][path]
 }
 
 base_lines_of(path) := [] if {
@@ -227,8 +227,8 @@ touched contains path if {
 grew contains [path, after] if {
 	some path in touched
 	endswith(path, ".rs")
-	after := gated_tests(input.tree.lines[path])
-	base := gated_tests(base_lines_of(path))
+	after = gated_tests(input.tree.lines[path])
+	base = gated_tests(base_lines_of(path))
 	after > base
 }
 

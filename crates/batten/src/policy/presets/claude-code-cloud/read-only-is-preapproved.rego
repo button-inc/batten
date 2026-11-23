@@ -189,7 +189,7 @@ reads(program) if {
 # the file itself, which no shell redirect check sees.
 reads(program) if {
 	program.name == "git"
-	verb := git_verb(program)
+	verb = git_verb(program)
 	git_read_verb(verb)
 	not some_writing_flag(verb.rest)
 }

@@ -114,7 +114,7 @@ rules contains "test place duplicate"
 # repository exists to refuse. Silence is the fabricated empty delta, one level
 # over.
 delta := d if {
-	d := input.tree["base-delta"]
+	d = input.tree["base-delta"]
 	is_object(d)
 }
 

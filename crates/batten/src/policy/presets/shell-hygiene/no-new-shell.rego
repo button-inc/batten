@@ -128,7 +128,7 @@ rules contains "shell write other"
 # delta is bound only for an object and every arm is undefined without it rather
 # than vacuously clean.
 delta := d if {
-	d := input.tree["base-delta"]
+	d = input.tree["base-delta"]
 	is_object(d)
 }
 
@@ -138,7 +138,7 @@ delta := d if {
 
 declarations contains shell if {
 	some doc in input.tree.documents
-	shell := doc.census.shell
+	shell = doc.census.shell
 	is_object(shell)
 }
 
@@ -163,7 +163,7 @@ exempt_globs contains pattern if {
 generated_globs contains pattern if {
 	some shell in declarations
 	some row in object.get(shell, "generated", [])
-	pattern := row.path
+	pattern = row.path
 	is_string(pattern)
 }
 
@@ -228,7 +228,7 @@ generated(path) if {
 # ---------------------------------------------------------------------------
 
 shell_fact := s if {
-	s := input.tree.shell
+	s = input.tree.shell
 	is_object(s)
 }
 
@@ -266,9 +266,9 @@ span_end(starts, k, total) := starts[k + 1] if k + 1 < count(starts)
 span_end(starts, k, total) := total if k + 1 >= count(starts)
 
 unit_spans(lines, unit) := {h: finish |
-	starts := headers(lines, unit)
+	starts = headers(lines, unit)
 	some k, h in starts
-	finish := span_end(starts, k, count(lines))
+	finish = span_end(starts, k, count(lines))
 }
 
 # The header index of every unit carrying at least one shell line.
@@ -313,10 +313,10 @@ violation contains {
 } if {
 	migrating
 	some pair in units
-	path := pair[0]
-	unit := pair[1]
+	path = pair[0]
+	unit = pair[1]
 	path in delta.edited
-	head := input.tree.lines[path]
+	head = input.tree.lines[path]
 	some h in shell_units(head, shell_lines(head_entry(path)), unit)
 	not trim_space(head[h]) in units_with_shell(base_side(path), shell_lines(base_entry(path)), unit)
 }
@@ -427,7 +427,7 @@ spawn_rows contains [row.path, row.function] if {
 
 # Absent when the fact did not read the whole tree, so neither arm decides.
 spawn_sites := s if {
-	s := shell_fact.spawn
+	s = shell_fact.spawn
 	is_array(s)
 }
 
@@ -504,27 +504,27 @@ task(name, body) := array.concat(array.concat([concat("", ["[task.", name, "]"])
 verdicts(input_document) := {v.verdict | some v in violation with input as input_document}
 
 test_a_body_grown_by_one_line_is_refused if {
-	base := task("a", ["echo one", "echo two"])
-	head := task("a", ["echo one", "echo two", "echo three"])
+	base = task("a", ["echo one", "echo two"])
+	head = task("a", ["echo one", "echo two", "echo three"])
 	"task write refused" in verdicts(edited("tasks.toml", "manifest", base, head, [3, 4], [3, 4, 5]))
 }
 
 test_an_edit_that_does_not_grow_a_body_is_admitted if {
-	base := task("a", ["echo one", "echo two"])
-	head := task("a", ["echo uno", "echo two"])
+	base = task("a", ["echo one", "echo two"])
+	head = task("a", ["echo uno", "echo two"])
 	count(verdicts(edited("tasks.toml", "manifest", base, head, [3, 4], [3, 4]))) == 0
 }
 
 test_a_deleted_body_is_admitted if {
 	base := array.concat(task("a", ["echo 1", "echo 2"]), task("b", ["echo 3", "echo 4"]))
-	head := task("a", ["echo 1", "echo 2"])
+	head = task("a", ["echo 1", "echo 2"])
 	count(verdicts(edited("tasks.toml", "manifest", base, head, [3, 4, 8, 9], [3, 4]))) == 0
 }
 
 test_a_body_moved_into_a_new_unit_is_refused_even_when_the_total_falls if {
-	base := task("a", ["echo 1", "echo 2", "echo 3"])
-	head := task("b", ["echo 1", "echo 2"])
-	found := verdicts(edited("tasks.toml", "manifest", base, head, [3, 4, 5], [3, 4]))
+	base = task("a", ["echo 1", "echo 2", "echo 3"])
+	head = task("b", ["echo 1", "echo 2"])
+	found = verdicts(edited("tasks.toml", "manifest", base, head, [3, 4, 5], [3, 4]))
 	"task add refused" in found
 	not "task write refused" in found
 }
@@ -629,7 +629,7 @@ standing(declaration, head, generated) := {"tree": {
 gen_row := {"path": "gen/*.sh", "generator": "batten completions", "check": "t.rs::pins_it"}
 
 test_a_shell_file_standing_at_the_base_is_refused_by_default if {
-	found := verdicts(standing(presence_declared([]), shell_file_fact("tools/x.sh"), []))
+	found = verdicts(standing(presence_declared([]), shell_file_fact("tools/x.sh"), []))
 	found == {"shell present refused"}
 }
 
@@ -656,19 +656,19 @@ test_an_empty_exempt_list_is_presence if {
 
 test_a_generated_file_is_admitted if {
 	measured := [{"path": "gen/*.sh", "matches": 1, "check_found": true}]
-	found := verdicts(standing(presence_declared([gen_row]), shell_file_fact("gen/a.sh"), measured))
+	found = verdicts(standing(presence_declared([gen_row]), shell_file_fact("gen/a.sh"), measured))
 	count(found) == 0
 }
 
 test_a_generated_entry_covering_no_file_is_refused if {
 	measured := [{"path": "gen/*.sh", "matches": 0, "check_found": true}]
-	found := verdicts(standing(presence_declared([gen_row]), {}, measured))
+	found = verdicts(standing(presence_declared([gen_row]), {}, measured))
 	found == {"shell path missing"}
 }
 
 test_a_generated_entry_whose_check_is_not_found_is_refused if {
 	measured := [{"path": "gen/*.sh", "matches": 1, "check_found": false}]
-	found := verdicts(standing(presence_declared([gen_row]), shell_file_fact("gen/a.sh"), measured))
+	found = verdicts(standing(presence_declared([gen_row]), shell_file_fact("gen/a.sh"), measured))
 	found == {"shell test missing"}
 }
 
@@ -704,7 +704,7 @@ test_an_existing_shell_file_that_does_not_grow_is_admitted if {
 # base as holding them all. The engine's shape is the empty side; the missing key
 # is read alike, so both are pinned by one case.
 test_an_unread_base_refuses_every_shell_unit if {
-	head := task("a", ["echo one", "echo two"])
+	head = task("a", ["echo one", "echo two"])
 	every base_lines in [{"tasks.toml": []}, {}] {
 		document := {"tree": {
 			"documents": {"config.toml": declared},
@@ -733,7 +733,7 @@ spawn_row := {"path": "src/lib.rs", "function": "run", "contract": "https://exam
 spawn_site := {"path": "src/lib.rs", "line": 3, "function": "run"}
 
 test_an_undeclared_spawn_is_refused if {
-	found := verdicts({"tree": {
+	found = verdicts({"tree": {
 		"documents": {"config.toml": spawn_declared([])},
 		"shell": {"head": {}, "base": {}, "spawn": [spawn_site]},
 	}})
@@ -748,7 +748,7 @@ test_a_declared_spawn_is_admitted if {
 }
 
 test_a_spawn_row_naming_no_site_is_refused if {
-	found := verdicts({"tree": {
+	found = verdicts({"tree": {
 		"documents": {"config.toml": spawn_declared([spawn_row])},
 		"shell": {"head": {}, "base": {}, "spawn": []},
 	}})

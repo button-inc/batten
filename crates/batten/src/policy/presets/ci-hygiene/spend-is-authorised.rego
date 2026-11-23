@@ -91,11 +91,11 @@ workflow[path] := doc if {
 # trigger stands down. That is the honest reading: a workflow written that way
 # declares no `types:` and no branch filter to judge.
 triggers(path) := t if {
-	t := workflow[path].on
+	t = workflow[path].on
 	is_object(t)
 }
 
-on_pull_request(path) if _ := triggers(path).pull_request
+on_pull_request(path) if _ = triggers(path).pull_request
 
 # --- 1. no job runs on a draft ------------------------------------------------
 
@@ -179,7 +179,7 @@ violation contains {
 # the right value differs by trigger and a single answer is wrong for one of
 # them. A scheduled workflow must not cancel its own previous tick.
 
-declares_concurrency(path) if _ := workflow[path].concurrency
+declares_concurrency(path) if _ = workflow[path].concurrency
 
 # SCOPED TO TRIGGERS WHOSE RUNS ANSWER ABOUT ONE SUBJECT, and the distinction is
 # the whole correctness of the rule rather than a convenience.
@@ -201,7 +201,7 @@ declares_concurrency(path) if _ := workflow[path].concurrency
 # asserts a minimal tree is clean) is what surfaced.
 races_itself(path) if {
 	some trigger in ["pull_request", "issue_comment", "workflow_run", "schedule"]
-	_ := triggers(path)[trigger]
+	_ = triggers(path)[trigger]
 }
 
 violation contains {
@@ -333,21 +333,21 @@ test_a_pure_aggregator_under_always_is_clean if {
 
 # AN AGGREGATOR THAT ALSO CHECKS OUT is a spend again, and still refused.
 test_an_aggregator_that_checks_out_is_still_refused if {
-	doc := aggregator_doc(array.concat([{"uses": "actions/checkout@v4"}], aggregating))
+	doc = aggregator_doc(array.concat([{"uses": "actions/checkout@v4"}], aggregating))
 	some f in violation with input as with_workflow(doc)
 	f.verdict == "job run early"
 }
 
 # AN AGGREGATOR THAT ALSO BUILDS is a spend again, and still refused.
 test_an_aggregator_that_builds_is_still_refused if {
-	doc := aggregator_doc(array.concat(aggregating, [{"run": "cargo build"}]))
+	doc = aggregator_doc(array.concat(aggregating, [{"run": "cargo build"}]))
 	some f in violation with input as with_workflow(doc)
 	f.verdict == "job run early"
 }
 
 # A CONDITION READING ANOTHER CONTEXT decides something else, and is refused.
 test_an_aggregator_reading_another_context_is_still_refused if {
-	doc := aggregator_doc([{"if": "${{ github.event_name == 'push' }}", "run": "exit 1"}])
+	doc = aggregator_doc([{"if": "${{ github.event_name == 'push' }}", "run": "exit 1"}])
 	some f in violation with input as with_workflow(doc)
 	f.verdict == "job run early"
 }

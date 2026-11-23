@@ -65,7 +65,7 @@ defined contains name if {
 	some path in input.tree.tracked
 	startswith(path, "mise-tasks/")
 	parts := split(path, "/")
-	name := parts[count(parts) - 1]
+	name = parts[count(parts) - 1]
 }
 
 defined contains stem if {
@@ -73,9 +73,9 @@ defined contains stem if {
 	some path in input.tree.tracked
 	startswith(path, "mise-tasks/")
 	parts := split(path, "/")
-	name := parts[count(parts) - 1]
+	name = parts[count(parts) - 1]
 	contains(name, ".")
-	stem := split(name, ".")[0]
+	stem = split(name, ".")[0]
 }
 
 # THE MANIFEST IS THE MARKER, and this predicate is what keeps the rule from
@@ -101,7 +101,7 @@ uses_this_runner if input.tree.documents["mise.toml"]
 spawned contains {"id": row.id, "task": task} if {
 	some row in input.tree.documents["batten.toml"].rule
 	some column in ["check", "fix"]
-	task := mise_task(row[column])
+	task = mise_task(row[column])
 }
 
 # The task a `mise run` command names, or nothing for any other program.
@@ -114,7 +114,7 @@ mise_task(command) := task if {
 	words[0] == "mise"
 	words[1] == "run"
 	rest := [word | some i, word in words; i > 1; not startswith(word, "-")]
-	task := rest[0]
+	task = rest[0]
 }
 
 violation contains {

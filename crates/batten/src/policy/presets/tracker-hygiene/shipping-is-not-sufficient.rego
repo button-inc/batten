@@ -63,7 +63,7 @@ released_refusals(id) := [rule |
 	count(columns) == 3
 	columns[0] == "refusal"
 	columns[1] == id
-	rule := columns[2]
+	rule = columns[2]
 	rule != "dangling-blocker"
 ]
 

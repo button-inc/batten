@@ -88,7 +88,7 @@ rules contains "replay halt conflict"
 # made regorus panic outright.
 replays := [answer |
 	is_object(input.tree.records)
-	line := input.tree.records[_][_]
+	line = input.tree.records[_][_]
 	columns := split(line, " ")
 	count(columns) == 4
 	columns[0] == "rebase"
@@ -109,7 +109,7 @@ replays := [answer |
 # to have conflicted over.
 last_replay := answer if {
 	count(replays) > 0
-	answer := replays[count(replays) - 1]
+	answer = replays[count(replays) - 1]
 }
 
 replay_conflicted if {

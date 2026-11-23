@@ -183,7 +183,7 @@ destructive(program) if program.subcommand == "filter-branch"
 # no refspec, and argv cannot see the current branch.
 pushes_to_trunk(program) if {
 	program.subcommand == "push"
-	pattern := data.batten.patterns["trunk-branch"]
+	pattern = data.batten.patterns["trunk-branch"]
 	some word in program.arguments
 	not startswith(word, "-")
 	parts := split(word, ":")

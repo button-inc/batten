@@ -78,7 +78,7 @@ map_path := ".serena/memories/engineering/module-map.md"
 # then undefined without it rather than vacuously clean, which is the difference
 # between could-not-look and a pass.
 map_lines := lines if {
-	lines := input.tree.lines[map_path]
+	lines = input.tree.lines[map_path]
 }
 
 # THE COULD-NOT-LOOK ARM. Reported once, and nothing else is reported with it.

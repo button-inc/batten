@@ -43,7 +43,7 @@ rules contains "tag mint wrong"
 shipped contains tag if {
 	is_object(input.tree["git-history"])
 	some entry in input.tree["git-history"]["release-tags"]
-	tag := entry.tag
+	tag = entry.tag
 }
 
 violation contains {

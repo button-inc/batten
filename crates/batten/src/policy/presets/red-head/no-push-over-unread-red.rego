@@ -59,7 +59,7 @@ violation contains {
 # nothing faulted regorus's interpreter (`some .. in` over null), so the whole
 # preset answered could-not-look instead of letting the push through (#1276).
 listed(key) := list if {
-	list := input.facts["red-head"][key]
+	list = input.facts["red-head"][key]
 	is_array(list)
 }
 

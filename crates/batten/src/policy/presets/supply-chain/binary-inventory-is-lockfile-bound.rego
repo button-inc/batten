@@ -59,7 +59,7 @@ declared contains sprintf("%s %s", [name, version]) if {
 	is_array(lock_lines)
 	some i, line in lock_lines
 	startswith(line, "name = \"")
-	following := lock_lines[i + 1]
+	following = lock_lines[i + 1]
 	startswith(following, "version = \"")
 	name := trim_suffix(trim_prefix(line, "name = \""), "\"")
 	version := trim_suffix(trim_prefix(following, "version = \""), "\"")

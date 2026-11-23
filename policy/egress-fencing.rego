@@ -83,7 +83,7 @@ rules contains "provision guard missing"
 # ---------------------------------------------------------------------------
 
 env := e if {
-	e := input.tree.documents["mise.toml"].env
+	e = input.tree.documents["mise.toml"].env
 	is_object(e)
 }
 
@@ -120,7 +120,7 @@ violation contains {
 	"subjects": [{"path": "mise.toml"}, {"artifact": key}],
 } if {
 	some key in spellings
-	value := env[key]
+	value = env[key]
 	is_string(value)
 	not regex.match(data.batten.patterns["egress-resolver-host"], value)
 }

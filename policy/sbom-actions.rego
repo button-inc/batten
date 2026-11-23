@@ -70,7 +70,7 @@ violation contains {
 } if {
 	some [number, fields] in rows
 	count(fields) >= 3
-	key := fields[0]
+	key = fields[0]
 	not pinned_key(key)
 }
 

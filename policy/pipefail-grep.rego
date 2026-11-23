@@ -96,7 +96,7 @@ grep_stage(line) := stage if {
 		invokes_grep(candidate_stage)
 	]
 	count(found) > 0
-	stage := found[count(found) - 1]
+	stage = found[count(found) - 1]
 }
 
 invokes_grep(stage) if startswith(trim_space(stage), "grep ")
@@ -106,7 +106,7 @@ invokes_grep(stage) if trim_space(stage) == "grep"
 # The tokens before `--`, which ends the flags: `grep -- -q` searches for the
 # literal `-q`.
 flag_tokens(line) := tokens if {
-	before := split(grep_stage(line), " -- ")[0]
+	before = split(grep_stage(line), " -- ")[0]
 	tokens := [token |
 		some token in split(before, " ")
 		token != ""

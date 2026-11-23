@@ -49,7 +49,7 @@ spec := "docs"
 # Bound only for an object, so every arm below is UNDEFINED rather than
 # vacuously clean when the index could not be read.
 docs := fact if {
-	fact := input.tree["git-index"][spec]
+	fact = input.tree["git-index"][spec]
 	is_object(fact)
 }
 
