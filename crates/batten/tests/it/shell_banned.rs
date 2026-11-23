@@ -849,24 +849,28 @@ fn an_existing_shell_file_that_grows_under_migrate_is_refused() {
 fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
     let authority: toml::Value =
         toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
-    let exempt: BTreeSet<&str> = authority["census"]["shell"]["exempt"]
+    // PLAN STEP 14 (CLOUD-2821): the legacy `exempt` list is gone, because it
+    // cannot stand beside a generated table, and the census says `migrate`
+    // outright instead. What the census still admits as shell is the generated
+    // table, so that is the set pinned here.
+    let census = &authority["census"]["shell"];
+    assert!(
+        census.get("exempt").is_none(),
+        "the legacy exempt list is retired: {census:?}"
+    );
+    assert_eq!(census["mode"].as_str(), Some("migrate"));
+    let generated: BTreeSet<&str> = census["generated"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|glob| glob.as_str().unwrap())
+        .map(|entry| entry["path"].as_str().unwrap())
         .collect();
     assert_eq!(
-        exempt,
+        generated,
         BTreeSet::from([
-            ".claude/hooks/git-hook.sh",
             "completions/batten.bash",
-            // TEMPORARY, admitted by the owner in `.batten/asked.jsonl` (dbd96081):
-            // the generated fish and zsh completions stand here until plan step 14
-            // swaps both for `[[census.shell.generated]]` rows under v0.0.221.
-            // Step 14 deletes these two lines with the entries.
             "completions/batten.fish",
             "completions/batten.zsh",
-            "setup.sh",
         ])
     );
 }

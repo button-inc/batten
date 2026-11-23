@@ -609,8 +609,8 @@ fn the_census_is_byte_stable() {
 /// THIS REPOSITORY'S BAN READS THE CENSUS'S OWN DECLARATION. There used to be a
 /// second exempt list inside the ban's module, pinned equal to this table's;
 /// since CLOUD-1994 the ban reads this table, so the property to hold is that
-/// the enabling row hands it over at all. `shell_banned.rs` pins the exempt set
-/// itself, and that every declared home is a line source.
+/// the enabling row hands it over at all. `shell_banned.rs` pins the generated
+/// table itself, and that every declared home is a line source.
 #[test]
 fn this_repositorys_ban_reads_the_census_declaration() {
     let authority: toml::Value =
@@ -629,13 +629,15 @@ fn this_repositorys_ban_reads_the_census_declaration() {
         .collect();
     assert!(documents.contains("batten.toml"), "{documents:?}");
     assert!(
-        authority["census"]["shell"]["exempt"].as_array().is_some(),
-        "the census declares the exempt set the ban reads"
+        authority["census"]["shell"]["generated"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()),
+        "the census declares the generated table the ban reads"
     );
 }
 
-/// The real tree, under its own declaration: the census answers, and every
-/// exempt file it names is one the ban exempts.
+/// The real tree, under its own declaration: the census answers, counts the
+/// hand-written shell, and holds every generated entry to a file and a test.
 #[test]
 fn this_repositorys_own_census_answers() {
     let output = common::run(&common::at_root("."), &["census", "shell", "-J"]);
@@ -646,12 +648,23 @@ fn this_repositorys_own_census_answers() {
         String::from_utf8_lossy(&output.stderr)
     );
     let document: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    // Plan step 14 (CLOUD-2821) retired the exempt list: `setup.sh` is counted as
+    // any existing shell file is, and each generated entry covers its file and
+    // names a test its file holds.
     assert!(
-        document["exempt"]
+        document["files"]
             .as_array()
             .unwrap()
             .iter()
             .any(|entry| entry["path"] == "setup.sh"),
+        "{document}"
+    );
+    let generated = document["generated"].as_array().unwrap();
+    assert_eq!(generated.len(), 3, "{document}");
+    assert!(
+        generated
+            .iter()
+            .all(|entry| entry["matches"] == 1 && entry["check_found"] == true),
         "{document}"
     );
 }
