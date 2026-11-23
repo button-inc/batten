@@ -2493,8 +2493,39 @@ pub struct Identity<'a> {
     pub sites: &'a [Option<String>],
     /// Each located mutant's innermost probed function, by digest.
     pub mutant_fns: &'a std::collections::BTreeMap<u32, String>,
+    /// Each mutant no probed function encloses, with the digest of every
+    /// probed function in its file ([`file_fns`]); absent where the file has
+    /// no probe.
+    pub file_fns: &'a std::collections::BTreeMap<u32, BTreeSet<String>>,
     /// The mutants handed back, which no reach run switches.
     pub classic: &'a BTreeSet<u32>,
+}
+
+/// [`Identity::file_fns`] for `mutants` over `schema`: each mutant with no
+/// innermost probed function, mapped to every probed function digest its own
+/// file's rendering holds. A file with no probe maps nothing.
+fn file_fns(
+    mutants: &[Listed],
+    schema: &Schema,
+) -> std::collections::BTreeMap<u32, BTreeSet<String>> {
+    mutants
+        .iter()
+        .enumerate()
+        .filter_map(|(id, mutant)| {
+            let id = u32::try_from(id).ok()?;
+            if schema.mutant_fns.contains_key(&id) {
+                return None;
+            }
+            let probes: BTreeSet<String> = schema
+                .files
+                .get(&mutant.file)?
+                .probes
+                .iter()
+                .cloned()
+                .collect();
+            (!probes.is_empty()).then_some((id, probes))
+        })
+        .collect()
 }
 
 /// A sealed case record ([`DEPENDS`]), read back.
@@ -2592,11 +2623,20 @@ fn carry_forward(
         if identity.classic.contains(&id) || key.as_ref().is_some_and(|key| listed.contains(key)) {
             continue;
         }
-        match identity.mutant_fns.get(&id) {
-            Some(function) => {
+        // A MUTANT NO PROBED FUNCTION ENCLOSES IS CHARGED TO ITS FILE, NOT TO
+        // THE SUITE: one keyless const or field mutant used to clear every
+        // record and re-record the whole suite. Its file's functions are what
+        // a case reaching it most likely ran. The limit: a case that reaches
+        // it only through a skeleton item, running none of that file's
+        // functions, keeps its record, and the mutant may read as a survivor
+        // it is not, which fails closed. A file with no probe has no function
+        // to charge, so it still clears everything.
+        match (identity.mutant_fns.get(&id), identity.file_fns.get(&id)) {
+            (Some(function), _) => {
                 fresh_fns.insert(function.clone());
             }
-            None => fresh_unplaced = true,
+            (None, Some(functions)) => fresh_fns.extend(functions.iter().cloned()),
+            (None, None) => fresh_unplaced = true,
         }
     }
     let functions = ids_by_value(identity.probes.iter().enumerate());
@@ -3000,6 +3040,10 @@ struct SealContext {
     untraced: String,
     sites: Vec<Option<String>>,
     mutant_fns: std::collections::BTreeMap<u32, String>,
+    /// A context written before it existed charges no mutant to its file, so
+    /// an unplaced one clears every record, as it did then.
+    #[serde(default)]
+    file_fns: std::collections::BTreeMap<u32, BTreeSet<String>>,
     classic: BTreeSet<u32>,
     /// What a case's selection digest is read in ([`seal_tested`]): the probed
     /// and unprobed files, the features and the cargo arguments. A context
@@ -3014,6 +3058,7 @@ impl SealContext {
             probes: &self.probes,
             sites: &self.sites,
             mutant_fns: &self.mutant_fns,
+            file_fns: &self.file_fns,
             classic: &self.classic,
         }
     }
@@ -4973,10 +5018,12 @@ fn reached(
 ) -> anyhow::Result<Reached> {
     let dirs = package_dirs(mutants);
     let started = std::time::Instant::now();
+    let in_file = file_fns(mutants, schema);
     let identity = &Identity {
         probes: &schema.probes,
         sites: site_keys,
         mutant_fns: &schema.mutant_fns,
+        file_fns: &in_file,
         classic,
     };
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
@@ -5000,6 +5047,7 @@ fn reached(
             untraced: ids.1.to_owned(),
             sites: site_keys.to_vec(),
             mutant_fns: schema.mutant_fns.clone(),
+            file_fns: in_file.clone(),
             classic: classic.clone(),
             format: Some(format.clone()),
         })?,
@@ -6147,6 +6195,7 @@ mod tests {
             probes: &probes,
             sites: &[],
             mutant_fns: &fns,
+            file_fns: &std::collections::BTreeMap::new(),
             classic: &classic,
         };
         let same = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
@@ -6235,11 +6284,14 @@ mod tests {
     /// An identity with no probes, no sites and nothing handed back.
     fn no_identity() -> Identity<'static> {
         static FNS: std::collections::BTreeMap<u32, String> = std::collections::BTreeMap::new();
+        static FILE_FNS: std::collections::BTreeMap<u32, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
         static CLASSIC: BTreeSet<u32> = BTreeSet::new();
         Identity {
             probes: &[],
             sites: &[],
             mutant_fns: &FNS,
+            file_fns: &FILE_FNS,
             classic: &CLASSIC,
         }
     }
@@ -6350,6 +6402,7 @@ mod tests {
             probes: &probes,
             sites: &sites,
             mutant_fns: &fns,
+            file_fns: &std::collections::BTreeMap::new(),
             classic: &classic,
         };
         let recompute =
@@ -6381,6 +6434,70 @@ mod tests {
         assert_eq!(reach.seconds.get(&kept), Some(&2.5));
     }
 
+    /// A new mutant no probed function encloses clears only the records that
+    /// ran a function in its own file; one in a file with no probe at all,
+    /// which no record could speak for, still clears every record.
+    ///
+    /// Fails by: one keyless mutant clearing every record (the whole suite
+    /// re-recorded for a mutant in one file), a record that ran its file kept
+    /// (a stale reach misses it), or an unprobed file's mutant trusted to
+    /// records that could not have seen it.
+    #[test]
+    fn an_unplaced_mutant_clears_only_the_records_that_ran_its_file() {
+        let sealed = |function: &str| format!("Dsame\nF{function}\nSkey-0\nT1\n");
+        let fresh = |name: &str| {
+            let base = crate::scratch::scratch(name);
+            record(
+                &base,
+                "near",
+                "near",
+                Some("0"),
+                &[(DEPENDS, &sealed("fa"))],
+            );
+            record(&base, "far", "far", Some("0"), &[(DEPENDS, &sealed("fc"))]);
+            std::fs::write(base.join(LISTED), "key-0\n").unwrap();
+            base
+        };
+        let probes = [String::from("fa"), String::from("fb"), String::from("fc")];
+        let sites = [Some(String::from("key-0")), None];
+        let fns = std::collections::BTreeMap::new();
+        let classic = BTreeSet::new();
+        let same = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+                    _: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+            executed
+                .keys()
+                .map(|case| (case.clone(), String::from("same")))
+                .collect()
+        };
+        let in_file: std::collections::BTreeMap<u32, BTreeSet<String>> =
+            [(1, BTreeSet::from([String::from("fa"), String::from("fb")]))].into();
+        let base = fresh("schema-reach-unplaced");
+        let identity = Identity {
+            probes: &probes,
+            sites: &sites,
+            mutant_fns: &fns,
+            file_fns: &in_file,
+            classic: &classic,
+        };
+        assert_eq!(
+            carry_forward(&base, "tree-2", &identity, (&same, None)).unwrap(),
+            (1, 0)
+        );
+        assert!(!base.join("near").exists(), "it ran the mutant's file");
+        assert!(base.join("far").exists(), "it ran only another file");
+        let unprobed = std::collections::BTreeMap::new();
+        let base = fresh("schema-reach-unprobed");
+        let identity = Identity {
+            file_fns: &unprobed,
+            ..identity
+        };
+        assert_eq!(
+            carry_forward(&base, "tree-2", &identity, (&same, None)).unwrap(),
+            (0, 0)
+        );
+        assert!(!base.join("near").exists() && !base.join("far").exists());
+    }
+
     /// Sealing writes each case in identities, drops its per-process files and
     /// records the listing; a case reaching a keyless site stays unsealed.
     ///
@@ -6401,6 +6518,7 @@ mod tests {
             probes: &probes,
             sites: &sites,
             mutant_fns: &fns,
+            file_fns: &std::collections::BTreeMap::new(),
             classic: &classic,
         };
         let mut reach = collect_reach(&base, &identity).unwrap();
@@ -6457,6 +6575,7 @@ mod tests {
             untraced: String::from("u"),
             sites: vec![Some(String::from("key-0"))],
             mutant_fns: std::collections::BTreeMap::new(),
+            file_fns: std::collections::BTreeMap::new(),
             classic: BTreeSet::new(),
             format: None,
         }
