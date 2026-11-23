@@ -6303,6 +6303,40 @@ mod tests {
         assert!(Overlay::declared_by(root, |_| None).is_none());
     }
 
+    /// THE SWEEP NAMES ITS TARGET AS THE READER SPELLS IT (CLOUD-2839 §2(c)):
+    /// the `.target` `mark` writes holds the copy's path relative to the
+    /// overlay, the exact string `read_overlay` compares, so a reader of the
+    /// marked module whose copy is absent refuses instead of judging the
+    /// embedded text.
+    ///
+    /// Fails by: `mark` writing nothing (cargo-mutants' `Ok(())`), or the two
+    /// sides ever spelling the path differently.
+    #[test]
+    fn the_sweep_names_its_target_as_the_reader_spells_it() {
+        let dir = fixture("overlay-mark").join("mutate-overlay");
+        fs::create_dir_all(&dir).expect("the overlay directory");
+        let overlay = Overlay {
+            root: String::from("crates/x/presets"),
+            env: String::from("BATTEN_PRESET_OVERLAY"),
+            features: String::from("preset-overlay"),
+            dir: dir.clone(),
+        };
+        let copy = overlay
+            .path_of("crates/x/presets/demo/a.rego")
+            .expect("a source under the root has a copy");
+        overlay.mark(&copy).expect("mark names the target");
+        let named = fs::read_to_string(dir.join(crate::preset::OVERLAY_TARGET))
+            .expect("mark writes `.target`");
+        assert_eq!(named.trim(), "demo/a.rego");
+        assert!(
+            matches!(
+                crate::preset::read_overlay(Some(&dir), "demo/a.rego"),
+                crate::preset::Overlaid::Unreadable(_)
+            ),
+            "the marked module's absent copy is refused, never the embedded text"
+        );
+    }
+
     /// The listing asks cargo-mutants for exactly the change's mutants as
     /// JSON, reads what it prints, and refuses a runner that failed.
     ///
