@@ -4407,6 +4407,25 @@ fn handback_verdict(
     }
 }
 
+/// Sync the mirror at `tree` to `live`, then `run` in it.
+///
+/// BEFORE EVERY RUN, NEVER ONLY THE FIRST: a run that was stopped, or a
+/// cargo-mutants that failed to restore its file, leaves its mutation in the
+/// mirror, and synced only once the next hand-back was judged on a tree
+/// holding the last one's mutation as well as its own.
+///
+/// # Errors
+///
+/// The mirror cannot be synced, or `run` fails.
+fn synced_run<T>(
+    live: &std::path::Path,
+    tree: &std::path::Path,
+    run: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    sync(live, tree, &BTreeSet::new())?;
+    run()
+}
+
 /// Judge each handed-back mutant ONCE, IN PLACE, on the cases that can
 /// observe it, reusing a journaled verdict whose key holds; answer the
 /// verdicts and how many were unviable.
@@ -4416,8 +4435,8 @@ fn handback_verdict(
 /// the whole suite per mutant). The mirror at `tree` keeps its own target, so
 /// a mutant costs the rebuild its mutation forces; the reach run already
 /// proved the unmutated suite on this source; and a mutant runs only the cases
-/// [`handback_cases`] names. The mirror is synced before the first run, which
-/// also undoes a mutation a killed run left in place.
+/// [`handback_cases`] names. The mirror is synced before EVERY run
+/// ([`synced_run`]), which also undoes a mutation a killed run left in place.
 ///
 /// # Errors
 ///
@@ -4442,7 +4461,7 @@ fn judge_handbacks(
     let (tree, output) = (tree.as_path(), output.as_path());
     let every: BTreeSet<Case> = reach.executed.keys().cloned().collect();
     let every_green: BTreeSet<Case> = split_red(&every, judging.red).0;
-    let (mut verdicts, mut unviable, mut reused, mut synced) = (Vec::new(), 0, 0, false);
+    let (mut verdicts, mut unviable, mut reused) = (Vec::new(), 0, 0);
     for &id in classic {
         let Some(mutant) = judging.mutants.get(id as usize) else {
             continue;
@@ -4464,10 +4483,6 @@ fn judge_handbacks(
             reused += 1;
             stored.clone()
         } else {
-            if !synced {
-                sync(live, tree, &BTreeSet::new())?;
-                synced = true;
-            }
             let (filter, ran) = handback_filter(green_observing.as_ref(), &green, &every_green);
             let poisoner = red.or_else(|| {
                 filter
@@ -4484,13 +4499,15 @@ fn judge_handbacks(
                 continue;
             }
             let bound = case_bound(ran, judging.seconds).min(super::runner_bound());
-            let outcome = super::cargo_mutant_in_place(
-                (tree, handback.runner, handback.diff),
-                &mutant.name,
-                filter.as_deref(),
-                bound,
-                output,
-            )?;
+            let outcome = synced_run(live, tree, || {
+                super::cargo_mutant_in_place(
+                    (tree, handback.runner, handback.diff),
+                    &mutant.name,
+                    filter.as_deref(),
+                    bound,
+                    output,
+                )
+            })?;
             let unobserved = observing.as_ref().is_some_and(BTreeSet::is_empty);
             let mut name = handback_verdict(outcome, output, &mutant.name, unobserved);
             if poisoner.is_some() && !matches!(name, "caught" | "timeout" | "error" | "unviable") {
@@ -9091,6 +9108,30 @@ mod tests {
             sync(&root, &work, &BTreeSet::new()).is_err(),
             "a scratch that cannot be cleared is an error"
         );
+    }
+
+    /// Every handed-back run starts on a mirror synced to the live checkout,
+    /// so a mutation one run left in place is gone before the next.
+    ///
+    /// Fails by: the mirror synced only before the first run, so the second
+    /// hand-back is judged with the first one's mutation still applied.
+    #[test]
+    fn every_handed_back_run_starts_on_a_synced_mirror() {
+        let base = crate::scratch::scratch("schema-synced-run");
+        let (live, tree) = (base.join("live"), base.join("tree"));
+        std::fs::create_dir_all(live.join("src")).unwrap();
+        std::fs::write(live.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+        let mirror = tree.join("src/lib.rs");
+        for run in 0..2 {
+            let seen = synced_run(&live, &tree, || {
+                let seen = std::fs::read_to_string(&mirror)?;
+                // A RUN THAT NEVER RESTORED ITS FILE, as a stopped one leaves it.
+                std::fs::write(&mirror, "pub fn f() { mutated() }\n")?;
+                Ok(seen)
+            })
+            .unwrap();
+            assert_eq!(seen, "pub fn f() {}\n", "run {run} saw the live source");
+        }
     }
 
     /// Fails by: a gate in a file after the first credited to another probe,
