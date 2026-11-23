@@ -15136,6 +15136,19 @@ severity = "deny"
 id = "plan-exits"
 count = "plan-exits"
 
+# The vendored `claude-code-dispatch` preset (CLOUD-2858, CLOUD-2864), enabled
+# with the pin bump that ships it, as `claude-code-plan`'s row above was. A
+# dispatch to another session whose message fails `batten lint brief` is refused
+# with the missing section's id; a linted one is granted with no owner approval.
+# `preapprove.rs`'s dispatch cases run against this row.
+[[rule]]
+id = "dispatch brief refused"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+preset = "claude-code-dispatch"
+severity = "deny"
+
 # The vendored `commit-hygiene` preset: `git commit --allow-empty` refused. It
 # was left off on the claim that the landing loop already enforces AGENTS.md's
 # "never push an empty commit to kick CI". The CLOUD-2813 census found no gate
