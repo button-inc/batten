@@ -20,12 +20,11 @@
 
 use crate::common;
 
-/// The `toolchain-is-provisioned` row's repair argv, as the engine derives it
-/// from the `mise` preset's enabling row (CLOUD-2633).
+/// The `toolchain-is-provisioned` row's repair argv, as the engine loads it.
 fn repair() -> Vec<String> {
-    let config =
-        batten::config::load(&common::at_root("batten.toml")).expect("the committed config loads");
-    batten::config_model::derive_startup(&config.startup, &config.rules)
+    batten::config::load(&common::at_root("batten.toml"))
+        .expect("the committed config loads")
+        .startup
         .into_iter()
         .find(|row| row.id == "toolchain-is-provisioned")
         .expect("the toolchain-is-provisioned row exists")
