@@ -1568,6 +1568,10 @@ pub(crate) fn pkl_ca_selection(
 /// could-not-fetch as its verdict; one helper means no spawn can forget the
 /// flag, and `pkl_ca.rs`'s census holds every other test file to it.
 #[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only (CLOUD-2841): the suite's one `pkl` spawn — `pkl eval` evaluates hk's config and the fix-selection predicate, which the engine does not host; a read with no effect"
+)]
 pub(crate) fn pkl_command() -> Command {
     let mut command = Command::new(require_tool("pkl"));
     command.arg("eval").args(pkl_ca_selection(
