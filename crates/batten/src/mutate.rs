@@ -6367,6 +6367,26 @@ mod tests {
         );
     }
 
+    /// Every runner over the shared suite target builds WITHOUT DEBUG INFO
+    /// (CLOUD-1746), the nextest arm included. Carries the build half of
+    /// `main`'s `a_sources_build_is_exactly_the_targets_its_scope_runs`, whose
+    /// per-source target scope left with the cargo-mutants wrapper (01ed3d26).
+    ///
+    /// Fails by: the setting dropped or changed, which flips the test profile
+    /// under one runner's builds so each flip rebuilds the workspace crates.
+    #[test]
+    fn every_runner_over_the_shared_target_builds_without_debug_info() {
+        let debug = |env: &[(String, String)]| {
+            env.iter()
+                .find(|(key, _)| key == "CARGO_PROFILE_TEST_DEBUG")
+                .map(|(_, value)| value.clone())
+        };
+        let suite = suite_env(Path::new("/repo"));
+        assert_eq!(debug(&suite).as_deref(), Some("0"), "{suite:?}");
+        let nextest = nextest_env(Path::new("/repo"), Path::new("/staged"));
+        assert_eq!(debug(&nextest).as_deref(), Some("0"), "{nextest:?}");
+    }
+
     /// Fails by: a nextest run read as libtest, which counts no case and finds
     /// no summary, so every declared Cargo row reads `suite-did-not-run`.
     #[test]
