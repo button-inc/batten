@@ -699,10 +699,73 @@ impl Sweep {
     /// could see it.
     #[must_use]
     pub fn unlooked(&self) -> usize {
+        self.count(Class::Unlooked)
+    }
+
+    /// How many findings are rows the suite stayed green under: the only ones
+    /// a coverage verdict over `declared` is about.
+    #[must_use]
+    pub fn survived(&self) -> usize {
+        self.count(Class::Survived)
+    }
+
+    /// How many findings are rows that prove nothing as written, whatever the
+    /// suite does: inert, self-mutating, malformed, or naming every case.
+    #[must_use]
+    pub fn row_defects(&self) -> usize {
+        self.count(Class::RowDefect)
+    }
+
+    /// How many findings are about a gate rather than a row of it: no row
+    /// declared, or a source a runner owns. NOT OVER `declared` (#1276): a set
+    /// of one rowless gate read `1 of 0 declared mutation(s) … were not caught`.
+    #[must_use]
+    pub fn gate_level(&self) -> usize {
+        self.count(Class::GateLevel)
+    }
+
+    fn count(&self, class: Class) -> usize {
         self.findings
             .iter()
-            .filter(|f| f.verdict.could_not_look())
+            .filter(|f| f.verdict.class() == class)
             .count()
+    }
+}
+
+/// Which line of a sweep's summary a verdict is counted on. Every verdict has
+/// exactly one, BY AN EXHAUSTIVE MATCH ([`Verdict::class`]), so a new variant
+/// cannot fall into a count it does not belong to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Caught,
+    Survived,
+    RowDefect,
+    GateLevel,
+    Unlooked,
+}
+
+impl Verdict {
+    const fn class(&self) -> Class {
+        match self {
+            Verdict::Caught => Class::Caught,
+            Verdict::Survived { .. } => Class::Survived,
+            Verdict::MalformedRow { .. }
+            | Verdict::FilterNamesEveryCase { .. }
+            | Verdict::InertMutation
+            | Verdict::SelfMutatingRow => Class::RowDefect,
+            Verdict::NoMutantDeclared | Verdict::RunnerOwned { .. } => Class::GateLevel,
+            Verdict::NoSuchGate
+            | Verdict::NoSuite { .. }
+            | Verdict::NamesNoCase { .. }
+            | Verdict::SuiteTimedOut { .. }
+            | Verdict::SuiteDidNotRun { .. }
+            | Verdict::CaseErrored { .. }
+            | Verdict::CaseAlreadyRed { .. }
+            | Verdict::UnappliableMutation
+            | Verdict::RunnerAbsent
+            | Verdict::RunnerOverlap
+            | Verdict::RunnerErrored { .. } => Class::Unlooked,
+        }
     }
 }
 
