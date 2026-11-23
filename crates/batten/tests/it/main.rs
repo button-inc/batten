@@ -447,6 +447,7 @@ mod semver_gate;
 mod session_drain;
 mod session_provisioning;
 mod session_start;
+mod session_watch;
 mod shell_authored;
 mod shell_banned;
 mod shell_retirement;
