@@ -9592,7 +9592,9 @@ pub(crate) fn task_programs(command: &str, bodies: &crate::taskset::TaskBodies) 
                 continue;
             }
             for line in bodies.get(&task).into_iter().flatten() {
-                for mut inner in reach_into(line, true, Some("task"), REACH_DEPTH) {
+                for mut inner in
+                    reach_into(line, true, Some("task"), REACH_DEPTH, Some(Path::new("")))
+                {
                     if let Some(object) = inner.as_object_mut() {
                         object.insert("task".to_owned(), serde_json::json!(task));
                     }
@@ -9631,7 +9633,7 @@ pub(crate) fn step_programs(bodies: &crate::taskset::TaskBodies) -> Value {
                 .any(|pair| pair == ["step", "run"])
         })
         .flat_map(|(task, line)| {
-            reach_into(line, true, Some("task"), REACH_DEPTH)
+            reach_into(line, true, Some("task"), REACH_DEPTH, Some(Path::new("")))
                 .into_iter()
                 // What the step runs, minus the `cargo run` that only launches
                 // the program carrying the stage's identity.
@@ -9741,7 +9743,18 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
 /// name rather than a boolean; spelling it now would be a vocabulary with one
 /// member and no consumer.
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
-    reach_into(command, false, None, REACH_DEPTH)
+    reach_into(command, false, None, REACH_DEPTH, Some(Path::new("")))
+}
+
+/// Where `operand` is, for a stage running in `dir` (CLOUD-2775): an absolute
+/// operand is itself; a relative one joins the stage's directory, relative to
+/// the call's own (`""`); and with that directory unknown (after a `cd` the
+/// reach could not place) a relative operand has no place, `None`.
+fn stage_path(operand: &str, dir: Option<&Path>) -> Option<PathBuf> {
+    if shell_absolute(operand, cfg!(windows)) {
+        return Some(PathBuf::from(operand));
+    }
+    dir.map(|dir| dir.join(operand))
 }
 
 /// How many constructs deep [`program_reach`] follows a program into the
@@ -9766,17 +9779,23 @@ const REACH_DEPTH: usize = 8;
 /// through a construct ([`unread_reach`]); at the top level it stays no
 /// entries, as before — `input.call.segments` is `null` there and that is a
 /// module's signal.
+///
+/// `base` is the directory the text starts in, relative to the call's own
+/// (`""`), or `None` where it is unknown. A `cd`/`pushd` stage moves the
+/// stages after it (CLOUD-2775), so a script operand is read where its stage
+/// runs: `cd dir && sh x.sh` runs `dir/x.sh`.
 fn reach_into(
     command: &str,
     outer_mediated: bool,
     via: Option<&'static str>,
     depth: usize,
+    base: Option<&Path>,
 ) -> Vec<serde_json::Value> {
     let parsed = match segments(command) {
         crate::facts::Look::Is(parsed) => parsed,
         crate::facts::Look::CouldNotLook | crate::facts::Look::IsNot => {
             return if via.is_some() {
-                unread_reach(command, outer_mediated, via, depth)
+                unread_reach(command, outer_mediated, via, depth, base)
             } else {
                 Vec::new()
             };
@@ -9787,10 +9806,16 @@ fn reach_into(
     // use -- so reading the fused list here left the over-deny alive on exactly
     // the surface the rules mandate, while `protected_mutation` was fixed.
     // Measured: `cd /tmp` then `git push --force origin main` exited 0.
-    parsed
-        .iter()
-        .flat_map(|segment| segment.lines.iter())
-        .flat_map(|line| {
+    let mut current: Option<PathBuf> = base.map(Path::to_path_buf);
+    // A `cd` inside a `( … )` or a substitution moves only the stages inside
+    // one; the flattened walk cannot tell which, so every enclosed stage after
+    // it is unplaced, and the stages outside keep their directory.
+    let mut enclosed_unplaced = false;
+    let mut reached: Vec<serde_json::Value> = Vec::new();
+    for segment in &parsed {
+        let enclosed = segment.grouped || segment.nested;
+        let last = segment.lines.len().saturating_sub(1);
+        for (at, line) in segment.lines.iter().enumerate() {
             let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
             // A REDIRECTION IS NEVER HANDED TO THE PROGRAM (CLOUD-2670): the
             // line's redirect tokens are the suffix of its words, so the argv
@@ -9798,20 +9823,65 @@ fn reach_into(
             // program and so yields no entry.
             let handed = tokens.len().saturating_sub(line.redirects.len());
             let argv = &tokens[..handed];
-            let mut reached: Vec<serde_json::Value> = effective_program(argv)
-                .map(|index| reach_argv(argv, index, outer_mediated, via, false, depth))
-                .unwrap_or_default();
+            let here = if enclosed && enclosed_unplaced {
+                None
+            } else {
+                current.clone()
+            };
+            reached.extend(
+                effective_program(argv)
+                    .map(|index| {
+                        reach_argv(
+                            argv,
+                            index,
+                            outer_mediated,
+                            via,
+                            false,
+                            depth,
+                            here.as_deref(),
+                        )
+                    })
+                    .unwrap_or_default(),
+            );
             // `env -S '<words>'` SPLITS ITS VALUE INTO THE COMMAND, so the
             // program is inside that one word, where the wrapper look-through
             // steps past it as an option value.
             if let Some(depth) = depth.checked_sub(1) {
                 for script in split_strings(argv) {
-                    reached.extend(reach_into(&script, outer_mediated, Some("script"), depth));
+                    reached.extend(reach_into(
+                        &script,
+                        outer_mediated,
+                        Some("script"),
+                        depth,
+                        here.as_deref(),
+                    ));
                 }
             }
-            reached
-        })
-        .collect()
+            if !is_cd_segment(argv) {
+                continue;
+            }
+            if enclosed {
+                enclosed_unplaced = true;
+                continue;
+            }
+            // THE NEXT STAGE RUNS AFTER IT across a newline, `&&`, `;` or
+            // `||` (`cd d || exit`); a pipe or `&` runs it in a subshell.
+            let hands_on = at < last
+                || !matches!(
+                    segment.terminator,
+                    Some(Separator::Pipe | Separator::Background)
+                );
+            match here
+                .as_deref()
+                .and_then(|from| placed_cd(segment, argv, from))
+            {
+                Some(dir) if hands_on => current = Some(dir),
+                Some(_) => {}
+                None => current = None,
+            }
+        }
+    }
+    reached
 }
 
 /// The values every `env -S`/`--split-string` in an argv's wrapper prefix
@@ -9853,21 +9923,29 @@ fn unread_reach(
     outer_mediated: bool,
     via: Option<&'static str>,
     depth: usize,
+    base: Option<&Path>,
 ) -> Vec<serde_json::Value> {
-    command
-        .split(['\n', ';', '&', '|', '(', ')', '`'])
-        .flat_map(|piece| {
-            let words: Vec<String> = piece
-                .split_whitespace()
-                .map(|word| word.replace(['\'', '"'], ""))
-                .filter(|word| !word.is_empty() && word != "$")
-                .collect();
-            let argv: Vec<&str> = words.iter().map(String::as_str).collect();
+    // The crude split cannot tell a `cd`'s reach, so every piece after one
+    // runs in a directory nothing placed (CLOUD-2775).
+    let mut here = base;
+    let mut reached = Vec::new();
+    for piece in command.split(['\n', ';', '&', '|', '(', ')', '`']) {
+        let words: Vec<String> = piece
+            .split_whitespace()
+            .map(|word| word.replace(['\'', '"'], ""))
+            .filter(|word| !word.is_empty() && word != "$")
+            .collect();
+        let argv: Vec<&str> = words.iter().map(String::as_str).collect();
+        reached.extend(
             effective_program(&argv)
-                .map(|index| reach_argv(&argv, index, outer_mediated, via, true, depth))
-                .unwrap_or_default()
-        })
-        .collect()
+                .map(|index| reach_argv(&argv, index, outer_mediated, via, true, depth, here))
+                .unwrap_or_default(),
+        );
+        if is_cd_segment(&argv) {
+            here = None;
+        }
+    }
+    reached
 }
 
 /// The entry for the program at `argv[index]`, then every program it runs.
@@ -9878,6 +9956,7 @@ fn reach_argv(
     via: Option<&'static str>,
     unread: bool,
     depth: usize,
+    dir: Option<&Path>,
 ) -> Vec<serde_json::Value> {
     let program = program_token(argv[index]);
     let name = program_name(program);
@@ -9900,18 +9979,25 @@ fn reach_argv(
     let Some(depth) = depth.checked_sub(1) else {
         return reached;
     };
-    for script in inner_scripts(name, &arguments)
+    // A program FILE is read where its stage runs; a bare name is a PATH
+    // lookup, never a file in the stage's directory.
+    let program_file = program
+        .contains('/')
+        .then(|| stage_path(program, dir))
+        .flatten()
+        .and_then(|path| shebang_script(&path.to_string_lossy()));
+    for script in inner_scripts(name, &arguments, dir)
         .into_iter()
-        .chain(shebang_script(program))
+        .chain(program_file)
     {
-        reached.extend(reach_into(&script, mediated, Some("script"), depth));
+        reached.extend(reach_into(&script, mediated, Some("script"), depth, dir));
     }
     // WHAT A NON-SHELL INTERPRETER'S PROGRAM SPAWNS, and every program text
     // nothing could read, as `opaque` entries (#1276, CLOUD-2775).
-    for spawned in interpreted_reach(name, &arguments) {
+    for spawned in interpreted_reach(name, &arguments, dir) {
         match spawned {
             Spawned::Shell(text) => {
-                reached.extend(reach_into(&text, mediated, Some("script"), depth));
+                reached.extend(reach_into(&text, mediated, Some("script"), depth, dir));
             }
             Spawned::Argv(words) => {
                 let words: Vec<&str> = words.iter().map(String::as_str).collect();
@@ -9923,6 +10009,7 @@ fn reach_argv(
                         Some("script"),
                         unread,
                         depth,
+                        dir,
                     ));
                 }
             }
@@ -9944,7 +10031,7 @@ fn reach_argv(
     ) {
         let inner: Vec<&str> = inner.iter().map(String::as_str).collect();
         if let Some(at) = effective_program(&inner) {
-            let mut nested = reach_argv(&inner, at, mediated, Some(how), unread, depth);
+            let mut nested = reach_argv(&inner, at, mediated, Some(how), unread, depth, dir);
             // EVERYTHING A STEP RUNS IS RECEIPTED, all the way down (step 21):
             // `step run x -- cargo run -p batten -- semver check` receipts the
             // `batten semver check` the `cargo run` starts, not only the launcher.
@@ -9964,8 +10051,13 @@ fn reach_argv(
 /// The shell texts a program runs from its own argv: a shell's `-c` script, by
 /// the interpreter [`grammar`] the protected-path scan reads (one grammar, so
 /// the two cannot disagree about what a shell's script is), and `eval`'s words
-/// joined as the shell joins them.
-fn inner_scripts(name: &str, arguments: &[&str]) -> Vec<String> {
+/// joined as the shell joins them. A script file is read where its stage runs
+/// (`dir`, [`stage_path`]); unplaced, it is not read here and
+/// [`interpreted_reach`] makes it opaque.
+fn inner_scripts(name: &str, arguments: &[&str], dir: Option<&Path>) -> Vec<String> {
+    let read = |operand: &str| {
+        stage_path(operand, dir).and_then(|path| script_file_text(&path.to_string_lossy()))
+    };
     match name {
         "eval" => vec![arguments.join(" ")],
         // `watch` hands its operands to `sh -c` joined, past its own options.
@@ -9995,7 +10087,7 @@ fn inner_scripts(name: &str, arguments: &[&str]) -> Vec<String> {
             // read through the same `script_operand` the protected-path scan
             // stops at, so the two cannot disagree about which file it is.
             script_operand(&grammar, arguments)
-                .and_then(script_file_text)
+                .and_then(read)
                 .into_iter()
                 .collect()
         }
@@ -10003,7 +10095,7 @@ fn inner_scripts(name: &str, arguments: &[&str]) -> Vec<String> {
         "source" | "." => arguments
             .first()
             .copied()
-            .and_then(script_file_text)
+            .and_then(read)
             .into_iter()
             .collect(),
         _ => Vec::new(),
@@ -10093,11 +10185,14 @@ fn language_of(name: &str) -> Option<Language> {
 /// non-shell interpreter's inline program and script file, and an unreadable
 /// script file for a shell too. A shell's readable text is [`inner_scripts`]'.
 ///
-/// A script file that is ABSENT is not opaque: the reach does not know the
-/// stage's directory (`cd dir && sh x.sh` names `dir/x.sh`), so an absent file
-/// is usually elsewhere, not hidden. One present but unreadable or too large to
-/// read is opaque.
-fn interpreted_reach(name: &str, arguments: &[&str]) -> Vec<Spawned> {
+/// ANY SCRIPT FILE THAT CANNOT BE READ IS OPAQUE (CLOUD-2775), absent
+/// included: the operand is resolved where its stage runs (`dir`, after every
+/// `cd` [`reach_into`] placed), so `cd dir && sh x.sh` reads `dir/x.sh`, and a
+/// file absent THERE is one the call will create first (`cat > x.sh … && sh
+/// x.sh`) or one nothing can see. A relative operand after a `cd` the reach
+/// could not place has no place, so it is opaque too. Present but unreadable
+/// or too large to read is opaque as before.
+fn interpreted_reach(name: &str, arguments: &[&str], dir: Option<&Path>) -> Vec<Spawned> {
     let shell = matches!(
         name,
         "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash"
@@ -10120,18 +10215,26 @@ fn interpreted_reach(name: &str, arguments: &[&str]) -> Vec<Spawned> {
     let Some(operand) = script_operand(&grammar, arguments) else {
         return found;
     };
-    let path = Path::new(operand);
+    let Some(path) = stage_path(operand, dir) else {
+        found.push(Spawned::Opaque {
+            source: operand.to_owned(),
+            trusted: false,
+        });
+        return found;
+    };
+    let source = path.to_string_lossy().into_owned();
     if !path.is_file() {
+        found.push(Spawned::Opaque {
+            source,
+            trusted: false,
+        });
         return found;
     }
-    let trusted = tracked_clean(path);
-    match (script_file_text(operand), language) {
-        (Some(text), Some(language)) => found.extend(spawns_in(language, &text, operand, trusted)),
+    let trusted = tracked_clean(&path);
+    match (script_file_text(&source), language) {
+        (Some(text), Some(language)) => found.extend(spawns_in(language, &text, &source, trusted)),
         (Some(_), None) => {}
-        (None, _) => found.push(Spawned::Opaque {
-            source: operand.to_owned(),
-            trusted,
-        }),
+        (None, _) => found.push(Spawned::Opaque { source, trusted }),
     }
     found
 }
@@ -23058,7 +23161,7 @@ deny contains "refused by themodule" if {
     #[test]
     fn an_unread_texts_program_skips_emptied_words() {
         for text in ["'' git push", "$ git push"] {
-            let reached = unread_reach(text, false, None, REACH_DEPTH);
+            let reached = unread_reach(text, false, None, REACH_DEPTH, Some(Path::new("")));
             assert_eq!(
                 reached.first().map(|entry| &entry["name"]),
                 Some(&serde_json::json!("git")),
@@ -23070,9 +23173,12 @@ deny contains "refused by themodule" if {
     /// Fails by: `watch`'s valued option read past the end of its argv.
     #[test]
     fn a_watch_of_only_options_runs_nothing() {
-        assert_eq!(inner_scripts("watch", &["-n", "2"]), Vec::<String>::new());
         assert_eq!(
-            inner_scripts("watch", &["-n", "2", "git", "push"]),
+            inner_scripts("watch", &["-n", "2"], Some(Path::new(""))),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            inner_scripts("watch", &["-n", "2", "git", "push"], Some(Path::new(""))),
             ["git push"]
         );
     }
