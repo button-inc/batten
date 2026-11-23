@@ -28,7 +28,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
              regex = '[A-Za-z0-9_./-]+\\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z0-9_:]+)?'\n\n\
              [[pattern]]\n\
              id = \"ledger-pair\"\n\
-             regex = '\\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_]+\\[[^\\]]+\\](?:\\.[A-Za-z0-9_]+)*)'\n\n\
+             regex = '\\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_][A-Za-z0-9_.]*\\[[^\\]]+\\](?:\\.[A-Za-z0-9_]+)*)'\n\n\
              [[verdict]]\n\
              id = \"call ask loose\"\n\
              gloss = \"a question asks to admit a finding in words the ledger cannot bind\"\n\
