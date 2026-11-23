@@ -89,6 +89,28 @@
           ],
           "type": "string"
         },
+        "lap-held": {
+          "description": "Each write of this call that lands in the checkout a live `land` lap holds (`input.facts[\"land-live\"]`): `{\"path\": <target as written>}` for a write tool's or an output redirection's target, `{\"git\": <subcommand>}` for a git program acting there. Judged by the checkout the write lands in, never by its path prefix, so a clone nested inside the lap's directory is not the lap's. NULL while no lap is live, or where the writes could not be placed.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "git": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "operation": {
           "type": "string"
         },

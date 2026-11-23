@@ -6261,6 +6261,11 @@ pub struct Facts<'a> {
     /// [`crate::facts::Fact::LandLive`]. Resolved at the boundary for the same
     /// reason [`Self::singleton`] is: a lock is a file and a pid is a process.
     pub land_live: &'a Option<String>,
+    /// Each of this call's writes that lands in the live lap's checkout
+    /// ([`write_sites`] whose checkout root is [`Self::land_live`]), or `None`
+    /// where no lap is live or the call's writes could not be placed
+    /// (CLOUD-2832). Presented as `input.call["lap-held"]`.
+    pub lap_held: &'a Option<Vec<Value>>,
     /// The commits a `git reset --hard` in this call would leave unreferenced,
     /// as short SHAs, and only those reachable from no remote (CLOUD-462).
     ///
@@ -6386,6 +6391,7 @@ impl<'a> Facts<'a> {
             // caller that looked and found a free lock would give.
             singleton: &None,
             land_live: &None,
+            lap_held: &None,
             // Could-not-look, never an empty list: "this reset discards nothing"
             // is a claim about a repository's remotes, and a caller that resolved
             // nothing is not making it (CLOUD-462).
@@ -7632,6 +7638,65 @@ pub fn acting_dirs(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::P
     }
     dirs.dedup();
     Some(dirs)
+}
+
+/// Each write a call makes that `lap-tree-held` judges, as the subject it is
+/// reported under and the absolute path it lands at (CLOUD-2832): a write
+/// tool's target (`{"path": <writes>}`), each output redirection's target
+/// (`{"path": <target as written>}`), and each `git` program's checkout,
+/// named by its subcommand (`{"git": <subcommand>}`). `None` where a `cd`
+/// cannot be placed or the command does not parse, so the caller cannot say.
+///
+/// [`acting_dirs`] answers WHETHER a lap is live in a checkout the call acts
+/// in; this answers WHICH of the call's writes land in it, so a module holds
+/// those and nothing else: `git -C <B> commit && git -C <A> status` writes
+/// only B, and `echo x > <A>/nested-clone/f` writes the nested clone's
+/// checkout, not A's, although its path lies under A.
+#[must_use]
+pub fn write_sites(envelope: &Envelope, start: &Path) -> Option<Vec<(Value, std::path::PathBuf)>> {
+    if envelope.command.is_empty() {
+        let Some(writes) = envelope.writes.as_ref() else {
+            return Some(Vec::new());
+        };
+        let named = ["/file_path", "/notebook_path"]
+            .iter()
+            .find_map(|pointer| envelope.input.pointer(pointer).and_then(Value::as_str))?;
+        return Some(vec![(
+            serde_json::json!({ "path": writes }),
+            start.join(named),
+        )]);
+    }
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let mut current = start.to_path_buf();
+    let mut sites = Vec::new();
+    for (_, segment, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+        if is_cd_segment(handed) {
+            let dir = placed_cd(segment, handed, &current)?;
+            if matches!(segment.terminator, Some(Separator::And | Separator::Semi)) {
+                current = dir;
+            }
+            continue;
+        }
+        if let Some(dir) = git_acting_dir(handed, &current)
+            && let Some(program) = effective_program(handed)
+        {
+            let arguments = &handed[program + 1..];
+            let verb = subcommand_index(arguments, &GIT_VALUE_OPTIONS)
+                .and_then(|at| arguments.get(at).copied());
+            sites.push((serde_json::json!({ "git": verb }), dir));
+        }
+        let redirects: Vec<&str> = line.redirects.iter().map(String::as_str).collect();
+        for target in redirect_writes(&redirects) {
+            if let Some(resolved) = shell_resolved(target, Some(&current)) {
+                sites.push((serde_json::json!({ "path": target }), resolved));
+            }
+        }
+    }
+    Some(sites)
 }
 
 /// The directory a written path lands in: its parent.
@@ -9509,6 +9574,11 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             "arguments": arguments,
             "command": envelope.command,
             "writes": envelope.writes,
+            // WHICH WRITES LAND IN THE LIVE LAP'S CHECKOUT (CLOUD-2832): each
+            // as `{"path": …}` or `{"git": <subcommand>}`, judged by the
+            // checkout it lands in rather than its path prefix. `null` while no
+            // lap is live, or where the writes could not be placed.
+            "lap-held": facts.lap_held,
             // THE TWO STOP PROJECTIONS (CLOUD-1051). Both are `null` on every
             // other event, because no other event carries them — which is the
             // three-valued read the whole fact model takes: a module asking at
@@ -14380,6 +14450,7 @@ mod tests {
                 sourced: &None,
                 singleton: &None,
                 land_live: &None,
+                lap_held: &None,
                 unread_history: &crate::facts::Look::CouldNotLook,
                 commit_subject: &crate::facts::Look::CouldNotLook,
                 reach: &NO_REACH,

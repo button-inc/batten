@@ -74,7 +74,29 @@ inside(target) if {
 	startswith(target, concat("", [root, "/"]))
 }
 
+# THE CHECKOUT A WRITE LANDS IN, NEVER ITS PATH (CLOUD-2832). Where the engine
+# placed this call's writes, `input.call["lap-held"]` is exactly those that land
+# in the live lap's checkout: a write tool's or a redirect's target, and each
+# git program acting there. A clone outside the checkout, or nested inside its
+# directory, is its own checkout; `git -C <B> commit && git -C <A> status`
+# writes only B. Measured on #1276: writes into other clones were held while a
+# lap held the main checkout, and `git -C <A> commit` from elsewhere was not.
+placed if is_array(input.call["lap-held"])
+
+held contains entry.path if {
+	some entry in input.call["lap-held"]
+	is_string(entry.path)
+}
+
+held contains sprintf("git %s", [entry.git]) if {
+	some entry in input.call["lap-held"]
+	entry.git in moving
+}
+
+# WHERE THE WRITES COULD NOT BE PLACED (an unplaceable `cd`, a command that does
+# not parse), the call is read by its paths as before: the direction that holds.
 held contains path if {
+	not placed
 	input.call.operation == "write"
 	path = input.call.writes
 	inside(path)
@@ -84,12 +106,14 @@ held contains path if {
 # `2>/dev/null` and a lone `>` read as relative paths and every read that
 # discarded its stderr was held. `redirect-writes` is the targets alone.
 held contains target if {
+	not placed
 	some segment in input.call.segments
 	some target in segment["redirect-writes"]
 	inside(target)
 }
 
 held contains sprintf("git %s", [program.subcommand]) if {
+	not placed
 	some program in input.call.programs
 	program.name == "git"
 	program.subcommand in moving
