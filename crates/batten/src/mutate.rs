@@ -4685,21 +4685,37 @@ fn without_absent_nextest<'a>(
     )
 }
 
-/// [`sweep_owned`] over one parsed `$MUTANT_SHARD`'s slice ([`shard_parsed`]):
-/// the declared rows [`shard_owns_row`] gives it, and the gate-level findings
-/// of the gates `by_shard` gives it. `None` is every row and every gate.
-///
-/// # Errors
-///
-/// [`sweep`]'s.
-pub fn sweep_shard(
+/// Every row verdict recorded for `work` and in `record`, none when
+/// `bypassed`, and the keys of those recorded caught.
+fn recorded_and_caught(
+    record: &Path,
+    work: &Path,
+    bypassed: bool,
+) -> (
+    std::collections::HashMap<String, Verdict>,
+    std::collections::HashSet<String>,
+) {
+    let recorded = if bypassed {
+        std::collections::HashMap::new()
+    } else {
+        rows_recorded_for(record, work)
+    };
+    let caught = recorded
+        .iter()
+        .filter(|(_, verdict)| **verdict == Verdict::Caught)
+        .map(|(key, _)| key.clone())
+        .collect();
+    (recorded, caught)
+}
+
+/// The gates of `shard`'s slice of `names` that can run, and a finding for
+/// each the slice reports that cannot: no such gate, or one [`gate_stopped`]
+/// stops before any row.
+fn gates_of_shard<'a>(
     root: &Path,
-    names: &[String],
-    work: PathBuf,
-    registry: &Registry,
+    names: &'a [String],
     shard: Option<(usize, usize)>,
-    progress: &mut dyn std::io::Write,
-) -> Result<Sweep> {
+) -> (Vec<Finding>, Vec<(&'a String, Gate)>) {
     // SORTED, so every shard numbers the same gates and rows in the same order
     // whatever order its caller listed them in.
     let mut findings = Vec::new();
@@ -4726,6 +4742,25 @@ pub fn sweep_shard(
             });
         }
     }
+    (findings, runnable)
+}
+
+/// [`sweep_owned`] over one parsed `$MUTANT_SHARD`'s slice ([`shard_parsed`]):
+/// the declared rows [`shard_owns_row`] gives it, and the gate-level findings
+/// of the gates `by_shard` gives it. `None` is every row and every gate.
+///
+/// # Errors
+///
+/// [`sweep`]'s.
+pub fn sweep_shard(
+    root: &Path,
+    names: &[String],
+    work: PathBuf,
+    registry: &Registry,
+    shard: Option<(usize, usize)>,
+    progress: &mut dyn std::io::Write,
+) -> Result<Sweep> {
+    let (mut findings, runnable) = gates_of_shard(root, names, shard);
     // THE SHARD'S ROWS, numbered across the runnable gates in sorted order, so
     // one numbering partitions the rows between the shards.
     findings.extend(runner_owned(registry, &runnable));
@@ -4767,16 +4802,7 @@ pub fn sweep_shard(
     // is replayed and nothing is recorded, so the run judges every row itself.
     let bypassed = crate::step::bypassed();
     let record = record_dir(root).join(CAUGHT_RECORD);
-    let recorded = if bypassed {
-        std::collections::HashMap::new()
-    } else {
-        rows_recorded_for(&record, &work)
-    };
-    let caught: std::collections::HashSet<String> = recorded
-        .iter()
-        .filter(|(_, verdict)| **verdict == Verdict::Caught)
-        .map(|(key, _)| key.clone())
-        .collect();
+    let (recorded, caught) = recorded_and_caught(&record, &work, bypassed);
     let mut staged = Staged::new(root, work)?;
     let prebuilt = build_if_owed(root, &holding, registry, &caught, &staged, progress);
     let mut declared = 0;

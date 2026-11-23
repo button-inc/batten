@@ -1148,7 +1148,7 @@ pub fn respell_span_at_moves(
     head_krate: &str,
 ) -> String {
     let reader = base.reader(path, text);
-    let moved = |at: usize, segments: &[String]| -> Option<String> {
+    let at_home = |at: usize, segments: &[String]| -> Option<String> {
         let absolute = base.rooted_at(&reader, at, segments)?;
         let (site, used) = base.resolve_from(&absolute, 8)?;
         let (head_file, name) = moves.get(&site)?;
@@ -1171,7 +1171,7 @@ pub fn respell_span_at_moves(
             .map(|path| spell(&path, &reader.krate))
     };
     respell_body_with(&text[span.0..span.1], span.0, &|at, segments| {
-        moved(at, segments).or_else(|| shimmed(at, segments))
+        at_home(at, segments).or_else(|| shimmed(at, segments))
     })
 }
 
@@ -1532,7 +1532,7 @@ mod tests {
     /// retired, which then fails to compile on the path, not the assertion
     /// (#1276's `crate::verdict::Native`). Only the body's span is respelled.
     #[test]
-    fn a_span_is_respelled_through_its_trees_shims() {
+    fn a_span_is_respelled_through_its_trees_shims() -> anyhow::Result<()> {
         let text = "fn a() { crate::verdict::Native::A; }\nfn b() { crate::verdict::Native::A; }\n";
         let base = index(&[
             ROOT,
@@ -1544,7 +1544,10 @@ mod tests {
             ("src/verdict.rs", "pub use crate::error::Native;\n"),
             ("src/other.rs", text),
         ]);
-        let span = (text.find('{').unwrap(), text.find('}').unwrap() + 1);
+        let (Some(open), Some(close)) = (text.find('{'), text.find('}')) else {
+            anyhow::bail!("the fixture holds a braced body");
+        };
+        let span = (open, close + 1);
         assert_eq!(
             respell_span_at_moves(
                 &base,
@@ -1557,13 +1560,14 @@ mod tests {
             ),
             "{ crate::error::Native::A; }"
         );
+        Ok(())
     }
 
     /// Fails by: an item a macro declares is unknown to the index, so a path
     /// naming it follows no move (#1276: `token_enum! { pub enum Native … }`).
     /// A `fn` inside a nested tree the macro writes is not a module item.
     #[test]
-    fn an_item_a_macro_declares_is_indexed_and_follows_its_move() {
+    fn an_item_a_macro_declares_is_indexed_and_follows_its_move() -> anyhow::Result<()> {
         let call = "token_enum! {\n    pub enum Native by id { A => \"a\" }\n}\nimpl_it! { impl X { fn inner() {} } }\n";
         let text = "fn t() { crate::verdict::Native::A; }\n";
         let base = index(&[
@@ -1592,7 +1596,10 @@ mod tests {
             ("two/src/error.rs", call),
         ]);
         let moves = moved_items(&base, &head);
-        let span = (text.find('{').unwrap(), text.rfind('}').unwrap() + 1);
+        let (Some(open), Some(close)) = (text.find('{'), text.rfind('}')) else {
+            anyhow::bail!("the fixture holds a braced body");
+        };
+        let span = (open, close + 1);
         assert_eq!(
             respell_span_at_moves(&base, &head, &moves, "one/src/other.rs", text, span, "one"),
             "{ two::error::Native::A; }"
@@ -1616,13 +1623,14 @@ mod tests {
             respell_span_at_moves(&base, &head, &moves, "one/src/other.rs", text, span, "one"),
             "{ two::error::Native::A; }"
         );
+        Ok(())
     }
 
     /// Fails by: a base body naming an item the branch moved, leaving a private
     /// `use` at its old home, is spliced as written and fails to compile on the
     /// path (#1276: `crate::verdict::Native`, `crate::refusal::{…, Severity}`).
     #[test]
-    fn a_span_naming_a_moved_item_is_respelled_at_its_home() {
+    fn a_span_naming_a_moved_item_is_respelled_at_its_home() -> anyhow::Result<()> {
         let lib = (
             "src/lib.rs",
             "pub mod error;\npub mod verdict;\npub mod other;\n",
@@ -1649,7 +1657,10 @@ mod tests {
             ("src/other.rs", text),
         ]);
         let moves = moved_items(&base, &head);
-        let span = (text.find('{').unwrap(), text.rfind('}').unwrap() + 1);
+        let (Some(open), Some(close)) = (text.find('{'), text.rfind('}')) else {
+            anyhow::bail!("the fixture holds a braced body");
+        };
+        let span = (open, close + 1);
         assert_eq!(
             respell_span_at_moves(&base, &head, &moves, "src/other.rs", text, span, "app"),
             "{ use crate::error::Native; use crate::verdict::Other; crate::error::Native::A; }"
@@ -1667,6 +1678,7 @@ mod tests {
             ),
             &text[span.0..span.1]
         );
+        Ok(())
     }
 
     /// Fails by: a file moved whole between crates, declaring a name another
