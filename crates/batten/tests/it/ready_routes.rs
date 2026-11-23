@@ -2,7 +2,9 @@
 //!
 //! The receipt rows key on `gh pr ready`, so a ready reached any other way — a
 //! hand-written `markPullRequestReadyForReview` mutation through `gh api` — buys
-//! the same CI matrix with none of the receipts asked for. These cases run over
+//! the same CI matrix with none of the receipts asked for. `check open missing`
+//! closes the rest on the engine's ready event (CLOUD-2873): the connector's
+//! `draft: false` and its mediated spelling owe `verify`. These cases run over
 //! THIS repository's committed rows, because a fixture config would prove a row
 //! nobody ships.
 
@@ -10,6 +12,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +20,21 @@ use common::{Fixture, run_with_stdin, stderr};
 
 /// This repository's own rows and modules.
 fn repo(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    // Every file the committed `[epoch] tracked` names rides along, read from the
+    // config rather than listed here: `receipt record` hashes each at HEAD and
+    // refuses one that is absent, and a list in `crates/**` would name a
+    // consumer's files (rule 1).
+    let mut staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    let tracked = batten::config::load(&common::at_root("batten.toml"))
+        .expect("the committed config loads")
+        .epoch
+        .map(|epoch| epoch.tracked)
+        .unwrap_or_default();
+    for path in tracked.iter().filter(|path| !path.ends_with("batten.toml")) {
+        let bytes = std::fs::read_to_string(common::at_root(path))
+            .expect("an epoch-tracked file is readable");
+        staged = staged.file(path, &bytes);
+    }
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -77,4 +94,109 @@ fn a_hand_written_ready_mutation_is_refused_and_a_plain_api_read_is_not() {
             "{read}"
         );
     }
+}
+
+/// The connector's ready, as the harness hands it to the hook.
+fn connector_ready() -> serde_json::Value {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "mcp__github__update_pull_request",
+        "tool_input": {"pullNumber": 1, "draft": false},
+    })
+}
+
+/// The same ready through the mediated client.
+fn mediated_ready() -> serde_json::Value {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": "batten mcp call github update_pull_request '{\"pullNumber\":1,\"draft\":false}'",
+        },
+    })
+}
+
+/// Every line `payload` earned, with its exit code.
+fn judged(dir: &Path, payload: &serde_json::Value) -> (Option<i32>, String) {
+    let output = run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &payload.to_string(),
+    );
+    (output.status.code(), stderr(&output))
+}
+
+/// The finding lines `check open missing` raised in `said`.
+fn verify_row_lines(said: &str) -> Vec<&str> {
+    said.lines()
+        .filter(|line| batten::refusal::parse_finding(line).is_some())
+        .filter(|line| common::refusing_rule(line).as_deref() == Some("check open missing"))
+        .collect()
+}
+
+/// [`repo`], with an `origin/main` at its base so a receipt's trunk resolves.
+fn repo_on_trunk(name: &str) -> PathBuf {
+    let dir = repo(name);
+    common::git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    dir
+}
+
+/// Record `check` on HEAD through the engine's own writer.
+fn record(dir: &Path, check: &str) {
+    let output = common::batten()
+        .args(["receipt", "record", check])
+        .current_dir(dir)
+        .streamed_output()
+        .expect("run batten receipt record");
+    assert!(
+        output.status.success(),
+        "recording {check} failed: {}",
+        stderr(&output)
+    );
+}
+
+/// PR #1281 (CLOUD-2873): the connector's `draft: false` readied a head no
+/// `verify` had seen. It is refused by the row that owes the receipts, and the
+/// cause it names is `missing`.
+#[test]
+fn a_connector_ready_without_a_green_verify_is_refused() {
+    let dir = repo_on_trunk("ready-route-connector-red");
+    let (code, said) = judged(&dir, &connector_ready());
+    assert_eq!(code, Some(2), "{said}");
+    let lines = verify_row_lines(&said);
+    assert!(!lines.is_empty(), "the ready row refuses: {said}");
+    assert!(
+        lines.iter().any(|line| line.contains("missing")),
+        "names the missing receipt: {said}"
+    );
+}
+
+/// The discriminating arm: the same call on a head carrying both receipts is
+/// not refused by this row. Without it the row could refuse every undraft and
+/// still pass the case above.
+#[test]
+fn a_connector_ready_after_a_green_verify_is_allowed() {
+    let dir = repo_on_trunk("ready-route-connector-green");
+    record(&dir, "verify");
+    record(&dir, "linear-check");
+    let (_, said) = judged(&dir, &connector_ready());
+    assert!(
+        verify_row_lines(&said).is_empty(),
+        "a verified head owes this row nothing: {said}"
+    );
+}
+
+/// The mediated `batten mcp call` spelling is the same event, refused the same
+/// way.
+#[test]
+fn a_mediated_ready_without_a_green_verify_is_refused() {
+    let dir = repo_on_trunk("ready-route-mediated-red");
+    let (code, said) = judged(&dir, &mediated_ready());
+    assert_eq!(code, Some(2), "{said}");
+    let lines = verify_row_lines(&said);
+    assert!(!lines.is_empty(), "the ready row refuses: {said}");
+    assert!(
+        lines.iter().any(|line| line.contains("missing")),
+        "names the missing receipt: {said}"
+    );
 }

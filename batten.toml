@@ -926,6 +926,31 @@ checks = ["verify", "linear-check"]
 key = "head"
 reason = "Run `mise run land` (backgrounded): each lap runs `verify` and `linear-check`, reusing a `verify` receipt already on this head, and readies the head itself. Readying is what starts CI, so it waits for a green head."
 
+# The same precondition on EVERY ready spelling (CLOUD-2873). The row above keys
+# on `gh pr ready`, so the connector's `update_pull_request` with `draft: false`
+# readied a head with six red gates on it and bought the CI matrix (PR #1281).
+# This row names the EVENT and the engine owns its spellings: the connector
+# undraft and reopen, the mediated `batten mcp call`, `gh pr ready` without
+# `--undo`, `gh pr create` without `--draft`, `gh pr reopen` and the `gh api`
+# ready mutations. Creating or reopening a ready PR starts CI too, so it is gated
+# with them. An addition, never a conversion: the row above stands unchanged.
+#
+# `key = "head"` judges THIS checkout's HEAD, so readying some other branch's PR
+# is judged against this checkout. Accepted: the route that readies a PR for its
+# own branch is the one that buys CI by mistake. `land`'s ready is in-process and
+# no mediated call, so this row never sees it.
+#MUTANT-SUITE crates/batten/tests/it/ready_routes.rs
+#MUTANT ready-verify-row-unselected|s@^on = "pull-request-ready"[[:space:]]*# every ready spelling$@@|a_connector_ready_without_a_green_verify_is_refused
+[[rule]]
+id = "check open missing"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+on = "pull-request-ready"                          # every ready spelling
+checks = ["verify", "linear-check"]
+key = "head"
+reason = "Run `mise run land` (backgrounded): it runs `verify` and `linear-check` on this head, then readies it. Readying, creating a ready PR or reopening one starts CI, so each waits for a green head."
+
 # CLOUD-2707, half one: A PUSHED HEAD NO `verify` EVER SAW. Measured on PR #1276:
 # 42 row commits pushed over hours, each checked with clippy and its own tests
 # only, so the first full gate was `land`'s first lap and its sixteen findings,
@@ -8621,9 +8646,7 @@ all three again. Readying starts CI, so review first."""
 # same `ready_for_review` and buys the same matrix with none of the receipts
 # asked for. Mirroring every receipt row onto it would be a second copy of each
 # predicate free to drift from the first, so this refuses the ROUTE and names
-# the door. The connector's `draft = false` route is the same hole and needs an
-# `input-draft` projection the pinned engine predates; its row lands with the
-# release that carries the projection.
+# the door.
 [[rule]]
 id = "review reach loose"
 kind = "shape"
