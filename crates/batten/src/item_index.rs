@@ -1114,9 +1114,10 @@ fn downgrade_shims(
             if skip.contains_range(token.text_range()) {
                 continue;
             }
+            // `cfg_test` already walks every ancestor: asked of the parent once.
             if !token
-                .parent_ancestors()
-                .any(|node| crate::module_graph::cfg_test(&node))
+                .parent()
+                .is_some_and(|parent| crate::module_graph::cfg_test(&parent))
             {
                 return false;
             }
