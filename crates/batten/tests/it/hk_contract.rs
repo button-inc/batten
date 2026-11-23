@@ -34,6 +34,7 @@ use batten::verdict::DeclaredVerdictExt as _;
 use std::fs;
 use std::path::Path;
 
+use batten::capture::Streamed as _;
 use batten::hk;
 
 /// The exit code a caller reads, as an integer, for the assertions below.
@@ -202,6 +203,123 @@ fn no_commit_time_hook_step_compiles() {
         compiling.is_empty(),
         "commit-time steps compile: {compiling:?}"
     );
+}
+
+/// Every command of every step a plain commit runs, AS HK RESOLVES IT:
+/// `pkl eval` over `hk.pkl` with its pinned `Builtins`, so a step taking its
+/// `check`, `check_diff`, `check_list_files` or `fix` from an upstream builtin
+/// (shfmt, taplo, pkl-format, prettier, actionlint, cargo-fmt's fixer) is read
+/// as hk will run it, not as this file happens to spell it. Unprofiled steps of
+/// the `pre-commit` and `commit-msg` hooks only: a `slow` step runs only where
+/// landing asks.
+fn resolved_commit_time_commands() -> Vec<(String, String)> {
+    let pkl = common::require_tool("pkl");
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the subject IS hk's resolved config, builtins included, and `pkl eval` is the evaluator of hk's config language; a read with no effect"
+    )]
+    let mut command = std::process::Command::new(pkl);
+    command
+        .args(["eval", "-f", "json", "hk.pkl"])
+        .current_dir(common::at_root("."));
+    let output = command.streamed_output().expect("pkl evaluates hk.pkl");
+    assert!(
+        output.status.success(),
+        "pkl eval hk.pkl failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("`-f json` prints one JSON document");
+    let text = |spec: &serde_json::Value| -> Option<String> {
+        let command = spec.get("command").unwrap_or(spec);
+        command.as_str().map(str::to_owned).or_else(|| {
+            let argv = command.get("argv")?.as_array()?;
+            Some(
+                argv.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )
+        })
+    };
+    let mut commands = Vec::new();
+    for hook in ["pre-commit", "commit-msg"] {
+        let steps = config["hooks"][hook]["steps"]
+            .as_object()
+            .unwrap_or_else(|| panic!("hk.pkl resolves a `{hook}` hook with steps"));
+        for (name, step) in steps {
+            if step.get("profiles").is_some_and(|p| !p.is_null()) {
+                continue;
+            }
+            for key in ["check", "check_diff", "check_list_files", "fix"] {
+                if let Some(command) = step.get(key).and_then(text) {
+                    commands.push((name.clone(), command));
+                }
+            }
+        }
+    }
+    commands
+}
+
+/// No command a plain commit runs, as hk resolves it from its builtins as well
+/// as from this file, compiles or pays `mise`'s startup unbudgeted.
+///
+/// `mise` alone costs 105-125 ms before a task body runs (CLOUD-1397), past the
+/// 100 ms ceiling every commit-time step answers to, so a step routed through
+/// `mise` is refused unless `policy/perf-assert.rego` budgets it by name — then
+/// its measured arm, not this test, decides. And `cargo-fmt`, calling the
+/// formatter directly, calls exactly `lint:fmt`'s body, so the hook and the task
+/// cannot disagree about what passes.
+///
+/// Fails by: `cargo-fmt` routed back through `mise run lint:fmt` with no
+/// budget, its command drifting from `lint:fmt`'s body, or a builtin's default
+/// command (which `no_commit_time_hook_step_compiles` cannot see) compiling.
+#[test]
+fn no_resolved_commit_time_command_compiles_or_pays_mise_startup_unbudgeted() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let budgets =
+        fs::read_to_string(root.join("policy/perf-assert.rego")).expect("perf-assert reads");
+    let mise: toml::Table = fs::read_to_string(root.join("mise.toml"))
+        .expect("mise.toml reads")
+        .parse()
+        .expect("mise.toml parses");
+    let commands = resolved_commit_time_commands();
+    for reached in ["taplo", "taplo-format", "prettier", "conventional-commit"] {
+        assert!(
+            commands.iter().any(|(name, _)| name == reached),
+            "the resolution reached {reached}: {commands:?}"
+        );
+    }
+    let offending: Vec<String> = commands
+        .iter()
+        .filter_map(|(name, command)| {
+            let body = task_body(&mise, command);
+            if let Some(form) = COMPILES
+                .iter()
+                .find(|form| command.contains(*form) || body.contains(*form))
+            {
+                return Some(format!("{name} compiles: `{form}`"));
+            }
+            let through_mise = command.starts_with("mise ") || command.contains("mise run");
+            (through_mise && !budgets.contains(&format!("\"{name}\": 100")))
+                .then(|| format!("{name} pays mise's startup unbudgeted: `{command}`"))
+        })
+        .collect();
+    assert!(offending.is_empty(), "commit-time commands: {offending:?}");
+    let fmt = commands
+        .iter()
+        .find(|(name, command)| {
+            name == "cargo-fmt" && (command.contains("--all") || command.contains("mise run"))
+        })
+        .map(|(_, command)| command.clone())
+        .expect("cargo-fmt's check is a commit-time command");
+    if !fmt.contains("mise run") {
+        assert_eq!(
+            fmt,
+            task_body(&mise, "mise run lint:fmt"),
+            "cargo-fmt calls the formatter directly, so it calls exactly lint:fmt's body"
+        );
+    }
 }
 
 /// Every nested Cargo workspace is outside the root clippy step (CLOUD-2051).
