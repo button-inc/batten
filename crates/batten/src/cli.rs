@@ -348,6 +348,11 @@ pub enum Command {
         /// The chosen sub-verb.
         command: ClaimCommand,
     },
+    /// Other agent sessions this one dispatched (CLOUD-2826).
+    Session {
+        /// The chosen sub-verb.
+        command: SessionCommand,
+    },
     /// The green-verdict gate (CLOUD-1143), ported off
     /// `mise-tasks/checks-green.sh`.
     ///
@@ -1215,6 +1220,19 @@ pub enum ReadyCommand {
         issue: Option<String>,
         /// Emit the findings on the structured channel.
         json: bool,
+    },
+}
+
+/// Subcommands of `session`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SessionCommand {
+    /// Wait until a child is done, dead or never started (CLOUD-2826).
+    Watch {
+        /// The declared MCP server the session toolbox answers on.
+        server: String,
+        /// The sessions to watch; empty watches the unarchived children.
+        sessions: Vec<String>,
     },
 }
 
@@ -3316,6 +3334,20 @@ fn ready_of(matches: &ArgMatches) -> Option<ReadyCommand> {
     }
 }
 
+fn session_of(matches: &ArgMatches) -> Option<SessionCommand> {
+    match matches.subcommand()? {
+        ("watch", matches) => Some(SessionCommand::Watch {
+            // Required by the surface, so clap refused an argv without it.
+            server: matches.get_one::<String>("server").cloned()?,
+            sessions: matches
+                .get_many::<String>("session")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+        }),
+        _ => None,
+    }
+}
+
 fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
     match matches.subcommand()? {
         ("check", matches) => Some(ClaimCommand::Check {
@@ -4065,6 +4097,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "landed" => landed_of(matches).map(|command| Command::Landed { command }),
         "hk" => hk_of(matches).map(|command| Command::Hk { command }),
         "claim" => claim_of(matches).map(|command| Command::Claim { command }),
+        "session" => session_of(matches).map(|command| Command::Session { command }),
         "checks" => checks_of(matches).map(|command| Command::Checks { command }),
         "pr" => pr_of(matches).map(|command| Command::Pr { command }),
         "task" => task_of(matches).map(|command| Command::Task { command }),

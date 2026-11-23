@@ -1,0 +1,303 @@
+{
+ "ccr": {
+  "data": [
+   {
+    "created_at": "2026-11-23T18:33:49.346698Z",
+    "control_request": {
+     "internal_anthropic_catchall": {
+      "request": {
+       "mode": "default",
+       "subtype": "set_permission_mode"
+      },
+      "request_id": "set-mode-f58107a5-abae-4908-bed1-a9465f30dcbd",
+      "uuid": "b56b351f-4fa0-49c2-a787-7e9ac961b244"
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:49.425247Z",
+    "env_manager_log": {
+     "uuid": "68a669e3-3b88-48b7-ab3e-76c2f5df3b87",
+     "internal_anthropic_catchall": {
+      "data": {
+       "category": "init",
+       "content": "Allocating sandbox",
+       "extra": {
+        "step_id": "provision",
+        "step_status": "started"
+       },
+       "level": "info",
+       "timestamp": "2026-11-23T18:33:49.414728304Z"
+      }
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:51.187913Z",
+    "env_manager_log": {
+     "uuid": "df0795bf-2491-4e7f-9e33-f52ee5e72c60",
+     "internal_anthropic_catchall": {
+      "data": {
+       "category": "init",
+       "content": "Restored saved setup",
+       "extra": {
+        "checkpoint_built_at": "2026-11-22T23:34:28Z",
+        "setup_script_duration_ms": 204879,
+        "setup_source": "checkpoint"
+       },
+       "level": "info",
+       "timestamp": "2026-11-23T18:33:51.173020889Z"
+      }
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:51.753999Z",
+    "env_manager_log": {
+     "uuid": "d85887a5-9546-4867-8451-5779eafac5c7",
+     "internal_anthropic_catchall": {
+      "data": {
+       "category": "init",
+       "content": "Environment runner started",
+       "extra": {
+        "expected_steps": "provision,clone,setup_script,start_cc",
+        "session_mode": "resume-cached",
+        "step_id": "provision",
+        "step_status": "completed"
+       },
+       "level": "info",
+       "timestamp": "2026-11-23T18:33:51.598340351Z"
+      }
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:51.753999Z",
+    "env_manager_log": {
+     "uuid": "1a13d8b8-971f-4d50-bbcf-4d75cc5faec0",
+     "internal_anthropic_catchall": {
+      "data": {
+       "category": "init",
+       "content": "Fetching repository button-inc/batten",
+       "extra": {
+        "step_detail": "github",
+        "step_id": "clone",
+        "step_status": "started"
+       },
+       "level": "info",
+       "timestamp": "2026-11-23T18:33:51.66874536Z"
+      }
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:54.108237Z",
+    "env_manager_log": {
+     "uuid": "5b9a6d27-c22b-43a4-8b24-3109a1ca55e0",
+     "internal_anthropic_catchall": {
+      "data": {
+       "category": "init",
+       "content": "Fetching repository button-inc/batten",
+       "extra": {
+        "step_detail": "github",
+        "step_id": "clone",
+        "step_status": "completed"
+       },
+       "level": "info",
+       "timestamp": "2026-11-23T18:33:54.074105714Z"
+      }
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:54.163523Z",
+    "env_manager_log": {
+     "uuid": "6b0d62bb-233a-4b1b-87d7-6a204f7d3afe",
+     "internal_anthropic_catchall": {
+      "data": {
+       "category": "init",
+       "content": "Finished processing sources",
+       "extra": {
+        "step_id": "clone",
+        "step_status": "completed"
+       },
+       "level": "info",
+       "timestamp": "2026-11-23T18:33:54.074212459Z"
+      }
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:54.163523Z",
+    "env_manager_log": {
+     "uuid": "335e92c0-b203-405f-88af-f33a84f3b707",
+     "internal_anthropic_catchall": {
+      "data": {
+       "category": "init",
+       "content": "Running setup script",
+       "extra": {
+        "output": "installed=/root/.local/bin/batten\nversion=v0.0.220\ntarget=x86_64-unknown-linux-gnu\nverified=sha256\nstartup: 0 row(s), 0 failed\n",
+        "step_id": "setup_script",
+        "step_status": "started"
+       },
+       "level": "info",
+       "timestamp": "2026-11-23T18:33:54.083677974Z"
+      }
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:54.163523Z",
+    "env_manager_log": {
+     "uuid": "c5592df2-0d18-4842-87f2-eb4415a5a353",
+     "internal_anthropic_catchall": {
+      "data": {
+       "category": "init",
+       "content": "Setup script cached from previous run",
+       "extra": {
+        "step_id": "setup_script",
+        "step_status": "completed"
+       },
+       "level": "info",
+       "timestamp": "2026-11-23T18:33:54.08405348Z"
+      }
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:54.163523Z",
+    "env_manager_log": {
+     "uuid": "b187e110-4ae5-4906-8e3f-879b2eedabc9",
+     "internal_anthropic_catchall": {
+      "data": {
+       "category": "init",
+       "content": "Starting Claude Code",
+       "extra": {
+        "step_id": "start_cc",
+        "step_status": "started"
+       },
+       "level": "info",
+       "timestamp": "2026-11-23T18:33:54.086693669Z"
+      }
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:54.163523Z",
+    "env_manager_log": {
+     "uuid": "57a1b68a-147e-42eb-b308-5f14f4574345",
+     "internal_anthropic_catchall": {
+      "data": {
+       "category": "init",
+       "content": "Claude Code process started (warm spare)",
+       "extra": {
+        "step_id": "start_cc",
+        "step_status": "completed"
+       },
+       "level": "info",
+       "timestamp": "2026-11-23T18:33:54.087187882Z"
+      }
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:33:55.882221Z",
+    "system": {
+     "uuid": "deef6e7e-7725-41c0-823f-3adf0e03bf66",
+     "internal_anthropic_catchall": {
+      "no_query_first": true,
+      "requires_rewind_request_id": true,
+      "session_id": "8dcb7c1c-4410-5ec4-a8aa-28fad6c6a97e",
+      "shared_message_id": true,
+      "staged_files": true,
+      "subtype": "turn_handoff_available",
+      "tools": [
+       "Bash",
+       "Write",
+       "Edit",
+       "Read",
+       "Glob",
+       "Grep",
+       "Agent",
+       "NotebookEdit",
+       "WebFetch",
+       "WebSearch",
+       "TaskStop",
+       "SearchMcpRegistry",
+       "SuggestConnectors",
+       "ListConnectors",
+       "Skill",
+       "Artifact",
+       "mcp__claude-code-remote__list_triggers",
+       "mcp__claude-code-remote__create_trigger",
+       "mcp__claude-code-remote__update_trigger",
+       "mcp__claude-code-remote__delete_trigger",
+       "mcp__claude-code-remote__fire_trigger",
+       "mcp__claude-code-remote__send_later",
+       "mcp__claude-code-remote__add_repo",
+       "mcp__claude-code-remote__check_repo_access",
+       "mcp__claude-code-remote__list_repos"
+      ],
+      "v": 1,
+      "worker_epoch": 1
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:39:09.223207Z",
+    "control_request": {
+     "internal_anthropic_catchall": {
+      "request": {
+       "promptSuggestions": true,
+       "subtype": "initialize"
+      },
+      "request_id": "1da70172-ada3-4a2d-b254-f9f36ec87f1a",
+      "uuid": "8968e5f0-b9f5-4903-830d-d6b791214aeb"
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:41:00.886362Z",
+    "control_request": {
+     "internal_anthropic_catchall": {
+      "request": {
+       "promptSuggestions": true,
+       "subtype": "initialize"
+      },
+      "request_id": "bd925ef3-cf1f-40b9-9d3d-a230cb8c5766",
+      "uuid": "d667e4e1-2850-489a-836c-2dd613290834"
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:41:38.463471Z",
+    "control_request": {
+     "internal_anthropic_catchall": {
+      "interrupted_by": "session",
+      "request": {
+       "cancel_queued": true,
+       "subtype": "interrupt"
+      },
+      "request_id": "817447bdf21f465eb3b45502f9c95eb5",
+      "uuid": "8de3d89d-f01e-4fb6-ad8b-e1bb278485ca"
+     }
+    }
+   },
+   {
+    "created_at": "2026-11-23T18:42:20.548371Z",
+    "control_request": {
+     "internal_anthropic_catchall": {
+      "request": {
+       "reason": "archived",
+       "subtype": "end_session"
+      },
+      "request_id": "req_011ChLMLcgqdrGX8TxbYEgF4",
+      "uuid": "70fc87fb-6ef3-423c-8971-3254a2ca6cc6"
+     }
+    }
+   }
+  ],
+  "first_id": "b56b351f-4fa0-49c2-a787-7e9ac961b244",
+  "last_id": "70fc87fb-6ef3-423c-8971-3254a2ca6cc6"
+ }
+}

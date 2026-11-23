@@ -1454,6 +1454,15 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-2826: a session id, a state word, a count and task ids per child,
+    // then a path — never a transcript byte. Here it reaches the refusal for a
+    // server no source declares.
+    Verb {
+        path: "session watch",
+        args: &["--server", "a-server"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The lane's receipt, driven to the same lane-absent refusal as the five `pr`
     // verbs above and pointer-only on the same structural terms: `bot::Attested`
     // holds a key, a login and a number, and there is no field a body could

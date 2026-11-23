@@ -1361,6 +1361,11 @@ mod tests {
             // what this assertion exists to prompt.
             "semver".to_owned(),
             "semver check".to_owned(),
+            // A parent's children, followed to done or dead (CLOUD-2826):
+            // `Unclassified`, off the read allowlist, because the leaf writes
+            // its per-child cache under the state directory.
+            "session".to_owned(),
+            "session watch".to_owned(),
             // One task per clone (CLOUD-428), ported off
             // `mise-tasks/singleton.sh` under CLOUD-843. Both verbs are
             // `Effect::Write` and so are deliberately absent from the read
