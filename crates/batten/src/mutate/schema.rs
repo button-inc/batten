@@ -1458,6 +1458,10 @@ pub enum Verdict {
     Timeout,
     /// The run itself failed.
     Error,
+    /// A case that fails unmutated reaches it and no passing case killed it,
+    /// so nothing could show it caught. Never reused: the red case decided
+    /// nothing about the mutant.
+    Unjudged,
 }
 
 impl Verdict {
@@ -1470,8 +1474,132 @@ impl Verdict {
             Self::Uncovered => "uncovered",
             Self::Timeout => "timeout",
             Self::Error => "error",
+            Self::Unjudged => "unjudged",
         }
     }
+}
+
+/// Every case that failed the unmutated baseline, with its failure line.
+type Red = std::collections::BTreeMap<Case, String>;
+
+/// How a case reads in a report line: its binary, a space, its name, as
+/// nextest spells it.
+fn case_label((name, binary): &Case) -> String {
+    format!("{binary} {name}")
+}
+
+/// The cases of `reached` that passed the baseline, and the first red one
+/// among them, if any.
+fn split_red(reached: &BTreeSet<Case>, red: &Red) -> (BTreeSet<Case>, Option<Case>) {
+    let first = reached.iter().find(|case| red.contains_key(*case)).cloned();
+    let green = reached
+        .iter()
+        .filter(|case| !red.contains_key(*case))
+        .cloned()
+        .collect();
+    (green, first)
+}
+
+/// A red-reached mutant's verdict from what its green cases said: a kill or
+/// hang stands, a run that erred decided nothing, and anything else — every
+/// green case passed, or there was none — is unjudged, never a survivor.
+const fn poisoned(green: Verdict) -> Verdict {
+    match green {
+        Verdict::Caught | Verdict::Timeout | Verdict::Error => green,
+        Verdict::Missed | Verdict::Uncovered | Verdict::Unjudged => Verdict::Unjudged,
+    }
+}
+
+/// The red case each unjudged one of `verdicts` names: the first that
+/// reaches its site, else (a hand-back whose run could not leave the red
+/// cases out) the first red case.
+fn blamed(
+    verdicts: &[(u32, Verdict)],
+    sites: &std::collections::BTreeMap<u32, BTreeSet<Case>>,
+    red: &Red,
+) -> std::collections::BTreeMap<u32, Case> {
+    verdicts
+        .iter()
+        .filter(|(_, verdict)| *verdict == Verdict::Unjudged)
+        .filter_map(|(id, _)| {
+            let reaching = sites.get(id).and_then(|cases| split_red(cases, red).1);
+            Some((*id, reaching.or_else(|| red.keys().next().cloned())?))
+        })
+        .collect()
+}
+
+/// Every case the reach run's `JUnit` report says failed the unmutated
+/// baseline, with its failure line, when the run did not pass.
+///
+/// A RED CASE IS A FINDING, A RUN THAT COULD NOT LOOK IS NOT: a failed run
+/// with no readable report, or one naming no failed case (a build that broke,
+/// a crash), refuses the sweep, since nothing says which cases are green.
+///
+/// # Errors
+///
+/// The run failed and its report names no failed case.
+fn baseline_red(passed: bool, junit: Option<&str>) -> anyhow::Result<Red> {
+    if passed {
+        return Ok(Red::new());
+    }
+    let red: Red = junit.and_then(junit_failures).unwrap_or_default();
+    anyhow::ensure!(
+        !red.is_empty(),
+        "the unmutated suite failed on the schema build and its report names no failed case, \
+         so no verdict would mean anything; every case that passed is sealed and carries to \
+         the next run"
+    );
+    Ok(red)
+}
+
+/// Every failed or hung case a nextest `JUnit` report names, with its failure
+/// line: the panic message when the output carries one, else the failure's
+/// own message. `None` when the report is not XML.
+fn junit_failures(xml: &str) -> Option<Red> {
+    let doc = roxmltree::Document::parse(xml).ok()?;
+    Some(
+        doc.descendants()
+            .filter(|node| node.has_tag_name("testcase"))
+            .filter_map(|case| {
+                let failure = case
+                    .children()
+                    .filter(roxmltree::Node::is_element)
+                    .find(|child| matches!(child.tag_name().name(), "failure" | "error"))?;
+                let line = failure_line(&case, &failure);
+                Some((
+                    (
+                        case.attribute("name")?.to_owned(),
+                        case.attribute("classname")?.to_owned(),
+                    ),
+                    line,
+                ))
+            })
+            .collect(),
+    )
+}
+
+/// One failed case's line: the first line after a `panicked at` in its
+/// failure or its captured output, else the failure's message or type.
+fn failure_line(case: &roxmltree::Node<'_, '_>, failure: &roxmltree::Node<'_, '_>) -> String {
+    let said: Vec<&str> = std::iter::once(*failure)
+        .chain(
+            case.children()
+                .filter(|child| matches!(child.tag_name().name(), "system-out" | "system-err")),
+        )
+        .filter_map(|node| node.text())
+        .flat_map(str::lines)
+        .map(str::trim)
+        .collect();
+    let panic = said
+        .iter()
+        .position(|line| line.contains("panicked at"))
+        .and_then(|at| said.get(at + 1).copied())
+        .filter(|line| !line.is_empty());
+    panic
+        .or_else(|| failure.attribute("message"))
+        .or_else(|| failure.attribute("type"))
+        .unwrap_or("failed")
+        .to_owned()
 }
 
 /// The package a nextest binary id names: `batten::it` is `batten`'s.
@@ -3534,6 +3662,9 @@ struct Judging<'a> {
     /// (Candea & Fox 2003), so a killed sweep keeps every kill it finished and
     /// a restart resumes from them (a restart lost a whole judging pass).
     store: &'a std::path::Path,
+    /// Every case that failed the unmutated baseline ([`baseline_red`]): never
+    /// run against a mutant, never a kill.
+    red: &'a Red,
 }
 
 /// How many verdicts pass between two progress lines.
@@ -3576,10 +3707,16 @@ fn judge_all(
                     let Some(mutant) = judging.mutants.get(id as usize) else {
                         break;
                     };
-                    let cases = judging.reach.get(&id).unwrap_or(nobody);
-                    let key = verdict_key(judging.root, mutant, cases, judging.digests);
+                    let reached = judging.reach.get(&id).unwrap_or(nobody);
+                    let key = verdict_key(judging.root, mutant, reached, judging.digests);
+                    // A RED CASE REACHING THE SITE IS NEVER RUN AND NEVER A
+                    // KILL: only the green cases judge, and a stored verdict
+                    // over the whole set is not reused while one is red.
+                    let (green, red) = split_red(reached, judging.red);
+                    let cases = if red.is_some() { &green } else { reached };
                     let reused = key
                         .as_ref()
+                        .filter(|_| red.is_none())
                         .and_then(|key| judging.cache.get(key))
                         .filter(|v| reusable(v));
                     if reused.is_some() {
@@ -3596,7 +3733,11 @@ fn judge_all(
                             let (verdict, skipped) =
                                 judge(judging, id, mutant, cases, hints, journal);
                             skipped_runs.fetch_add(skipped, std::sync::atomic::Ordering::Relaxed);
-                            verdict
+                            if red.is_some() {
+                                poisoned(verdict)
+                            } else {
+                                verdict
+                            }
                         }
                     };
                     // EVERY VERDICT, SURVIVORS TOO, the moment it is decided:
@@ -3717,29 +3858,54 @@ fn unprobe_key(root: &std::path::Path, file: &str) -> String {
     format!("unprobe-{}", hasher.finalize().to_hex())
 }
 
-/// Print every verdict that is not a kill, and the counts, and answer the
-/// sweep's exit: 3 when a run erred, 2 when a mutant survived, else 0.
+/// Print each baseline-red case with its failure line, every verdict that is
+/// not a kill (an unjudged one naming the red case that poisoned it), and the
+/// counts, and answer the sweep's exit: 3 when a run erred, 2 when a mutant
+/// survived or went unjudged or a case was red unmutated, else 0.
 fn report(
     out: &mut dyn std::io::Write,
     mutants: &[Listed],
     verdicts: &[(u32, Verdict)],
+    (red, sites): (&Red, &std::collections::BTreeMap<u32, BTreeSet<Case>>),
     (unviable, classic): (usize, usize),
     state: &std::path::Path,
     seconds: u64,
 ) -> anyhow::Result<u8> {
+    let blame = blamed(verdicts, sites, red);
+    for (case, line) in red {
+        writeln!(out, "baseline-red\t{}\t{line}", case_label(case))?;
+    }
     let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for (id, verdict) in verdicts {
         *counts.entry(verdict.name()).or_default() += 1;
-        if !matches!(verdict, Verdict::Caught)
-            && let Some(mutant) = mutants.get(*id as usize)
-        {
-            writeln!(out, "{}\t{}", verdict.name(), mutant.name)?;
+        if matches!(verdict, Verdict::Caught) {
+            continue;
+        }
+        let Some(mutant) = mutants.get(*id as usize) else {
+            continue;
+        };
+        match (verdict, blame.get(id)) {
+            (Verdict::Unjudged, Some(case)) => writeln!(
+                out,
+                "unjudged (baseline-red: {})\t{}",
+                case_label(case),
+                mutant.name
+            )?,
+            _ => writeln!(out, "{}\t{}", verdict.name(), mutant.name)?,
         }
     }
     writeln!(
         out,
         "mutate schema: {counts:?}, {unviable} unviable, {classic} classic, in {seconds}s"
     )?;
+    let unjudged = counts.get(Verdict::Unjudged.name()).copied().unwrap_or(0);
+    if !red.is_empty() || unjudged > 0 {
+        writeln!(
+            out,
+            "mutate schema: {} baseline-red case(s), {unjudged} unjudged mutant(s)",
+            red.len()
+        )?;
+    }
     // A RUN THAT ERRED DECIDED NOTHING: could-not-look (3), above any verdict,
     // so a sweep whose runs failed never reads as a set of survivors.
     if verdicts.iter().any(|(_, v)| matches!(v, Verdict::Error)) {
@@ -3750,9 +3916,12 @@ fn report(
         )?;
         return Ok(3);
     }
-    let failed = verdicts
-        .iter()
-        .any(|(_, v)| matches!(v, Verdict::Missed | Verdict::Uncovered));
+    // A RED CASE KEEPS THE SWEEP NON-ZERO even when every mutant it reaches
+    // was caught by a green one: the suite it judged by is not whole.
+    let failed = !red.is_empty()
+        || verdicts
+            .iter()
+            .any(|(_, v)| matches!(v, Verdict::Missed | Verdict::Uncovered | Verdict::Unjudged));
     Ok(if failed { 2 } else { 0 })
 }
 
@@ -3966,6 +4135,7 @@ fn judge_handbacks(
     let (tree, output) = (state.join("classic"), state.join("classic-out"));
     let (tree, output) = (tree.as_path(), output.as_path());
     let every: BTreeSet<Case> = reach.executed.keys().cloned().collect();
+    let every_green: BTreeSet<Case> = split_red(&every, judging.red).0;
     let (mut verdicts, mut unviable, mut reused, mut synced) = (Vec::new(), 0, 0, false);
     for &id in classic {
         let Some(mutant) = judging.mutants.get(id as usize) else {
@@ -3974,8 +4144,14 @@ fn judge_handbacks(
         let observing = handback_cases(id, mutant, schema, reach);
         let cases = observing.clone().unwrap_or_else(|| every.clone());
         let key = verdict_key(judging.root, mutant, &cases, judging.digests);
+        // THE SAME RULE AS THE SCHEMA'S: a red case is never run and never a
+        // kill, so a hand-back runs only its green cases, and one whose run
+        // could not leave the red cases out (the whole suite) is unjudged.
+        let (green, red) = split_red(&cases, judging.red);
+        let green_observing = observing.as_ref().map(|_| green.clone());
         let stored = key
             .as_ref()
+            .filter(|_| red.is_none())
             .and_then(|key| judging.cache.get(key))
             .filter(|verdict| reusable(verdict));
         let verdict = if let Some(stored) = stored {
@@ -3986,7 +4162,21 @@ fn judge_handbacks(
                 sync(live, tree, &BTreeSet::new())?;
                 synced = true;
             }
-            let (filter, ran) = handback_filter(observing.as_ref(), &cases, &every);
+            let (filter, ran) = handback_filter(green_observing.as_ref(), &green, &every_green);
+            let poisoner = red.or_else(|| {
+                filter
+                    .is_none()
+                    .then(|| judging.red.keys().next().cloned())
+                    .flatten()
+            });
+            if poisoner.is_some() && (green.is_empty() || filter.is_none()) {
+                journal(
+                    judging.store,
+                    &journal_line(key.as_deref(), Verdict::Unjudged.name(), &mutant.name),
+                )?;
+                verdicts.push((id, Verdict::Unjudged));
+                continue;
+            }
             let bound = case_bound(ran, judging.seconds).min(super::runner_bound());
             let outcome = super::cargo_mutant_in_place(
                 (tree, handback.runner, handback.diff),
@@ -3996,7 +4186,10 @@ fn judge_handbacks(
                 output,
             )?;
             let unobserved = observing.as_ref().is_some_and(BTreeSet::is_empty);
-            let name = handback_verdict(outcome, output, &mutant.name, unobserved);
+            let mut name = handback_verdict(outcome, output, &mutant.name, unobserved);
+            if poisoner.is_some() && !matches!(name, "caught" | "timeout" | "error" | "unviable") {
+                name = Verdict::Unjudged.name();
+            }
             journal(
                 judging.store,
                 &journal_line(key.as_deref(), name, &mutant.name),
@@ -4009,6 +4202,7 @@ fn judge_handbacks(
             "missed" => verdicts.push((id, Verdict::Missed)),
             "timeout" => verdicts.push((id, Verdict::Timeout)),
             "uncovered" => verdicts.push((id, Verdict::Uncovered)),
+            "unjudged" => verdicts.push((id, Verdict::Unjudged)),
             _ => verdicts.push((id, Verdict::Error)),
         }
     }
@@ -4176,7 +4370,7 @@ pub fn sweep(
     let trees = (work.as_path(), target.as_path(), state.as_path());
     let ids = (&resource_ids, resources.as_str());
     let format = sweep_format(live, mutants, &schema, unprobed);
-    let (reach, digests, seconds) = reached(
+    let (reach, digests, seconds, red) = reached(
         trees,
         &root,
         mutants,
@@ -4186,9 +4380,7 @@ pub fn sweep(
     )?;
     let scratch = state.join("scratch");
     std::fs::create_dir_all(&scratch)?;
-    let todo: Vec<u32> = (0..u32::try_from(mutants.len())?)
-        .filter(|id| !unviable.contains(id) && !classic.contains(id))
-        .collect();
+    let todo = judged_by_switch(mutants.len(), &unviable, &classic)?;
     let judging = Judging {
         work: &work,
         target: &target,
@@ -4200,6 +4392,7 @@ pub fn sweep(
         cache: &cache,
         digests: &digests,
         store: &cache_path,
+        red: &red,
     };
     let mut verdicts = judge_all(&judging, &todo, jobs, out);
     let (names, handed_unviable) = match handback {
@@ -4220,6 +4413,7 @@ pub fn sweep(
         out,
         mutants,
         &verdicts,
+        (&red, &reach.sites),
         (
             unviable_total(unviable.len(), handed_unviable),
             classic.len(),
@@ -4310,12 +4504,13 @@ fn digests_with(
     case_digests(root, executed.keys(), dirs, executed, &depends)
 }
 
-/// What a sweep reads off its reach run: the record, each case's digest and
-/// each case's seconds.
+/// What a sweep reads off its reach run: the record, each case's digest,
+/// each case's seconds, and every case that failed unmutated.
 type Reached = (
     Reach,
     std::collections::BTreeMap<Case, String>,
     std::collections::BTreeMap<Case, f64>,
+    Red,
 );
 
 /// Record reach over the schema, carrying every case the change left alone;
@@ -4401,11 +4596,21 @@ fn reached(
         )?,
         Err(why) => writeln!(out, "mutate schema: no selection digest taken: {why:#}")?,
     }
-    anyhow::ensure!(
+    // ONE RED CASE NO LONGER REFUSES THE SWEEP (#1276: four of ~10,500 left
+    // 12,452 mutants with no verdict). Each is a finding, and poisons only the
+    // mutants it reaches; a run that could not say which case failed still
+    // refuses.
+    let red = baseline_red(
         passed,
-        "the unmutated suite failed on the schema build, so no verdict would mean anything; \
-         every case that passed is sealed and carries to the next run"
-    );
+        crate::fsio::read_to_string(
+            state
+                .join("nextest")
+                .join("batten-cover")
+                .join(super::cover::JUNIT),
+        )
+        .ok()
+        .as_deref(),
+    )?;
     writeln!(
         out,
         "mutate schema: reach recorded for {} site(s), {} function(s) probed, in {}s",
@@ -4413,7 +4618,23 @@ fn reached(
         schema.probes.len(),
         started.elapsed().as_secs()
     )?;
-    Ok((reach, digests, seconds))
+    Ok((reach, digests, seconds, red))
+}
+
+/// The mutants of `count` the schema judges by switch: every one that built
+/// and was not handed back.
+///
+/// # Errors
+///
+/// The count does not fit a mutant id.
+fn judged_by_switch(
+    count: usize,
+    unviable: &BTreeSet<u32>,
+    classic: &BTreeSet<u32>,
+) -> anyhow::Result<Vec<u32>> {
+    Ok((0..u32::try_from(count)?)
+        .filter(|id| !unviable.contains(id) && !classic.contains(id))
+        .collect())
 }
 
 /// Every unviable mutant a sweep reports: the schema build's and the
@@ -6263,6 +6484,68 @@ mod tests {
         assert_eq!(junit_cases("FAIL [ 1s] batten::it x"), None);
     }
 
+    /// A failed baseline names each red case with its failure line, a hung one
+    /// included; a passing one names none; and a failed run whose report names
+    /// no failed case, or that left none, refuses as could-not-look.
+    ///
+    /// Fails by: a red case dropped or keyed by the wrong binary, a hang not
+    /// counted red, a pass read as red, or a crash with no report read as a
+    /// sweep with nothing red.
+    #[test]
+    fn a_failed_baseline_names_its_red_cases_and_a_blind_one_refuses() {
+        let pair = |name: &str, binary: &str| (String::from(name), String::from(binary));
+        let red = baseline_red(false, Some(JUNIT_FIXTURE)).expect("two red cases");
+        assert_eq!(
+            red.keys().cloned().collect::<Vec<_>>(),
+            [pair("m::b", "batten::it"), pair("m::slow", "batten::it")]
+        );
+        assert_eq!(red[&pair("m::b", "batten::it")], "panicked");
+        assert_eq!(red[&pair("m::slow", "batten::it")], "test timeout");
+        assert!(baseline_red(true, None).expect("passed").is_empty());
+        assert!(baseline_red(false, None).is_err(), "no report");
+        assert!(baseline_red(false, Some("not xml")).is_err());
+        let green = "<testsuites><testsuite><testcase name=\"a\" classname=\"b\"/>\
+                     </testsuite></testsuites>";
+        assert!(baseline_red(false, Some(green)).is_err(), "no case failed");
+        let panicked = "<testsuites><testsuite><testcase name=\"r\" classname=\"fix\">\
+                        <failure message=\"test failure\" type=\"test failure\"/>\
+                        <system-err>thread 'r' panicked at src/lib.rs:2:9:\nred first\n\
+                        note: run with `RUST_BACKTRACE=1`</system-err></testcase>\
+                        </testsuite></testsuites>";
+        assert_eq!(
+            baseline_red(false, Some(panicked)).expect("red")[&pair("r", "fix")],
+            "red first",
+            "the panic message is the failure line"
+        );
+    }
+
+    /// A red-reached mutant keeps a green kill, a green hang and a run that
+    /// erred, and is unjudged for anything else — never missed or uncovered;
+    /// and the red cases are split from the green.
+    #[test]
+    fn a_red_case_leaves_a_green_kill_standing_and_nothing_else() {
+        for (green, then) in [
+            (Verdict::Caught, Verdict::Caught),
+            (Verdict::Timeout, Verdict::Timeout),
+            (Verdict::Error, Verdict::Error),
+            (Verdict::Missed, Verdict::Unjudged),
+            (Verdict::Uncovered, Verdict::Unjudged),
+        ] {
+            assert_eq!(poisoned(green), then, "{green:?}");
+        }
+        let pair = |name: &str| (String::from(name), String::from("fix"));
+        let red: Red = [(pair("r"), String::from("x"))].into();
+        let reached: BTreeSet<Case> = [pair("a"), pair("r")].into();
+        assert_eq!(
+            split_red(&reached, &red),
+            ([pair("a")].into(), Some(pair("r")))
+        );
+        assert_eq!(
+            split_red(&[pair("a")].into(), &red),
+            ([pair("a")].into(), None)
+        );
+    }
+
     /// A region holds its start and not its end, an empty one holds its start,
     /// and the smallest holding region decides.
     ///
@@ -7588,7 +7871,8 @@ mod tests {
             (1, Verdict::Missed),
             (2, Verdict::Uncovered),
         ];
-        let code = report(&mut out, &mutants, &verdicts, (4, 5), &state, 7).unwrap();
+        let none = (&Red::new(), &std::collections::BTreeMap::new());
+        let code = report(&mut out, &mutants, &verdicts, none, (4, 5), &state, 7).unwrap();
         let said = String::from_utf8(out).unwrap();
         assert_eq!(code, 2);
         assert!(
@@ -7603,8 +7887,47 @@ mod tests {
             "{said}"
         );
         let mut out = Vec::new();
-        let code = report(&mut out, &mutants, &verdicts[..1], (0, 0), &state, 7).unwrap();
+        let none = (&Red::new(), &std::collections::BTreeMap::new());
+        let code = report(&mut out, &mutants, &verdicts[..1], none, (0, 0), &state, 7).unwrap();
         assert_eq!(code, 0);
+        // A RED CASE IS LISTED WITH ITS LINE, AN UNJUDGED MUTANT NAMES IT, AND
+        // THE EXIT IS 2 EVEN WHEN EVERY MUTANT WAS CAUGHT.
+        let case = (String::from("tests::red"), String::from("fix"));
+        let red: Red = [(case.clone(), String::from("red first"))].into();
+        let blame = [(1, [case].into())].into();
+        let mut out = Vec::new();
+        let poisoned = [(0, Verdict::Caught), (1, Verdict::Unjudged)];
+        let code = report(
+            &mut out,
+            &mutants,
+            &poisoned,
+            (&red, &blame),
+            (0, 0),
+            &state,
+            7,
+        )
+        .unwrap();
+        let said = String::from_utf8(out).unwrap();
+        assert_eq!(code, 2, "{said}");
+        for line in [
+            "baseline-red\tfix tests::red\tred first\n",
+            "unjudged (baseline-red: fix tests::red)\tm1\n",
+            "{\"caught\": 1, \"unjudged\": 1}",
+            "mutate schema: 1 baseline-red case(s), 1 unjudged mutant(s)\n",
+        ] {
+            assert!(said.contains(line), "{line:?} in {said}");
+        }
+        let mut out = Vec::new();
+        let code = report(
+            &mut out,
+            &mutants,
+            &verdicts[..1],
+            (&red, none.1),
+            (0, 0),
+            &state,
+            7,
+        );
+        assert_eq!(code.unwrap(), 2, "a red case alone keeps the exit non-zero");
     }
 
     /// Each case's own recorded outcome against a mutant decides it or narrows
@@ -7650,6 +7973,7 @@ mod tests {
                 cache: &cache,
                 digests: &digests,
                 store: &store,
+                red: &Red::new(),
             };
             let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
             let journal = std::sync::Mutex::new(None);
@@ -7784,6 +8108,7 @@ mod tests {
             cache: &cache,
             digests: &digests,
             store: &store,
+            red: &Red::new(),
         };
         let todo: Vec<u32> = (0..105).collect();
         let mut out = Vec::new();

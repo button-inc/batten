@@ -307,6 +307,116 @@ fn a_sweep_under_a_supervising_task_moves_its_signal() {
     );
 }
 
+/// A library one of whose cases fails before any mutant is switched in, and
+/// reaches some sites but not others.
+const RED_LIB: &str = "pub fn add(a: u8, b: u8) -> u8 {\n    a + b\n}\n\
+pub fn same(a: u8, b: u8) -> bool {\n    a == b\n}\n\
+pub fn broken() -> u8 {\n    1\n}\n\
+pub fn id(x: u8) -> u8 {\n    x\n}\n\
+#[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {\n        assert_eq!(super::add(2, 3), 5);\n    }\n\
+    #[test]\n    fn compares() {\n        assert!(super::same(1, 1));\n    }\n\
+    #[test]\n    fn ids() {\n        let _ = super::id(1);\n    }\n\
+    #[test]\n    fn red() {\n        let _ = super::add(1, 1) + super::broken() + super::id(0);\n\
+        panic!(\"red before any mutant\");\n    }\n}\n";
+
+/// The listing over [`RED_LIB`], one mutant per rule.
+fn red_listing(name: &str) -> String {
+    let listing = serde_json::json!([
+        mutant(
+            "kill",
+            "BinaryOperator",
+            "*",
+            [2, 7, 2, 8],
+            ("add", "-> u8", [1, 1, 3, 2])
+        ),
+        mutant(
+            "survive",
+            "BinaryOperator",
+            "<=",
+            [5, 7, 5, 9],
+            ("same", "-> bool", [4, 1, 6, 2]),
+        ),
+        mutant(
+            "poisoned",
+            "FnValue",
+            "0",
+            [8, 5, 8, 6],
+            ("broken", "-> u8", [7, 1, 9, 2]),
+        ),
+        mutant(
+            "shielded",
+            "FnValue",
+            "0",
+            [11, 5, 11, 6],
+            ("id", "-> u8", [10, 1, 12, 2]),
+        ),
+    ]);
+    let file = common::scratch(name).join("listing.json");
+    std::fs::write(&file, listing.to_string()).unwrap();
+    file.to_string_lossy().into_owned()
+}
+
+/// A CASE RED BEFORE ANY MUTANT POISONS ONLY WHAT IT REACHES (#1276: four red
+/// cases out of ~10,500 left 12,452 mutants with no verdict). The red case is
+/// a finding and never a kill; a mutant it does not reach is judged from its
+/// green cases; a green kill stands whatever red case also reaches the site;
+/// and a mutant a red case reaches that no green case kills is listed as
+/// unjudged beside the survivors. The exit stays non-zero while one is red,
+/// and a second sweep over the same tree keeps all of it: the red case is
+/// never sealed as passing and carried past its failure.
+///
+/// Fails by: one red case refusing the whole sweep, the red case counted as
+/// the kill of a mutant it reaches, a red-reached mutant read as caught,
+/// missed or uncovered, a red case missing from the report, a zero exit, or a
+/// second sweep carrying the red case as passed.
+#[test]
+fn a_red_baseline_case_poisons_only_the_mutants_it_reaches() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = seeded_with("mutate-schema-red", RED_LIB);
+    let file = red_listing("mutate-schema-red-listing");
+    let sweep = || {
+        let output = common::run(&repo, &["__mutate-schema", &file, "2"]);
+        let said = common::stdout(&output);
+        (output.status.code(), said, common::stderr(&output))
+    };
+    let (code, said, err) = sweep();
+    assert_eq!(code, Some(2), "a red baseline case exits 2\n{said}\n{err}");
+    for line in [
+        "baseline-red\tfix tests::red\t",
+        "red before any mutant",
+        "missed\tsurvive\n",
+        "unjudged (baseline-red: fix tests::red)\tpoisoned\n",
+        "unjudged (baseline-red: fix tests::red)\tshielded\n",
+        "{\"caught\": 1, \"missed\": 1, \"unjudged\": 2}, 0 unviable, 0 classic",
+        "mutate schema: 1 baseline-red case(s), 2 unjudged mutant(s)",
+    ] {
+        assert!(said.contains(line), "{line:?} in {said}\n{err}");
+    }
+    assert!(!said.contains("\tkill\n"), "the green kill stands: {said}");
+    let (code, again, err) = sweep();
+    assert_eq!(code, Some(2), "{again}\n{err}");
+    for line in [
+        "reach carried 3 case(s)",
+        "baseline-red\tfix tests::red\t",
+        "unjudged (baseline-red: fix tests::red)\tpoisoned\n",
+        "{\"caught\": 1, \"missed\": 1, \"unjudged\": 2}",
+    ] {
+        assert!(again.contains(line), "{line:?} in {again}\n{err}");
+    }
+    // FIXED, THE POISONED MUTANTS ARE JUDGED: nothing it said stands.
+    let fixed = RED_LIB.replace("panic!(\"red before any mutant\");\n", "");
+    assert_ne!(fixed, RED_LIB, "the fix removes the panic");
+    common::write(&repo, "src/lib.rs", &fixed);
+    let (code, third, err) = sweep();
+    assert_eq!(code, Some(2), "{third}\n{err}");
+    assert!(!third.contains("baseline-red"), "{third}\n{err}");
+    assert!(!third.contains("unjudged"), "{third}\n{err}");
+    assert!(
+        third.contains("{\"caught\": 1, \"missed\": 3}"),
+        "{third}\n{err}"
+    );
+}
+
 #[test]
 fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
     if !cfg!(target_os = "linux") {
