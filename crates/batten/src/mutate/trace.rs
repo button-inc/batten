@@ -124,8 +124,13 @@ pub(crate) fn touched(trace: &str, cwd: Option<&Path>) -> Option<Vec<PathBuf>> {
 /// How a traced syscall used a path (CLOUD-2786).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Access {
-    /// Looked at, opened read-only, executed: the bytes were judged, not moved.
+    /// Opened read-only, executed, a link read: the bytes were judged, not
+    /// moved.
     Read,
+    /// Asked whether it is there, or a directory listed for its names
+    /// ([`PROBES`], an `O_DIRECTORY` open): no file's bytes were read
+    /// (CLOUD-2835).
+    Probe,
     /// Created, truncated, opened for writing, removed or renamed over.
     Write,
 }
@@ -164,6 +169,23 @@ const TWO_PATHS: [&str; 7] = [
 /// The open flags that make an open a write.
 const WRITE_FLAGS: [&str; 4] = ["O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC"];
 
+/// The syscalls that ask whether a path is there, or what it is, and read none
+/// of its bytes (CLOUD-2835).
+const PROBES: [&str; 12] = [
+    "stat",
+    "stat64",
+    "lstat",
+    "lstat64",
+    "newfstatat",
+    "fstatat64",
+    "statx",
+    "statfs",
+    "statfs64",
+    "access",
+    "faccessat",
+    "faccessat2",
+];
+
 /// The syscall a trace line reports: the word before its `(`, or the name a
 /// `<... name resumed>` line carries.
 fn syscall(line: &str) -> &str {
@@ -183,6 +205,10 @@ fn access_of(line: &str) -> Access {
         && WRITE_FLAGS.iter().any(|flag| line.contains(flag));
     if opens || WRITES.contains(&name) || TWO_PATHS.contains(&name) {
         Access::Write
+    } else if PROBES.contains(&name)
+        || (matches!(name, "open" | "openat" | "openat2") && line.contains("O_DIRECTORY"))
+    {
+        Access::Probe
     } else {
         Access::Read
     }
@@ -318,11 +344,11 @@ impl Cwds {
                             .push((began, target));
                     }
                 }
-                "clone" | "clone3" | "fork" | "vfork" => {
-                    if result.parse::<u32>().is_ok_and(|child| child > 0) {
-                        cwds.parent
-                            .insert(result.to_owned(), (pid.to_owned(), began));
-                    }
+                "clone" | "clone3" | "fork" | "vfork"
+                    if result.parse::<u32>().is_ok_and(|child| child > 0) =>
+                {
+                    cwds.parent
+                        .insert(result.to_owned(), (pid.to_owned(), began));
                 }
                 _ => {}
             }
@@ -645,9 +671,42 @@ mod tests {
             ]
         );
         assert_eq!(
-            accessed(&["7     newfstatat(AT_FDCWD</repo>, \"c\", 0x1, 0) = 0"]),
+            accessed(&["7     readlink(\"c\", \"x\", 4095) = 1"]),
             vec![(PathBuf::from("/repo/c"), Read)],
-            "a stat is a read"
+            "a link's target is its bytes"
+        );
+    }
+
+    // A PROBE (CLOUD-2835): a call that asks whether a path is there, or lists a
+    // directory's names, and reads no file's bytes. Cargo's target discovery
+    // probes every member's `src/lib.rs`, `build.rs` and the rest this way.
+    #[test]
+    fn a_stat_an_access_or_a_listing_is_a_probe() {
+        use super::Access::Probe;
+        for line in [
+            "7     newfstatat(AT_FDCWD</repo>, \"c\", 0x1, 0) = 0",
+            "7     statx(AT_FDCWD</repo>, \"c\", AT_STATX_SYNC_AS_STAT, STATX_ALL, 0x1) = 0",
+            "7     stat(\"c\", 0x1) = 0",
+            "7     lstat(\"c\", 0x1) = 0",
+            "7     access(\"c\", F_OK) = -1 ENOENT (No such file or directory)",
+            "7     faccessat2(AT_FDCWD</repo>, \"c\", R_OK, 0) = 0",
+        ] {
+            assert_eq!(
+                accessed(&[line]),
+                vec![(PathBuf::from("/repo/c"), Probe)],
+                "{line}"
+            );
+        }
+        assert_eq!(
+            accessed(&[
+                "7     openat(AT_FDCWD</repo>, \"d\", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = \
+                 3</repo/d>"
+            ]),
+            vec![
+                (PathBuf::from("/repo/d"), Probe),
+                (PathBuf::from("/repo/d"), Probe)
+            ],
+            "a directory opened to list its names"
         );
     }
 

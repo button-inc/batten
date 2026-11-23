@@ -725,6 +725,12 @@ pub enum StepCommand {
         /// The names, or `PREFIX*` patterns, whose variables are keyed.
         patterns: Vec<String>,
     },
+    /// Print the presence lines a step's probed pathspecs select (CLOUD-2835):
+    /// what a step only probes, declared as a `tools` entry.
+    Exists {
+        /// The pathspecs whose index paths are printed, never their bytes.
+        specs: Vec<String>,
+    },
     /// Run groups' rows as graphs, one group after another (CLOUD-2785).
     Graph {
         /// The groups, in order, each `NAME` or `NAME=N` (CLOUD-2789).
@@ -3719,6 +3725,12 @@ fn step_of(matches: &ArgMatches) -> Option<StepCommand> {
                 .unwrap_or_default(),
             patterns: matches
                 .get_many::<String>("patterns")?
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
+        ("exists", matches) => Some(StepCommand::Exists {
+            specs: matches
+                .get_many::<String>("specs")?
                 .cloned()
                 .collect::<Vec<_>>(),
         }),
