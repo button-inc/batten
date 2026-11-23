@@ -483,11 +483,14 @@ fn the_committed_row_is_the_one_these_cases_exercise() {
         .expect("the committed config declares the row this suite exercises");
     assert_eq!(declared.kind, RuleKind::Policy);
     assert_eq!(declared.scope, RuleScope::Tree);
+    // A glob that MATCHES a case file, not one whose text names the directory:
+    // the row now reads every crate's tests as `crates/*/{tests,examples}/…`
+    // (0c6a0c4c), which covers `crates/batten/tests` without spelling it.
+    let case_file = "crates/batten/tests/it/obligations_bound.rs";
     assert!(
-        declared
-            .line_sources
-            .iter()
-            .any(|glob| glob.contains("crates/batten/tests")),
+        declared.line_sources.iter().any(|glob| {
+            globset::Glob::new(glob).is_ok_and(|glob| glob.compile_matcher().is_match(case_file))
+        }),
         "an obligation naming a case file must be resolvable, or the slug can \
          never be found and the gate refuses for a reason no message names: {:?}",
         declared.line_sources
