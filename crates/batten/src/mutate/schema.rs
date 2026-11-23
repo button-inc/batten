@@ -4485,8 +4485,9 @@ fn synced_run<T>(
 ///
 /// # Errors
 ///
-/// The mirror cannot be synced, cargo-mutants cannot be spawned, or the
-/// journal cannot be written.
+/// `out` cannot be written. A moved checkout, a mirror that cannot be synced
+/// or a run that cannot be spawned makes the hand-backs it touches `error`,
+/// and a journal that cannot be written is said on `out`; none fails the call.
 fn judge_handbacks(
     judging: &Judging<'_>,
     (handback, live, listed_over, state): (&Handback<'_>, &std::path::Path, &str, &std::path::Path),
@@ -4496,12 +4497,20 @@ fn judge_handbacks(
 ) -> anyhow::Result<(Vec<(u32, Verdict)>, usize)> {
     // THE MIRROR COPIES THE LIVE CHECKOUT, an hour after the listing: an edit
     // since would judge these names against text the listing never read.
-    anyhow::ensure!(
-        super::cover::source_digest(live)? == listed_over,
-        "the checkout's Rust sources changed during the sweep, so the handed-back mutants \
-         would be judged against text they were not listed from; the schema's verdicts are \
-         journaled, so run the sweep again once the tree is still"
-    );
+    //
+    // NOTHING HERE FAILS THE SWEEP (#1276): this runs after the build, the
+    // reach run and every schema verdict, and a late `?` threw all of them and
+    // the report away. A hand-back this run cannot judge is an `error`, which
+    // is could-not-look, and the report of everything else is still printed.
+    let still = matches!(super::cover::source_digest(live), Ok(digest) if digest == listed_over);
+    if !still {
+        writeln!(
+            out,
+            "mutate schema: the checkout's Rust sources changed during the sweep, so each \
+             handed-back mutant not already journaled is an error; run the sweep again once \
+             the tree is still"
+        )?;
+    }
     let (tree, output) = (state.join("classic"), state.join("classic-out"));
     let (tree, output) = (tree.as_path(), output.as_path());
     let every: BTreeSet<Case> = reach.executed.keys().cloned().collect();
@@ -4528,6 +4537,10 @@ fn judge_handbacks(
             reused += 1;
             stored.clone()
         } else {
+            if !still {
+                verdicts.push((id, Verdict::Error));
+                continue;
+            }
             let (filter, ran) = handback_filter(green_observing.as_ref(), &green, &every_green);
             let poisoner = red.or_else(|| {
                 filter
@@ -4536,15 +4549,19 @@ fn judge_handbacks(
                     .flatten()
             });
             if poisoner.is_some() && (green.is_empty() || filter.is_none()) {
-                journal(
+                journal_or_say(
                     judging.store,
                     &journal_line(key.as_deref(), Verdict::Unjudged.name(), &mutant.name),
+                    out,
                 )?;
                 verdicts.push((id, Verdict::Unjudged));
                 continue;
             }
             let bound = case_bound(ran, judging.seconds).min(super::runner_bound());
-            let outcome = synced_run(live, tree, || {
+            // SYNCED BEFORE EVERY RUN (W4), AND A FAULT IS THIS MUTANT'S
+            // `error`, never the sweep's: a mirror that cannot be synced or a
+            // run that cannot be spawned throws away no other verdict.
+            let outcome = match synced_run(live, tree, || {
                 super::cargo_mutant_in_place(
                     (tree, handback.runner, handback.diff),
                     &mutant.name,
@@ -4552,15 +4569,28 @@ fn judge_handbacks(
                     bound,
                     output,
                 )
-            })?;
+            }) {
+                Ok(outcome) => outcome,
+                Err(why) => {
+                    writeln!(
+                        out,
+                        "mutate schema: {} could not be judged in the hand-back mirror {}: {why:#}",
+                        mutant.name,
+                        tree.display()
+                    )?;
+                    verdicts.push((id, Verdict::Error));
+                    continue;
+                }
+            };
             let unobserved = observing.as_ref().is_some_and(BTreeSet::is_empty);
             let mut name = handback_verdict(outcome, output, &mutant.name, unobserved);
             if poisoner.is_some() && !matches!(name, "caught" | "timeout" | "error" | "unviable") {
                 name = Verdict::Unjudged.name();
             }
-            journal(
+            journal_or_say(
                 judging.store,
                 &journal_line(key.as_deref(), name, &mutant.name),
+                out,
             )?;
             name.to_owned()
         };
@@ -4580,6 +4610,27 @@ fn judge_handbacks(
         classic.len()
     )?;
     Ok((verdicts, unviable))
+}
+
+/// Journal `line`, or say on `out` that it could not be: the verdict it holds
+/// still counts in this sweep, and only the next sweep pays to judge it again.
+///
+/// # Errors
+///
+/// `out` cannot be written.
+fn journal_or_say(
+    store: &std::path::Path,
+    line: &str,
+    out: &mut dyn std::io::Write,
+) -> std::io::Result<()> {
+    match journal(store, line) {
+        Ok(()) => Ok(()),
+        Err(why) => writeln!(
+            out,
+            "mutate schema: {} could not be journaled, so the next sweep judges it again: {why:#}",
+            line.trim_end()
+        ),
+    }
 }
 
 /// What a sweep decided: its exit (0 every switched mutant caught, 2 one
@@ -4722,6 +4773,23 @@ pub fn sweep(
             classic: Vec::new(),
         });
     };
+    // WHAT THE HAND-BACKS NEED IS CHECKED BEFORE THE BUILD, NEVER AFTER IT: on
+    // #1276 they were judged 40 minutes in, behind the build, the reach run and
+    // every schema verdict, and a missing input there threw all of it away.
+    if let Some(handback) = handback {
+        anyhow::ensure!(
+            handback.runner.is_file(),
+            "the provisioned cargo-mutants at {} is not a file, so no handed-back mutant \
+             could be judged; run `batten provision apply`",
+            handback.runner.display()
+        );
+        anyhow::ensure!(
+            handback.diff.is_file(),
+            "the change the mutants were listed from, {}, is not a file, so no handed-back \
+             mutant could be judged",
+            handback.diff.display()
+        );
+    }
     let work = state.join("tree");
     // INSIDE THE TREE, where cargo-mutants' copies keep theirs: a case's
     // fixtures land under the target's `tmp/`, and on #1276 one with no `.git`
@@ -6866,6 +6934,86 @@ mod tests {
         assert!(hold(&state).unwrap().is_some(), "released on drop");
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// A hand-back the sweep could never run is refused before anything is
+    /// staged or built, naming what is missing.
+    ///
+    /// Fails by: the missing runner or diff discovered only after the build,
+    /// the reach run and the schema's judging (40 minutes on #1276), thrown
+    /// away by a late failure.
+    #[test]
+    fn a_handback_the_sweep_cannot_run_is_refused_before_the_build() {
+        let root = crate::scratch::scratch("schema-handback-up-front");
+        let missing = root.join("no-such-cargo-mutants");
+        let diff = root.join("change.diff");
+        std::fs::write(&diff, "").unwrap();
+        let handback = Handback {
+            runner: &missing,
+            diff: &diff,
+        };
+        let refused = sweep(&root, &[], "", 1, Some(&handback), &mut Vec::new())
+            .expect_err("a sweep that cannot run its hand-backs refuses");
+        assert!(
+            format!("{refused:#}").contains("cargo-mutants"),
+            "it names the runner: {refused:#}"
+        );
+        let state = mirror_state(&root).unwrap();
+        assert!(!state.join("pristine").exists(), "nothing was staged");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// A checkout that moved during the sweep makes each hand-back not
+    /// already journaled an `error`, and the call still answers, so the
+    /// report of everything the schema judged is printed.
+    ///
+    /// Fails by: the moved checkout failing the whole call (the report and
+    /// every schema verdict lost to one late check), or a hand-back judged
+    /// against text it was not listed from.
+    #[test]
+    fn a_moved_checkout_errs_each_unjournaled_handback_and_still_answers() {
+        let base = crate::scratch::scratch("schema-handback-moved");
+        let mutants = [listed("BinaryOperator", "!=", (2, 7), (2, 9))];
+        let (reach, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let store = base.join("verdicts");
+        let red = Red::new();
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &store,
+            red: &red,
+            reuse: None,
+        };
+        let nowhere = base.join("nowhere");
+        let handback = Handback {
+            runner: &nowhere,
+            diff: &nowhere,
+        };
+        let mut out = Vec::new();
+        let (verdicts, unviable) = judge_handbacks(
+            &judging,
+            (&handback, &base, "not-this-tree", &base),
+            &BTreeSet::from([0]),
+            (&Schema::default(), &Reach::default()),
+            &mut out,
+        )
+        .expect("a moved checkout degrades, it does not fail the call");
+        assert_eq!(verdicts, [(0, Verdict::Error)]);
+        assert_eq!(unviable, 0);
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.contains("changed during the sweep"), "{said}");
     }
 
     fn listed(genre: &str, replacement: &str, from: (usize, usize), to: (usize, usize)) -> Listed {
