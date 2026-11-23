@@ -652,8 +652,8 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 args,
                 command,
             } => run_step_watched(&step, &args, &command, err),
-            cli::StepCommand::Graph { group, jobs } => {
-                crate::step::run_graph(&group, jobs.as_deref(), err)
+            cli::StepCommand::Graph { groups, jobs } => {
+                crate::step::run_graph(&groups, jobs.as_deref(), err)
             }
             cli::StepCommand::Cover => crate::step::run_cover(out, err),
             cli::StepCommand::Base {

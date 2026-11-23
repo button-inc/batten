@@ -82,14 +82,61 @@ impl Graph {
 
 /// A schedule-only node of group `g`: `bin/node <id> <code>`, after `after`.
 fn node(id: &str, code: u8, after: &[&str]) -> String {
+    node_in("g", id, code, after)
+}
+
+/// [`node`] in group `group`.
+fn node_in(group: &str, id: &str, code: u8, after: &[&str]) -> String {
     let after = after
         .iter()
         .map(|id| format!("\"{id}\""))
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "[[step]]\nid = \"{id}\"\ngroup = \"g\"\nrun = [\"bin/node\", \"{id}\", \"{code}\"]\ndepends_on = [{after}]\n\n"
+        "[[step]]\nid = \"{id}\"\ngroup = \"{group}\"\nrun = [\"bin/node\", \"{id}\", \"{code}\"]\ndepends_on = [{after}]\n\n"
     )
+}
+
+/// Fails by: a red group stopping a later, independent group (the one-tier-
+/// per-lap shape CLOUD-2789 removes), the reds not all listed at the end, or
+/// the run exiting 0 over a red. Tier-1 gate `a` and tier-2 gate `b` are both
+/// red and independent; `c` depends on `b`, so it alone is held.
+#[test]
+fn a_red_group_stops_no_later_group_and_every_red_is_listed() {
+    let rows = [
+        node_in("t1", "a", 2, &[]),
+        node_in("t1", "a-ok", 0, &[]),
+        node_in("t2", "b", 2, &[]),
+        node_in("t2", "c", 0, &["b"]),
+        node_in("t2", "d", 0, &[]),
+    ]
+    .concat();
+    let graph = Graph::new("tiers", &rows);
+    let out = graph.run(&["t1", "t2=1"]);
+    let stderr = common::stderr(&out);
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    for ran in ["a", "a-ok", "b", "d"] {
+        assert!(graph.started(ran), "{ran} ran: {stderr}");
+    }
+    assert!(
+        !graph.started("c"),
+        "a genuine dependency still holds: {stderr}"
+    );
+    for red in [
+        "step graph: red t1 a ran 2",
+        "step graph: red t2 b ran 2",
+        "step graph: red t2 c skipped",
+    ] {
+        assert!(stderr.contains(red), "{red}: {stderr}");
+    }
+    assert!(!stderr.contains("red t1 a-ok"), "{stderr}");
+    assert!(stderr.contains("step graph: t2 peak 1 of 1"), "{stderr}");
+    let events = graph.events();
+    let at = |event: &str| events.iter().position(|e| e == event).unwrap();
+    assert!(
+        at("end a") < at("start b") && at("end a-ok") < at("start b"),
+        "a group starts once the one before it ended: {events:?}"
+    );
 }
 
 #[test]
@@ -178,5 +225,11 @@ fn an_unknown_group_or_jobs_value_is_a_usage_error() {
     let graph = Graph::new("usage", &node("a", 0, &[]));
     assert_eq!(graph.run(&["nope"]).status.code(), Some(1));
     assert_eq!(graph.run(&["g", "--jobs", "0"]).status.code(), Some(1));
+    assert_eq!(graph.run(&["g=0"]).status.code(), Some(1));
+    assert_eq!(
+        graph.run(&["g", "nope"]).status.code(),
+        Some(1),
+        "every group resolves first"
+    );
     assert!(!graph.started("a"), "nothing ran");
 }

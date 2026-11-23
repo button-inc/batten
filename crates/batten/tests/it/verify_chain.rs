@@ -307,22 +307,32 @@ fn members(step: &str) -> Vec<String> {
 /// first failing tier. Fails by: a build or the suite moved into a cheaper tier,
 /// or the tiers collapsed back into one step.
 ///
-/// THE TIERS ARE GRAPH GROUPS SINCE CLOUD-2785: a step `batten step graph run
-/// <group>` runs every `[[step]]` row of the group, so a task's tier is the
-/// position of the step whose group holds a row running it.
+/// THE TIERS ARE GRAPH GROUPS SINCE CLOUD-2785, AND ONE CALL'S GROUPS SINCE
+/// CLOUD-2789: `batten step graph run <group>...` runs its groups in order, so
+/// a task's tier is the position of the group holding a row running it. One
+/// call, so a red tier no longer stops the `run` array before the next starts.
 #[test]
 fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
     let gated = steps("verify:gated");
+    let graphs: Vec<&String> = gated
+        .iter()
+        .filter(|step| !common::graph_groups(step).is_empty())
+        .collect();
+    assert_eq!(
+        graphs.len(),
+        1,
+        "every tier is a group of one call: {gated:?}"
+    );
+    let tiers = common::graph_groups(graphs[0]);
     let position = |task: &str| {
-        gated
+        tiers
             .iter()
-            .position(|step| match common::graph_group(step) {
-                Some(group) => common::group_rows(&group)
+            .position(|group| {
+                common::group_rows(group)
                     .iter()
-                    .any(|row| row.task.as_deref() == Some(task)),
-                None => mise_run(step).is_some() && members(step).iter().any(|m| m == task),
+                    .any(|row| row.task.as_deref() == Some(task))
             })
-            .unwrap_or_else(|| panic!("verify:gated runs {task}: {gated:?}"))
+            .unwrap_or_else(|| panic!("verify:gated runs {task}: {tiers:?}"))
     };
     let seconds = [
         "verify:commit-lint",
@@ -335,7 +345,7 @@ fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
     let minutes = ["semver", "verify:test-replay", "cross-check", "darwin-link"];
     let tier_one = position(seconds[0]);
     let tier_two = position(minutes[0]);
-    let suite = position("ci");
+    let suite = position("verify:ci-suite");
     for task in seconds {
         assert_eq!(
             position(task),
@@ -354,10 +364,15 @@ fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
         tier_one < tier_two && tier_two < suite,
         "seconds, then minutes, then the suite: {gated:?}"
     );
-    assert_eq!(
-        members(&gated[suite]),
-        ["ci"],
-        "the suite is its own tier: {gated:?}"
+    assert!(
+        common::group_rows(&tiers[suite])
+            .iter()
+            .all(|row| row.task.as_deref() != Some("semver")),
+        "the suite is its own tier: {tiers:?}"
+    );
+    assert!(
+        common::task_body("verify:ci-suite").contains("step run ci-suite -- mise run ci"),
+        "the suite node runs `ci` through its keyed row"
     );
     assert_eq!(depends_of("verify:gated"), ["tree-clean"]);
 }
@@ -400,8 +415,9 @@ fn the_receipt_is_the_last_step() {
     // THE FIRST STEP IS A GRAPH WHOSE ONE ROOT IS `tree-clean` (CLOUD-2785):
     // every other row of the group waits on it, so nothing in the group is
     // decided over a dirty tree.
-    let first = common::graph_group(&gated[0])
-        .map(|group| common::group_rows(&group))
+    let first = common::graph_groups(&gated[0])
+        .first()
+        .map(|group| common::group_rows(group))
         .unwrap_or_default();
     let roots: Vec<_> = first
         .iter()
@@ -426,13 +442,22 @@ fn the_receipt_is_the_last_step() {
 /// `depends` entry, which mise would run beside the rest of the fan. Only the
 /// coverage read (CLOUD-2788) sits between it and the receipt: it reads the pass
 /// records, `perf-gate`'s among them, so it must follow, and it runs nothing.
+///
+/// SINCE CLOUD-2789 it is the last group of the one graph call: groups run in
+/// order and it is the only row of its own, so it still starts alone.
 #[test]
 fn the_perf_gate_runs_alone_and_last_before_the_receipt() {
     let gated = steps("verify:gated");
-    let perf = step_at(&gated, "mise run perf-gate");
+    let graph = step_at(&gated, "step graph run");
     let cover = step_at(&gated, "step cover");
-    assert_eq!(perf, gated.len() - 3, "{gated:?}");
+    assert_eq!(graph, gated.len() - 3, "{gated:?}");
     assert_eq!(cover, gated.len() - 2, "{gated:?}");
+    let last = common::graph_groups(&gated[graph])
+        .pop()
+        .expect("the graph names its groups");
+    let rows = common::group_rows(&last);
+    assert_eq!(rows.len(), 1, "perf-gate's group holds it alone: {rows:?}");
+    assert_eq!(rows[0].task.as_deref(), Some("perf-gate"), "{rows:?}");
     assert!(
         !depends_of("verify:gated")
             .iter()

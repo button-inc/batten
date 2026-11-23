@@ -718,10 +718,10 @@ pub enum StepCommand {
         /// The names, or `PREFIX*` patterns, whose variables are keyed.
         patterns: Vec<String>,
     },
-    /// Run a group's rows as a graph (CLOUD-2785).
+    /// Run groups' rows as graphs, one group after another (CLOUD-2785).
     Graph {
-        /// The group, as the step table names it.
-        group: String,
+        /// The groups, in order, each `NAME` or `NAME=N` (CLOUD-2789).
+        groups: Vec<String>,
         /// At most this many rows at once, as written; `None` is no bound. The
         /// verb parses it, so a bad value is its usage error with a reason.
         jobs: Option<String>,
@@ -3698,7 +3698,7 @@ fn step_of(matches: &ArgMatches) -> Option<StepCommand> {
         }),
         ("graph", matches) => match matches.subcommand()? {
             ("run", matches) => Some(StepCommand::Graph {
-                group: matches.get_one::<String>("group").cloned()?,
+                groups: matches.get_many::<String>("group")?.cloned().collect(),
                 jobs: matches.get_one::<String>("jobs").cloned(),
             }),
             _ => None,

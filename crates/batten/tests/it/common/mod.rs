@@ -398,8 +398,11 @@ pub(crate) fn task_reaches(name: &str) -> Vec<String> {
     for line in task_body(name).lines() {
         // A `step graph run <group>` line (CLOUD-2785) reaches every task its
         // group's `[[step]]` rows run, which the step table holds, not the body.
-        if let Some(group) = graph_group(line) {
-            reached.extend(group_rows(&group).into_iter().filter_map(|row| row.task));
+        let groups = graph_groups(line);
+        if !groups.is_empty() {
+            for group in groups {
+                reached.extend(group_rows(&group).into_iter().filter_map(|row| row.task));
+            }
             continue;
         }
         let Some(rest) = line.trim().strip_prefix("mise run ") else {
@@ -417,10 +420,23 @@ pub(crate) fn task_reaches(name: &str) -> Vec<String> {
     reached
 }
 
-/// The group a `… step graph run <group>` line runs, or `None` for any other line.
-pub(crate) fn graph_group(line: &str) -> Option<String> {
-    let (_, rest) = line.split_once("step graph run ")?;
-    rest.split_whitespace().next().map(str::to_owned)
+/// The groups a `… step graph run <group>...` line runs, in order, or none for
+/// any other line: every word before the first flag, a `NAME=N` bound read as
+/// its `NAME` (CLOUD-2789).
+pub(crate) fn graph_groups(line: &str) -> Vec<String> {
+    let Some((_, rest)) = line.split_once("step graph run ") else {
+        return Vec::new();
+    };
+    rest.split_whitespace()
+        // A raw manifest line ends its array entry with `",`.
+        .map(|word| word.trim_matches(|c| c == '"' || c == ','))
+        .take_while(|word| !word.is_empty() && !word.starts_with('-'))
+        .map(|word| {
+            word.split_once('=')
+                .map_or(word, |(group, _)| group)
+                .to_owned()
+        })
+        .collect()
 }
 
 /// One `[[step]]` row of a graph group, as the committed `batten.toml` declares it.

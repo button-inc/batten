@@ -2926,10 +2926,13 @@ pub(crate) const STEP_ARG: FlagDecl = FlagDecl {
 };
 
 /// The group `step graph run` schedules, as the step table's `group` names it.
-pub(crate) const STEP_GROUP: FlagDecl = FlagDecl::positional(
-    "group",
-    "The graph to run, as the step table's `group` field names it",
-);
+pub(crate) const STEP_GROUP: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::positional(
+        "group",
+        "The graphs to run, in order, as the step table's `group` field names them; `NAME=N` runs that one at most N at once",
+    )
+};
 
 /// `--root <dir>` on `modules metrics` (CLOUD-2821).
 pub(crate) const MODULES_ROOT: FlagDecl = FlagDecl {
