@@ -75,6 +75,10 @@ const FAIL: &str = "#!/bin/sh\necho 'stub failure detail' >&2\nexit \"${STUB_COD
 /// so the record after it cannot recompute the key.
 const BREAK: &str = "#!/bin/sh\necho ran >>bin/ran.log\nprintf 'version = [\\n' >batten.toml\n";
 
+/// A `cargo` standing in for nextest: it logs the argv it was handed, so a
+/// case can see whether the journal's `--config-file` was added to it.
+const CARGO: &str = "#!/bin/sh\necho \"$@\" >>bin/cargo.log\n";
+
 /// A committed authority that will not parse.
 const UNLOADABLE: &str = "version = [\n";
 
@@ -115,6 +119,12 @@ tools = [["toolv"], ["batten", "step", "base", "--ref", "trunk", "--", "src"]]
 id = "based-by-commit"
 inputs = ["input.txt"]
 tools = [["toolv"], ["git", "merge-base", "HEAD", "trunk"]]
+
+[[step]]
+id = "journaled"
+inputs = ["input.txt"]
+tools = [["toolv"]]
+journal = "nextest"
 "#;
 
 /// Where the keyed family keeps its records.
@@ -133,6 +143,7 @@ impl Repo {
             ("bin/ok", OK),
             ("bin/fail", FAIL),
             ("bin/break", BREAK),
+            ("bin/cargo", CARGO),
         ] {
             common::write(&dir, file, body);
             #[cfg(unix)]
@@ -661,6 +672,37 @@ fn an_undeclared_step_still_runs_its_command_and_records_nothing() {
     assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
     assert_eq!(repo.runs(), 1);
     assert!(repo.receipts().is_empty(), "{:?}", repo.receipts());
+}
+
+// --- the case journal is the row's choice, never the argv's (CLOUD-2785) ----
+
+/// Fails by: the journal keyed off anything but the row, so a row that
+/// declares `journal = "nextest"` runs its nextest argv without the journal's
+/// config, and a stopped run re-runs every case it had passed.
+#[test]
+fn a_declared_nextest_row_journals() {
+    let repo = Repo::new("journal-declared");
+    let out = repo.run_step(&["journaled"], &["cargo", "nextest", "run"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    let argv = read(&repo.path("bin/cargo.log"));
+    assert!(
+        argv.starts_with("nextest run --config-file "),
+        "the declared row runs under the journal's config: {argv:?}"
+    );
+}
+
+/// Fails by: the argv sniff coming back, so a row that declares no journal is
+/// journaled because its command happens to start `cargo nextest run`.
+#[test]
+fn an_undeclared_nextest_argv_is_not_journaled() {
+    let repo = Repo::new("journal-undeclared");
+    let out = repo.run_step(&["mystep"], &["cargo", "nextest", "run"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert_eq!(
+        read(&repo.path("bin/cargo.log")),
+        "nextest run\n",
+        "a row with no `journal` runs its command exactly as declared"
+    );
 }
 
 // --- the table is the keyed tree's own, and a failure to read it runs the step -
