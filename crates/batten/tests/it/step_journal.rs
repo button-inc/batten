@@ -511,6 +511,11 @@ fn a_failing_suite_names_its_cases_and_a_focused_command() {
         .env("FIXTURE_FAIL", "1")
         .output()
         .expect("run the focused command");
-    assert!(!confirmed.status.success(), "it still fails");
-    assert_eq!(counts(&log), [2, 1, 1, 1], "the failing case and no other");
+    let said = String::from_utf8_lossy(&confirmed.stderr);
+    assert!(!confirmed.status.success(), "it still fails\n{said}");
+    assert_eq!(
+        counts(&log),
+        [2, 1, 1, 1],
+        "the failing case and no other\n{said}"
+    );
 }

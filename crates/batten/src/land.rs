@@ -2477,6 +2477,24 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
             )?;
             Ok(verified)
         }
+        // A GATE STEP ANSWERED RED FROM ITS RECEIPT (CLOUD-2253) is a refusal
+        // of this tree, recorded with the step and whether the cancel landed.
+        Some(Raced::Red(step)) => {
+            let verified = Verified::Refused {
+                sha: settle.head.clone(),
+                cause: Refusal::Tree,
+            };
+            let reclaimed = settle.reclaimed.try_recv().unwrap_or(false);
+            append(
+                settle.root,
+                settle.branch,
+                &[
+                    verified.line(),
+                    format!("{LAP_RECORD} gate-red {step} {reclaimed}"),
+                ],
+            )?;
+            Ok(verified)
+        }
         // BOTH ARMS CLOSED WITHOUT ANSWERING is could-not-look about the RACE,
         // never a clean tree: the gate is the arm that cannot abstain, so this is
         // reachable only if its thread died without sending.
@@ -2641,6 +2659,9 @@ pub struct Stall {
     /// whole seconds and a step can start within the second the lap entered
     /// verify.
     pub progress: fn(&std::path::Path, u32) -> Option<String>,
+    /// The gate step answered from a failure receipt under the task, if any
+    /// (CLOUD-2253): read each beat, it cancels the gate at once.
+    pub red: fn(&std::path::Path, u32) -> Option<String>,
 }
 
 /// Which arm of a raced gate answered. The gate's `Result` travels whole so a
@@ -2649,6 +2670,8 @@ enum Raced {
     Gate(Result<Verified>),
     Moved(String),
     Stalled(u32),
+    /// A gate step answered from its failure receipt (CLOUD-2253).
+    Red(String),
 }
 
 /// Where the racing arms (watcher and stall) report, bundled so their
@@ -2762,6 +2785,12 @@ fn win(root: &Path, arms: &Arms<'_>, raced: Raced) {
 fn stall_arm(root: &Path, stall: &Stall, seed: Option<Still>, arms: &Arms<'_>) {
     let mut run = seed;
     while !arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
+        // A KNOWN-RED STEP ENDS THE GATE AT ONCE (CLOUD-2253): its siblings'
+        // minutes would only say red again, so the lap does not wait for them.
+        if let Some(step) = (stall.red)(&stall.git_dir, stall.pid) {
+            win(root, arms, Raced::Red(step));
+            return;
+        }
         run = still(run, (stall.progress)(&stall.git_dir, stall.pid));
         if stalled(run.as_ref(), stall.beats) {
             win(root, arms, Raced::Stalled(stall.beats));
