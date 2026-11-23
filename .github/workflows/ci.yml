@@ -1167,13 +1167,6 @@ jobs:
           path: ~/.local/share/batten/*/provision
           key: provision-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('batten.toml') }}
           restore-keys: provision-${{ runner.os }}-${{ runner.arch }}-
-      # The journal the shards last saved: unviable verdicts a build round
-      # would otherwise rediscover.
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.local/share/batten/*/mutate/schema/verdicts
-          key: mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-reach
-          restore-keys: mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-
       - run: mise run mutant:changed
         env:
           MUTANT_PHASE: reach
@@ -1186,7 +1179,6 @@ jobs:
           path: |
             ~/.local/share/batten/*/mutate/schema/reuse
             ~/.local/share/batten/*/mutate/schema/reach
-            ~/.local/share/batten/*/mutate/schema/verdicts
           key: mutant-mirror-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   mutants:
@@ -1261,19 +1253,6 @@ jobs:
           path: ~/.local/share/batten/*/provision
           key: provision-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('batten.toml') }}
           restore-keys: provision-${{ runner.os }}-${{ runner.arch }}-
-      # THE SCHEMA'S VERDICT JOURNAL (CLOUD-2253): append-only, every verdict
-      # keyed by the content it was decided over, so any shard's line stands
-      # wherever its key still holds and a lap re-judges only what moved.
-      # Restored from this shard's newest, else any shard's; the mirror below,
-      # restored after it, carries the reach job's journal over it when there
-      # is one.
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.local/share/batten/*/mutate/schema/verdicts
-          key: mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-${{ strategy.job-index }}-
-            mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-
       # THE REACH JOB'S BUILD AND REACH: its packed binaries, its sealed reach
       # record and the context the seal is read in. Absent when that job
       # failed, and the sweep then builds and reaches here, as it did before it.
@@ -1282,7 +1261,6 @@ jobs:
           path: |
             ~/.local/share/batten/*/mutate/schema/reuse
             ~/.local/share/batten/*/mutate/schema/reach
-            ~/.local/share/batten/*/mutate/schema/verdicts
           key: mutant-mirror-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
       - run: mise run mutant:changed
         env:
@@ -1290,15 +1268,6 @@ jobs:
           # shard unrun: k is this job's index over every combination.
           MUTANT_SHARD: ${{ strategy.job-index }}/${{ strategy.job-total }}
           DOCTOR_TARGETS: ""
-      # SAVED WHATEVER THE SWEEP ANSWERED: a red shard's journal holds every
-      # verdict it decided before the survivor that turned it red, and the next
-      # lap re-judged all of them while this save rode on the job passing. A
-      # cache entry is never overwritten, so the key is per run.
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: always()
-        with:
-          path: ~/.local/share/batten/*/mutate/schema/verdicts
-          key: mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   final:
     name: final

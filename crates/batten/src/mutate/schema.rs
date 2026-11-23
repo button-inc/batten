@@ -4131,6 +4131,18 @@ pub fn load_verdicts(text: &str) -> std::collections::BTreeMap<String, String> {
         .collect()
 }
 
+/// The verdicts a sweep may reuse: the journal's ([`load_verdicts`]), or none
+/// under `ci`, so a CI run judges every mutant itself however its runner came
+/// by a journal (CLOUD-2850).
+#[must_use]
+pub fn cache_for(text: &str, ci: bool) -> std::collections::BTreeMap<String, String> {
+    if ci {
+        std::collections::BTreeMap::new()
+    } else {
+        load_verdicts(text)
+    }
+}
+
 /// Whether a stored verdict may stand in for a run: every decided verdict,
 /// never a run that erred or hung, which decided nothing. A SURVIVOR TOO: its key holds the cases that reach
 /// its site and their files, so a case added that reaches it, or an edit to
@@ -5085,6 +5097,8 @@ pub fn sweep(
     handback: Option<&Handback<'_>>,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Swept> {
+    // READ ONCE, HERE (CLOUD-2850): whether no stored verdict may answer.
+    let ci = crate::step::under_ci();
     let state = mirror_state(root)?;
     // ONE SWEEP PER MIRROR, FOR THE WHOLE SWEEP: a second one would resync the
     // tree, rebuild into the target and judge under the first, and each would
@@ -5119,7 +5133,13 @@ pub fn sweep(
     // would read as a run of this one erring.
     let _ = std::fs::remove_dir_all(state.join("errors"));
     let cache_path = state.join("verdicts");
-    let mut cache = load_verdicts(&crate::fsio::read_to_string(&cache_path).unwrap_or_default());
+    // NOT UNDER CI (CLOUD-2850), for `step`'s "Local only" reason: CI's job is
+    // to confirm independently, so a journal a runner came by answers nothing.
+    // The sweep still appends what it decides; it reads none of it back.
+    let mut cache = cache_for(
+        &crate::fsio::read_to_string(&cache_path).unwrap_or_default(),
+        ci,
+    );
     let site_keys: Vec<Option<String>> = mutants.iter().map(|m| site_key(&root, m)).collect();
     let Built {
         unviable,
@@ -6743,6 +6763,22 @@ mod tests {
         );
         assert_eq!(Format::load(&base, &format.key()), Some(format.clone()));
         assert_eq!(sealed_cases(&base).len(), 3, "every record is sealed");
+    }
+
+    /// CI confirms independently (CLOUD-2850): under `ci` no journaled
+    /// verdict answers, and off it the journal loads as it always did.
+    ///
+    /// Fails by: a stored kill reused on a CI runner, or the local journal
+    /// dropped along with it.
+    #[test]
+    fn under_ci_no_journaled_verdict_is_reused() {
+        let text = "k\tcaught\tm1\nh\thanded\tm2\n";
+        assert!(cache_for(text, true).is_empty(), "CI reuses nothing");
+        assert_eq!(cache_for(text, false), load_verdicts(text));
+        assert_eq!(
+            cache_for(text, false).get("k").map(String::as_str),
+            Some("caught")
+        );
     }
 
     #[test]
