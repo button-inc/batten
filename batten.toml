@@ -18717,11 +18717,13 @@ repair = ["mise", "run", "session:git-hooks"]
 # answers `mediator-build-behind-source` on exactly this state. A verdict nothing
 # asks for is a sensor, not a gate (non-negotiable rule 2).
 #
-# THE REPAIR IS THE OPT-IN BUILD, which is the one case CLOUD-1620 left for it:
-# judging `crates/batten/**` with the engine that tree builds. It is the expensive
-# path and it belongs HERE, where the alternative is every dropped row deciding
-# nothing — not on the unconditional session-start path, where it cost 224.87s to
-# reproduce a binary that already existed.
+# THE REPAIR IS THE PINNED RELEASE, NEVER A BUILD (CLOUD-2840). A session runs the
+# engine `engine` pins, as CI does, and `batten engine install` puts that release
+# over whatever shadows it, `target/release` included. The check asks only under
+# a source pin (`diagnose_mediator`), the one case where the tree's own build is
+# the engine; without one a mismatch is no fault, so nothing compiles. The cold
+# `install:local` this row used to name cost 224.87s on session start, and 714s
+# of a `verify` when a compaction's SessionStart fired it mid-lap.
 #
 # NOT CLOUD-1650's TRIGGER, and the two do not overlap. That row re-checks after a
 # tree move MID-session and needs `command_matcher`, which is unlanded. This is the
@@ -18731,7 +18733,7 @@ repair = ["mise", "run", "session:git-hooks"]
 id = "mediator-matches-the-tree"
 gloss = "the engine adjudicating this tree was built from it, so a declared gate is not silently dropped"
 check = ["batten", "doctor", "mediator"]
-repair = ["mise", "run", "install:local"]
+repair = ["batten", "engine", "install"]
 
 # AND THE ENGINE ON `PATH` MUST RESOLVE EVERY ROW OF THIS CONFIG.
 #
@@ -18745,12 +18747,13 @@ repair = ["mise", "run", "install:local"]
 # design. Only the bare report's `config` check answered `config-rows-dropped`,
 # and no row asked it; `doctor config` is that check alone. An installed engine
 # too old to know the sub-verb fails it as a usage error, and the same repair —
-# the tree's build — is the right one there too.
+# the pinned release, which reads every key this config's pin admits — is the
+# right one there too (CLOUD-2840).
 [[startup]]
 id = "engine-resolves-every-row"
 gloss = "the engine on PATH resolves every row of this config, so none is dropped undecided"
 check = ["batten", "doctor", "config"]
-repair = ["mise", "run", "install:local"]
+repair = ["batten", "engine", "install"]
 
 # THE STEP CACHE'S TABLE (CLOUD-424), retiring `[tasks.step-receipt]`'s hard-coded
 # `case` under CLOUD-843. Each row is a step a task brackets with `batten step`:

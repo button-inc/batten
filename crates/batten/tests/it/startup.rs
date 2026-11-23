@@ -372,6 +372,53 @@ fn every_remedy_the_hook_check_prints_names_something_that_resolves() {
     );
 }
 
+/// THE ENGINE ROWS REPAIR WITH THE PINNED RELEASE, NEVER A BUILD (CLOUD-2840).
+/// This repository pins a release, so a session runs the engine that pin names,
+/// as CI does: a mediator or config mismatch is fixed by installing it, and a
+/// local build is reachable only through a source pin. Fails by: either row
+/// repairing with `install:local`, a cold `cargo build --release` that ran on
+/// every session start over an empty `target/`.
+#[test]
+fn the_engine_rows_repair_with_the_pinned_release() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("the workspace root is two levels above the crate");
+    let text = std::fs::read_to_string(root.join("batten.toml")).expect("the authority is tracked");
+    let config: toml::Table = text.parse().expect("the authority parses");
+    let rows = config["startup"].as_array().expect("[[startup]] rows");
+    let repair_of = |id: &str| -> Vec<String> {
+        rows.iter()
+            .find(|row| row["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("the `{id}` row is declared"))
+            .get("repair")
+            .and_then(toml::Value::as_array)
+            .unwrap_or_else(|| panic!("the `{id}` row repairs"))
+            .iter()
+            .map(|word| word.as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+    for id in ["mediator-matches-the-tree", "engine-resolves-every-row"] {
+        assert_eq!(repair_of(id), ["batten", "engine", "install"], "{id}");
+    }
+    let compiling: Vec<&str> = rows
+        .iter()
+        .filter(|row| {
+            row.get("repair")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|argv| {
+                    argv.iter()
+                        .any(|word| word.as_str() == Some("install:local"))
+                })
+        })
+        .filter_map(|row| row["id"].as_str())
+        .collect();
+    assert!(
+        compiling.is_empty(),
+        "rows repairing with a build: {compiling:?}"
+    );
+}
+
 /// A repository declaring nothing says so, rather than saying nothing.
 ///
 /// The count line is what makes silence legible: without it, "no rows" and
