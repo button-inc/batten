@@ -821,10 +821,11 @@ pub enum Fact {
     /// prompt edited after approval clears nothing. `false` on every call that is
     /// not such a method; `null` when the store could not be located.
     DispatchCleared,
-    /// The pid of the live `land` lap holding this checkout's singleton, or
-    /// `null` when no lap is live (CLOUD-2781). One lock read and a pid probe
-    /// under the per-worktree `$GIT_DIR`: the same reading `land` uses to refuse
-    /// a second lap, so a call is judged by the fact the lap itself trusts.
+    /// The root of a checkout the call writes in whose singleton a live `land`
+    /// lap holds, or `null` when no such lap is live (CLOUD-2781, CLOUD-2789).
+    /// One lock read and a pid probe under each written checkout's per-worktree
+    /// `$GIT_DIR`: the same reading `land` uses to refuse a second lap, so a
+    /// call is judged by the fact the lap itself trusts.
     LandLive,
     /// The current branch's red-head record: the head a lap's wait stopped red
     /// on, each failed check's newest run with whether its log was read, and
@@ -2670,7 +2671,7 @@ impl Fact {
             }),
             Fact::LandLive => serde_json::json!({
                 "type": ["string", "null"],
-                "description": "Fact::LandLive (CLOUD-2781). The pid of the live `land` lap holding this checkout's singleton lock under the per-worktree git dir, by the same reading `land` uses to refuse a second lap (`task::singleton_holder`: the lock names a pid and that pid exists). NULL when no lap is live or the lock could not be read. A pid and nothing else.",
+                "description": "Fact::LandLive (CLOUD-2781, CLOUD-2789). The absolute root of a checkout this call WRITES in (a program's directory as its own options move it, an output redirection's target, a write tool's target) whose singleton lock a live `land` lap holds under the per-worktree git dir, by the same reading `land` uses to refuse a second lap (`task::singleton_holder`: the lock names a pid and that pid exists). NULL when no such lap is live or the lock could not be read. A path and nothing else: a module judges an absolute target by whether it lies under it.",
             }),
             Fact::Instant => serde_json::json!({
                 "type": ["integer", "null"],

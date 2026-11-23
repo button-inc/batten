@@ -6256,7 +6256,8 @@ pub struct Facts<'a> {
     /// `None` is both "this call starts no guarded task" and "nothing holds the
     /// lock", which are the same answer to the only question asked here.
     pub singleton: &'a Option<(String, String)>,
-    /// The pid of a live `land` lap on this checkout, or `None` (CLOUD-2781):
+    /// The root of a checkout this call writes in that a live `land` lap
+    /// holds, or `None` (CLOUD-2781, CLOUD-2789):
     /// [`crate::facts::Fact::LandLive`]. Resolved at the boundary for the same
     /// reason [`Self::singleton`] is: a lock is a file and a pid is a process.
     pub land_live: &'a Option<String>,
@@ -7575,10 +7576,12 @@ pub fn call_targets(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::
     Some(std::iter::once(current).chain(operands).collect())
 }
 
-/// The directory each program of a shell call ACTS in (CLOUD-2789): the
-/// directory in effect after every followed `cd`, and for `git` that directory
-/// moved by its own `-C`, `--work-tree` and `--git-dir`. `None` for a call with
-/// no command, and where a `cd` cannot be placed.
+/// The directories a call WRITES in (CLOUD-2789): for a shell call, each
+/// program's directory (the one in effect after every followed `cd`, moved by
+/// the program's own directory option) and each output redirection's target
+/// directory; for a write tool, its target's directory. `None` for a call with
+/// neither, and where a `cd` cannot be placed, so the caller keeps its judging
+/// root.
 ///
 /// [`call_targets`] answers which repository JUDGES a call, and that is the
 /// shell's directory first; a gate about one checkout's state needs where each
@@ -7587,7 +7590,13 @@ pub fn call_targets(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::
 #[must_use]
 pub fn acting_dirs(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::PathBuf>> {
     if envelope.command.is_empty() {
-        return None;
+        // A WRITE TOOL acts where its target lands. The host's own spelling,
+        // not `writes`, which is relativised against the judging root.
+        envelope.writes.as_ref()?;
+        let named = ["/file_path", "/notebook_path"]
+            .iter()
+            .find_map(|pointer| envelope.input.pointer(pointer).and_then(Value::as_str))?;
+        return Some(vec![containing_dir(start.join(named))]);
     }
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
         return None;
@@ -7604,13 +7613,93 @@ pub fn acting_dirs(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::P
             }
             continue;
         }
-        dirs.push(git_acting_dir(handed, &current).unwrap_or_else(|| current.clone()));
+        dirs.push(
+            git_acting_dir(handed, &current)
+                .or_else(|| option_acting_dir(handed, &current))
+                .unwrap_or_else(|| current.clone()),
+        );
+        // AN OUTPUT REDIRECTION WRITES ITS TARGET, wherever the program runs.
+        let redirects: Vec<&str> = line.redirects.iter().map(String::as_str).collect();
+        dirs.extend(
+            redirect_writes(&redirects)
+                .into_iter()
+                .filter_map(|target| shell_resolved(target, Some(&current)))
+                .map(containing_dir),
+        );
     }
     if dirs.is_empty() {
         dirs.push(current);
     }
     dirs.dedup();
     Some(dirs)
+}
+
+/// The directory a written path lands in: its parent.
+fn containing_dir(path: std::path::PathBuf) -> std::path::PathBuf {
+    match path.parent() {
+        Some(parent) => parent.to_path_buf(),
+        None => path,
+    }
+}
+
+/// Where a non-git program acts, as its own directory option moves it
+/// (CLOUD-2789): `make -C`/`--directory` (chained, as make chains them),
+/// `cargo --manifest-path` (the manifest's directory), and `mise -C`/`--cd`
+/// before its subcommand. `None` for any other program, or one naming none.
+fn option_acting_dir(tokens: &[&str], current: &Path) -> Option<std::path::PathBuf> {
+    let program = effective_program(tokens)?;
+    let name = program_name(program_token(tokens[program]));
+    if !matches!(name, "make" | "cargo" | "mise") {
+        return None;
+    }
+    let arguments = tokens[program + 1..]
+        .iter()
+        .copied()
+        .take_while(|word| *word != "--");
+    let mut dir: Option<std::path::PathBuf> = None;
+    let mut pending: Option<&str> = None;
+    for word in arguments {
+        let here = dir.clone().unwrap_or_else(|| current.to_path_buf());
+        if let Some(option) = pending.take() {
+            dir = moved(name, option, word, &here).or(dir);
+            continue;
+        }
+        let (option, value) = match word.split_once('=') {
+            Some((option, value)) if option.starts_with("--") => (option, Some(value)),
+            _ => match word.strip_prefix("-C") {
+                Some(value) if !value.is_empty() && name != "cargo" => ("-C", Some(value)),
+                _ => (word, None),
+            },
+        };
+        let takes = matches!(
+            (name, option),
+            ("make", "-C" | "--directory") | ("cargo", "--manifest-path") | ("mise", "-C" | "--cd")
+        );
+        if !takes {
+            // `mise`'s directory option precedes its subcommand; a bare word
+            // after it belongs to the task.
+            if name == "mise" && !word.starts_with('-') {
+                break;
+            }
+            continue;
+        }
+        match value {
+            Some(value) => dir = moved(name, option, value, &here).or(dir),
+            None => pending = Some(option),
+        }
+    }
+    dir
+}
+
+/// One directory option's move: a manifest names its directory, every other
+/// option names the directory itself, resolved from `here`.
+fn moved(name: &str, option: &str, value: &str, here: &Path) -> Option<std::path::PathBuf> {
+    let resolved = shell_resolved(value, Some(here))?;
+    Some(if name == "cargo" && option == "--manifest-path" {
+        containing_dir(resolved)
+    } else {
+        resolved
+    })
 }
 
 /// Where a `git` program acts, as its own options move it: `-C` chains from the
@@ -9100,7 +9189,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                 facts
                     .land_live
                     .as_ref()
-                    .map_or(serde_json::Value::Null, |pid| serde_json::Value::from(pid.as_str())),
+                    .map_or(serde_json::Value::Null, |root| serde_json::Value::from(root.as_str())),
             ),
             crate::facts::Fact::RedHead => Some(match facts.red_head {
                 crate::facts::Look::Is(record) => record.clone(),
