@@ -19849,10 +19849,14 @@ fn red_head_for(
     }
 }
 
-/// The pid of a live `land` lap on this checkout (CLOUD-2781), read the way
-/// `land` reads it to refuse a second lap: the singleton lock under the
-/// per-worktree git dir, and a pid that exists. Asked only before a call runs,
-/// which is when a write into a lap's tree can still be refused.
+/// The root of a checkout this call writes in that a live `land` lap holds
+/// (CLOUD-2781, CLOUD-2789), read the way `land` reads it to refuse a second
+/// lap: the singleton lock under the per-worktree git dir, and a pid that
+/// exists. Asked only before a call runs, which is when a write into a lap's
+/// tree can still be refused.
+///
+/// THE ROOT, NOT THE PID: the module judges an absolute target by whether it
+/// lies under the lap's checkout, which a pid cannot tell it.
 fn land_live_for(policy: &hook::Policy, envelope: &hook::Envelope) -> Option<String> {
     // NO MODULE ON THIS CALL, NO READ: the common call opens no repository for
     // it, as `red_head_for` keeps the hook's hot path.
@@ -19860,20 +19864,27 @@ fn land_live_for(policy: &hook::Policy, envelope: &hook::Envelope) -> Option<Str
         return None;
     }
     let ours = std::env::var(land::LAP_PID).ok();
-    // THE CHECKOUTS THE CALL ACTS IN, NEVER THE SHELL'S CWD (CLOUD-2789): `git
-    // -C <B> commit` run from A writes B, so A's lap does not hold it, and the
-    // same command run from B into A is held. A write tool, and a shell call
-    // whose `cd` cannot be placed, keep the judging root.
+    // THE CHECKOUTS THE CALL WRITES IN, NEVER THE SHELL'S CWD (CLOUD-2789): `git
+    // -C <B> commit` or `make -C <B>` run from A writes B, so A's lap does not
+    // hold it; `echo x > <A>/f` or a `Write` of `<A>/f` run from B writes A, so
+    // it is held. A call that names no such directory, and a shell call whose
+    // `cd` cannot be placed, keep the judging root.
     let start = envelope
         .cwd
         .clone()
         .filter(|dir| dir.is_dir())
+        .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
     let dirs = hook::acting_dirs(envelope, &start)
         .unwrap_or_else(|| vec![hook_authority_root().to_path_buf()]);
     dirs.iter().find_map(|dir| {
+        // A target not yet written: the nearest directory that exists.
+        let dir = dir.ancestors().find(|ancestor| ancestor.is_dir())?;
         let git_dir = git::git_dir(dir).ok()?;
-        live_lap_outside_its_gate(task::singleton_holder(&git_dir, LAND_TASK), ours.as_deref())
+        live_lap_outside_its_gate(task::singleton_holder(&git_dir, LAND_TASK), ours.as_deref())?;
+        git::worktree_root(dir)
+            .ok()
+            .map(|root| root.display().to_string())
     })
 }
 

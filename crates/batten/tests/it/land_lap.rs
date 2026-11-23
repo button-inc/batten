@@ -1041,6 +1041,17 @@ fn a_git_command_is_judged_by_the_repository_it_targets() {
         batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
     ));
     let (a_dir, b_dir) = (a.to_string_lossy(), b.to_string_lossy());
+    // The chained and relative spellings name each checkout by its parent and
+    // its own name; the two benches share a parent.
+    let parent = a.parent().expect("a bench has a parent").to_string_lossy();
+    let name = |dir: &std::path::Path| {
+        dir.file_name()
+            .expect("a bench has a name")
+            .to_string_lossy()
+            .into_owned()
+    };
+    let (a_name, b_name) = (name(&a), name(&b));
+    assert_eq!(b.parent(), a.parent(), "the benches share a parent");
     assert!(
         bash_held(&a, "git commit -m wip"),
         "a commit in the lap's checkout is held"
@@ -1049,6 +1060,10 @@ fn a_git_command_is_judged_by_the_repository_it_targets() {
         format!("git -C {a_dir} commit -m wip"),
         format!("cd {a_dir} && git commit -m wip"),
         format!("git --git-dir={a_dir}/.git --work-tree={a_dir} commit -m wip"),
+        format!("git -C {parent} -C {a_name} commit -m wip"),
+        format!("git --git-dir={a_dir}/.git commit -m wip"),
+        format!("git --git-dir {a_dir}/.git commit -m wip"),
+        format!("git -C ../{a_name} commit -m wip"),
     ] {
         assert!(
             bash_held(&b, &command),
@@ -1060,12 +1075,109 @@ fn a_git_command_is_judged_by_the_repository_it_targets() {
         format!("cd {b_dir} && git commit -m wip"),
         format!("git --git-dir={b_dir}/.git --work-tree={b_dir} commit -m wip"),
         format!("git -C {b_dir} add -A && git -C {b_dir} commit -m wip"),
+        format!("git -C {parent} -C {b_name} commit -m wip"),
+        format!("git --git-dir={b_dir}/.git commit -m wip"),
+        format!("git --git-dir {b_dir}/.git commit -m wip"),
+        format!("git -C ../{b_name} commit -m wip"),
+        // CLOUD-2832, measured: a head-moving `git -C` into another repository
+        // outside the lap's checkout was refused while the lap ran.
+        format!("git -C {b_dir} checkout -b scratch"),
     ] {
         assert!(
             !bash_held(&a, &command),
             "`{command}` from A targets B, so it is admitted"
         );
     }
+    // A CALL ACTING IN SEVERAL CHECKOUTS IS HELD IF ANY HAS A LIVE LAP: the
+    // second program acts in A, whatever the first does in B.
+    for command in [
+        format!("git -C {b_dir} add -A && git commit -m wip"),
+        format!("git -C {b_dir} add -A && git -C {a_dir} commit -m wip"),
+    ] {
+        assert!(
+            bash_held(&a, &command),
+            "`{command}` acts in A too, so it is held"
+        );
+    }
+    batten::task::singleton_release(&git_dir, "land");
+}
+
+/// **EVERY PROGRAM IS JUDGED BY THE CHECKOUT IT WRITES** (CLOUD-2789): a
+/// non-git program's own directory option, an absolute redirect target and a
+/// write tool's `file_path` each name the checkout the call writes, and the lap
+/// is judged there rather than in the shell's directory.
+///
+/// Fails by: a non-git program read as acting in the shell's directory (A's
+/// lap then holds the `git -C <B>` commit beside it); an absolute redirect or
+/// write-tool target in A, made from B, judged under B, which has no lap.
+#[test]
+fn a_non_git_write_is_judged_by_the_checkout_it_writes() {
+    let a = lap_tree_bench("land-lap-written-a");
+    let b = lap_tree_bench("land-lap-written-b");
+    let git_dir = batten::git::git_dir(&a).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    let (a_dir, b_dir) = (a.to_string_lossy(), b.to_string_lossy());
+    // A program's own directory option moves where it acts: run from A into B,
+    // nothing it chains with is held by A's lap.
+    for option in [
+        format!("make -C {b_dir}"),
+        format!("make --directory={b_dir}"),
+        format!("cargo build --manifest-path {b_dir}/Cargo.toml"),
+        format!("cargo --manifest-path={b_dir}/Cargo.toml build"),
+        format!("mise -C {b_dir} run build"),
+        format!("mise --cd {b_dir} run build"),
+        format!("mise --cd={b_dir} run build"),
+    ] {
+        let command = format!("{option} && git -C {b_dir} commit -m wip");
+        assert!(
+            !bash_held(&a, &command),
+            "`{command}` from A writes B, so it is admitted"
+        );
+    }
+    // THE PREMISE: the same chain into A is held.
+    assert!(
+        bash_held(
+            &b,
+            &format!("make -C {a_dir} && git -C {a_dir} commit -m wip")
+        ),
+        "the same chain into A is held"
+    );
+    // An absolute redirect target names the checkout it writes.
+    assert!(
+        bash_held(&b, &format!("echo x > {a_dir}/out.txt")),
+        "a redirect from B into A is held"
+    );
+    assert!(
+        bash_held(&a, &format!("echo x > {a_dir}/out.txt")),
+        "an absolute redirect into the lap's own checkout is held"
+    );
+    assert!(
+        !bash_held(&a, &format!("echo x > {b_dir}/out.txt")),
+        "a redirect from A into B is admitted"
+    );
+    assert!(
+        !bash_held(&a, "cat src/a.rs 2>/dev/null"),
+        "a target in no checkout is admitted"
+    );
+    // A write tool's target names the checkout it writes.
+    assert!(
+        held(&b, &format!("{a_dir}/src/new.rs")),
+        "a write from B into A is held"
+    );
+    assert!(
+        !held(&a, &format!("{b_dir}/src/new.rs")),
+        "a write from A into B is admitted"
+    );
+    // THE FALLBACK STAYS: a `cd` that cannot be placed judges in the judging
+    // root, so A's lap holds the commit after it.
+    assert!(
+        bash_held(&a, "cd \"$(mktemp -d)\" && git commit -m wip"),
+        "an unplaceable `cd` keeps the judging root"
+    );
     batten::task::singleton_release(&git_dir, "land");
 }
 
