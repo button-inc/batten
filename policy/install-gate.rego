@@ -73,6 +73,18 @@ test_a_pending_program_is_held_while_the_task_runs if {
 	count(violation) == 1 with input as {"facts": {"install-pending": running}, "call": {"programs": [{"program": "cargo", "name": "cargo"}]}}
 }
 
+# A COMPOUND CALL IS HELD ON THE PROGRAM THE ENGINE FOUND PENDING, whatever
+# runs before it (CLOUD-857's class): `cd` resolves and is not named, `cargo`
+# is, and the call is held once rather than per segment.
+test_a_compound_call_is_held_on_its_pending_program if {
+	some v in violation with input as {"facts": {"install-pending": running}, "call": {
+		"command": "cd /tmp && cargo build",
+		"programs": [{"program": "cd", "name": "cd"}, {"program": "cargo", "name": "cargo"}],
+	}}
+	{"artifact": "cargo"} in v.subjects
+	not {"artifact": "cd"} in v.subjects
+}
+
 test_an_ok_task_admits_everything if {
 	count(violation) == 0 with input as {"facts": {"install-pending": {"state": "ok", "task": "session-setup", "pid": "42", "pending": []}}, "call": {"programs": [{"program": "cargo", "name": "cargo"}]}}
 }
