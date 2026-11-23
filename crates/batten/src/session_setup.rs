@@ -9,9 +9,11 @@
 //! read it, spawns `batten startup --session` in its own process group, and
 //! registers that pid in the task registry before the dispatch returns.
 //!
-//! **The task runs what the hook used to, in the order it used to**: the
-//! declared handlers (each under its own `timeout_ms`), the pin record, the
-//! `[[startup]]` repairs, then the health report re-decided after them. What any
+//! **The task runs what the hook used to, in the order it used to**, with one
+//! step moved ahead: the environment manager's install (a `[[startup]]` row
+//! naming a `preset`), then the declared handlers (each under its own
+//! `timeout_ms`), the pin record, the other `[[startup]]` repairs, then the
+//! health report re-decided after them. What any
 //! of them would have said is RECORDED here as JSON lines, and the next
 //! `PreToolUse` or `UserPromptSubmit` surfaces it once ([`surface`]), through the
 //! same constructors the inline path used, so a finding reads the same whichever
@@ -161,6 +163,21 @@ pub fn run(
     }
     let mut findings = Vec::new();
 
+    // THE ENVIRONMENT MANAGER'S INSTALL FIRST (CLOUD-2840). A `[[startup]]` row
+    // naming a `preset` runs that preset's declared install, and every later
+    // step — a handler running a pinned tool, a repair needing one — runs on
+    // what it installed, so it goes before them, whatever line declares it.
+    let (installs, rest): (Vec<_>, Vec<_>) =
+        rows.iter().cloned().partition(|row| row.preset.is_some());
+    task::push(
+        git_dir,
+        &pid,
+        task::Signal::Phase,
+        "install",
+        crate::clock::now_unix(),
+    );
+    let _ = crate::startup::repair(root, &installs);
+
     task::push(
         git_dir,
         &pid,
@@ -188,7 +205,7 @@ pub fn run(
         crate::clock::now_unix(),
     );
     let _ = crate::pinned::refresh(root);
-    let _ = crate::startup::repair(root, rows);
+    let _ = crate::startup::repair(root, &rest);
 
     task::push(
         git_dir,
