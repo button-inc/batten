@@ -1897,6 +1897,12 @@ description = "Gate: every declared Rego, Pkl or manifest gate this branch touch
 # copy from `BATTEN_PRESET_OVERLAY` (`mutate::Overlay`, `PresetModule::text`);
 # the overlay's root is `[env]`'s `MUTANT_PRESETS`.
 env = { MUTANT_OVERLAY_ENV = "BATTEN_PRESET_OVERLAY", MUTANT_OVERLAY_FEATURES = "preset-overlay" }
+# THE SUITE'S `pkl eval hk.pkl` CASES NEED THE PACKAGE CACHE WARM, as `hooks` and
+# `record-verdicts` do (CLOUD-2311). Run alone on a cold, TLS-intercepted host,
+# `hk_contract`'s four pkl cases went baseline-red and every mutant they reach
+# came back unjudged; CI's `mutants` job restores `~/.pkl/cache`, so only a
+# local sweep paid it.
+depends = ["pkl-package"]
 run = "{{vars.batten}} mutate sweep"
 
 [tasks."mutant:rust"]
@@ -1910,6 +1916,8 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 # unviable. The schema itself judges on every core but one, since its workers
 # share its one build.
 env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "6200", MUTANT_JOB_MEMORY_MB = "4000" }
+# The package cache, for `mutant:declared`'s reason above.
+depends = ["pkl-package"]
 # The verb applies the pin and runs the cached binary, so nothing is linked onto
 # PATH and no task step precedes it.
 run = "{{vars.batten}} mutate cargo"
