@@ -63,7 +63,14 @@ const USAGE: &str = "usage: batten-profile record ARM [--rate HZ] [--iterations 
 /// The arms `batten perf measure` times, as (payload under the hook fixtures,
 /// arguments after the binary, whether it runs in the staged `check-repo`).
 /// The same commands, so a profile describes what the gate measured.
-const ARMS: [(&str, Option<&str>, &[&str], bool); 6] = [
+///
+/// The last four are the lap's slow rows rather than hook paths, each at the
+/// repository root against its full config, as the lap runs them:
+/// `policy-test` (the `policy-test` step), `enforce-tree` and `enforce-live`
+/// (the two halves of `batten-check`), and `state-record` (the detached
+/// `batten state record` the hooks spawn). Each runs for seconds to minutes,
+/// so record them with `--iterations 1`.
+const ARMS: [(&str, Option<&str>, &[&str], bool); 10] = [
     ("noop", None, &["--help"], false),
     ("check", None, &["check"], true),
     (
@@ -90,6 +97,15 @@ const ARMS: [(&str, Option<&str>, &[&str], bool); 6] = [
         &["adjudicate", "--harness", "claude-code"],
         true,
     ),
+    ("policy-test", None, &["policy", "test"], false),
+    (
+        "enforce-tree",
+        None,
+        &["enforce", "--half", "tree", "--keyed-base", "origin/main"],
+        false,
+    ),
+    ("enforce-live", None, &["enforce", "--half", "live"], false),
+    ("state-record", None, &["state", "record"], false),
 ];
 
 fn flag<T: std::str::FromStr>(args: &[String], name: &str, default: T) -> T {
