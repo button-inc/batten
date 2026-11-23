@@ -659,9 +659,9 @@ pub fn run(
         if let Some(head_path) = head_path.clone()
             && !changed.modified.is_empty()
         {
-            // THE SPLICED BODY IS SPELLED AS HEAD SPELLS (CLOUD-2789): through
-            // each shim base had, at its target; then each moved file's path;
-            // then each crate cut. Only its spelling changes, so what it asserts
+            // THE SPLICED BODY IS SPELLED AS HEAD SPELLS (CLOUD-2789): each
+            // moved item at its HEAD home, each shim base had at its target;
+            // then each moved file's path; then each crate cut. Only its spelling changes, so what it asserts
             // is what base asserted.
             let spans: BTreeMap<String, (usize, usize)> = tests_in(base_text)
                 .unwrap_or_default()
@@ -676,11 +676,14 @@ pub fn run(
                         || test.base_body.clone(),
                         |span| {
                             translate(
-                                &crate::item_index::respell_span_through_shims(
+                                &crate::item_index::respell_span_at_moves(
                                     &base_index,
+                                    &head_index,
+                                    &item_moves,
                                     path,
                                     base_text,
                                     *span,
+                                    &head_crate,
                                 ),
                                 test_path,
                                 &moves,

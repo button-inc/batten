@@ -1037,24 +1037,140 @@ fn respell_paths(body: &str, reader: &Reader, index: &Index) -> String {
     respell_paths_at(body, 0, reader, index)
 }
 
-/// `text[span]` — one body of the file `path` — with each path through a shim
-/// of `index`'s tree respelled at the shim's target, as
-/// [`respell_through_shims`]' second pass respells a whole file.
+/// `text[span]` — one body of the BASE file `path` — with each path naming an
+/// item `moves` moved respelled at the item's HEAD home, as `head_krate`
+/// spells it: `crate::…` inside that crate, its name outside (CLOUD-2789);
+/// a path through a shim base had, to an item that did not move, at the shim's
+/// target, as [`respell_through_shims`]' second pass respells it.
 ///
-/// What `batten test replay` reads a base body through before it splices it
-/// (CLOUD-2789): a branch that retired a shim (`crate::verdict::Native` to
-/// `crate::error::Native`) leaves the base spelling private or gone at HEAD,
-/// so the base body failed to compile on a path, not on an assertion.
-/// Measured on #1276. `index` is the BASE tree's: the shim is one base had.
+/// A branch that moved `Native` from `verdict.rs` to `error.rs` and left a
+/// private `use` behind made the base spelling `crate::verdict::Native` a
+/// privacy error at HEAD, so a modified test's base body failed to compile on
+/// a path rather than on an assertion: measured on #1276, 300 of the
+/// remaining compile errors. A `use` naming one is regenerated one `use` per
+/// prefix, as the shim respelling regenerates it. A spelling HEAD does not
+/// resolve to the same item is left as written, so a miss is a compile error
+/// charged to the body, never a different item.
 #[must_use]
-pub fn respell_span_through_shims(
-    index: &Index,
+pub fn respell_span_at_moves(
+    base: &Index,
+    head: &Index,
+    moves: &BTreeMap<Key, Key>,
     path: &str,
     text: &str,
     span: (usize, usize),
+    head_krate: &str,
 ) -> String {
-    let reader = index.reader(path, text);
-    respell_paths_at(&text[span.0..span.1], span.0, &reader, index)
+    let reader = base.reader(path, text);
+    let moved = |at: usize, segments: &[String]| -> Option<String> {
+        let absolute = base.rooted_at(&reader, at, segments)?;
+        let (site, used) = base.resolve_from(&absolute, 8)?;
+        let (head_file, name) = moves.get(&site)?;
+        let (krate, module) = head.files.get(head_file)?;
+        let spelled: Vec<String> = std::iter::once(krate.clone())
+            .chain(module.iter().cloned())
+            .chain(std::iter::once(name.clone()))
+            .chain(absolute.get(used..).unwrap_or_default().iter().cloned())
+            .collect();
+        let written = spell(&spelled, head_krate);
+        let reread: Vec<String> = written.split("::").map(str::to_owned).collect();
+        let (again, _) = head.resolve(head_krate, &reread)?;
+        (again == (head_file.clone(), name.clone())).then_some(written)
+    };
+    // Through a shim base had, at its target: `respell_through_shims`' second
+    // pass for a path whose item did not move.
+    let shimmed = |at: usize, segments: &[String]| -> Option<String> {
+        base.rooted_at(&reader, at, segments)
+            .and_then(|absolute| base.respelled_for(&reader.krate, &absolute))
+            .map(|path| spell(&path, &reader.krate))
+    };
+    respell_body_with(&text[span.0..span.1], span.0, &|at, segments| {
+        moved(at, segments).or_else(|| shimmed(at, segments))
+    })
+}
+
+/// `body`, which starts at byte `offset` of its file, with each path and each
+/// `use` leaf `respell` answers rewritten: `respell` is given the file offset
+/// and the path as written, and answers the whole new spelling. A `use` with a
+/// rewritten leaf is regenerated one `use` per prefix, keeping its renames; one
+/// holding a glob is left whole.
+fn respell_body_with(
+    body: &str,
+    offset: usize,
+    respell: &dyn Fn(usize, &[String]) -> Option<String>,
+) -> String {
+    const OPEN: &str = "fn f() ";
+    let wrapped = format!("{OPEN}{body}");
+    let parse = batten_facts::source::rust_parse(&wrapped, Edition::Edition2024);
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    let mut uses: Vec<std::ops::Range<usize>> = Vec::new();
+    for declaration in parse
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::Use::cast)
+    {
+        let range = declaration.syntax().text_range();
+        let range = usize::from(range.start()) - OPEN.len()..usize::from(range.end()) - OPEN.len();
+        uses.push(range.clone());
+        let Some(tree) = declaration.use_tree() else {
+            continue;
+        };
+        if binds_unnamed(&tree) {
+            continue;
+        }
+        let leaves: Vec<(crate::module_graph::UseLeaf, Option<String>)> =
+            crate::module_graph::use_leaves(&tree)
+                .into_iter()
+                .map(|leaf| {
+                    let hit = respell(offset + range.start, &leaf.path);
+                    (leaf, hit)
+                })
+                .collect();
+        if leaves.iter().all(|(_, hit)| hit.is_none()) {
+            continue;
+        }
+        let mut by_prefix: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (leaf, hit) in leaves {
+            let full = hit.unwrap_or_else(|| leaf.path.join("::"));
+            let (prefix, last) = full.rsplit_once("::").unwrap_or(("", full.as_str()));
+            let item = if leaf.name == last {
+                last.to_owned()
+            } else {
+                format!("{last} as {}", leaf.name)
+            };
+            by_prefix.entry(prefix.to_owned()).or_default().push(item);
+        }
+        let lines: Vec<String> = by_prefix
+            .into_iter()
+            .map(|(prefix, items)| {
+                let tail = match items.as_slice() {
+                    [one] => one.clone(),
+                    _ => format!("{{{}}}", items.join(", ")),
+                };
+                if prefix.is_empty() {
+                    format!("use {tail};")
+                } else {
+                    format!("use {prefix}::{tail};")
+                }
+            })
+            .collect();
+        edits.push((range, lines.join(" ")));
+    }
+    for (at, segments, len) in paths_in(body) {
+        if uses.iter().any(|range| range.contains(&at)) {
+            continue;
+        }
+        if let Some(written) = respell(offset + at, &segments) {
+            edits.push((at..at + len, written));
+        }
+    }
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    let mut out = body.to_owned();
+    for (range, replacement) in edits {
+        out.replace_range(range, &replacement);
+    }
+    out
 }
 
 /// [`respell_paths`] over `body`, which starts at byte `offset` of the file
@@ -1344,8 +1460,67 @@ mod tests {
         ]);
         let span = (text.find('{').unwrap(), text.find('}').unwrap() + 1);
         assert_eq!(
-            respell_span_through_shims(&base, "src/other.rs", text, span),
+            respell_span_at_moves(
+                &base,
+                &base,
+                &BTreeMap::new(),
+                "src/other.rs",
+                text,
+                span,
+                "app"
+            ),
             "{ crate::error::Native::A; }"
+        );
+    }
+
+    /// Fails by: a base body naming an item the branch moved, leaving a private
+    /// `use` at its old home, is spliced as written and fails to compile on the
+    /// path (#1276: `crate::verdict::Native`, `crate::refusal::{…, Severity}`).
+    #[test]
+    fn a_span_naming_a_moved_item_is_respelled_at_its_home() {
+        let lib = (
+            "src/lib.rs",
+            "pub mod error;\npub mod verdict;\npub mod other;\n",
+        );
+        let text = "fn a() { use crate::verdict::{Native, Other}; crate::verdict::Native::A; }\n";
+        let base = index(&[
+            ROOT,
+            lib,
+            ("src/error.rs", ""),
+            (
+                "src/verdict.rs",
+                "pub enum Native { A }\npub struct Other;\n",
+            ),
+            ("src/other.rs", text),
+        ]);
+        let head = index(&[
+            ROOT,
+            lib,
+            ("src/error.rs", "pub enum Native { A }\n"),
+            (
+                "src/verdict.rs",
+                "use crate::error::Native;\npub struct Other;\n",
+            ),
+            ("src/other.rs", text),
+        ]);
+        let moves = moved_items(&base, &head);
+        let span = (text.find('{').unwrap(), text.rfind('}').unwrap() + 1);
+        assert_eq!(
+            respell_span_at_moves(&base, &head, &moves, "src/other.rs", text, span, "app"),
+            "{ use crate::error::Native; use crate::verdict::Other; crate::error::Native::A; }"
+        );
+        // Anti-vacuity: with no move known, nothing is respelled.
+        assert_eq!(
+            respell_span_at_moves(
+                &base,
+                &head,
+                &BTreeMap::new(),
+                "src/other.rs",
+                text,
+                span,
+                "app"
+            ),
+            &text[span.0..span.1]
         );
     }
 
