@@ -3396,19 +3396,7 @@ silent = "stdout"
 # installed all 38 tools and left `mise.lock` byte-identical, where an unlocked
 # resolve is refused 403 for every third-party repository.
 env = { MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent" }
-# THE EGRESS CA FOR PKL FIRST (CLOUD-2840). `pkl` trusts only its own bundle,
-# never `SSL_CERT_FILE`, so behind a TLS-intercepting proxy every `hk.pkl`
-# evaluation failed its handshake to github.com (`unable to find valid
-# certification path`), and with it every commit-time hook. A `~/.pkl/cacerts`
-# directory REPLACES pkl's bundle, so it receives the whole of `SSL_CERT_FILE`
-# (system roots and the proxy's), not the proxy's alone. Where no bundle is
-# declared there is nothing to trust and the step is a no-op. Measured: with the
-# bundle installed, `pkl eval hk.pkl` resolves the hk package and exits 0.
-run = [
-  "{% set ca = get_env(name='SSL_CERT_FILE', default='') %}{% if ca %}install -D -m 0644 {{ ca }} {{ get_env(name='HOME') }}/.pkl/cacerts/egress.pem{% else %}true{% endif %}",
-  "mise install",
-  "mise run toolchain-check",
-]
+run = ["mise install", "mise run toolchain-check"]
 
 [tasks."toolchain-check"]
 description = "Gate: every tool [tools] declares is actually installed — the question doctor.sh structurally cannot ask"
