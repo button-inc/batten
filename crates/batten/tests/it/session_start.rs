@@ -19,19 +19,13 @@ use std::time::{Duration, Instant};
 
 use common::{stderr, stdout, write};
 
-/// The hook's ceiling (`perf-assert`'s): what "returns at once" means here.
-const CEILING: Duration = Duration::from_millis(100);
-
-/// How long a case waits for the task to leave a terminal phase. A bound, not a
-/// sleep: the loop ends the moment the phase lands.
+/// How long a case polls for the task's terminal phase before it gives up. An
+/// INPUT, never an assertion (`wall_clock.rs`): the loop ends the moment the
+/// phase lands, and giving up is the failure.
 const SETTLE: Duration = Duration::from_secs(120);
 
 /// One hook call through the door: `event`, with `extra` merged into the payload.
-pub(crate) fn door(
-    repo: &Path,
-    event: &str,
-    extra: &serde_json::Value,
-) -> (String, String, Duration) {
+pub(crate) fn door(repo: &Path, event: &str, extra: &serde_json::Value) -> (String, String) {
     use std::io::Write as _;
     let mut payload = serde_json::json!({
         "hook_event_name": event,
@@ -42,7 +36,6 @@ pub(crate) fn door(
     if let (Some(into), Some(from)) = (payload.as_object_mut(), extra.as_object()) {
         into.extend(from.clone());
     }
-    let began = Instant::now();
     let mut child = common::batten()
         .current_dir(repo)
         .args(["adjudicate", "--harness", "claude-code"])
@@ -58,14 +51,13 @@ pub(crate) fn door(
         .write_all(payload.to_string().as_bytes())
         .expect("write stdin");
     let outcome = child.streamed_wait().expect("wait for batten");
-    let took = began.elapsed();
     assert_eq!(outcome.status.code(), Some(0), "{}", stderr(&outcome));
-    (stdout(&outcome), stderr(&outcome), took)
+    (stdout(&outcome), stderr(&outcome))
 }
 
 /// A `PreToolUse` for a read: the first call after setup, which carries it.
 pub(crate) fn pre_tool(repo: &Path) -> String {
-    let (out, err, _) = door(
+    let (out, err) = door(
         repo,
         "PreToolUse",
         &serde_json::json!({"tool_name": "Read", "tool_input": {"file_path": "batten.toml"}}),
@@ -76,19 +68,15 @@ pub(crate) fn pre_tool(repo: &Path) -> String {
 /// The setup task's record, once its phase is terminal.
 pub(crate) fn settle(repo: &Path) -> String {
     let began = Instant::now();
-    loop {
+    while began.elapsed() < SETTLE {
         if let Some(phase) = setup_phase(repo)
             && (phase == "ok" || phase == "failed")
         {
             return phase;
         }
-        assert!(
-            began.elapsed() < SETTLE,
-            "the setup task never finished: {:?}",
-            setup_phase(repo)
-        );
         std::thread::yield_now();
     }
+    panic!("the setup task never finished: {:?}", setup_phase(repo));
 }
 
 /// The setup task's current phase, or `None` where nothing registered it.
@@ -156,11 +144,12 @@ fn a_blocking_handler_holds_nothing_and_is_said_once() {
         .expect("mkfifo runs");
     assert!(made.status.success(), "{}", stderr(&made));
 
-    let (out, _, took) = door(&repo, "SessionStart", &serde_json::json!({}));
-    assert!(
-        took < CEILING,
-        "SessionStart waited on its handler: {took:?}"
-    );
+    // THE FIFO IS THE BOUND, NOT A CLOCK (`wall_clock.rs`). The handler cannot
+    // finish until this case writes to the pipe below, so the door returning
+    // here at all is the proof it did not wait: a door that waited would hold
+    // this case until nextest's own timeout, which is red. The 100 ms the hook
+    // owes is measured where measurements live, the `session-start` perf arm.
+    let (out, _) = door(&repo, "SessionStart", &serde_json::json!({}));
     assert!(!out.contains("step finished"), "{out}");
 
     // Registered before the door returned, so the very next read names it.
