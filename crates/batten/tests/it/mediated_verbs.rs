@@ -51,10 +51,18 @@ fn root() -> PathBuf {
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     // Per PROCESS: nextest runs each case in its own, and a shared name races.
     ROOT.get_or_init(|| {
-        common::committed_fixture_with_substitution(&format!(
+        let root = common::committed_fixture_with_substitution(&format!(
             "mediated-verbs-{}",
             std::process::id()
-        ))
+        ));
+        // THE REPOSITORY'S OWN IGNORE RULE, which the fixture builder does not
+        // copy: without it `target/debug/scratch` is an untracked, judgeable
+        // write, and the `claim read unread` receipt row refuses it for want of
+        // a claim, so `ORDINARY` stops being the ordinary write it stands for.
+        std::fs::write(root.join(".gitignore"), "/target\n").expect("write .gitignore");
+        common::git_in(&root, &["add", ".gitignore"]);
+        common::git_in(&root, &["commit", "-q", "-m", "ignore target"]);
+        root
     })
     .clone()
 }
