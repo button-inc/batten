@@ -4368,6 +4368,36 @@ fn mirror_state(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
         .join("schema"))
 }
 
+/// The file under the mirror's state directory a sweep holds ([`hold`]).
+const LOCK: &str = "lock";
+
+/// Take the exclusive `flock` on `state`'s [`LOCK`], creating both; `None`
+/// when another sweep holds it. Released when the file drops.
+///
+/// A LOCK THE PLATFORM REFUSES IS AN ERROR, NEVER AN UNLOCKED SWEEP: two
+/// unexcluded sweeps corrupt each other's mirror silently, which is worse than
+/// one that could not look.
+///
+/// # Errors
+///
+/// The directory or the lock file cannot be created, or the lock call fails.
+fn hold(state: &std::path::Path) -> anyhow::Result<Option<std::fs::File>> {
+    std::fs::create_dir_all(state)?;
+    let path = state.join(LOCK);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(why)) => {
+            Err(anyhow::Error::new(why).context(format!("lock {}", path.display())))
+        }
+    }
+}
+
 /// The environment every schema build and run spawns cargo under: the mirror's
 /// own target directory for what cargo uplifts, and the CHECKOUT's build
 /// directory for every intermediate unit.
@@ -4441,6 +4471,21 @@ pub fn sweep(
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Swept> {
     let state = mirror_state(root)?;
+    // ONE SWEEP PER MIRROR, FOR THE WHOLE SWEEP: a second one would resync the
+    // tree, rebuild into the target and judge under the first, and each would
+    // read the other's half-written records as its own. Held until return.
+    let Some(_held) = hold(&state)? else {
+        writeln!(
+            out,
+            "mutate schema: another sweep holds {}; could not look, run again once it ends",
+            state.join(LOCK).display()
+        )?;
+        return Ok(Swept {
+            // Could not look, as [`exit_of`] reads it.
+            code: 3,
+            classic: Vec::new(),
+        });
+    };
     let work = state.join("tree");
     // INSIDE THE TREE, where cargo-mutants' copies keep theirs: a case's
     // fixtures land under the target's `tmp/`, and on #1276 one with no `.git`
@@ -6314,6 +6359,35 @@ mod tests {
         std::fs::write(work.join("src/lib.rs"), "fn b() {}").unwrap();
         assert_ne!(tree_digest(&work), before);
         let _ = std::fs::remove_dir_all(&work);
+    }
+
+    /// A sweep holds the mirror alone: while another sweep holds it, a second
+    /// refuses with could-not-look and a pointer to the lock, touching nothing.
+    ///
+    /// Fails by: no lock taken (two sweeps rebuild and judge one tree under
+    /// each other), the lock not exclusive, a held lock read as a pass or a
+    /// violation, or the lock kept after its holder drops it.
+    #[test]
+    fn a_sweep_refuses_while_another_holds_the_mirror() {
+        let root = std::env::temp_dir().join(format!("batten-schema-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let state = mirror_state(&root).unwrap();
+        let held = hold(&state).unwrap().expect("the first hold is taken");
+        assert!(hold(&state).unwrap().is_none(), "a second hold is refused");
+        let mut out = Vec::new();
+        let swept = sweep(&root, &[], "", 1, None, &mut out).unwrap();
+        assert_eq!(swept.code, 3, "a held mirror could not look");
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains(&state.join("lock").display().to_string()),
+            "the refusal points at the lock: {text}"
+        );
+        assert!(!state.join("pristine").exists(), "nothing was staged");
+        drop(held);
+        assert!(hold(&state).unwrap().is_some(), "released on drop");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&state);
     }
 
     fn listed(genre: &str, replacement: &str, from: (usize, usize), to: (usize, usize)) -> Listed {
