@@ -245,7 +245,10 @@ violation contains {"rule": "write refused probe", "verdict": "write refused pro
 #[test]
 fn a_hook_call_decides_a_literal_binding_as_the_interpreter_does() {
     let root = root_with("literal", LITERAL_DECIDES);
-    let interpreted = load(&root, policy::ModuleChecks::RunOverSelection);
+    // A checked load decides on bytecode too; its interpreter is the reference.
+    let interpreted = load(&root, policy::ModuleChecks::RunOverSelection)
+        .as_interpreted()
+        .expect("a checked load keeps its interpreter");
     let compiled = load(&root, policy::ModuleChecks::SkipOnHotPath);
     assert!(compiled.is_bytecode(), "the hook path decides on bytecode");
     let read = r#"{"call":{"operation":"read"}}"#;
@@ -260,12 +263,68 @@ fn a_hook_call_decides_a_literal_binding_as_the_interpreter_does() {
     );
 }
 
+/// #1276: every load decides on bytecode, and an unchanged module's second
+/// load — at any [`policy::ModuleChecks`] — reads the `.rvm` entry instead of
+/// compiling it; a changed module compiles afresh.
+///
+/// Fails by: a checked load (`check`, `enforce`) deciding on the interpreter,
+/// as every one did before; a warm load compiling the program again; an edited
+/// module answered from the entry its previous text wrote.
+#[test]
+fn an_unchanged_module_loads_its_program_from_the_cache_and_a_changed_one_recompiles() {
+    let compiled = policy::Execution::Bytecode { cached: false };
+    let cached = policy::Execution::Bytecode { cached: true };
+    let root = root_with("rvm-reuse", ANSWERS_EVERY_RULE);
+    let first = load(&root, policy::ModuleChecks::Run);
+    assert_eq!(
+        first.execution(),
+        compiled,
+        "the first load compiles bytecode"
+    );
+    for checks in [
+        policy::ModuleChecks::Run,
+        policy::ModuleChecks::RunOverSelection,
+        policy::ModuleChecks::SkipOnHotPath,
+    ] {
+        let again = load(&root, checks);
+        assert_eq!(again.execution(), cached, "{checks:?} reads the entry");
+        for input in CALLS {
+            assert_eq!(decided(&again, input), decided(&first, input), "{input}");
+        }
+    }
+    // A distinct text per load, so each one is an edit its predecessor's entry
+    // does not answer.
+    for checks in [
+        policy::ModuleChecks::Run,
+        policy::ModuleChecks::SkipOnHotPath,
+    ] {
+        std::fs::write(
+            root.join("cached.rego"),
+            format!("{EDITED}\n# {checks:?}\n"),
+        )
+        .expect("edit module");
+        let edited = load(&root, checks);
+        assert_eq!(
+            edited.execution(),
+            compiled,
+            "{checks:?} recompiles an edit"
+        );
+        let Look::Is(refused) = policy::deny(&edited, r#"{"call":{"operation":"read"}}"#) else {
+            panic!("the edited module answers");
+        };
+        assert_eq!(refused.len(), 1, "{checks:?} answers from the edited text");
+    }
+}
+
 #[test]
 fn bytecode_answers_as_the_interpreter_does() {
     let root = root_with("agree", ANSWERS_EVERY_RULE);
-    let interpreted = load(&root, policy::ModuleChecks::Run);
+    let checked = load(&root, policy::ModuleChecks::Run);
+    let interpreted = checked
+        .as_interpreted()
+        .expect("a checked load keeps its interpreter");
     let compiled = load(&root, policy::ModuleChecks::SkipOnHotPath);
-    assert!(compiled.is_bytecode() && !interpreted.is_bytecode());
+    assert!(compiled.is_bytecode() && checked.is_bytecode() && !interpreted.is_bytecode());
     let mut refused = 0;
     for input in CALLS {
         let (denied, approved, rewritten) = decided(&compiled, input);
@@ -306,7 +365,16 @@ fn the_repositorys_bundles_answer_alike_compiled_and_interpreted() {
         records: &resolved.records,
     };
     let load = |checks| policy::load(&repo, &rows, vocabulary, checks, None).expect("loads");
-    let interpreted = load(policy::ModuleChecks::RunOverSelection);
+    // A checked load decides on bytecode too now (#1276); its interpreter,
+    // kept for the checks, is what the bytecode is compared against.
+    let interpreted: Vec<policy::Bundle> = load(policy::ModuleChecks::RunOverSelection)
+        .iter()
+        .map(|bundle| {
+            bundle
+                .as_interpreted()
+                .expect("a checked load keeps its interpreter")
+        })
+        .collect();
     let compiled = load(policy::ModuleChecks::SkipOnHotPath);
     assert_eq!(interpreted.len(), compiled.len());
     assert!(
