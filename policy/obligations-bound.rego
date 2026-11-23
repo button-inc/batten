@@ -69,6 +69,9 @@
 #MUTANT newest-line-ignored|s@^\traw := closes_lines\[count(closes_lines) - 1\]$@\tsome raw in closes_lines@|a_key_dropped_from_the_latest_body_is_not_judged
 #MUTANT unread-fetch-measured|s@^\tcolumns\[1\] != "-"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_reading
 #MUTANT nothing-read-as-zero|s@^\tcontains(columns\[1\], ":")$@\ttrue@|a_measured_nothing_closes_no_row_named_zero
+#MUTANT row-read-anywhere|s@^\tstartswith(line, concat("", \[opener, "MUTANT ", entry.slug, "."\]))$@\tcontains(line, entry.slug)@|a_slug_mentioned_in_prose_is_unbound
+#MUTANT case-unchecked|s@^\tcase_resolves(entry.file, i, fields\[2\])$@\ttrue@|a_row_whose_case_its_suite_lacks_is_unbound
+#MUTANT enrollment-unchecked|s@^\tenrolled(entry.file)$@\ttrue@|a_row_in_a_file_no_gate_enrolls_is_unbound
 
 # METADATA
 # description: |
@@ -233,16 +236,130 @@ obligation contains entry if {
 # with `MUTANT-EXEMPT`, `MUTANT-SUITE` or `MUTANT-OWNER`, whose text after the
 # marker is a key or a path rather than `<slug>|`.
 #
-# IT IS DELIBERATELY THE LOOSER READING, AND THE LOOSENESS FALLS IN THE SAFE
-# DIRECTION. A line mentioning the marker in prose would satisfy this gate over a
-# row `mutate` never applies. But this gate answers *is something bound to the
-# promise*; whether the binding DISCRIMINATES is the sweep's question, and the
-# sweep reports `unappliable-mutation` and `names-no-case` for exactly that.
-# Over-refusing here would block an author whose row is correct, which no later
-# gate recovers from.
+# THE LOOSER READING WAS NOT SAFE, AND IS RETIRED (#1276). Matching
+# `MUTANT <slug>|` anywhere in a line bound an obligation to prose, an indented
+# example, a two-field row, a row naming a case nobody wrote, and a row in a file
+# no sweep runs. "The sweep reports it later" did not hold: the sweep runs only
+# the enforced set, nightly, so for the last two it never reports at all, and a
+# Ready block landed promising a mutation that could kill nothing.
+#
+# A ROW NOW BINDS ONLY WHEN IT IS ONE THE SWEEP APPLIES AND CAN SCORE:
+#   * column zero, behind an opener `mutate.rs`'s `OPENERS` honours (`#`, `//`),
+#     with the slug as the first field and exactly three fields;
+#   * its case resolves by `marker name undefined`'s rule: the nearest
+#     `MUTANT-SUITE` above the row, read for the case's last `::` segment, or a
+#     registered module's own `test_<case>` rule;
+#   * in a file an enforced gate owns, read from the committed `[mutate] gates`.
+#
+# THE TWO PIECES OF `mutate.rs`'S MAPPING THIS RESTATES are named rather than
+# hidden: the suite-above rule (shared verbatim with
+# `mutation-declared-case.rego`) and a gate name's files (`policy/<g>.rego`,
+# `mise-tasks/<g>.sh`, the preset directory `MUTANT_PRESETS` names, the manifest
+# for a `task-` gate, and the path itself). A new arm there must arrive here,
+# or this gate refuses an obligation the sweep honours — the safe direction.
 declares_slug(entry) if {
-	some line in input.tree.lines[entry.file]
-	contains(line, sprintf("MUTANT %v|", [entry.slug]))
+	some i, line in input.tree.lines[entry.file]
+	some opener in openers
+	startswith(line, concat("", [opener, "MUTANT ", entry.slug, "|"]))
+	fields := split(line, "|")
+	count(fields) == 3
+	enrolled(entry.file)
+	case_resolves(entry.file, i, fields[2])
+}
+
+openers := ["#", "//"]
+
+# The enforced set, PARSED: the row reads `batten.toml` as a document, so a
+# comment or a reflow of the array cannot change what this sees.
+gates := input.tree.documents["batten.toml"].mutate.gates
+
+enrolled(file) if file in gates
+
+enrolled(file) if {
+	some gate in gates
+	file == sprintf("policy/%s.rego", [gate])
+}
+
+enrolled(file) if {
+	some gate in gates
+	file == sprintf("mise-tasks/%s.sh", [gate])
+}
+
+enrolled(file) if {
+	some gate in gates
+	startswith(file, sprintf("%s/%s/", [presets_dir, gate]))
+}
+
+enrolled(file) if {
+	file == "mise.toml"
+	some gate in gates
+	startswith(gate, "task-")
+}
+
+enrolled(file) if {
+	some gate in gates
+	contains(gate, "*")
+	regex.match(glob_pattern(gate), file)
+}
+
+# `MUTANT_PRESETS` as `mise.toml` declares it, the root `mutate.rs` reads.
+presets_dir := trim_suffix(value, "/") if {
+	some line in input.tree.lines["mise.toml"]
+	key := "MUTANT_PRESETS = \""
+	startswith(line, key)
+	rest := substring(line, count(key), -1)
+	value := substring(rest, 0, indexof(rest, "\""))
+}
+
+# THE NEAREST SUITE ABOVE, as `mutation-declared-case.rego` and `mutate.rs`
+# judge it (CLOUD-2193); a row above every header keeps the first.
+suite_headers(path) := [[j, trim_space(substring(line, count(opener) + count("MUTANT-SUITE "), -1))] |
+	some j, line in input.tree.lines[path]
+	some opener in openers
+	startswith(line, concat("", [opener, "MUTANT-SUITE "]))
+]
+
+suite_above(path, i) if {
+	some header in suite_headers(path)
+	header[0] < i
+}
+
+declared_suite(path, i) := suite if {
+	above := [header | some header in suite_headers(path); header[0] < i]
+	count(above) > 0
+	suite := above[count(above) - 1][1]
+}
+
+declared_suite(path, i) := suite if {
+	not suite_above(path, i)
+	headers := suite_headers(path)
+	count(headers) > 0
+	suite := headers[0][1]
+}
+
+spelled(case) := parts[count(parts) - 1] if parts := split(case, "::")
+
+case_resolves(path, i, case) if {
+	suite := declared_suite(path, i)
+	endswith(suite, ".rs")
+	some line in input.tree.lines[suite]
+	contains(line, sprintf("fn %v(", [spelled(case)]))
+}
+
+case_resolves(path, i, case) if {
+	suite := declared_suite(path, i)
+	endswith(suite, ".bats")
+	some line in input.tree.lines[suite]
+	contains(line, sprintf("@test \"%v\"", [case]))
+}
+
+# A registered module's own `test_<case>` rule, judged before any suite
+# (`mutate.rs`'s `declares_own_case`, CLOUD-2255).
+case_resolves(path, _, case) if {
+	startswith(path, "policy/")
+	endswith(path, ".rego")
+	some line in input.tree.lines[path]
+	startswith(line, sprintf("test_%v ", [case]))
 }
 
 # OR THE SLUG NAMES THE RUNNER THAT OWNS THE FILE (CLOUD-2255). A Ready block's
@@ -325,7 +442,14 @@ board(record, tracked, lines_by_file) := {"tree": {
 	},
 	"tracked": tracked,
 	"lines": lines_by_file,
+	"documents": {"batten.toml": {"mutate": {"gates": ["tests/a.rs", "tests/b.rs", "hk.pkl", "subject"]}}},
 }}
+
+# A declaring file, the suite its header names, and the case in it.
+row_lines(row) := {
+	"tests/a.rs": ["#MUTANT-SUITE tests/s.rs", row],
+	"tests/s.rs": ["fn the_case() {"],
+}
 
 # THE RECORDER'S OWN SPELLING: `<count>:<file>:<slug>`, because the obligations
 # column declares `counted-with = ":"`. Written with a comma here for its whole
@@ -351,7 +475,75 @@ test_a_bound_obligation_is_clean if {
 	count(violation) == 0 with input as board(
 		[bound],
 		["tests/a.rs"],
-		{"tests/a.rs": ["#MUTANT slug-one|s@a@b@|the_case"]},
+		row_lines("#MUTANT slug-one|s@a@b@|the_case"),
+	)
+}
+
+# EACH CONJUNCT OF THE ROW ARM, refused alone (#1276). Every one of these bound
+# under the retired substring reading.
+refused_over(lines_by_file) if {
+	some v in violation with input as board([bound], ["tests/a.rs"], lines_by_file)
+	v.verdict == "test name undefined"
+}
+
+test_a_slug_in_prose_is_unbound if {
+	refused_over(row_lines("# see MUTANT slug-one|s@a@b@|the_case"))
+}
+
+test_an_indented_row_is_unbound if {
+	refused_over(row_lines("  #MUTANT slug-one|s@a@b@|the_case"))
+}
+
+test_a_two_field_row_is_unbound if {
+	refused_over(row_lines("#MUTANT slug-one|the_case"))
+}
+
+test_a_row_whose_case_its_suite_lacks_is_unbound if {
+	refused_over(row_lines("#MUTANT slug-one|s@a@b@|a_case_nobody_wrote"))
+}
+
+test_a_row_in_a_file_no_gate_enrolls_is_unbound if {
+	some v in violation with input as object.union(
+		board([bound], ["tests/a.rs"], row_lines("#MUTANT slug-one|s@a@b@|the_case")),
+		{"tree": {"documents": {"batten.toml": {"mutate": {"gates": ["elsewhere"]}}}}},
+	)
+	v.verdict == "test name undefined"
+}
+
+test_a_suite_less_row_is_unbound if {
+	refused_over({"tests/a.rs": ["#MUTANT slug-one|s@a@b@|the_case"]})
+}
+
+# And the spellings that DO bind, so the refusals above are not a rule that
+# refuses everything.
+test_a_slash_opened_row_binds if {
+	count(violation) == 0 with input as board(
+		[bound],
+		["tests/a.rs"],
+		{
+			"tests/a.rs": ["//MUTANT-SUITE tests/s.rs", "//MUTANT slug-one|s@a@b@|the_case"],
+			"tests/s.rs": ["fn the_case() {"],
+		},
+	)
+}
+
+test_a_qualified_case_binds_by_its_last_segment if {
+	count(violation) == 0 with input as board(
+		[bound],
+		["tests/a.rs"],
+		row_lines("#MUTANT slug-one|s@a@b@|module::the_case"),
+	)
+}
+
+test_a_modules_own_case_binds_by_its_gate_name if {
+	count(violation) == 0 with input as board(
+		["issue CLOUD-1 2026-01-01T00:00:00Z ready - - - 1:policy/subject.rego:slug-one"],
+		["policy/subject.rego"],
+		{"policy/subject.rego": [
+			"#MUTANT-SUITE tests/s.rs",
+			"#MUTANT slug-one|s@a@b@|own",
+			"test_own if {",
+		]},
 	)
 }
 
