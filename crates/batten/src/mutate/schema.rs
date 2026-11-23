@@ -4035,7 +4035,14 @@ pub fn ran(args: impl Iterator<Item = std::ffi::OsString>) -> Option<std::proces
     let swept = crate::git::repo_root(std::path::Path::new(".")).and_then(|root| {
         let listed_over = super::cover::source_digest(&root)?;
         let mutants = listing(&crate::fsio::read_to_string(path)?)?;
-        sweep(&root, &mutants, &listed_over, jobs, None, &mut out)
+        sweep(
+            &root,
+            &mutants,
+            &listed_over,
+            (jobs, Scope::default()),
+            None,
+            &mut out,
+        )
     });
     let code = match swept {
         Ok(swept) => swept.code,
@@ -4380,6 +4387,100 @@ pub fn shard_of(listed: Vec<Listed>, shard: Option<(usize, usize)>) -> Vec<Liste
         .filter(|(index, _)| index % n == k)
         .map(|(_, mutant)| mutant)
         .collect()
+}
+
+/// The variable naming how far a sweep goes ([`Phase`]).
+pub const PHASE: &str = "MUTANT_PHASE";
+
+/// How far a sweep goes: the whole of it, or only the schema build and the
+/// reach run, sealed for the shards that judge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Phase {
+    /// Build, reach and judge.
+    #[default]
+    Judge,
+    /// Build and reach, seal the reach record, judge nothing.
+    Reach,
+}
+
+/// [`PHASE`]'s value read as a [`Phase`]: unset or empty is the whole sweep,
+/// `reach` the build and reach alone.
+///
+/// # Errors
+///
+/// Any other value: a misspelt phase never reads as the whole sweep, which
+/// would judge every shard's mutants in a job meant only to build.
+pub fn phase_parsed(value: Option<&str>) -> Result<Phase, String> {
+    match value {
+        None | Some("") => Ok(Phase::Judge),
+        Some("reach") => Ok(Phase::Reach),
+        Some(other) => Err(format!(
+            "`{PHASE}` is `{other}`; it names `reach` or nothing"
+        )),
+    }
+}
+
+/// What part of its listing a sweep judges, and how far it goes.
+///
+/// THE SHARD NARROWS THE JUDGING, NEVER THE BUILD (CLOUD-2789). Sliced before
+/// the build, each shard switched in a different set, rendered a different
+/// tree and so built and reached for itself; over the whole listing every
+/// shard builds the same tree, which one job builds and reaches for all.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Scope {
+    /// This run's `k` of `n` ([`shard_of`]'s partition); none judges all.
+    pub shard: Option<(usize, usize)>,
+    /// How far it goes.
+    pub phase: Phase,
+}
+
+impl Scope {
+    /// Whether mutant `id` is this shard's: [`shard_of`]'s rule on the id,
+    /// which is the mutant's position in the listing.
+    fn holds(self, id: u32) -> bool {
+        self.shard
+            .is_none_or(|(k, n)| usize::try_from(id).is_ok_and(|id| id % n == k))
+    }
+
+    /// This shard's part of what the whole listing's build left to judge: its
+    /// switched ids of `todo`, its hand-backs of `classic`, and how many of
+    /// `unviable` are its own.
+    fn slice(
+        self,
+        todo: Vec<u32>,
+        classic: &BTreeSet<u32>,
+        unviable: &BTreeSet<u32>,
+    ) -> (Vec<u32>, BTreeSet<u32>, usize) {
+        (
+            todo.into_iter().filter(|id| self.holds(*id)).collect(),
+            classic
+                .iter()
+                .copied()
+                .filter(|id| self.holds(*id))
+                .collect(),
+            unviable.iter().filter(|id| self.holds(**id)).count(),
+        )
+    }
+}
+
+/// The sweep a reach-only [`Phase`] ends with, once the reach run is sealed:
+/// said on `out`, and answered as success with nothing handed back, since
+/// the shards' judging is the verdict.
+///
+/// # Errors
+///
+/// `out` cannot be written.
+fn reach_sealed(out: &mut dyn std::io::Write, reach: &Reach) -> anyhow::Result<Swept> {
+    writeln!(
+        out,
+        "mutate schema: {PHASE}=reach: built and reached, {} case record(s) sealed for the \
+         shards to judge",
+        reach.executed.len()
+    )?;
+    Ok(Swept {
+        code: 0,
+        classic: Vec::new(),
+    })
 }
 
 /// A sweep's exit on the house contract (§6): 0 every switched mutant caught,
@@ -4843,8 +4944,8 @@ pub fn mirror_target(root: &std::path::Path) -> anyhow::Result<std::path::PathBu
     Ok(mirror_state(root)?.join("tree").join("target"))
 }
 
-/// Every one of `mutants` judged in one schema build of the checkout at
-/// `root`, on `jobs` workers.
+/// Every one of `mutants` built and reached in one schema build of the
+/// checkout at `root`, and `scope`'s share of them judged on `jobs` workers.
 ///
 /// # Errors
 ///
@@ -4854,7 +4955,7 @@ pub fn sweep(
     root: &std::path::Path,
     mutants: &[Listed],
     listed_over: &str,
-    jobs: usize,
+    (jobs, scope): (usize, Scope),
     handback: Option<&Handback<'_>>,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Swept> {
@@ -4919,11 +5020,18 @@ pub fn sweep(
         ids,
         out,
     )?;
+    if scope.phase == Phase::Reach {
+        return reach_sealed(out, &reach);
+    }
     // RECORDED ONCE, AFTER THE BUILD AND THE REACH RUN THAT USED IT: nothing
     // after this point changes a source the binaries were built from, so every
     // judging run reuses them rather than asking cargo again.
     let reuse = announce_reuse(&work, &target, mutants, &state, out)?;
-    let todo = judged_by_switch(mutants.len(), &unviable, &classic)?;
+    let (todo, classic, unviable) = scope.slice(
+        judged_by_switch(mutants.len(), &unviable, &classic)?,
+        &classic,
+        &unviable,
+    );
     let judging = Judging {
         work: &work,
         target: &target,
@@ -4953,10 +5061,7 @@ pub fn sweep(
         mutants,
         &verdicts,
         (&red, &reach.sites),
-        (
-            unviable_total(unviable.len(), handed_unviable),
-            classic.len(),
-        ),
+        (unviable_total(unviable, handed_unviable), classic.len()),
         &state,
         started.elapsed().as_secs(),
     )?;
@@ -7105,7 +7210,7 @@ mod tests {
         let held = hold(&state).unwrap().expect("the first hold is taken");
         assert!(hold(&state).unwrap().is_none(), "a second hold is refused");
         let mut out = Vec::new();
-        let swept = sweep(&root, &[], "", 1, None, &mut out).unwrap();
+        let swept = sweep(&root, &[], "", (1, Scope::default()), None, &mut out).unwrap();
         assert_eq!(swept.code, 3, "a held mirror could not look");
         let text = String::from_utf8(out).unwrap();
         assert!(
@@ -7135,8 +7240,15 @@ mod tests {
             runner: &missing,
             diff: &diff,
         };
-        let refused = sweep(&root, &[], "", 1, Some(&handback), &mut Vec::new())
-            .expect_err("a sweep that cannot run its hand-backs refuses");
+        let refused = sweep(
+            &root,
+            &[],
+            "",
+            (1, Scope::default()),
+            Some(&handback),
+            &mut Vec::new(),
+        )
+        .expect_err("a sweep that cannot run its hand-backs refuses");
         assert!(
             format!("{refused:#}").contains("cargo-mutants"),
             "it names the runner: {refused:#}"
@@ -9112,6 +9224,71 @@ mod tests {
             moved,
             "a source is the probes'"
         );
+    }
+
+    /// A shard judges only its own ids, from the whole listing's build: its
+    /// switched mutants, its hand-backs and its unviable count, partitioning
+    /// the listing with every other shard; no shard judges everything.
+    ///
+    /// Fails by: a shard judging another's mutant (two shards pay for one,
+    /// and their journals race), one judged by no shard (a survivor never
+    /// seen), or a shard's report counting the whole listing's unviable.
+    #[test]
+    fn a_shard_judges_only_its_ids() {
+        let todo = vec![0, 2, 3, 4, 5, 8];
+        let classic = BTreeSet::from([7, 10]);
+        let unviable = BTreeSet::from([1, 6, 9]);
+        let scope = |shard| Scope {
+            shard,
+            phase: Phase::Judge,
+        };
+        let (mine, handed, dead) = scope(Some((1, 3))).slice(todo.clone(), &classic, &unviable);
+        assert_eq!(mine, [4]);
+        assert_eq!(handed, BTreeSet::from([7, 10]));
+        assert_eq!(dead, 1, "only id 1 of the unviable is shard 1's");
+        let mut every: Vec<u32> = Vec::new();
+        let mut every_handed = BTreeSet::new();
+        let mut every_dead = 0;
+        for k in 0..3 {
+            let (mine, handed, dead) = scope(Some((k, 3))).slice(todo.clone(), &classic, &unviable);
+            every.extend(mine);
+            every_handed.extend(handed);
+            every_dead += dead;
+        }
+        every.sort_unstable();
+        assert_eq!(every, todo, "the shards partition the judged ids");
+        assert_eq!(every_handed, classic);
+        assert_eq!(every_dead, unviable.len());
+        let (all, all_handed, all_dead) = scope(None).slice(todo.clone(), &classic, &unviable);
+        assert_eq!((all, all_handed, all_dead), (todo, classic, unviable.len()));
+    }
+
+    /// The phase is the whole sweep unless `reach` is named; anything else
+    /// named is a usage error, never read as the whole sweep.
+    ///
+    /// Fails by: a misspelt phase judging everything in a job meant only to
+    /// build and reach (every shard's work paid twice), or `reach` ignored.
+    #[test]
+    fn the_phase_is_reach_only_when_named() {
+        assert_eq!(phase_parsed(None), Ok(Phase::Judge));
+        assert_eq!(phase_parsed(Some("")), Ok(Phase::Judge));
+        assert_eq!(phase_parsed(Some("reach")), Ok(Phase::Reach));
+        assert!(phase_parsed(Some("reached")).is_err());
+    }
+
+    /// A reach-phase sweep answers success once the reach run is sealed, judges
+    /// nothing and hands nothing back, so the shards' judging is the verdict.
+    ///
+    /// Fails by: a reach job read as a verdict (red for a survivor it never
+    /// judged, or green standing in for the shards), or one listing hand-backs.
+    #[test]
+    fn a_reach_phase_sweep_answers_success_once_sealed() {
+        let mut out = Vec::new();
+        let swept = reach_sealed(&mut out, &Reach::default()).unwrap();
+        assert_eq!(exit_of(swept.code), crate::exit::ExitCode::Success);
+        assert!(swept.classic.is_empty());
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.contains("sealed"), "{said}");
     }
 
     /// A deleted resource keys apart from an emptied one, and one that cannot
