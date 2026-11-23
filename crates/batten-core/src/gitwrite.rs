@@ -1993,7 +1993,47 @@ fn executable_kind(meta: &std::fs::Metadata) -> gix::objs::tree::EntryKind {
     }
 }
 
-use crate::propose::diff3;
+/// The conflict-marker width, as the merge driver takes it: the width the
+/// shapes in [`crate::propose`] read.
+const MARKER_SIZE: std::num::NonZeroU8 = match std::num::NonZeroU8::new(crate::propose::MARKER) {
+    Some(size) => size,
+    None => unreachable!(),
+};
+
+/// The three-way text merge with every conflict kept as diff3 markers, or
+/// `None` for a merge with no conflict or bytes that are not UTF-8 (CLOUD-1956).
+///
+/// HERE, IN A GIT MODULE, and not beside the shapes in `batten-base`: it runs
+/// gix's merge driver, and reaching the backend is what `GIT_MODULES` keeps
+/// enumerable (`git::tests::gix_is_confined_to_the_git_modules`). The split
+/// moved it out once (CLOUD-2789) and the gate, then scoped to one crate, did
+/// not see it go.
+#[must_use]
+pub fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
+    use gix::merge::blob::builtin_driver::text;
+    let mut out = Vec::new();
+    let mut input = gix_diff::blob::InternedInput::default();
+    let options = text::Options {
+        conflict: text::Conflict::Keep {
+            style: text::ConflictStyle::Diff3,
+            marker_size: MARKER_SIZE,
+        },
+        ..Default::default()
+    };
+    let resolution = gix::merge::blob::builtin_driver::text(
+        &mut out,
+        &mut input,
+        text::Labels::default(),
+        ours,
+        ancestor,
+        theirs,
+        options,
+    );
+    if resolution != gix::merge::blob::Resolution::Conflict {
+        return None;
+    }
+    String::from_utf8(out).ok()
+}
 
 /// The patch identities a replay drops rather than re-applies (CLOUD-1586,
 /// CLOUD-2086): the base's, and on a bet's unwind the upstream's too. Split out
@@ -2591,5 +2631,80 @@ mod tests {
         assert_eq!(answered, crate::git::canonical(&common));
         assert_eq!(branch.as_deref(), Some("refs/heads/worktree-feat"));
         assert!(!dir.exists());
+    }
+}
+
+/// The replay's whole proposal path — [`diff3`], then [`crate::propose`]'s
+/// shapes — moved here with `diff3` from `batten-base`'s `propose` (CLOUD-2789),
+/// which can no longer reach it.
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod proposal_tests {
+    use crate::propose::{Proposal, Shape};
+
+    /// The replay's own path: `diff3`, then the shapes.
+    fn propose(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<Proposal> {
+        crate::propose::propose(&super::diff3(ancestor, ours, theirs)?)
+    }
+
+    fn text(proposal: &Proposal) -> &str {
+        std::str::from_utf8(&proposal.bytes).expect("utf-8")
+    }
+
+    #[test]
+    fn a_list_both_sides_grew_keeps_trunks_order_and_appends_the_branchs_addition() {
+        let base = b"GATES = \"b,a,c\"\n";
+        let ours = b"GATES = \"b,a,c,trunk\"\n";
+        let theirs = b"GATES = \"b,a,branch,c\"\n";
+        let proposal = propose(base, ours, theirs).expect("a list-union region");
+        assert_eq!(text(&proposal), "GATES = \"b,a,c,trunk,branch\"\n");
+        assert_eq!(proposal.shapes, vec![Shape::ListUnion]);
+    }
+
+    #[test]
+    fn a_branch_removal_from_the_list_is_kept() {
+        let base = b"GATES = \"a,old,c\"\n";
+        let ours = b"GATES = \"a,old,c,trunk\"\n";
+        let theirs = b"GATES = \"a,c\"\n";
+        let proposal = propose(base, ours, theirs).expect("a list-union region");
+        assert_eq!(text(&proposal), "GATES = \"a,c,trunk\"\n");
+    }
+
+    #[test]
+    fn a_json_allow_list_both_sides_grew_is_unioned() {
+        let base = b"[\n  \"a\",\n  \"z\"\n]\n";
+        let ours = b"[\n  \"a\",\n  \"trunk\",\n  \"z\"\n]\n";
+        let theirs = b"[\n  \"a\",\n  \"branch\",\n  \"z\"\n]\n";
+        let proposal = propose(base, ours, theirs).expect("a json-array-union region");
+        assert_eq!(
+            text(&proposal),
+            "[\n  \"a\",\n  \"trunk\",\n  \"branch\",\n  \"z\"\n]\n"
+        );
+        assert_eq!(proposal.shapes, vec![Shape::JsonArrayUnion]);
+    }
+
+    #[test]
+    fn a_comment_both_sides_reworded_takes_trunks_text() {
+        let base = b"# old\nx = 1\n";
+        let ours = b"# trunk wording\nx = 1\n";
+        let theirs = b"# branch wording\nx = 1\n";
+        let proposal = propose(base, ours, theirs).expect("a comment-only region");
+        assert_eq!(text(&proposal), "# trunk wording\nx = 1\n");
+        assert_eq!(proposal.shapes, vec![Shape::CommentOnly]);
+    }
+
+    /// ALL OR NOTHING: a code change both sides made matches no shape, so the
+    /// path gets no candidate at all — even though another region would.
+    #[test]
+    fn one_unshaped_region_withholds_the_whole_candidate() {
+        let base = b"# old\nx = 1\n\n\n\ny = 1\n";
+        let ours = b"# trunk\nx = 1\n\n\n\ny = 2\n";
+        let theirs = b"# branch\nx = 1\n\n\n\ny = 3\n";
+        assert_eq!(propose(base, ours, theirs), None);
+    }
+
+    #[test]
+    fn a_clean_merge_is_not_a_proposal() {
+        assert_eq!(propose(b"a\n", b"a\nb\n", b"a\n"), None);
     }
 }
