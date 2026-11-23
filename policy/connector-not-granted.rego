@@ -156,5 +156,3 @@ test_no_permissions_block_answers_nothing if {
 test_no_settings_file_answers_nothing if {
 	count(violation) == 0 with input as {"tree": {"documents": {}}}
 }
-
-#MUTANT-EXEMPT CLOUD-1260|no `tests/connector-not-granted.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `shell add refused` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/connector_not_granted.rs`, neither of which is what the mutation runner drives
