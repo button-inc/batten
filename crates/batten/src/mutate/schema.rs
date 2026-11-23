@@ -4651,8 +4651,9 @@ fn handed_back(
 pub struct Handback<'a> {
     /// The provisioned cargo-mutants, run as cargo runs a subcommand.
     pub runner: &'a std::path::Path,
-    /// The change the listing was made of.
-    pub diff: &'a std::path::Path,
+    /// The change the listing was made of; `None` for a whole-workspace
+    /// listing ([`super::WHOLE_TREE`]).
+    pub diff: Option<&'a std::path::Path>,
 }
 
 /// The bare identifier a cargo-mutants function name ends in: `bar` of
@@ -5229,12 +5230,14 @@ fn handback_inputs(handback: &Handback<'_>) -> anyhow::Result<()> {
          could be judged; run `batten provision apply`",
         handback.runner.display()
     );
-    anyhow::ensure!(
-        handback.diff.is_file(),
-        "the change the mutants were listed from, {}, is not a file, so no handed-back \
-         mutant could be judged",
-        handback.diff.display()
-    );
+    if let Some(diff) = handback.diff {
+        anyhow::ensure!(
+            diff.is_file(),
+            "the change the mutants were listed from, {}, is not a file, so no handed-back \
+             mutant could be judged",
+            diff.display()
+        );
+    }
     Ok(())
 }
 
@@ -7379,7 +7382,7 @@ mod tests {
         std::fs::write(&diff, "").unwrap();
         let handback = Handback {
             runner: &missing,
-            diff: &diff,
+            diff: Some(&diff),
         };
         let refused = sweep(
             &root,
@@ -7435,7 +7438,7 @@ mod tests {
         let nowhere = base.join("nowhere");
         let handback = Handback {
             runner: &nowhere,
-            diff: &nowhere,
+            diff: Some(&nowhere),
         };
         let mut out = Vec::new();
         let (verdicts, unviable) = judge_handbacks(

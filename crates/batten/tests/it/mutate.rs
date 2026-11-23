@@ -2389,6 +2389,72 @@ fn cargo_mutants_is_never_spawned_by_the_sweep() {
     assert!(!out.contains("runner-absent"), "{out}{err}");
 }
 
+/// `batten mutate cargo` in this repository's toy tree, with `env` set.
+fn mutate_cargo(root: &Path, env: &[(&str, &str)]) -> (Option<i32>, String, String) {
+    let mut command = common::batten();
+    command
+        .args(["mutate", "cargo"])
+        .current_dir(root)
+        .env("MUTANT_RUNNERS", "cargo-mutants=**/*.rs");
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let answer = command.streamed_output().expect("run batten mutate cargo");
+    (answer.status.code(), stdout(&answer), stderr(&answer))
+}
+
+/// THE WHOLE WORKSPACE NEEDS NO BASE (CLOUD-2849): `MUTANT_WHOLE_TREE` alone
+/// passes the base check and writes no change, so the run goes on to fetch
+/// the runner that lists `--workspace`. The toy tree provisions none, so that
+/// is where it stops. Fails by: the whole-tree run refused for naming no base,
+/// which is how the schedule lost its Rust proof, or narrowed to a change.
+#[test]
+fn a_whole_tree_run_needs_no_base_and_lists_no_change() {
+    let root = rust_gate_repo("whole-tree-no-base");
+    let (code, out, err) = mutate_cargo(&root, &[("MUTANT_WHOLE_TREE", "1")]);
+    assert!(!err.contains("names no base"), "{out}{err}");
+    assert!(!out.contains("changed since"), "{out}{err}");
+    assert!(
+        err.contains("no [[provision]] row ships cargo-mutants"),
+        "the run reached the runner: {code:?} {out}{err}"
+    );
+}
+
+/// A CHANGE OR THE WHOLE WORKSPACE, NEVER BOTH (CLOUD-2849): a schedule that
+/// inherited a base would judge one diff while reporting a whole-tree sweep.
+/// Fails by: the base winning in silence, or the refusal not naming both.
+#[test]
+fn a_base_beside_the_whole_tree_is_a_usage_error() {
+    let root = rust_gate_repo("whole-tree-and-base");
+    let (code, out, err) = mutate_cargo(
+        &root,
+        &[("MUTANT_WHOLE_TREE", "1"), ("MUTANT_CHANGED_SINCE", "HEAD")],
+    );
+    assert_eq!(
+        code,
+        Some(batten::exit::ExitCode::Usage.code()),
+        "{out}{err}"
+    );
+    assert!(
+        err.contains("MUTANT_WHOLE_TREE") && err.contains("MUTANT_CHANGED_SINCE"),
+        "{out}{err}"
+    );
+    assert!(
+        !err.contains("[[provision]]"),
+        "nothing was fetched: {out}{err}"
+    );
+    let (code, out, err) = mutate_cargo(&root, &[]);
+    assert_eq!(
+        code,
+        Some(batten::exit::ExitCode::Usage.code()),
+        "{out}{err}"
+    );
+    assert!(
+        err.contains("names no base"),
+        "neither is today's refusal: {out}{err}"
+    );
+}
+
 /// A RUST ROW IS REFUSED, NEVER PASSED OVER (CLOUD-2253): a gate named by a
 /// `.rs` path whose row cargo-mutants' registry owns is `runner-owned` in both
 /// the sweep and the census. Fails by: the row filtered out in silence, which is

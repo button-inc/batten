@@ -18303,12 +18303,25 @@ fn run_mutate(
 /// The disk floor is the collector's own, so the jobs never spend the room it
 /// exists to keep.
 fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
-    let Some(base) = mutate::changed_since() else {
-        writeln!(
-            err,
-            "::error:: mutate cargo: `MUTANT_CHANGED_SINCE` names no base"
-        )?;
-        return Ok(ExitCode::Usage);
+    // A CHANGE OR THE WHOLE WORKSPACE, NEVER BOTH (CLOUD-2849): a schedule that
+    // inherited a base would judge only that diff while saying it swept the tree.
+    let base = match (mutate::changed_since(), mutate::whole_tree()) {
+        (Some(_), true) => {
+            writeln!(
+                err,
+                "::error:: mutate cargo: `{}` and `MUTANT_CHANGED_SINCE` are both set; a run judges a change or the whole workspace, not both",
+                mutate::WHOLE_TREE
+            )?;
+            return Ok(ExitCode::Usage);
+        }
+        (None, false) => {
+            writeln!(
+                err,
+                "::error:: mutate cargo: `MUTANT_CHANGED_SINCE` names no base"
+            )?;
+            return Ok(ExitCode::Usage);
+        }
+        (base, _) => base,
     };
     let shard = match mutate::shard_set(std::env::var(mutate::SHARD).ok())
         .map(|shard| mutate::shard_parsed(&shard))
@@ -18346,12 +18359,18 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // THE TREE THE LISTING READS, fixed before the change is written: the
     // schema's snapshot and the classic stage are each held to it.
     let listed_over = mutate::cover::source_digest(root)?;
-    let Some(sources) = mutate::write_change(root, &registry, &base, &diff)? else {
-        writeln!(
-            out,
-            "mutate cargo: no source cargo-mutants owns changed since {base}"
-        )?;
-        return Ok(ExitCode::Success);
+    let (sources, listing) = match &base {
+        Some(base) => {
+            let Some(sources) = mutate::write_change(root, &registry, base, &diff)? else {
+                writeln!(
+                    out,
+                    "mutate cargo: no source cargo-mutants owns changed since {base}"
+                )?;
+                return Ok(ExitCode::Success);
+            };
+            (format!("{sources} changed source(s)"), Some(diff.as_path()))
+        }
+        None => (String::from("the whole workspace"), None),
     };
     // FROM THE PROVISION CACHE, NEVER `PATH`: the engine runs the pinned bytes
     // itself, so the row needs no `link` (only the task runner's carries one).
@@ -18370,12 +18389,12 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // THE WHOLE LISTING IS BUILT AND REACHED, AND THE SHARD NARROWS ONLY THE
     // JUDGING (CLOUD-2789): sliced here, each shard built a different schema
     // and paid its own build and reach run, which one job now pays for all.
-    let listed = mutate::list_mutants(root, &runner, &diff)?;
+    let listed = mutate::list_mutants(root, &runner, listing)?;
     let scope = mutate::schema::Scope { shard, phase };
     let workers = mutate::judging_jobs(machine);
     writeln!(
         out,
-        "mutate cargo: {} mutant(s) of {sources} changed source(s), switched in one schema build, judged on {workers} worker(s)",
+        "mutate cargo: {} mutant(s) of {sources}, switched in one schema build, judged on {workers} worker(s)",
         listed.len()
     )?;
     // THE HANDED-BACK MUTANTS ARE JUDGED INSIDE THE SWEEP, in place, on the
@@ -18384,7 +18403,7 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // suite per mutant on every lap.
     let handback = mutate::schema::Handback {
         runner: &runner,
-        diff: &diff,
+        diff: listing,
     };
     let swept = mutate::schema::sweep(
         root,

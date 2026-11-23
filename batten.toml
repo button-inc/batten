@@ -12050,6 +12050,7 @@ gates = [
   "batten.toml",
   "task-verify",
   "task-alive",
+  "task-mutant",
   ".github/workflows/release-plz.yml",
   ".github/workflows/release-land.yml",
   ".github/workflows/release-artifacts.yml",

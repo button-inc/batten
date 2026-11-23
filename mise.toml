@@ -1815,7 +1815,9 @@ run = [
 ]
 
 [tasks."mutant"]
-description = "Gate: every declared gate has a mutation its own suite is PROVEN to catch (CLOUD-418)"
+#MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
+#MUTANT whole-tree-unset|s@MUTANT_WHOLE_TREE = "1"@MUTANT_WHOLE_TREE = ""@|the_scheduled_sweep_judges_the_whole_rust_tree
+description = "Gate: every declared gate has a mutation its own suite is PROVEN to catch (CLOUD-418), and every mutant cargo-mutants makes of the whole workspace is caught (CLOUD-2849)"
 # CLOUD-418's mechanism, ported off `mise-tasks/mutant.sh` under CLOUD-1267.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason above and with a
@@ -1841,7 +1843,16 @@ description = "Gate: every declared gate has a mutation its own suite is PROVEN 
 #
 # THROUGH `mutant:declared`, so the sweep's environment is declared once: with no
 # `MUTANT_CHANGED_SINCE` it narrows to nothing and sweeps every gate.
-run = "mise run mutant:declared"
+#
+# AND THROUGH `mutant:rust` OVER THE WHOLE WORKSPACE (CLOUD-2849). Retiring the
+# hand-written Rust rows onto cargo-mutants left the schedule judging only the
+# declared Rego, Pkl and manifest gates, and Rust only on a branch's diff, so code
+# no change touched had no mutation judged against its suite. `MUTANT_WHOLE_TREE`
+# makes `batten mutate cargo` list `cargo mutants --workspace` with no base; a
+# subtask inherits it, as `mutant:changed`'s inherit its base, and a base set
+# beside it is a usage error. Both run whatever the first says, as there.
+env = { MUTANT_WHOLE_TREE = "1" }
+run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
 
 [tasks."mutant:changed"]
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change is caught, and every declared Rego, Pkl or manifest gate it touched has a mutation its suite catches"
