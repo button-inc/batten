@@ -83,6 +83,31 @@ fn repo_closing(
     root
 }
 
+/// The fixture with several files written beside the record, as a declaring
+/// file, the suite it names and the authority enrolling it are three files.
+fn repo_with(name: &str, record: &[&str], files: &[(&str, &str)]) -> PathBuf {
+    let root = repo(name, record, None);
+    for (path, body) in files {
+        let full = root.join(path);
+        fs::create_dir_all(full.parent().unwrap()).expect("file parent");
+        fs::write(full, body).expect("write the fixture file");
+    }
+    root
+}
+
+/// The authority enrolling `gates` in `[mutate]`, which is what makes a row in
+/// their files one a sweep applies.
+fn enrolling(gates: &str) -> String {
+    format!("version = 1\n\n[mutate]\ngates = [{gates}]\n")
+}
+
+/// A declaring module naming its suite and carrying one row for `slug-one`.
+const DECLARING: &str =
+    "#MUTANT-SUITE crates/batten/tests/it/x.rs\n#MUTANT slug-one|s@a@b@|the_case\n";
+
+/// The suite that holds the case `DECLARING` names.
+const SUITE: (&str, &str) = ("crates/batten/tests/it/x.rs", "#[test]\nfn the_case() {}\n");
+
 fn write_record(root: &Path, name: &str, lines: &[&str]) {
     let git_dir = common::git_in(root, &["rev-parse", "--absolute-git-dir"]);
     let path = batten::recorder::record_path(Path::new(git_dir.trim()), name, "work", None);
@@ -201,19 +226,89 @@ fn line(obligations: &str) -> String {
 /// theirs.
 #[test]
 fn a_bound_obligation_reaches_the_predicate_and_is_clean() {
-    let root = repo(
+    let root = repo_with(
         "obligations-bound-clean",
-        &[&line("1:crates/batten/tests/it/x.rs:slug-one")],
-        Some((
-            "crates/batten/tests/it/x.rs",
-            "#MUTANT slug-one|s@a@b@|the_case\n",
-        )),
+        &[&line("1:policy/subject.rego:slug-one")],
+        &[
+            ("policy/subject.rego", DECLARING),
+            SUITE,
+            ("batten.toml", &enrolling("\"subject\"")),
+        ],
     );
     assert!(
         verdicts(&root).is_empty(),
-        "the obligation names a tracked file whose lines declare the slug: {:?}",
+        "an enrolled gate's row names a case its suite carries: {:?}",
         verdicts(&root)
     );
+}
+
+/// THE `//` OPENER binds as `#` does: `hk.pkl` declares its rows with it.
+#[test]
+fn a_slash_opened_row_in_an_enrolled_file_binds() {
+    let slashed = DECLARING.replace('#', "/".repeat(2).as_str());
+    let root = repo_with(
+        "obligations-bound-slash",
+        &[&line("1:hk.pkl:slug-one")],
+        &[
+            ("hk.pkl", &slashed),
+            SUITE,
+            ("batten.toml", &enrolling("\"hk.pkl\"")),
+        ],
+    );
+    assert!(verdicts(&root).is_empty(), "{:?}", verdicts(&root));
+}
+
+/// THE SLUG IN PROSE IS NOT A ROW (#1276). The gate matched `MUTANT <slug>|`
+/// anywhere in a line, so a comment mentioning the slug bound the obligation
+/// to a mutation no sweep would ever apply.
+#[test]
+fn a_slug_mentioned_in_prose_is_unbound() {
+    let root = repo_with(
+        "obligations-prose",
+        &[&line("1:policy/subject.rego:slug-one")],
+        &[
+            (
+                "policy/subject.rego",
+                "#MUTANT-SUITE crates/batten/tests/it/x.rs\n# see MUTANT slug-one|s@a@b@|the_case\n",
+            ),
+            SUITE,
+            ("batten.toml", &enrolling("\"subject\"")),
+        ],
+    );
+    assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
+}
+
+/// THE CASE IS CHECKED, by the marker gate's rule: the nearest suite above the
+/// row, read for the case's last `::` segment. A row naming a case its suite
+/// lacks is a mutation nothing can kill.
+#[test]
+fn a_row_whose_case_its_suite_lacks_is_unbound() {
+    let root = repo_with(
+        "obligations-case-missing",
+        &[&line("1:policy/subject.rego:slug-one")],
+        &[
+            ("policy/subject.rego", DECLARING),
+            (SUITE.0, "#[test]\nfn another_case() {}\n"),
+            ("batten.toml", &enrolling("\"subject\"")),
+        ],
+    );
+    assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
+}
+
+/// A ROW IN A FILE NO ENFORCED GATE OWNS is one no sweep applies, however well
+/// it is written.
+#[test]
+fn a_row_in_a_file_no_gate_enrolls_is_unbound() {
+    let root = repo_with(
+        "obligations-unenrolled",
+        &[&line("1:policy/subject.rego:slug-one")],
+        &[
+            ("policy/subject.rego", DECLARING),
+            SUITE,
+            ("batten.toml", &enrolling("\"other\"")),
+        ],
+    );
+    assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
 }
 
 #[test]
