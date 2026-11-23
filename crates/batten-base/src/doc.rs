@@ -1537,7 +1537,9 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
     },
     VendoredDoc {
         id: "crate reach unknown",
-        why: Some("One unreviewed `Cargo.toml` edge can turn a wide crate graph back into a deep one"),
+        why: Some(
+            "One unreviewed `Cargo.toml` edge can turn a wide crate graph back into a deep one",
+        ),
         act: &[
             "remove the dependency, or move the code using it into a package its pattern admits",
             "widen `crate-allow-<package>` in the same change when the edge is the design",
