@@ -1257,6 +1257,12 @@ mod tests {
             &["busybox", "sh"],
             &["perl", "-e", "<computed>"],
             &["python3", "-c", "print(1)"],
+            // Windows: a shell by its name, whatever its case or `.exe`.
+            &["cmd", "/C"],
+            &["CMD.EXE", "/c", "dir"],
+            &["C:\\Windows\\System32\\cmd.exe", "/C", "x"],
+            &["powershell", "-NoProfile"],
+            &["pwsh.exe"],
         ] {
             assert!(spawns_shell(argv), "{argv:?}");
         }
@@ -1264,7 +1270,7 @@ mod tests {
             &["git", "status"][..],
             &["python3", "x.py"],
             &["node", "-v"],
-            &["cmd", "/C"],
+            &["cmdx", "/C"],
             &[],
         ] {
             assert!(!spawns_shell(argv), "{argv:?}");
