@@ -6443,14 +6443,6 @@
       "description": "One declared step: what its verdict depends on, and where it runs in a graph.\n\nA KEYED ROW declares both `inputs` and `tools`; a SCHEDULE-ONLY NODE declares\nneither (CLOUD-2785): it is in a `batten step graph run` group, always runs,\nand never keys or takes a receipt. Absent and empty are different answers,\nwhich is why both lists are optional and an empty one is still refused.",
       "type": "object",
       "properties": {
-        "ci": {
-          "description": "The required CI checks a pass of this row stands for (CLOUD-2788):\n`step cover` counts a check covered when the row passed at `HEAD`'s\ntree. Never key material: it names what the pass is evidence of, not\nwhat the verdict depends on.",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "maxLength": 1536
-          }
-        },
         "depends_on": {
           "description": "Rows of the same group that must exit 0 before this one starts.",
           "type": "array",

@@ -64,12 +64,6 @@ pub struct Step {
     /// sniffing the command's argv.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub journal: Option<Journal>,
-    /// The required CI checks a pass of this row stands for (CLOUD-2788):
-    /// `step cover` counts a check covered when the row passed at `HEAD`'s
-    /// tree. Never key material: it names what the pass is evidence of, not
-    /// what the verdict depends on.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ci: Vec<String>,
 }
 
 /// How a step's verdict is read.
@@ -275,7 +269,6 @@ mod tests {
             depends_on: Vec::new(),
             verdict: None,
             journal: None,
-            ci: Vec::new(),
         }
     }
 
@@ -290,7 +283,6 @@ mod tests {
             depends_on: after.iter().map(|id| (*id).to_owned()).collect(),
             verdict: None,
             journal: None,
-            ci: Vec::new(),
         }
     }
 
@@ -341,6 +333,17 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(refused.contains("declared twice"), "{refused}");
+    }
+
+    // THE CI MAPPING IS NOT A ROW KEY (CLOUD-2788): `step cover` reads it from
+    // `CI_LOCAL_PROOF` beside the roster, so a `ci` list on a row would load and
+    // be read by nothing. It is refused, as every unknown key is.
+    #[test]
+    fn a_ci_key_on_a_row_is_refused() {
+        let base = "[[step]]\nid = \"s\"\ninputs = [\"a\"]\ntools = [[\"t\"]]\n";
+        assert!(loaded(base).is_ok());
+        let refused = loaded(&format!("{base}ci = [\"check\"]\n")).unwrap_err();
+        assert!(refused.contains("unknown field `ci`"), "{refused}");
     }
 
     // A VERDICT HAS NO TEXT FORM (CLOUD-2785): the only value is `exit`, so a
