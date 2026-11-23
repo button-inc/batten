@@ -304,3 +304,16 @@ fn a_preset_remedy_is_a_verdict_route() {
         "the remedy argv must be printed\n{out}"
     );
 }
+
+/// A copy at `1.9.0` is behind a preset shipped at `1.10.0`: the comparison is
+/// semver's, never the strings'.
+///
+/// Fails by: comparing the versions as text, where `"1.10.0" < "1.9.0"`.
+#[test]
+fn a_minor_ten_is_newer_than_a_minor_nine() {
+    let (_, _, recorded) =
+        batten::preset::ejected_from("# batten-ejected: git/m version 1.9.0\n").expect("parsed");
+    let (_, _, shipped) =
+        batten::preset::ejected_from("# batten-ejected: git/m version 1.10.0\n").expect("parsed");
+    assert!(recorded < shipped);
+}
