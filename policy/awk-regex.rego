@@ -64,7 +64,7 @@ assigned contains [path, index, line, name] if {
 	# GROUP 2, because `awk-v-assignment` carries a left-boundary group ahead of
 	# the name (review of #928): without it `-v` matched inside `--verbose=1` and
 	# the capture was `erbose`. The row's own comment states the coupling.
-	name := capture[2]
+	name = capture[2]
 }
 
 # The identifier a fragment starts with, or undefined where it starts with

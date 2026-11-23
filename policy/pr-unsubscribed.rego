@@ -49,7 +49,7 @@ values(name) := {columns[1] |
 }
 
 field(name) := value if {
-	candidates := values(name)
+	candidates = values(name)
 	count(candidates) == 1
 	some value in candidates
 }

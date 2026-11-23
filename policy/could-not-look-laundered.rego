@@ -107,7 +107,7 @@ rules contains "gate run unsafe"
 # makes every predicate below undefined rather than vacuously green, which is
 # `shell-retirement`'s reason in its own words.
 delta := d if {
-	d := input.tree["base-delta"]
+	d = input.tree["base-delta"]
 	is_object(d)
 }
 
@@ -130,7 +130,7 @@ added_lines(path) := lines if {
 # occurrence that predates the change is what this rule exists not to fire on.
 added_lines(path) := lines if {
 	path in delta.edited
-	base := delta["base-lines"][path]
+	base = delta["base-lines"][path]
 	lines := {line | some line in input.tree.lines[path]; not line in base}
 }
 

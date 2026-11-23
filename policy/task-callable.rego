@@ -132,7 +132,7 @@ defined contains stem if {
 	rel := substring(path, count("mise-tasks/"), -1)
 	name := replace(rel, "/", ":")
 	contains(name, ".")
-	stem := split(name, ".")[0]
+	stem = split(name, ".")[0]
 }
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ caller contains [path, task] if {
 	some name, _ in workflow[path].jobs
 	some step in workflow[path].jobs[name].steps
 	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], step.run, -1)
-	task := split(fragment, " ")[2]
+	task = split(fragment, " ")[2]
 }
 
 # A `depends` / `depends_post` entry names one task, optionally followed by its
@@ -168,7 +168,7 @@ caller contains ["mise.toml", task] if {
 	is_array(body[key])
 	some entry in body[key]
 	is_string(entry)
-	task := split(trim_space(entry), " ")[0]
+	task = split(trim_space(entry), " ")[0]
 }
 
 # A `mise run <task>` inside another task's body. The parsed `run` scalar decides,
@@ -178,7 +178,7 @@ caller contains ["mise.toml", task] if {
 	some line in run_lines(body)
 	not commented(line)
 	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], line, -1)
-	task := split(fragment, " ")[2]
+	task = split(fragment, " ")[2]
 }
 
 # `hk.pkl` is Pkl, which the boundary does not parse into a document, so it is
@@ -190,7 +190,7 @@ caller contains ["hk.pkl", task] if {
 	not commented(line)
 	contains(line, "= \"mise run ")
 	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], line, -1)
-	task := split(fragment, " ")[2]
+	task = split(fragment, " ")[2]
 }
 
 run_lines(body) := split(body.run, "\n") if is_string(body.run)
@@ -259,7 +259,7 @@ violation contains {
 	some placement in task_line
 	placement[0] == path
 	placement[1] == task
-	number := placement[2]
+	number = placement[2]
 }
 
 # The path-only arm, for a caller the line index could not place.

@@ -133,7 +133,7 @@ entry[at] := row if {
 # mechanism, so it is simply the current one.
 latest[id] := row if {
 	some at, row in entry
-	id := row.id
+	id = row.id
 	at == max({other | some other, candidate in entry; candidate.id == id})
 }
 
@@ -172,7 +172,7 @@ changed contains path if {
 # kept exempting a row an older body closed and the latest dropped: the PR no
 # longer lands it, and the exemption is the fail-open direction.
 closes contains key if {
-	raw := measured_closes[count(measured_closes) - 1]
+	raw = measured_closes[count(measured_closes) - 1]
 
 	# THE SAME TRIMMED SPLIT `measured_closes` decided on, so a line it counts
 	# as measured is never parsed into different columns here.
@@ -258,9 +258,9 @@ overlapping[id] := hits if {
 # side missing skips the arm rather than deciding on it: could-not-look
 # manufactures neither a pass nor a refusal.
 predates_the_branch(id) if {
-	base := delta["base-date"]
+	base = delta["base-date"]
 	is_string(base)
-	updated := latest[id].updated
+	updated = latest[id].updated
 	updated != "-"
 	updated < base
 }
@@ -274,7 +274,7 @@ predates_the_branch(id) if {
 # `-` is could-not-look and leaves the row judged as before, so a record from an
 # older recorder is never silently exempted.
 cites_only(id) if {
-	packed := latest[id].sec1
+	packed = latest[id].sec1
 	packed != "-"
 	count({path |
 		some path in named_paths(packed)
@@ -489,7 +489,7 @@ test_a_newest_unread_fetch_keeps_the_earlier_exemption if {
 # A NEWEST `closes 0` IS A MEASURED NOTHING: no key, and the older body's
 # exemption is gone.
 test_a_latest_body_closing_nothing_exempts_nothing if {
-	doc := with_diff(
+	doc = with_diff(
 		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
 		["closes 1:CLOUD-1", "closes 0"],
 		["src/a.rs"],

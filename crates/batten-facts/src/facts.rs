@@ -2314,7 +2314,7 @@ impl Fact {
     fn units_schema_fragment() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
-            "description": "Fact::Units (CLOUD-1008). Path -> {nodes}: every function, comment and string literal in that source file as a D4 node `{kind, position, line, name, offset, bytes, counts}`. Rust is read through the one lossless parse; Rego through regorus, as `function` (counts.total: has a default or an else) and `binding` (a `:=` bound to a call; name is the callee) nodes. Counts are integers and booleans only, never source text; a Rust `fn`'s counts carry `tokens` (o200k_base over its slice, the capture-view reader's counter). A path absent from this map is could-not-look; a path present with no nodes parsed and holds none.",
+            "description": "Fact::Units (CLOUD-1008). Path -> {nodes}: every function, comment and string literal in that source file as a D4 node `{kind, position, line, name, offset, bytes, counts}`. Rust is read through the one lossless parse; Rego through regorus, as `function` (counts.total: has a default or an else) and `binding` (a `:=` whose right side is a call, a lookup, or whose left side is `_`; name is a bare callee or empty, counts.lookup and counts.wildcard say which) nodes. Counts are integers and booleans only, never source text; a Rust `fn`'s counts carry `tokens` (o200k_base over its slice, the capture-view reader's counter). A path absent from this map is could-not-look; a path present with no nodes parsed and holds none.",
             "additionalProperties": {
                 "type": "object",
                 "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},

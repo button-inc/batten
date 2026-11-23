@@ -113,7 +113,7 @@ lines := input.tree.records["board-writes"]
 # The two modules cannot import each other, so the rule is spelled the same in
 # both and each carries the same mutant rows; a change to one is a change to both.
 closes contains key if {
-	raw := closes_lines[count(closes_lines) - 1]
+	raw = closes_lines[count(closes_lines) - 1]
 	columns := split(trim_space(raw), " ")
 
 	# A MEASURED NOTHING (`closes 0`) carries no `:` and so no keys; without
@@ -160,9 +160,9 @@ recorded contains {"id": columns[1], "stamp": columns[2], "columns": columns} if
 # needs to know what a month is.
 latest[id] := stamp if {
 	some row in recorded
-	id := row.id
+	id = row.id
 	stamps := sort([other.stamp | some other in recorded; other.id == id])
-	stamp := stamps[count(stamps) - 1]
+	stamp = stamps[count(stamps) - 1]
 }
 
 # THE COUNT IS SEPARATED BY A COLON, NOT A COMMA, AND READING IT WRONG MADE THIS
@@ -196,7 +196,7 @@ latest[id] := stamp if {
 obligation contains entry if {
 	some row in recorded
 	row.stamp == latest[row.id]
-	packed := column(row.columns, 7)
+	packed = column(row.columns, 7)
 	packed != "-"
 	some pair in split(substring(packed, indexof(packed, ":") + 1, -1), ",")
 	at := indexof(pair, ":")
@@ -329,27 +329,27 @@ suite_above(path, i) if {
 declared_suite(path, i) := suite if {
 	above := [header | some header in suite_headers(path); header[0] < i]
 	count(above) > 0
-	suite := above[count(above) - 1][1]
+	suite = above[count(above) - 1][1]
 }
 
 declared_suite(path, i) := suite if {
 	not suite_above(path, i)
-	headers := suite_headers(path)
+	headers = suite_headers(path)
 	count(headers) > 0
-	suite := headers[0][1]
+	suite = headers[0][1]
 }
 
 spelled(case) := parts[count(parts) - 1] if parts := split(case, "::")
 
 case_resolves(path, i, case) if {
-	suite := declared_suite(path, i)
+	suite = declared_suite(path, i)
 	endswith(suite, ".rs")
 	some line in input.tree.lines[suite]
 	contains(line, sprintf("fn %v(", [spelled(case)]))
 }
 
 case_resolves(path, i, case) if {
-	suite := declared_suite(path, i)
+	suite = declared_suite(path, i)
 	endswith(suite, ".bats")
 	some line in input.tree.lines[suite]
 	contains(line, sprintf("@test \"%v\"", [case]))
@@ -373,7 +373,7 @@ case_resolves(path, _, case) if {
 # `;`, `mutate::Registry`'s grammar), never restated here.
 declares_slug(entry) if {
 	some line in input.tree.lines["mise.toml"]
-	runners := runners_declared(line)
+	runners = runners_declared(line)
 	some declared in split(runners, ";")
 	owner := split(declared, "=")
 	trim_space(owner[0]) == entry.slug

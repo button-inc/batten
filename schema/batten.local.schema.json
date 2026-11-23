@@ -1606,6 +1606,7 @@
             "pinned-toolchain",
             "release-hygiene",
             "engine-hygiene",
+            "rego-hygiene",
             "shell-hygiene",
             "tracker-hygiene",
             "supply-chain",

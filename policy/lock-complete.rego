@@ -86,12 +86,12 @@ rules contains "lock read unread"
 # Both are one map lookup here, and the quoted-versus-bare tool name that the awk
 # needed a `gsub` for is simply a key.
 lock := node if {
-	node := input.tree.staged["mise.lock"]
+	node = input.tree.staged["mise.lock"]
 	is_object(node)
 }
 
 manifest := node if {
-	node := input.tree.staged["mise.toml"]
+	node = input.tree.staged["mise.toml"]
 	is_object(node)
 }
 
@@ -141,7 +141,7 @@ lock_tools[name] := entry if {
 	some name, entries in lock.tools
 	is_array(entries)
 	count(entries) > 0
-	entry := entries[count(entries) - 1]
+	entry = entries[count(entries) - 1]
 }
 
 platform_keys[name] := keys if {
@@ -166,8 +166,8 @@ real_platforms[name] := names if {
 }
 
 has_url(name, platform) if {
-	entry := lock_tools[name]
-	block := entry[sprintf("platforms.%s", [platform])]
+	entry = lock_tools[name]
+	block = entry[sprintf("platforms.%s", [platform])]
 	is_string(block.url)
 }
 
@@ -300,7 +300,7 @@ violation contains {
 } if {
 	some name, names in locked_platforms
 	count(names) == 0
-	backend := lock_tools[name].backend
+	backend = lock_tools[name].backend
 	not locks_nothing(backend)
 }
 
@@ -379,7 +379,7 @@ pinned_version(value) := value if is_string(value)
 
 pinned_version(value) := version if {
 	is_object(value)
-	version := value.version
+	version = value.version
 	is_string(version)
 }
 
@@ -406,9 +406,9 @@ violation contains {
 	"subjects": [pointer("mise.toml", [name]), {"artifact": name}],
 } if {
 	some name, value in declared_tools
-	pin := pinned_version(value)
+	pin = pinned_version(value)
 	plain_version(pin)
-	locked := lock_tools[name].version
+	locked = lock_tools[name].version
 	is_string(locked)
 	not satisfies(locked, pin)
 }

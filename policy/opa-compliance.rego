@@ -210,7 +210,7 @@ compliance_for := input.tree.documents["mise.toml"].env.REGORUS_OPA_COMPLIANCE_F
 regorus_pin := input.tree.documents["Cargo.toml"].workspace.dependencies.regorus.version
 
 regorus_pin := v if {
-	v := input.tree.documents["Cargo.toml"].workspace.dependencies.regorus
+	v = input.tree.documents["Cargo.toml"].workspace.dependencies.regorus
 	is_string(v)
 }
 

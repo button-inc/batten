@@ -91,17 +91,17 @@ config := "hk.pkl"
 # The pin table, bound only when the manifest parsed to an object, so every arm
 # below is UNDEFINED rather than vacuously clean when it was not read.
 tools := t if {
-	t := input.tree.documents["mise.toml"].tools
+	t = input.tree.documents["mise.toml"].tools
 	is_object(t)
 }
 
 pin := v if {
-	v := tools.hk
+	v = tools.hk
 	is_string(v)
 }
 
 lines := ls if {
-	ls := input.tree.lines[config]
+	ls = input.tree.lines[config]
 	is_array(ls)
 }
 
@@ -241,12 +241,12 @@ violation contains {
 # are the two shapes read, and every other leaves D and E undefined together,
 # exactly as an absent task does.
 package_run := r if {
-	r := input.tree.documents["mise.toml"].tasks["pkl-package"].run
+	r = input.tree.documents["mise.toml"].tasks["pkl-package"].run
 	is_string(r)
 }
 
 package_run := r if {
-	r := input.tree.documents["mise.toml"].tasks["pkl-package"].run
+	r = input.tree.documents["mise.toml"].tasks["pkl-package"].run
 	is_array(r)
 }
 

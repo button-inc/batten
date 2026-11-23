@@ -53,7 +53,7 @@ rules contains "connector grant loose"
 # below silent, and the could-not-look finding to `input.tree.missing`, which the
 # engine owns.
 allows := entries if {
-	entries := input.tree.documents[".claude/settings.json"].permissions.allow
+	entries = input.tree.documents[".claude/settings.json"].permissions.allow
 	is_array(entries)
 }
 

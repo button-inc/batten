@@ -111,7 +111,7 @@ board_notes contains pointer if {
 	some pair in board_forwarded
 	pair[0] in board_queue
 	board_ready[pair[0]].verdict == "unready"
-	pointer := pair[1]
+	pointer = pair[1]
 }
 
 violation contains {

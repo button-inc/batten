@@ -69,16 +69,16 @@ watcher contains path if {
 governed if count(watcher) > 0
 
 triggers(path) := t if {
-	t := workflow[path].on
+	t = workflow[path].on
 	is_object(t)
 }
 
 # A trigger that fires once per release AND is not the event the recursion guard
 # swallows. `push` is the trunk write that publishes; `workflow_run` is the
 # release workflow's own completion, which is itself reached by a push.
-independent(path) if _ := triggers(path).push
+independent(path) if _ = triggers(path).push
 
-independent(path) if _ := triggers(path).workflow_run
+independent(path) if _ = triggers(path).workflow_run
 
 # The gate watches releases on a trigger the failure can silence, or on no
 # per-release trigger at all.

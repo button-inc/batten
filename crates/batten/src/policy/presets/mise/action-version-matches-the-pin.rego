@@ -68,8 +68,8 @@ workflow[path] := doc if {
 pinned[name] := version if {
 	some _, doc in input.tree.documents
 	some row in doc.provision
-	name := row.name
-	version := row.version
+	name = row.name
+	version = row.version
 }
 
 # The guard, for the reason `hk-fix-selection` measured on another module: an
@@ -148,10 +148,10 @@ disagrees(path, name) if {
 	some entry in job_step
 	entry[0] == path
 	entry[1] == name
-	step := entry[2]
+	step = entry[2]
 	action_step(step)
 	declares_a_version(step)
-	pinned_version := pinned[tool]
+	pinned_version = pinned[tool]
 	declared := object.get(step, ["with", "version"], "")
 	declared != pinned_version
 }
@@ -163,9 +163,9 @@ violation contains {
 } if {
 	governed
 	some placement in job_line
-	path := placement[0]
-	name := placement[1]
-	number := placement[2]
+	path = placement[0]
+	name = placement[1]
+	number = placement[2]
 	disagrees(path, name)
 }
 
@@ -193,10 +193,10 @@ unpinned_reader(path, name) if {
 	some entry in job_step
 	entry[0] == path
 	entry[1] == name
-	step := entry[2]
+	step = entry[2]
 	action_step(step)
 	not declares_a_version(step)
-	_ := pinned[tool]
+	_ = pinned[tool]
 }
 
 violation contains {
@@ -206,9 +206,9 @@ violation contains {
 } if {
 	governed
 	some placement in job_line
-	path := placement[0]
-	name := placement[1]
-	number := placement[2]
+	path = placement[0]
+	name = placement[1]
+	number = placement[2]
 	unpinned_reader(path, name)
 }
 

@@ -1,14 +1,14 @@
-//! [`crate::facts::Fact::Units`] for Rego: each module's functions and its `:=`
-//! bindings to calls, as D4 nodes, through regorus's own parse (CLOUD-1008,
-//! CLOUD-2777).
+//! [`crate::facts::Fact::Units`] for Rego: each module's functions and the `:=`
+//! bindings whose right side can be undefined by its shape, as D4 nodes,
+//! through regorus's own parse (CLOUD-1008, CLOUD-2777).
 //!
 //! Pointers, never the AST: a `function` node says whether the helper is
 //! TOTAL (it has a `default` or an `else` body, so a call to it always yields a
-//! value), and a `binding` node says that a `:=` in some body is bound to a call
-//! of a named function. Those two facts are exactly what a preset needs to
-//! refuse a partial helper bound with `:=` and then relied on, which regorus's
-//! RVM binds as Undefined (CLOUD-2777), and nothing here decides it: the
-//! `rego-hygiene` preset does.
+//! value), and a `binding` node says that a `:=` in some body binds a call of a
+//! named function (`name`), a lookup (`counts.lookup`), or `_`
+//! (`counts.wildcard`). Those facts are what a preset needs to refuse a `:=`
+//! regorus's RVM binds as Undefined where the interpreter fails the body
+//! (CLOUD-2777), and nothing here decides it: the `rego-hygiene` preset does.
 //!
 //! A module regorus refuses is could-not-look, never an empty node list.
 
@@ -72,13 +72,13 @@ pub fn units(path: &str, text: &str) -> Option<Vec<Value>> {
         .collect();
     let mut bindings = Vec::new();
     collect_bindings(&Value::Array(rules.clone()), &mut bindings);
-    nodes.extend(bindings.into_iter().map(|(callee, line)| {
+    nodes.extend(bindings.into_iter().map(|binding| {
         json!({
             "kind": "binding",
             "position": "body",
-            "line": line,
-            "name": callee,
-            "counts": {},
+            "line": binding.line,
+            "name": binding.callee.unwrap_or_default(),
+            "counts": {"wildcard": binding.wildcard, "lookup": binding.lookup},
         })
     }));
     Some(nodes)
@@ -105,18 +105,45 @@ fn first_line(node: &Value) -> Option<usize> {
     }
 }
 
-/// Every `x := f(…)` whose callee is a bare name, with its line.
-fn collect_bindings(node: &Value, out: &mut Vec<(String, usize)>) {
+/// One `:=` whose right side's definedness is a question of its shape
+/// ([`collect_bindings`]).
+struct Binding {
+    /// The bare-named function the right side calls, when it is a call.
+    callee: Option<String>,
+    /// The left side is a bare `_`: the statement asserts only that the right
+    /// side is defined, which is the check the bytecode drops.
+    wildcard: bool,
+    /// The right side is a lookup (`a.b`, `a[k]`), undefined where the key is.
+    lookup: bool,
+    line: usize,
+}
+
+/// Every `:=` that calls a bare-named function, is a lookup, or binds `_`,
+/// with its line. Any other right side (a literal, a variable, a
+/// comprehension, a dotted builtin) is not reported: its definedness is not a
+/// question of its shape.
+fn collect_bindings(node: &Value, out: &mut Vec<Binding>) {
     match node {
         Value::Object(map) => {
             if let Some(assign) = map.get("AssignExpr")
                 && assign.get("op").and_then(Value::as_str) == Some("ColEq")
-                && let Some(callee) = assign
-                    .get("rhs")
-                    .and_then(|rhs| rhs.get("Call"))
-                    .and_then(|call| var_name(call.get("fcn")))
             {
-                out.push((callee, first_line(assign).unwrap_or(0)));
+                let rhs = assign.get("rhs");
+                let callee = rhs
+                    .and_then(|rhs| rhs.get("Call"))
+                    .and_then(|call| var_name(call.get("fcn")));
+                let lookup = rhs.is_some_and(|rhs| {
+                    rhs.get("RefDot").is_some() || rhs.get("RefBrack").is_some()
+                });
+                let wildcard = var_name(assign.get("lhs")).as_deref() == Some("_");
+                if callee.is_some() || lookup || wildcard {
+                    out.push(Binding {
+                        callee,
+                        wildcard,
+                        lookup,
+                        line: first_line(assign).unwrap_or(0),
+                    });
+                }
             }
             for value in map.values() {
                 collect_bindings(value, out);
@@ -186,7 +213,27 @@ violation contains \"x\" if {
                 )
             })
             .collect();
-        assert_eq!(bindings, [("subject", 18), ("total", 19)]);
+        // `message := args[i + 1]` is a lookup, so it is a binding with no callee.
+        assert_eq!(bindings, [("", 14), ("subject", 18), ("total", 19)]);
+        let lookup = nodes
+            .iter()
+            .find(|node| node["kind"] == "binding" && node["line"] == 14)
+            .expect("the lookup binding");
+        assert_eq!(lookup["counts"], json!({"wildcard": false, "lookup": true}));
+    }
+
+    /// Fails by: `_ := e` not reported, or `=` (which keeps the guard on both
+    /// evaluators) or a literal right side reported as a binding.
+    #[test]
+    fn a_wildcard_binding_is_reported_and_unification_is_not() {
+        let module = "package p\n\nimport rego.v1\n\nv if {\n\t_ := input.a\n\t_ = input.b\n\tx := 1\n\tx == 1\n}\n";
+        let nodes = units("p.rego", module).expect("parses");
+        let bindings: Vec<_> = nodes
+            .iter()
+            .filter(|node| node["kind"] == "binding")
+            .map(|node| (node["line"].as_u64().unwrap(), node["counts"].clone()))
+            .collect();
+        assert_eq!(bindings, [(6, json!({"wildcard": true, "lookup": true}))]);
     }
 
     /// Fails by: an `else` body not counted as making the helper total.

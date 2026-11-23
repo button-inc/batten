@@ -97,7 +97,7 @@ job_fields[pair[0]] := pair[1] if {
 # rules below unfired and the window unjudged, so `torn` reads a missing or
 # non-numeric column as a refusal rather than letting it go silent.
 job_count_of(key) := number if {
-	raw := job_fields[key]
+	raw = job_fields[key]
 	regex.match("^[0-9]+$", raw)
 	number := to_number(raw)
 }

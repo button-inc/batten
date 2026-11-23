@@ -47,7 +47,7 @@ reads_positional(line) if {
 # shape whose appended words become arguments.
 function_shaped(line) if {
 	rest := substring(trim_space(line), count(run_prefix), -1)
-	head := split(rest, " ")[0]
+	head = split(rest, " ")[0]
 	endswith(head, "()")
 }
 

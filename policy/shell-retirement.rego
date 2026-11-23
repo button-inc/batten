@@ -147,7 +147,7 @@ rules contains "shell retire other"
 # through a rule that holds only for an object, and every predicate below is
 # undefined without it rather than vacuously clean.
 delta := d if {
-	d := input.tree["base-delta"]
+	d = input.tree["base-delta"]
 	is_object(d)
 }
 
@@ -375,7 +375,7 @@ violation contains {
 # that both adds a precondition and drops a line has to earn the drop under
 # `only_drops_a_retired_reference` exactly as before.
 only_supplies_the_successors_precondition(path) if {
-	base := delta["base-lines"][path]
+	base = delta["base-lines"][path]
 	head := {line | some line in input.tree.lines[path]}
 	added := {line | some line in head; not line in base}
 
@@ -446,7 +446,7 @@ only_repoints_at_a_program_this_change_retires(path) if {
 	# what it refuses does not add a route — it deletes one.
 	under_mise_tasks(path)
 
-	base := delta["base-lines"][path]
+	base = delta["base-lines"][path]
 	base_set := {line | some line in base}
 	head := {line | some line in input.tree.lines[path]}
 	removed := {line | some line in base_set; not line in head}
@@ -572,7 +572,7 @@ supplies_a_precondition(line) if {
 # admission does not hold and the edit is refused, which is the safe direction
 # for an arm whose failure mode is a silent licence.
 only_drops_a_retired_reference(path) if {
-	base := delta["base-lines"][path]
+	base = delta["base-lines"][path]
 	head := {line | some line in input.tree.lines[path]}
 	removed := {line | some line in base; not line in head}
 
@@ -728,14 +728,14 @@ admitted_addition(path, line, removed) if drops_a_retired_var_name(path, line, r
 # today. A rule that simply does not hold is false, which is the only safe shape
 # for an additive arm.
 line_of_a_retired_case(path, line, removed) if {
-	base := delta["base-lines"][path]
+	base = delta["base-lines"][path]
 	head := {l | some l in input.tree.lines[path]}
 
 	# A case whose opener the head no longer carries.
 	some start, opener in base
 	startswith(opener, "@test ")
 	not opener in head
-	stop := case_end(base, start)
+	stop = case_end(base, start)
 
 	case_earns_removal(path, base, start, stop, removed)
 
@@ -787,7 +787,7 @@ case_earns_removal(path, base, start, stop, removed) if {
 	binding in removed
 	some gone in delta.deleted
 	mentions_retired(path, binding, gone)
-	variable := assigned_name(binding)
+	variable = assigned_name(binding)
 
 	some spent, body in base
 	spent >= start
@@ -818,7 +818,7 @@ case_end(base, start) := stop if {
 # path in `delta.deleted` already has.
 basename(path) := name if {
 	parts := split(path, "/")
-	name := parts[count(parts) - 1]
+	name = parts[count(parts) - 1]
 }
 
 # The extensionless form of a basename: `graph-check.sh` -> `graph-check`.
@@ -838,8 +838,8 @@ stem(name) := head if {
 # carry `.sh` (CLOUD-865), so the line reads `for gate in graph-check …` and the
 # token is the stem rather than any filename.
 naming_forms(gone) := forms if {
-	base := basename(gone)
-	forms := {gone, base} | {s | s := stem(base)}
+	base = basename(gone)
+	forms := {gone, base} | {s | s = stem(base)}
 }
 
 # A RETIRED NAME DROPPED FROM A LIST (CLOUD-1224).
@@ -990,7 +990,7 @@ script_dir_vars_of[path] := names if {
 	some path, lines in delta["base-lines"]
 	names := {variable |
 		some line in lines
-		variable := assigned_name(line)
+		variable = assigned_name(line)
 		some form in spellings(assigned_value(line))
 		regex.match(data.batten.patterns["shell-script-directory"], form)
 	}
@@ -1042,7 +1042,7 @@ bats_retired_path_vars_of[[path, gone]] := names if {
 	tail := concat("", ["/", basename(gone)])
 	names := {variable |
 		some line in lines
-		variable := assigned_name(line)
+		variable = assigned_name(line)
 		some form in spellings(assigned_value(line))
 		endswith(form, tail)
 		head := substring(form, 0, count(form) - count(tail))
@@ -1066,7 +1066,7 @@ retired_path_vars_of[[path, gone]] := names if {
 	some gone in delta.deleted
 	names := {variable |
 		some line in lines
-		variable := assigned_name(line)
+		variable = assigned_name(line)
 		some form in spellings(assigned_value(line))
 		is_retired_reference_by_text(path, form, gone)
 	}
@@ -1263,7 +1263,7 @@ spends_only_the_retired(path, variable, gone) if {
 }
 
 mentions_retired(path, line, gone) if {
-	variable := assigned_name(line)
+	variable = assigned_name(line)
 	variable in script_dir_vars(path)
 	spends_only_the_retired(path, variable, gone)
 }
@@ -1757,7 +1757,7 @@ withdrawn_subjects(path) := subjects if {
 # Everything else on the row is the reason. It names no successor, so this is the
 # only thing a reader can check the claim against, and it is owed.
 withdrawal_reason(path) := words if {
-	subjects := withdrawn_subjects(path)
+	subjects = withdrawn_subjects(path)
 	words := {word |
 		some word in withdrawn_fields(path)
 
@@ -1823,7 +1823,7 @@ arm_pairs := {[path, row] |
 	trimmed := trim_space(line)
 	startswith(trimmed, marker)
 	fields := split(trim_space(substring(trimmed, count(marker), -1)), " ")
-	path := fields[0]
+	path = fields[0]
 	row := trimmed
 }
 
@@ -2915,7 +2915,7 @@ test_an_invocation_field_is_not_a_successor if {
 # licence.
 #MUTANT rename-rewrite-unchecked|s@^	not old in head_rule_ids$@	true@|a_rewrite_naming_an_unrenamed_token_is_refused
 only_rewrites_a_renamed_id(path) if {
-	base := delta["base-lines"][path]
+	base = delta["base-lines"][path]
 	base_set := {line | some line in base}
 	head := {line | some line in input.tree.lines[path]}
 	removed := {line | some line in base_set; not line in head}
@@ -2982,7 +2982,7 @@ rewritten_by_a_rename(was, others) if {
 # Every rule id the committed authority declares at head.
 head_rule_ids contains id if {
 	some row in input.tree.documents["batten.toml"].rule
-	id := row.id
+	id = row.id
 }
 
 # THE RENAME-REWRITE ARM, over a synthetic input.

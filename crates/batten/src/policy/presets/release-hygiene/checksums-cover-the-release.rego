@@ -105,7 +105,7 @@ rh_census(lines) := {pair[0]: pair[1] |
 # manifest named.
 rh_whole(lines) if {
 	count([line | some line in lines; startswith(line, "release-census\t")]) == 1
-	census := rh_census(lines)
+	census = rh_census(lines)
 	every key in rh_counted {
 		to_number(census[key]) == count([line | some line in lines; startswith(line, sprintf("release-%s\t", [key]))])
 	}
@@ -113,7 +113,7 @@ rh_whole(lines) if {
 }
 
 rh_manifest(lines) := name if {
-	names := rh_of(lines, "release-manifest")
+	names = rh_of(lines, "release-manifest")
 	count(names) == 1
 	some name in names
 }

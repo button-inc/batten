@@ -56,7 +56,7 @@ job_conditions[path] := conditions if {
 	some path, _ in workflow
 	conditions := concat("\n", [c |
 		some name, job in workflow[path].jobs
-		c := condition_text(path, name)
+		c = condition_text(path, name)
 	])
 }
 
@@ -67,7 +67,7 @@ condition_text(path, name) := concat("\n", array.concat(
 
 scopes_head_branch(path) if contains(job_conditions[path], "workflow_run.head_branch")
 
-trigger_filters_branches(path) if _ := triggers(path).workflow_run.branches
+trigger_filters_branches(path) if _ = triggers(path).workflow_run.branches
 
 violation contains {
 	"rule": "workflow run loose",
@@ -75,7 +75,7 @@ violation contains {
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in workflow
-	_ := triggers(path).workflow_run
+	_ = triggers(path).workflow_run
 	scopes_head_branch(path)
 	not trigger_filters_branches(path)
 }
@@ -127,7 +127,7 @@ violation contains {
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in workflow
-	_ := triggers(path).issue_comment
+	_ = triggers(path).issue_comment
 	merges(path)
 	not reads_draft_state(path)
 }
@@ -177,7 +177,7 @@ violation contains {
 cron_of contains [path, expr] if {
 	some path, _ in workflow
 	some entry in triggers(path).schedule
-	expr := entry.cron
+	expr = entry.cron
 }
 
 colliding contains expr if {
@@ -245,12 +245,12 @@ some_dependency_is_named(path, name) if {
 # collection` expects a collection), so on a tree with one such job this whole
 # preset answered could-not-look and judged nothing (#1276).
 needs_of(path, name) := needs if {
-	needs := workflow[path].jobs[name].needs
+	needs = workflow[path].jobs[name].needs
 	is_array(needs)
 }
 
 needs_of(path, name) := [needs] if {
-	needs := workflow[path].jobs[name].needs
+	needs = workflow[path].jobs[name].needs
 	is_string(needs)
 }
 
@@ -270,7 +270,7 @@ needs_of(path, name) := [needs] if {
 # signal.
 
 warm_step(path, name, index) if {
-	step := workflow[path].jobs[name].steps[index]
+	step = workflow[path].jobs[name].steps[index]
 	contains(object.get(step, "run", ""), "--no-run")
 }
 
@@ -333,9 +333,9 @@ violation contains {
 cache_hit_step_id := `steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit`
 
 guard_names(path, name, index) := id if {
-	guard := workflow[path].jobs[name].steps[index]["if"]
+	guard = workflow[path].jobs[name].steps[index]["if"]
 	found := regex.find_n(cache_hit_step_id, guard, 1)
-	id := split(split(found[0], ".")[1], ".")[0]
+	id = split(split(found[0], ".")[1], ".")[0]
 }
 
 step_id_exists(path, id) if {
@@ -353,7 +353,7 @@ violation contains {
 	some name, _ in workflow[path].jobs
 	some index, _ in workflow[path].jobs[name].steps
 	warm_step(path, name, index)
-	id := guard_names(path, name, index)
+	id = guard_names(path, name, index)
 	not step_id_exists(path, id)
 }
 
@@ -601,7 +601,7 @@ test_two_workflows_sharing_a_cron_are_refused if {
 		some f in found
 		f.verdict == "job start same"
 		some s in f.subjects
-		p := s.path
+		p = s.path
 	}) == 2
 }
 

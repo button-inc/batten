@@ -71,10 +71,10 @@ present contains name if {
 # One window's closing line, as `key -> value`, or undefined where the record
 # carries anything but exactly one.
 closing(name) := fields if {
-	lines := input.tree.records[name]
+	lines = input.tree.records[name]
 	endings := [line | some line in lines; startswith(line, "window\t")]
 	count(endings) == 1
-	ending := endings[0]
+	ending = endings[0]
 	fields := {pair[0]: pair[1] |
 		some field in array.slice(split(ending, "\t"), 1, 100)
 		pair := split(field, "=")
@@ -85,7 +85,7 @@ closing(name) := fields if {
 # A count off the closing line, or undefined — never a fault: regorus `to_number`
 # faults on a non-numeric string, so it is guarded first.
 counted(name, key) := to_number(raw) if {
-	raw := closing(name)[key]
+	raw = closing(name)[key]
 	regex.match(data.batten.patterns["whole-number"], raw)
 }
 
@@ -105,7 +105,7 @@ unmeasured(name) if {
 # window the producer tore mid-write must not read as a quiet trunk.
 whole contains name if {
 	some name in present
-	read := counted(name, "read")
+	read = counted(name, "read")
 	kept(name) == count([line | some line in input.tree.records[name]; startswith(line, "row\t")])
 	read >= kept(name)
 	not unmeasured(name)

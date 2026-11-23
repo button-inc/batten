@@ -61,7 +61,7 @@ rules contains "review declare wrong"
 config_path := ".coderabbit.yaml"
 
 config_lines := lines if {
-	lines := input.tree.lines[config_path]
+	lines = input.tree.lines[config_path]
 }
 
 # The keys whose DEFAULT is the value this refuses, so absence is a violation.
@@ -90,7 +90,7 @@ key_matches(name) := [{"line": i + 1, "value": value} |
 	not commented(line)
 	contains(line, ":")
 	trim_space(substring(line, 0, indexof(line, ":"))) == name
-	value := value_of(line)
+	value = value_of(line)
 ]
 
 # THE LAST ONE WINS, because that is what the reader this gate is about does:
@@ -98,9 +98,9 @@ key_matches(name) := [{"line": i + 1, "value": value} |
 # would be a verdict about a value nothing uses. Undefined when there is no
 # match, which is the absence every caller below already handles.
 key_at(name) := match if {
-	found := key_matches(name)
+	found = key_matches(name)
 	count(found) > 0
-	match := found[count(found) - 1]
+	match = found[count(found) - 1]
 }
 
 # AND THE DUPLICATE IS ITSELF REPORTED, rather than silently resolved. Two
