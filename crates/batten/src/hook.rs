@@ -21997,11 +21997,18 @@ deny contains "refused by themodule" if {
             vec!["echo"],
             "a mention runs nothing"
         );
+        // An absent script file is not parsed as a -c text: it reaches only
+        // `bash` itself and the opaque entry for the file nothing read
+        // (CLOUD-2775: any script that cannot be read is opaque).
+        let file = program_reach("bash script.sh");
         assert_eq!(
             reached("bash script.sh"),
-            vec!["bash"],
-            "a script file is not a -c text"
+            vec!["bash", "bash"],
+            "a script file is not a -c text: {file:?}"
         );
+        assert!(file[0].get("opaque").is_none(), "{file:?}");
+        assert_eq!(file[1]["opaque"], true, "{file:?}");
+        assert_eq!(file[1]["trusted"], false, "{file:?}");
     }
 
     /// `cargo run` reaches the binary it starts, named by `--bin`, `--example`
