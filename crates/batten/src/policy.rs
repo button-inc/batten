@@ -2960,6 +2960,30 @@ pub fn input_paths(bundle: &Bundle) -> Vec<String> {
     paths.into_iter().collect()
 }
 
+/// Every `input` path the non-test rules of the one module `source` read,
+/// dotted as [`input_paths`] renders them, or `None` when it will not parse or
+/// cannot be described (CLOUD-2789).
+///
+/// What an admission's epoch is narrowed to (`epoch::for_rule`): a module row
+/// compiles from its one file, so these paths are the whole of what its input
+/// can hand it. Parsed, never compiled against a table: the question is which
+/// names the code reads, not what they evaluate to.
+pub(crate) fn module_input_paths(path: &str, source: &str) -> Option<BTreeSet<String>> {
+    let mut engine = new_engine();
+    engine
+        .add_policy(path.to_owned(), source.to_owned())
+        .ok()?;
+    let described = describe(&engine)?;
+    Some(
+        described
+            .iter()
+            .flat_map(|module| &module.rules)
+            .filter(|rule| !rule.name.starts_with("test_"))
+            .flat_map(|rule| rule.input_paths.iter().cloned())
+            .collect(),
+    )
+}
+
 /// `bundle`, still on its interpreter, recording why.
 fn interpreted_because(bundle: Bundle, why: Fallback, detail: &dyn std::fmt::Display) -> Bundle {
     let Evaluator::Interpreted { engine, .. } = bundle.evaluator else {

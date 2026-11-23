@@ -298,13 +298,25 @@ fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
 /// policy change that would have made it unnecessary — and that is a change to
 /// what decides THIS rule.
 ///
-/// The value covers [`describe`]'s tracked files, read the same way, except
-/// that `batten.toml` enters as a parsed projection ([`project`]): comments and
-/// layout dropped, and of the id-keyed rows only this rule's `[[rule]]`, the
-/// `[[verdict]]` rows naming this rule or verdict, and — when the rule has a
-/// module — the `[[pattern]]` rows that module reads ([`pattern_reads`]): every
-/// row when it reads one by a computed id. Every other table stays whole. The rule's module, which the surface does not track, and
-/// the engine version are added.
+/// `batten.toml` enters as a parsed projection ([`project_reading`]): comments
+/// and layout dropped, and of the id-keyed rows only this rule's `[[rule]]`,
+/// the `[[verdict]]` rows naming this rule or verdict, and — when the rule has
+/// a module — the `[[pattern]]` rows that module reads ([`pattern_reads`]):
+/// every row when it reads one by a computed id.
+///
+/// **AN ALLOWLIST WHERE THE MODULE'S READS ARE KNOWN** (CLOUD-2789). A module
+/// row compiles from its one file and decides from `data.batten.patterns` and
+/// its `input`, so when every `input` path its code reads is a named
+/// `input.tree` key ([`TreeReads`]) the projection keeps only the tables that
+/// build those keys, and the tracked files only where the row hands it their
+/// CONTENT (`documents`, `lines`, `invocations`, `uses`, `units`). Hashed whole,
+/// an unrelated `[[verb]]` or `AGENTS.md` edit unbound every held `issue file
+/// held` admission. A read it cannot name — `input.call`, `input.facts`, a bare
+/// `input.tree`, a computed key — keeps every table but the narrowed rows and
+/// every tracked file, as before; a key built from every row's declarations
+/// keeps every `[[rule]]` row. A row whose selectors reach `batten.toml` itself
+/// reads all of it, so it is hashed whole. The rule's module, which the surface
+/// does not track, and the engine version are added.
 ///
 /// # Errors
 ///
@@ -312,19 +324,53 @@ fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
 pub fn for_rule(dir: &Path, base_ref: Option<&str>, rule: &str, verdict: &str) -> Result<String> {
     let config = authority(dir, base_ref)?;
     let tracked = tracked_paths(&config)?;
+    let row = config.rules.iter().find(|row| row.id == rule);
+    let reads = match row.and_then(|row| row.module.as_deref()) {
+        Some(module) => {
+            let path = canonical_repo_path(module)?;
+            let source = read_tracked(dir, &path, base_ref)?;
+            Some(Reads {
+                patterns: pattern_reads(&source),
+                input: std::str::from_utf8(&source)
+                    .ok()
+                    .and_then(|text| crate::policy::module_input_paths(&path, text)),
+            })
+        }
+        None => None,
+    };
+    // What the row hands its module as file CONTENT, over the tracked set.
+    let read_files = match row {
+        Some(row) if reads.is_some() => Some(content_paths(row, &tracked)?),
+        _ => None,
+    };
+    let config_read_whole = read_files
+        .as_ref()
+        .is_some_and(|files| files.contains(crate::config_model::CONFIG_FILE));
+    // Narrowed only where nothing the module reads opens a file its row does
+    // not name: `traversals`, `shell` and every key built from all rows may.
+    let narrowed = reads
+        .as_ref()
+        .and_then(|reads| reads.input.as_ref())
+        .and_then(TreeReads::of)
+        .is_some_and(|tree| tree.opens_only_declared_files());
     let mut entries = Vec::new();
     let mut module = None;
     for path in &tracked {
+        let is_config = path == crate::config_model::CONFIG_FILE;
+        if narrowed && !is_config && !read_files.as_ref().is_some_and(|files| files.contains(path))
+        {
+            continue;
+        }
         let contents = read_tracked(dir, path, base_ref)?;
-        if path == crate::config_model::CONFIG_FILE {
-            let reads = |module: &str| -> Result<Option<BTreeSet<String>>> {
-                let path = canonical_repo_path(module)?;
-                Ok(pattern_reads(&read_tracked(dir, &path, base_ref)?))
-            };
-            let (projected, declared) = project(&contents, rule, verdict, &reads)?;
+        if is_config && !config_read_whole {
+            let answer = |_: &str| -> Result<Reads> { Ok(reads.clone().unwrap_or_default()) };
+            let (projected, declared) = project_reading(&contents, rule, verdict, &answer)?;
             module = declared;
             entries.push((path.clone(), projected));
         } else {
+            if is_config {
+                module = row.and_then(|row| row.module.clone());
+            }
             entries.push((path.clone(), contents));
         }
     }
@@ -415,14 +461,140 @@ fn module_digest(dir: &Path, module: Option<&str>) -> String {
     surface_fingerprint(&[(String::from("module"), bytes)]).to_hex()
 }
 
-/// `batten.toml` reduced to what decides `rule`/`verdict`, and the rule's
-/// module path if it declares one. See [`for_rule`]. `reads` answers which
-/// `[[pattern]]` ids a module reads, `None` for every one.
+/// What a module row's code reads, as [`project_reading`] narrows to it.
+/// `Default` is the could-not-look answer: every pattern, unknown input.
+#[derive(Clone, Default)]
+struct Reads {
+    /// The `[[pattern]]` ids it reads ([`pattern_reads`]), `None` for every one.
+    patterns: Option<BTreeSet<String>>,
+    /// The `input` paths its non-test rules read, dotted without `input.`
+    /// ([`crate::policy::module_input_paths`]), `None` when not established.
+    input: Option<BTreeSet<String>>,
+}
+
+/// The `input.tree` keys a module reads, when every read it makes is one.
+struct TreeReads {
+    /// Each key, the first segment after `tree.`.
+    keys: BTreeSet<String>,
+    /// The `input.tree.records` subpaths it reads, `None` when it reads the
+    /// family whole (or by a computed name).
+    records: Option<BTreeSet<String>>,
+}
+
+/// The tree keys whose value a row's OWN declarations and the subject decide:
+/// its declared paths (`documents` … `units`, selected per row in
+/// `rules::policy_rule`), the walk, the could-not-look channel, and the
+/// recorder receipts, which no table names.
+const SELF_DECLARED: &[&str] = &[
+    "documents",
+    "tracked",
+    "lines",
+    "invocations",
+    "uses",
+    "units",
+    "missing",
+    "records-blocked",
+];
+
+/// `input.tree.records`: one store per `[[recorder]]`/`[[record]]` row's
+/// `record` name (`rules::recorder_records`).
+const RECORDS: &str = "records";
+
+/// `input.tree.base-delta`: ONE delta over every row's `delta_sources`, against
+/// the one `base` those rows share (`rules::git_facts_within`), so another
+/// row's pair decides this module's value too.
+const BASE_DELTA: &str = "base-delta";
+
+/// `input.tree.traversals`: walked from `[[traversal]]`, `[[register]]` and the
+/// whole pattern table (`rules::walk_traversals`).
+const TRAVERSALS: &str = "traversals";
+
+/// `input.tree.shell`: the detector over `[census.shell]`'s homes.
+const SHELL: &str = "shell";
+
+impl TreeReads {
+    /// `paths` as tree keys, or `None` when one is not a named `input.tree`
+    /// key: `input.call`, `input.facts`, a bare `input`, `input.tree[k]`.
+    fn of(paths: &BTreeSet<String>) -> Option<Self> {
+        let mut keys = BTreeSet::new();
+        let mut records = Some(BTreeSet::new());
+        for path in paths {
+            let rest = path.strip_prefix("tree.")?;
+            let (key, sub) = match rest.split_once('.') {
+                Some((key, sub)) => (key, Some(sub)),
+                None => (rest, None),
+            };
+            if key.is_empty() {
+                return None;
+            }
+            if key == RECORDS {
+                match (sub, records.as_mut()) {
+                    (Some(sub), Some(names)) if !sub.is_empty() => {
+                        names.insert(sub.to_owned());
+                    }
+                    _ => records = None,
+                }
+            }
+            keys.insert(key.to_owned());
+        }
+        Some(Self { keys, records })
+    }
+
+    /// Whether a key outside [`SELF_DECLARED`] and the table-built few is read:
+    /// one built from every row's declarations (the git family, `forge`,
+    /// `state`, `minted` …), or one this reader does not classify.
+    fn reads_every_row(&self) -> bool {
+        self.keys.iter().any(|key| {
+            !SELF_DECLARED.contains(&key.as_str())
+                && ![RECORDS, BASE_DELTA, TRAVERSALS, SHELL].contains(&key.as_str())
+        })
+    }
+
+    /// Whether every file the module's input opens is one its row declares:
+    /// `traversals` and `shell` walk files no row names, and a key built from
+    /// every row may.
+    fn opens_only_declared_files(&self) -> bool {
+        !self.reads_every_row() && !self.keys.contains(TRAVERSALS) && !self.keys.contains(SHELL)
+    }
+
+    /// Whether a `[[recorder]]`/`[[record]]` row's store is one this reads.
+    fn reads_record(&self, row: &toml::Value) -> bool {
+        let Some(names) = self.records.as_ref() else {
+            return true;
+        };
+        row.get("record").and_then(toml::Value::as_str).is_none_or(|record| {
+            names
+                .iter()
+                .any(|sub| sub == record || sub.starts_with(&format!("{record}.")))
+        })
+    }
+}
+
+/// [`project_reading`] with only the pattern half of a module's reads known:
+/// its input is could-not-look, so no table is narrowed past the rows.
 fn project(
     contents: &[u8],
     rule: &str,
     verdict: &str,
     reads: &dyn Fn(&str) -> Result<Option<BTreeSet<String>>>,
+) -> Result<(Vec<u8>, Option<String>)> {
+    let answer = |module: &str| -> Result<Reads> {
+        Ok(Reads {
+            patterns: reads(module)?,
+            input: None,
+        })
+    };
+    project_reading(contents, rule, verdict, &answer)
+}
+
+/// `batten.toml` reduced to what decides `rule`/`verdict`, and the rule's
+/// module path if it declares one. See [`for_rule`]. `reads` answers what the
+/// module reads.
+fn project_reading(
+    contents: &[u8],
+    rule: &str,
+    verdict: &str,
+    reads: &dyn Fn(&str) -> Result<Reads>,
 ) -> Result<(Vec<u8>, Option<String>)> {
     let text = std::str::from_utf8(contents)
         .map_err(|err| UsageError::raise(format!("batten.toml is not UTF-8: {err}")))?;
@@ -434,18 +606,46 @@ fn project(
             .is_some_and(|id| ids.contains(&id))
     };
     let mut module = None;
-    if let Some(toml::Value::Array(rows)) = value.get_mut("rule") {
-        rows.retain(|row| id_is(row, &[rule]));
+    if let Some(toml::Value::Array(rows)) = value.get("rule") {
+        let own: Vec<&toml::Value> = rows.iter().filter(|row| id_is(row, &[rule])).collect();
         // A `bundle` names a DIRECTORY of modules, which this projection does
         // not enumerate: the whole config stays in, as before CLOUD-2779,
         // rather than a narrower surface that could miss what decides it.
-        if rows.iter().any(|row| row.get("bundle").is_some()) {
+        if own.iter().any(|row| row.get("bundle").is_some()) {
             return Ok((contents.to_vec(), None));
         }
-        module = rows
+        module = own
             .iter()
             .find_map(|row| row.get("module").and_then(toml::Value::as_str))
             .map(str::to_owned);
+    }
+    let reads = module.as_deref().map(reads).transpose()?;
+    let tree = reads
+        .as_ref()
+        .and_then(|reads| reads.input.as_ref())
+        .and_then(TreeReads::of);
+    if let Some(toml::Value::Array(rows)) = value.get_mut("rule") {
+        match tree.as_ref() {
+            // EVERY ROW DECLARES INTO IT: kept whole.
+            Some(tree) if tree.reads_every_row() => {}
+            // Every row's `base` and `delta_sources` decide the one delta.
+            Some(tree) if tree.keys.contains(BASE_DELTA) => {
+                rows.retain_mut(|row| {
+                    if id_is(row, &[rule]) {
+                        return true;
+                    }
+                    let declares = row
+                        .get("delta_sources")
+                        .and_then(toml::Value::as_array)
+                        .is_some_and(|sources| !sources.is_empty());
+                    if let Some(fields) = row.as_table_mut() {
+                        fields.retain(|name, _| ["id", "base", "delta_sources"].contains(&name));
+                    }
+                    declares
+                });
+            }
+            _ => rows.retain(|row| id_is(row, &[rule])),
+        }
     }
     if let Some(toml::Value::Array(rows)) = value.get_mut("verdict") {
         rows.retain(|row| id_is(row, &[rule, verdict]));
@@ -456,7 +656,7 @@ fn project(
     // does) and nothing else decides a verdict from. Kept whole, a step row's
     // `ci` mapping unbound every held admission of a `command` rule, and the
     // `filed-row-settled` handler then refused every Edit after it (#1276).
-    match module.as_deref() {
+    match reads {
         None => {
             value.remove("pattern");
             value.remove("step");
@@ -465,9 +665,13 @@ fn project(
         // from its one file (`policy::load`), so a pattern its code never names
         // cannot decide it: narrowing `admit-asked`, read by `admit-ask.rego`
         // alone, unbound `filed-here.rego`'s held admissions while every row
-        // stayed in. `[[step]]` stays whole: a module may read it as a document.
-        Some(module) => {
-            if let Some(ids) = reads(module)?
+        // stayed in. A traversal reads the whole table through its registers.
+        Some(reads) => {
+            let traverses = tree
+                .as_ref()
+                .is_some_and(|tree| tree.keys.contains(TRAVERSALS));
+            if !traverses
+                && let Some(ids) = reads.patterns
                 && let Some(toml::Value::Array(rows)) = value.get_mut("pattern")
             {
                 rows.retain(|row| {
@@ -476,11 +680,63 @@ fn project(
                         .is_some_and(|id| ids.contains(id))
                 });
             }
+            if let Some(tree) = tree.as_ref() {
+                allow(&mut value, tree);
+            }
         }
     }
     let projected = serde_json::to_vec(&value)
         .map_err(|err| UsageError::raise(format!("batten.toml will not project: {err}")))?;
     Ok((projected, module))
+}
+
+/// Keep, of `value`'s tables, only those that build what `tree` reads.
+///
+/// THE ALLOWLIST (CLOUD-2789). A module's evaluation is handed
+/// `data.batten.patterns` and its `input`, and on the tree surface every
+/// `input.tree` key is built from the rows `rules::run` reads: `[[rule]]`
+/// (narrowed by the caller), `[[pattern]]`, `[[recorder]]`/`[[record]]` for
+/// `records`, `[[traversal]]`/`[[register]]` for `traversals`, and `[census]`
+/// for `shell`. `[[verdict]]` is the registry a raised verdict resolves
+/// through, and `[[waiver]]`/`[[deferral]]` act on its finding after it is
+/// raised, so all three stay. A top-level value that is not a table is a
+/// whole-config knob (`strictness`, `scope`, …) and stays. Every other table —
+/// `[[verb]]`, `[[mint]]`, `[[startup]]`, `[forge]`, `[hook]`, `[board]`,
+/// `[vocabulary]`, `[[step]]` … — is never handed to the module, so editing it
+/// cannot change its verdict and no longer moves its epoch.
+fn allow(value: &mut toml::Table, tree: &TreeReads) {
+    let rows = |item: &toml::Value| match item {
+        toml::Value::Table(_) => true,
+        toml::Value::Array(items) => !items.is_empty() && items.iter().all(toml::Value::is_table),
+        _ => false,
+    };
+    value.retain(|name, item| {
+        !rows(item)
+            || match name {
+                "rule" | "verdict" | "pattern" | "waiver" | "deferral" => true,
+                "recorder" | "record" => tree.keys.contains(RECORDS),
+                "traversal" | "register" => tree.keys.contains(TRAVERSALS),
+                "census" => tree.keys.contains(SHELL),
+                _ => false,
+            }
+    });
+    for table in ["recorder", "record"] {
+        if let Some(toml::Value::Array(rows)) = value.get_mut(table) {
+            rows.retain(|row| tree.reads_record(row));
+        }
+    }
+}
+
+/// Every path among `tracked` whose content `row` hands its bundle: the
+/// literal-plus-glob selections `rules::policy_rule` resolves per row.
+fn content_paths(row: &crate::config_model::Rule, tracked: &[String]) -> Result<BTreeSet<String>> {
+    let mut paths = BTreeSet::new();
+    paths.extend(crate::rules::declared_documents(row, tracked)?);
+    paths.extend(crate::rules::declared_lines(row, tracked)?);
+    paths.extend(crate::rules::declared_invocations(row, tracked)?);
+    paths.extend(crate::rules::declared_uses(row, tracked)?);
+    paths.extend(crate::rules::declared_units(row, tracked)?);
+    Ok(paths)
 }
 
 /// The `[[pattern]]` ids a module's code reads, or `None` when it may read any.
@@ -892,6 +1148,26 @@ mod rule_surface_tests {
         let before = epoch(&dir);
         fs::write(dir.join("AGENTS.md"), "# guide, edited\n").unwrap();
         assert_ne!(epoch(&dir), before, "a declared document is an input");
+    }
+
+    /// This repository's own `issue file held` module reads only keys the
+    /// allowlist names, so the cases above are the shape it takes (#1276).
+    ///
+    /// Fails by: a read in it the classifier cannot name, which would quietly
+    /// put its admissions back on the whole config.
+    #[test]
+    fn the_filed_here_module_is_narrowed() {
+        let path = "policy/filed-here.rego";
+        let source = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(path),
+        )
+        .unwrap();
+        let paths = crate::policy::module_input_paths(path, &source).unwrap();
+        let tree = super::TreeReads::of(&paths).unwrap();
+        assert!(!tree.reads_every_row(), "{:?}", tree.keys);
+        assert!(tree.opens_only_declared_files(), "{:?}", tree.keys);
     }
 }
 
