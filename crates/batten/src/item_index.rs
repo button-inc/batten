@@ -329,7 +329,7 @@ impl Index {
                     .globs
                     .iter()
                     .filter_map(|glob| {
-                        let mut absolute = self.anchored(krate, &module, glob)?;
+                        let mut absolute = Self::anchored(krate, &module, glob)?;
                         let glob_len = absolute.len();
                         absolute.extend(rest[at..].iter().cloned());
                         let (key, used) = self.resolve_through(&absolute, depth - 1, globs)?;
@@ -364,7 +364,7 @@ impl Index {
 
     /// A `use` target written in `module` of `krate`, as an absolute path:
     /// `crate::` and `self::` anchored there, a crate's name as written.
-    fn anchored(&self, krate: &str, module: &[String], target: &[String]) -> Option<Vec<String>> {
+    fn anchored(krate: &str, module: &[String], target: &[String]) -> Option<Vec<String>> {
         Some(match target.first().map(String::as_str) {
             Some("crate") => std::iter::once(krate.to_owned())
                 .chain(target[1..].iter().cloned())
