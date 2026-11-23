@@ -1262,6 +1262,16 @@ pub(crate) fn task_bash(dir: &Path, body: &str) -> Batten {
         .envs(batten::testing::state_pins(scratch_state_root()));
     pin_mise(&mut command);
     pin_home(&mut command);
+    // NO SUITE VARIABLE THE CASE ITSELF INHERITED (U1): a body that runs
+    // nextest over a fixture read the sweep's `NEXTEST_PROFILE` and asked the
+    // fixture for a profile it has none of. The sweep's own spawns remove the
+    // same set ([`batten::mutate::suite_scrubbed`]).
+    for key in batten::mutate::suite_scrubbed(
+        std::env::vars_os().filter_map(|(key, _)| key.into_string().ok()),
+        &[],
+    ) {
+        command.env_remove(key);
+    }
     // THE BINARY'S DOOR GUARDS THIS ONE TOO (review of #1089). A task body runs
     // the engine through `PATH` from wherever the command stands WHEN IT SPAWNS,
     // so a fixture that is no repository of its own falls through to this
