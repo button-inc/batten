@@ -19706,8 +19706,21 @@ fn land_live_for(policy: &hook::Policy, envelope: &hook::Envelope) -> Option<Str
         return None;
     }
     let ours = std::env::var(land::LAP_PID).ok();
-    let git_dir = git::git_dir(hook_authority_root()).ok()?;
-    live_lap_outside_its_gate(task::singleton_holder(&git_dir, LAND_TASK), ours.as_deref())
+    // THE CHECKOUTS THE CALL ACTS IN, NEVER THE SHELL'S CWD (CLOUD-2789): `git
+    // -C <B> commit` run from A writes B, so A's lap does not hold it, and the
+    // same command run from B into A is held. A write tool, and a shell call
+    // whose `cd` cannot be placed, keep the judging root.
+    let start = envelope
+        .cwd
+        .clone()
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dirs = hook::acting_dirs(envelope, &start)
+        .unwrap_or_else(|| vec![hook_authority_root().to_path_buf()]);
+    dirs.iter().find_map(|dir| {
+        let git_dir = git::git_dir(dir).ok()?;
+        live_lap_outside_its_gate(task::singleton_holder(&git_dir, LAND_TASK), ours.as_deref())
+    })
 }
 
 /// The live lap a call is held for, or `None` (CLOUD-2783).
