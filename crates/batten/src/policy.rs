@@ -5995,52 +5995,42 @@ fn package_facts(policies: &[serde_json::Value]) -> BTreeMap<String, BTreeMap<St
     packages
 }
 
+/// What one case's statement walk reads throughout: its module's text and
+/// package, the package's rule facts, and the variables the case binds.
+struct CaseText<'a> {
+    text: &'a str,
+    package: &'a str,
+    facts: &'a BTreeMap<String, RuleFacts>,
+    locals: &'a BTreeSet<String>,
+}
+
+/// A variable a statement references: name, span, and whether it is called.
+type ReferencedVar = (String, usize, usize, bool);
+
 /// One case desugared: the rules it becomes, and its contexts — or why it
 /// cannot be ([`SuiteProgram`]).
-#[expect(
-    clippy::too_many_lines,
-    reason = "one statement walk: each step reads what the one before bound, and splitting it would thread the case's locals, lines and prelude through helpers that exist for a line count"
-)]
 fn plan_case(
     at: usize,
     spec: &serde_json::Value,
     text: &str,
     (package, facts): (&str, &BTreeMap<String, RuleFacts>),
 ) -> std::result::Result<(String, Vec<PlannedContext>), String> {
-    let refused = |why: &str| why.to_owned();
-    let head = spec.get("head").ok_or_else(|| refused("no head"))?;
-    let (name, _) = head_of(head).ok_or_else(|| refused("no head"))?;
-    if head.get("Func").is_some() {
-        return Err(refused("a case taking arguments"));
-    }
-    if head
-        .get("Compr")
-        .and_then(|compr| compr.get("assign"))
-        .is_some_and(|assign| !assign.is_null())
-    {
-        return Err(refused("a case assigning a value"));
-    }
-    let bodies = spec
-        .get("bodies")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| refused("no body"))?;
-    let [body] = bodies.as_slice() else {
-        return Err(refused("an `else` or a second body"));
-    };
-    let stmts = body
-        .get("query")
-        .and_then(|query| query.get("stmts"))
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| refused("no statements"))?;
+    let (name, stmts) = case_statements(spec)?;
     let locals = case_locals(stmts, text, facts);
+    let case = CaseText {
+        text,
+        package,
+        facts,
+        locals: &locals,
+    };
     let mut lines: Vec<String> = Vec::new();
     let mut contexts = Vec::new();
     let mut prelude = String::new();
     let mut plain = true;
     for (index, stmt) in stmts.iter().enumerate() {
-        let literal = stmt.get("literal").ok_or_else(|| refused("no literal"))?;
+        let literal = stmt.get("literal").ok_or("no literal")?;
         if holds_key(literal, "with_mods") {
-            return Err(refused("a `with` inside a nested query"));
+            return Err(String::from("a `with` inside a nested query"));
         }
         let mut vars = Vec::new();
         referenced_vars(literal, &mut vars);
@@ -6048,9 +6038,9 @@ fn plan_case(
             .iter()
             .any(|(var, ..)| !locals.contains(var) && facts.get(var).is_some_and(|fact| fact.with))
         {
-            return Err(refused("a helper that writes its own `with`"));
+            return Err(String::from("a helper that writes its own `with`"));
         }
-        let (start, end) = span_of(stmt).ok_or_else(|| refused("no span"))?;
+        let (start, end) = span_of(stmt).ok_or("no span")?;
         let mods = stmt
             .get("with_mods")
             .and_then(serde_json::Value::as_array)
@@ -6058,7 +6048,7 @@ fn plan_case(
         let Some(mods) = mods else {
             lines.push(
                 spanned(text, start, end)
-                    .ok_or_else(|| refused("a span off its text"))?
+                    .ok_or("a span off its text")?
                     .to_owned(),
             );
             continue;
@@ -6066,52 +6056,7 @@ fn plan_case(
         let plain_before = plain;
         plain = false;
         let key = format!("c{at}_{index}");
-        let (cut, _) = span_of(&mods[0]).ok_or_else(|| refused("no span"))?;
-        let from = if start > 0 && matches!(text.as_bytes().get(start - 1), Some(b'"' | b'`')) {
-            start - 1
-        } else {
-            start
-        };
-        let mut statement = text
-            .get(from..cut)
-            .ok_or_else(|| refused("a span off its text"))?
-            .trim_end()
-            .to_owned();
-        let mut edits = Vec::new();
-        let mut read = BTreeSet::new();
-        for (var, var_start, var_end, called) in &vars {
-            if locals.contains(var) {
-                continue;
-            }
-            if var == "input" || var == "data" {
-                return Err(refused("a read of `input` or `data` under `with`"));
-            }
-            let Some(fact) = facts.get(var) else {
-                continue;
-            };
-            if !fact.reads {
-                continue;
-            }
-            if *called || fact.function {
-                return Err(refused("a function reading the input under `with`"));
-            }
-            edits.push((
-                var_start - from,
-                var_end - from,
-                format!("data.{WITH_DATA}[\"{key}\"][\"{var}\"]"),
-            ));
-            read.insert(var.clone());
-        }
-        edits.sort_by_key(|(at, ..)| std::cmp::Reverse(*at));
-        for (edit_start, edit_end, replacement) in edits {
-            if edit_end > statement.len()
-                || !statement.is_char_boundary(edit_start)
-                || !statement.is_char_boundary(edit_end)
-            {
-                return Err(refused("a span off its text"));
-            }
-            statement.replace_range(edit_start..edit_end, &replacement);
-        }
+        let (statement, read) = redirected_statement(&case, start, mods, &vars, &key)?;
         lines.push(statement);
         let mut context = PlannedContext {
             key,
@@ -6125,56 +6070,167 @@ fn plan_case(
                 })
                 .collect(),
         };
-        for (term_at, modifier) in mods.iter().enumerate() {
-            let target = modifier
-                .get("refr")
-                .and_then(reference_path)
-                .ok_or_else(|| refused("a `with` on a computed path"))?;
-            let term = modifier.get("as").ok_or_else(|| refused("no term"))?;
-            let (term_start, term_end) = term
-                .as_object()
-                .and_then(|object| object.values().next())
-                .and_then(span_of)
-                .ok_or_else(|| refused("no span"))?;
-            let term_text = spanned(text, term_start, term_end)
-                .ok_or_else(|| refused("a span off its text"))?;
-            let mut term_vars = Vec::new();
-            referenced_vars(term, &mut term_vars);
-            let hoisted = term_vars
-                .iter()
-                .any(|(var, _, _, called)| !called && locals.contains(var));
-            let rule = format!("__batten_in_{at}_{index}_{term_at}");
-            let body = if hoisted {
-                if !plain_before {
-                    return Err(refused(
-                        "a `with` term reading a variable bound under `with`",
-                    ));
-                }
-                format!(" if {{\n\t{}\n}}", lines[..index].join("\n\t"))
-            } else {
-                String::new()
-            };
-            for piece in ["\n", rule.as_str(), " := ", term_text, body.as_str(), "\n"] {
-                prelude.push_str(piece);
-            }
-            let entry = format!("data.{package}.{rule}");
-            match target.as_str() {
-                "input" if context.input.is_none() => context.input = Some(entry),
-                "data.batten.patterns" => context.patterns.push((None, entry)),
-                other => match other.strip_prefix("data.batten.patterns.") {
-                    Some(key) if !key.contains('.') => {
-                        context.patterns.push((Some(key.to_owned()), entry));
-                    }
-                    _ => return Err(format!("a `with` on `{other}`")),
-                },
-            }
-        }
+        let hoist = plain_before.then(|| &lines[..index]);
+        with_terms(&case, mods, (at, index), hoist, &mut context, &mut prelude)?;
         contexts.push(context);
     }
     Ok((
         format!("\n{name} if {{\n\t{}\n}}\n{prelude}", lines.join("\n\t")),
         contexts,
     ))
+}
+
+/// A case's name and its one body's statements, or why it cannot be
+/// desugared: a case taking arguments or assigning a value, or one with an
+/// `else` or a second body.
+fn case_statements(
+    spec: &serde_json::Value,
+) -> std::result::Result<(String, &Vec<serde_json::Value>), String> {
+    let head = spec.get("head").ok_or("no head")?;
+    let (name, _) = head_of(head).ok_or("no head")?;
+    if head.get("Func").is_some() {
+        return Err(String::from("a case taking arguments"));
+    }
+    if head
+        .get("Compr")
+        .and_then(|compr| compr.get("assign"))
+        .is_some_and(|assign| !assign.is_null())
+    {
+        return Err(String::from("a case assigning a value"));
+    }
+    let bodies = spec
+        .get("bodies")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("no body")?;
+    let [body] = bodies.as_slice() else {
+        return Err(String::from("an `else` or a second body"));
+    };
+    let stmts = body
+        .get("query")
+        .and_then(|query| query.get("stmts"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or("no statements")?;
+    Ok((name, stmts))
+}
+
+/// A `with` statement's text up to its first modifier, each rule it reads
+/// redirected to the value its context computes under `data.__batten_with`
+/// at `key`, and the rules so read. A read of `input` or `data`, or a function
+/// reading the input, under `with` is refused.
+fn redirected_statement(
+    case: &CaseText<'_>,
+    start: usize,
+    mods: &[serde_json::Value],
+    vars: &[ReferencedVar],
+    key: &str,
+) -> std::result::Result<(String, BTreeSet<String>), String> {
+    let text = case.text;
+    let (cut, _) = span_of(&mods[0]).ok_or("no span")?;
+    let from = if start > 0 && matches!(text.as_bytes().get(start - 1), Some(b'"' | b'`')) {
+        start - 1
+    } else {
+        start
+    };
+    let mut statement = text
+        .get(from..cut)
+        .ok_or("a span off its text")?
+        .trim_end()
+        .to_owned();
+    let mut edits = Vec::new();
+    let mut read = BTreeSet::new();
+    for (var, var_start, var_end, called) in vars {
+        if case.locals.contains(var) {
+            continue;
+        }
+        if var == "input" || var == "data" {
+            return Err(String::from("a read of `input` or `data` under `with`"));
+        }
+        let Some(fact) = case.facts.get(var) else {
+            continue;
+        };
+        if !fact.reads {
+            continue;
+        }
+        if *called || fact.function {
+            return Err(String::from("a function reading the input under `with`"));
+        }
+        edits.push((
+            var_start - from,
+            var_end - from,
+            format!("data.{WITH_DATA}[\"{key}\"][\"{var}\"]"),
+        ));
+        read.insert(var.clone());
+    }
+    edits.sort_by_key(|(at, ..)| std::cmp::Reverse(*at));
+    for (edit_start, edit_end, replacement) in edits {
+        if edit_end > statement.len()
+            || !statement.is_char_boundary(edit_start)
+            || !statement.is_char_boundary(edit_end)
+        {
+            return Err(String::from("a span off its text"));
+        }
+        statement.replace_range(edit_start..edit_end, &replacement);
+    }
+    Ok((statement, read))
+}
+
+/// Each `with` term of statement `index` of case `at`, as a rule in `prelude`
+/// its `context` names: `input` and the pattern table are the targets a term
+/// may replace. `hoist` is the statements before this one where none of them
+/// bound under `with`, which a term reading a case variable is evaluated
+/// under; `None` refuses such a term.
+fn with_terms(
+    case: &CaseText<'_>,
+    mods: &[serde_json::Value],
+    (at, index): (usize, usize),
+    hoist: Option<&[String]>,
+    context: &mut PlannedContext,
+    prelude: &mut String,
+) -> std::result::Result<(), String> {
+    for (term_at, modifier) in mods.iter().enumerate() {
+        let target = modifier
+            .get("refr")
+            .and_then(reference_path)
+            .ok_or("a `with` on a computed path")?;
+        let term = modifier.get("as").ok_or("no term")?;
+        let (term_start, term_end) = term
+            .as_object()
+            .and_then(|object| object.values().next())
+            .and_then(span_of)
+            .ok_or("no span")?;
+        let term_text = spanned(case.text, term_start, term_end).ok_or("a span off its text")?;
+        let mut term_vars = Vec::new();
+        referenced_vars(term, &mut term_vars);
+        let hoisted = term_vars
+            .iter()
+            .any(|(var, _, _, called)| !called && case.locals.contains(var));
+        let rule = format!("__batten_in_{at}_{index}_{term_at}");
+        let body = if hoisted {
+            let Some(before) = hoist else {
+                return Err(String::from(
+                    "a `with` term reading a variable bound under `with`",
+                ));
+            };
+            format!(" if {{\n\t{}\n}}", before.join("\n\t"))
+        } else {
+            String::new()
+        };
+        for piece in ["\n", rule.as_str(), " := ", term_text, body.as_str(), "\n"] {
+            prelude.push_str(piece);
+        }
+        let entry = format!("data.{}.{rule}", case.package);
+        match target.as_str() {
+            "input" if context.input.is_none() => context.input = Some(entry),
+            "data.batten.patterns" => context.patterns.push((None, entry)),
+            other => match other.strip_prefix("data.batten.patterns.") {
+                Some(key) if !key.contains('.') => {
+                    context.patterns.push((Some(key.to_owned()), entry));
+                }
+                _ => return Err(format!("a `with` on `{other}`")),
+            },
+        }
+    }
+    Ok(())
 }
 
 /// The desugared sources, `(path, text)`, and each case's plan.
@@ -6660,10 +6716,6 @@ fn parsed_input(input: &str) -> anyhow::Result<regorus::Value> {
 /// A [`UsageError`] (exit `1`) when the input will not parse. A config fault,
 /// kept apart from a test failure because that is CLOUD-202's whole lesson: a
 /// run that could not evaluate must not be reported as one that found nothing.
-#[expect(
-    clippy::too_many_lines,
-    reason = "discovery, the bytecode verdicts and the coverage sweep are one report; the sweep's early exit reads the verdicts' discovery list"
-)]
 pub fn test(
     bundle: &Bundle,
     input: &str,
@@ -6673,7 +6725,48 @@ pub fn test(
     let Some(described) = bundle.described() else {
         return Ok(Look::CouldNotLook);
     };
+    let Discovered {
+        cases: discovered,
+        mut untested_modules,
+        bare_only_modules,
+    } = discover(described, mediated);
+    let Some(engine) = bundle.evaluator.engine() else {
+        return Ok(Look::CouldNotLook);
+    };
+    let document = parsed_input(input).map_err(|err| {
+        UsageError::raise(format!(
+            "`{}` was handed an input document that will not parse: {err}",
+            bundle.pointer()
+        ))
+    })?;
+    let (mut passed, mut failed) = verdicts(bundle, engine, &document, &discovered, cache);
+    let Some(unexercised) = unexercised(bundle, engine, &document, &discovered, described) else {
+        return Ok(Look::CouldNotLook);
+    };
+    passed.sort();
+    failed.sort();
+    untested_modules.sort();
+    Ok(Look::Is(Suite {
+        passed,
+        failed,
+        unexercised,
+        untested_modules,
+        bare_only_modules,
+    }))
+}
 
+/// A bundle's cases and the modules that carry none ([`test`]'s discovery).
+struct Discovered {
+    /// Each `test_` rule and its entry point, in module order.
+    cases: Vec<(TestId, String)>,
+    /// The modules declaring no `test_` rule.
+    untested_modules: Vec<String>,
+    /// The mediated modules whose cases never pass a compound command.
+    bare_only_modules: Vec<String>,
+}
+
+/// Every `test_` rule `described` declares, by prefix over the AST.
+fn discover(described: &[Described], mediated: bool) -> Discovered {
     let mut untested_modules = Vec::new();
     let mut bare_only_modules = Vec::new();
     let mut discovered = Vec::new();
@@ -6707,18 +6800,22 @@ pub fn test(
             bare_only_modules.push(module.path.clone());
         }
     }
+    Discovered {
+        cases: discovered,
+        untested_modules,
+        bare_only_modules,
+    }
+}
 
-    let Some(engine) = bundle.evaluator.engine() else {
-        return Ok(Look::CouldNotLook);
-    };
-    let unparsable = |err: &dyn std::fmt::Display| {
-        UsageError::raise(format!(
-            "`{}` was handed an input document that will not parse: {err}",
-            bundle.pointer()
-        ))
-    };
-    let document = parsed_input(input).map_err(|err| unparsable(&err))?;
-
+/// Each case's verdict over `document`: the cases that passed, then those
+/// that failed, in discovery order.
+fn verdicts(
+    bundle: &Bundle,
+    engine: &regorus::Engine,
+    document: &regorus::Value,
+    discovered: &[(TestId, String)],
+    cache: Option<&Path>,
+) -> (Vec<TestId>, Vec<TestId>) {
     // A TEST THAT ANSWERS ANYTHING BUT `true` HAS FAILED. `false` and undefined
     // are one answer here, and an evaluation that errors is a third spelling of
     // the same thing — a test whose body faults has not passed. None of the
@@ -6737,7 +6834,7 @@ pub fn test(
             let decided: BTreeMap<(&str, &str), Option<bool>> = program
                 .tests
                 .iter()
-                .zip(program.run(&document))
+                .zip(program.run(document))
                 .map(|(test, decided)| ((test.module.as_str(), test.name.as_str()), decided))
                 .collect();
             (decided, program.cached, Fallback::TestWith)
@@ -6747,7 +6844,7 @@ pub fn test(
     let mut interpreter: Option<regorus::Engine> = None;
     let mut passed = Vec::new();
     let mut failed = Vec::new();
-    for (id, path) in &discovered {
+    for (id, path) in discovered {
         let verdict =
             if let Some(Some(verdict)) = decided.get(&(id.module.as_str(), id.name.as_str())) {
                 record_as(&bundle.id, Execution::Bytecode { cached });
@@ -6773,21 +6870,32 @@ pub fn test(
             failed.push(id.clone());
         }
     }
+    (passed, failed)
+}
 
-    // THE COVERAGE SWEEP IS THE INTERPRETER'S ONE JOB HERE (#1276), and it
-    // stops as soon as it has answered. Coverage is a report about which
-    // predicates the cases ENTERED, which bytecode cannot read; it decides only
-    // `unexercised`, so once every published predicate is entered no further
-    // case can change the answer. Cases are swept in doubling batches, so a
-    // suite that covers everything early pays for a few cases, and a predicate
-    // no case enters still costs the whole sweep, exactly as before.
+/// The predicates `bundle` publishes that no case entered, or `None` where
+/// the coverage read did not happen (CLOUD-251).
+///
+/// THE COVERAGE SWEEP IS THE INTERPRETER'S ONE JOB HERE (#1276), and it stops
+/// as soon as it has answered. Coverage is a report about which predicates the
+/// cases ENTERED, which bytecode cannot read; it decides only `unexercised`, so
+/// once every published predicate is entered no further case can change the
+/// answer. Cases are swept in doubling batches, so a suite that covers
+/// everything early pays for a few cases, and a predicate no case enters still
+/// costs the whole sweep, exactly as before.
+fn unexercised(
+    bundle: &Bundle,
+    engine: &regorus::Engine,
+    document: &regorus::Value,
+    discovered: &[(TestId, String)],
+    described: &[Described],
+) -> Option<Vec<String>> {
     let mut unexercised: Vec<String> = bundle.declared.iter().cloned().collect();
     if !unexercised.is_empty() && !discovered.is_empty() {
         let mut sweep = engine.clone();
         sweep.set_enable_coverage(true);
-        sweep
-            .set_input_json(input)
-            .map_err(|err| unparsable(&err))?;
+        // The document already parsed, not the text again.
+        sweep.set_input(document.clone());
         let mut swept = 0;
         let mut batch = 1;
         while swept < discovered.len() && !unexercised.is_empty() {
@@ -6801,14 +6909,14 @@ pub fn test(
             // `file.code` is untouched: a coverage report is the most
             // payload-shaped thing in this crate and rule 4 admits a pointer.
             let Ok(report) = sweep.get_coverage_report() else {
-                return Ok(Look::CouldNotLook);
+                return None;
             };
             // Cases ran and the report mentions nothing at all: the coverage
             // read did not happen, which is a different answer from "no test
             // entered anything" and must not be reported as one (CLOUD-251).
             if report.files.iter().all(|file| file.covered.is_empty()) {
                 if swept == discovered.len() {
-                    return Ok(Look::CouldNotLook);
+                    return None;
                 }
                 continue;
             }
@@ -6820,17 +6928,7 @@ pub fn test(
             unexercised.retain(|id| !entered_predicate(described, &entered, id));
         }
     }
-
-    passed.sort();
-    failed.sort();
-    untested_modules.sort();
-    Ok(Look::Is(Suite {
-        passed,
-        failed,
-        unexercised,
-        untested_modules,
-        bare_only_modules,
-    }))
+    Some(unexercised)
 }
 
 /// Whether a case entered the rule raising predicate `id`: its HEAD line is
