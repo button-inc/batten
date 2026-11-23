@@ -1566,6 +1566,48 @@ fn anti_vacuity_a_mutation_that_changes_nothing_is_not_a_pass() {
     );
 }
 
+/// A ROW IN NEXTEST'S OWN CONFIG IS JUDGED BY ITS CASE, NOT BY THE HARNESS IT
+/// BREAKS (#1276). The row makes `.config/nextest.toml` unreadable to nextest,
+/// and its case reads that file as data. Run against the mutated config,
+/// nextest stops before it selects a case and the row cannot be looked at;
+/// handed the unmutated copy with `--config-file`, the harness runs and the
+/// case reddens. Fails by: the suite run under the config it was mutating.
+#[test]
+fn a_row_in_the_nextest_config_runs_under_an_unmutated_copy() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = toy("nextest-config-row");
+    write(
+        &root,
+        ".config/nextest.toml",
+        "#MUTANT-SUITE tests/config.rs\n\
+         #MUTANT timeout-unreadable|s/^slow-timeout = \"60s\"$/slow-timeout = \"never\"/|\
+         the_config_keeps_its_timeout\n\
+         [profile.default]\nslow-timeout = \"60s\"\n",
+    );
+    write(
+        &root,
+        "tests/config.rs",
+        &format!(
+            "{}{}",
+            case(
+                "the_config_keeps_its_timeout",
+                "let text = std::fs::read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \
+                 \"/.config/nextest.toml\")).expect(\"the config\");\n    \
+                 assert!(text.lines().any(|line| line == \"slow-timeout = \\\"60s\\\"\"), \
+                 \"{text}\");"
+            ),
+            case("a_second_case_keeps_the_filter_honest", ""),
+        ),
+    );
+    cargo_package(&root);
+    track(&root);
+    let (code, out, err) = sweep(&root, ".config/nextest.toml");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}{err}");
+}
+
 /// A ROW THAT PROVES NOTHING COSTS NO SUITE RUN (#1276): the mutation is
 /// applied and diffed in memory before the clean run, so an inert or
 /// self-mutating row is refused as such even where its case filter names
