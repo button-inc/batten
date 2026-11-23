@@ -47,6 +47,7 @@
 //! adding an empty file to the tracked set still moves the epoch, because the
 //! *set* is part of what governs.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -301,8 +302,8 @@ fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
 /// that `batten.toml` enters as a parsed projection ([`project`]): comments and
 /// layout dropped, and of the id-keyed rows only this rule's `[[rule]]`, the
 /// `[[verdict]]` rows naming this rule or verdict, and — when the rule has a
-/// module — every `[[pattern]]`, which a module may read by id. Every other
-/// table stays whole. The rule's module, which the surface does not track, and
+/// module — the `[[pattern]]` rows that module reads ([`pattern_reads`]): every
+/// row when it reads one by a computed id. Every other table stays whole. The rule's module, which the surface does not track, and
 /// the engine version are added.
 ///
 /// # Errors
@@ -316,7 +317,11 @@ pub fn for_rule(dir: &Path, base_ref: Option<&str>, rule: &str, verdict: &str) -
     for path in &tracked {
         let contents = read_tracked(dir, path, base_ref)?;
         if path == crate::config_model::CONFIG_FILE {
-            let (projected, declared) = project(&contents, rule, verdict)?;
+            let reads = |module: &str| -> Result<Option<BTreeSet<String>>> {
+                let path = canonical_repo_path(module)?;
+                Ok(pattern_reads(&read_tracked(dir, &path, base_ref)?))
+            };
+            let (projected, declared) = project(&contents, rule, verdict, &reads)?;
             module = declared;
             entries.push((path.clone(), projected));
         } else {
@@ -384,7 +389,7 @@ pub fn for_rule_cached(
     let value = for_rule(dir, None, rule, verdict)?;
     let module = crate::fsio::read(dir.join(crate::config_model::CONFIG_FILE))
         .ok()
-        .and_then(|text| project(&text, rule, verdict).ok())
+        .and_then(|text| project(&text, rule, verdict, &|_| Ok(None)).ok())
         .and_then(|(_, module)| module);
     if let Some(entry) = entry.as_deref()
         && let Some(parent) = entry.parent()
@@ -411,8 +416,14 @@ fn module_digest(dir: &Path, module: Option<&str>) -> String {
 }
 
 /// `batten.toml` reduced to what decides `rule`/`verdict`, and the rule's
-/// module path if it declares one. See [`for_rule`].
-fn project(contents: &[u8], rule: &str, verdict: &str) -> Result<(Vec<u8>, Option<String>)> {
+/// module path if it declares one. See [`for_rule`]. `reads` answers which
+/// `[[pattern]]` ids a module reads, `None` for every one.
+fn project(
+    contents: &[u8],
+    rule: &str,
+    verdict: &str,
+    reads: &dyn Fn(&str) -> Result<Option<BTreeSet<String>>>,
+) -> Result<(Vec<u8>, Option<String>)> {
     let text = std::str::from_utf8(contents)
         .map_err(|err| UsageError::raise(format!("batten.toml is not UTF-8: {err}")))?;
     let mut value: toml::Table = toml::from_str(text)
@@ -445,13 +456,122 @@ fn project(contents: &[u8], rule: &str, verdict: &str) -> Result<(Vec<u8>, Optio
     // does) and nothing else decides a verdict from. Kept whole, a step row's
     // `ci` mapping unbound every held admission of a `command` rule, and the
     // `filed-row-settled` handler then refused every Edit after it (#1276).
-    if module.is_none() {
-        value.remove("pattern");
-        value.remove("step");
+    match module.as_deref() {
+        None => {
+            value.remove("pattern");
+            value.remove("step");
+        }
+        // ONLY THE ROWS THE MODULE READS (CLOUD-2779). A module rule compiles
+        // from its one file (`policy::load`), so a pattern its code never names
+        // cannot decide it: narrowing `admit-asked`, read by `admit-ask.rego`
+        // alone, unbound `filed-here.rego`'s held admissions while every row
+        // stayed in. `[[step]]` stays whole: a module may read it as a document.
+        Some(module) => {
+            if let Some(ids) = reads(module)?
+                && let Some(toml::Value::Array(rows)) = value.get_mut("pattern")
+            {
+                rows.retain(|row| {
+                    row.get("id")
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|id| ids.contains(id))
+                });
+            }
+        }
     }
     let projected = serde_json::to_vec(&value)
         .map_err(|err| UsageError::raise(format!("batten.toml will not project: {err}")))?;
     Ok((projected, module))
+}
+
+/// The `[[pattern]]` ids a module's code reads, or `None` when it may read any.
+///
+/// Each `data.batten.patterns["<id>"]` with a literal id is a read of that row.
+/// A path into another `data.batten` package reads no pattern. Every other use
+/// of `data` — a computed id, the table bound whole (`with data.batten.patterns
+/// as …`), `data` itself — answers `None`, which keeps every row. Comments and
+/// string bodies are not code, so an id quoted there is never a read.
+fn pattern_reads(source: &[u8]) -> Option<BTreeSet<String>> {
+    const TABLE: &str = "data.batten.patterns[\"";
+    let code = rego_code(std::str::from_utf8(source).ok()?);
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut ids = BTreeSet::new();
+    for (at, _) in code.match_indices("data") {
+        let rest = &code[at..];
+        let bounded =
+            !code[..at].ends_with(|c: char| word(c) || c == '.') && !rest[4..].starts_with(word);
+        if !bounded {
+            continue;
+        }
+        if let Some(subscript) = rest.strip_prefix(TABLE) {
+            let (id, _) = subscript.split_once("\"]")?;
+            if id.is_empty() {
+                return None;
+            }
+            ids.insert(id.to_owned());
+            continue;
+        }
+        let package: String = rest
+            .strip_prefix("data.batten.")?
+            .chars()
+            .take_while(|c| word(*c))
+            .collect();
+        if package.is_empty() || package == "patterns" {
+            return None;
+        }
+    }
+    Some(ids)
+}
+
+/// `source` with every comment and every string body blanked, except the
+/// literal subscript of a `data.batten.patterns[...]` read, which
+/// [`pattern_reads`] needs verbatim. An escape in that subscript blanks it too,
+/// so the read no longer parses as literal and every row is kept.
+fn rego_code(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '#' => {
+                out.push(' ');
+                for skipped in chars.by_ref() {
+                    if skipped == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            '"' => {
+                let subscript = out.ends_with("data.batten.patterns[");
+                let mut body = String::new();
+                let mut escaped = false;
+                while let Some(inner) = chars.next() {
+                    match inner {
+                        '\\' => {
+                            escaped = true;
+                            chars.next();
+                        }
+                        '"' => break,
+                        other => body.push(other),
+                    }
+                }
+                out.push('"');
+                if subscript && !escaped {
+                    out.push_str(&body);
+                }
+                out.push('"');
+            }
+            '`' => {
+                out.push_str("``");
+                for inner in chars.by_ref() {
+                    if inner == '`' {
+                        break;
+                    }
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// One tracked file's bytes, from the working tree or from the base ref.
@@ -702,12 +822,41 @@ mod module_digest_tests {
                  [[step]]\nid = \"s\"\nrun = [\"true\"]\ngroup = \"g\"\nci = [\"{ci}\"]\n"
             )
         };
-        let (before, _) = super::project(rows("a").as_bytes(), "plain", "plain").unwrap();
-        let (after, _) = super::project(rows("b").as_bytes(), "plain", "plain").unwrap();
+        let (before, _) =
+            super::project(rows("a").as_bytes(), "plain", "plain", &|_| Ok(None)).unwrap();
+        let (after, _) =
+            super::project(rows("b").as_bytes(), "plain", "plain", &|_| Ok(None)).unwrap();
         assert_eq!(before, after, "a command rule does not read the step table");
-        let (before, module) = super::project(rows("a").as_bytes(), "moduled", "moduled").unwrap();
-        let (after, _) = super::project(rows("b").as_bytes(), "moduled", "moduled").unwrap();
+        let (before, module) =
+            super::project(rows("a").as_bytes(), "moduled", "moduled", &|_| Ok(None)).unwrap();
+        let (after, _) =
+            super::project(rows("b").as_bytes(), "moduled", "moduled", &|_| Ok(None)).unwrap();
         assert_eq!(module.as_deref(), Some("m.rego"));
         assert_ne!(before, after, "a module may read the step table");
+    }
+
+    /// Fails by: an id in a comment or a string read as a read, a computed id
+    /// or the table bound whole read as reading nothing, or a path into another
+    /// package read as reading every row.
+    #[test]
+    fn a_modules_pattern_reads_are_its_literal_subscripts() {
+        let reads = |text: &str| super::pattern_reads(text.as_bytes());
+        let ids = |list: &[&str]| Some(list.iter().map(|id| (*id).to_owned()).collect());
+        assert_eq!(
+            reads(
+                "x if regex.match(data.batten.patterns[\"a\"], y)\n# data.batten.patterns[\"c\"]\n"
+            ),
+            ids(&["a"])
+        );
+        assert_eq!(
+            reads("x := \"data.batten.patterns[\\\"c\\\"]\"\n"),
+            ids(&[])
+        );
+        assert_eq!(reads("x := data.batten.other.rule\n"), ids(&[]));
+        assert_eq!(reads("x := data.batten.patterns[id]\n"), None);
+        assert_eq!(reads("t if { v with data.batten.patterns as p }\n"), None);
+        assert_eq!(reads("x := data[\"batten\"]\n"), None);
+        assert_eq!(reads("x := data.batten.patterns[\"a\\\"b\"]\n"), None);
+        assert_eq!(reads("metadata := 1\n"), ids(&[]));
     }
 }
