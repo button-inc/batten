@@ -514,6 +514,29 @@ fn a_worktree_spawn_is_refused_in_auto() {
         .unwrap_or_default();
     assert_eq!(decision, "deny", "{reason}");
     assert!(reason.contains("spawn place wrong"), "{reason}");
+    // ON A DEVELOPER'S MACHINE THE SAME SPAWN IS NOT REFUSED, by design:
+    // `dd8c55487` (CLOUD-2709) made `agent-spawn.rego` host-aware, so the
+    // refusal this case once asserted for every host now holds only on a
+    // disposable one. Pinned here beside the refusal, so the host is the one
+    // thing that moves the decision, with both of the host's signals absent.
+    let mut machine = common::batten();
+    machine
+        .env_remove("CLAUDE_CODE_REMOTE")
+        .env_remove("BATTEN_ENVIRONMENT");
+    let refused = documents_from(&mut machine, &worktree)
+        .iter()
+        .find_map(|document| {
+            let inner = document.get("hookSpecificOutput")?;
+            Some((
+                inner.get("permissionDecision")?.as_str()?.to_owned(),
+                inner.get("permissionDecisionReason")?.as_str()?.to_owned(),
+            ))
+        })
+        .filter(|(decision, _)| decision == "deny");
+    assert_eq!(
+        refused, None,
+        "a worktree spawn on a machine is not refused (dd8c55487, CLOUD-2709)"
+    );
 }
 
 /// CLOUD-2313: this repository's `memory-write-tool` row is granted in default
