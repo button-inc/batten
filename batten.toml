@@ -6188,7 +6188,7 @@ no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a
 [[rule]]
 id = "waiver add refused"
 kind = "ratchet"
-glob = "crates/{batten,batten-facts,batten-base,batten-core}/src/**/*.rs"
+glob = "crates/*/src/**/*.rs"
 pattern = "clippy::disallowed_methods"
 direction = "non_increasing"
 base = "origin/main"
