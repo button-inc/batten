@@ -3042,33 +3042,70 @@ pub(crate) fn annotation_reason(attribute: &str) -> Option<String> {
 ///
 /// # Panics
 ///
-/// When the sweep finds too few files to be this crate — a silently empty
-/// corpus is what makes every shape assertion over it pass vacuously.
+/// When a workspace member with a `src/` or `tests/` directory contributes no
+/// file to the sweep — a silently narrowed corpus is what makes every shape
+/// assertion over it pass vacuously for the crates it dropped (CLOUD-2789).
 #[must_use]
 pub(crate) fn rust_sources() -> Vec<PathBuf> {
-    let mut found = Vec::new();
     // EVERY CRATE'S SOURCES (#1276), not `batten`'s alone: a leaf split out
     // of it (`batten-fsio`, `batten-stream`) carries the same code and must
     // stay under the same census, or the split is a way out of every gate.
-    let crates = at_root("crates");
-    let mut members: Vec<PathBuf> = fs::read_dir(&crates)
+    let members = workspace_members();
+    let found = sources_of(&members);
+    for dir in ["src", "tests"] {
+        let gaps = census_gaps(&members, &found, dir);
+        assert!(
+            gaps.is_empty(),
+            "the source sweep read no `{dir}/` file of {gaps:?}"
+        );
+    }
+    found
+}
+
+/// Every workspace member's directory: each `crates/*` carrying a `Cargo.toml`,
+/// sorted. The census [`rust_sources`] is held to, read independently of it.
+///
+/// # Panics
+///
+/// When the workspace's `crates` directory cannot be read.
+#[must_use]
+pub(crate) fn workspace_members() -> Vec<PathBuf> {
+    let mut members: Vec<PathBuf> = fs::read_dir(at_root("crates"))
         .expect("the workspace's crates directory")
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.join("Cargo.toml").is_file())
         .collect();
     members.sort();
+    members
+}
+
+/// Every Rust file under each of `members`' `src/` and `tests/`, sorted.
+#[must_use]
+pub(crate) fn sources_of(members: &[PathBuf]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
     for member in members {
         for dir in ["src", "tests"] {
             collect_rust(&member.join(dir), &mut found);
         }
     }
     found.sort();
-    assert!(
-        found.len() > 40,
-        "the source sweep found {} files, which is too few to be the crate",
-        found.len()
-    );
     found
+}
+
+/// The members carrying a `dir/` directory with a Rust file in it that `found`
+/// has no file under: the crates a census silently dropped.
+#[must_use]
+pub(crate) fn census_gaps(members: &[PathBuf], found: &[PathBuf], dir: &str) -> Vec<PathBuf> {
+    members
+        .iter()
+        .filter(|member| {
+            let mut own = Vec::new();
+            collect_rust(&member.join(dir), &mut own);
+            !own.is_empty()
+        })
+        .filter(|member| !found.iter().any(|path| path.starts_with(member.join(dir))))
+        .cloned()
+        .collect()
 }
 
 /// Every workspace crate's PRODUCTION sources: each member's `src`, never its
@@ -3079,7 +3116,7 @@ pub(crate) fn rust_sources() -> Vec<PathBuf> {
 ///
 /// # Panics
 ///
-/// When the sweep finds too few files to be the engine, for the reason
+/// When a member's `src/` contributes no file to the sweep, for the reason
 /// [`rust_sources`] gives.
 #[must_use]
 pub(crate) fn engine_sources() -> Vec<PathBuf> {
@@ -3090,10 +3127,10 @@ pub(crate) fn engine_sources() -> Vec<PathBuf> {
             .is_some_and(|dir| dir.as_os_str() == "src")
     };
     let found: Vec<PathBuf> = rust_sources().into_iter().filter(src_of).collect();
+    let gaps = census_gaps(&workspace_members(), &found, "src");
     assert!(
-        found.len() > 40,
-        "the engine sweep found {} files, which is too few to be the engine",
-        found.len()
+        gaps.is_empty(),
+        "the engine sweep read no `src/` file of {gaps:?}"
     );
     found
 }
@@ -3105,7 +3142,7 @@ pub(crate) fn engine_sources() -> Vec<PathBuf> {
 ///
 /// # Panics
 ///
-/// When the sweep finds too few files to be the suites, for the reason
+/// When a member's `tests/` contributes no file to the sweep, for the reason
 /// [`rust_sources`] gives.
 #[must_use]
 pub(crate) fn test_sources() -> Vec<PathBuf> {
@@ -3116,10 +3153,10 @@ pub(crate) fn test_sources() -> Vec<PathBuf> {
             .is_some_and(|dir| dir.as_os_str() == "tests")
     };
     let found: Vec<PathBuf> = rust_sources().into_iter().filter(tests_of).collect();
+    let gaps = census_gaps(&workspace_members(), &found, "tests");
     assert!(
-        found.len() > 40,
-        "the test sweep found {} files, which is too few to be the suites",
-        found.len()
+        gaps.is_empty(),
+        "the test sweep read no `tests/` file of {gaps:?}"
     );
     found
 }

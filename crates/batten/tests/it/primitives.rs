@@ -2129,3 +2129,49 @@ fn the_route_taken_when_no_template_exists_builds_the_repository_the_template_wo
         "both halves of the identity, for the same reason"
     );
 }
+
+/// CLOUD-2789: the source census every shape gate sweeps reads EVERY workspace
+/// member, held to the member list read independently of it. Before the split
+/// `found.len() > 40` stood in for this, and a census narrowed back to
+/// `crates/batten` alone still passes that count — so the case also builds the
+/// narrowed census and requires the coverage check to name the crates it drops.
+#[test]
+fn every_workspace_crate_is_in_the_source_census() {
+    let members = common::workspace_members();
+    assert!(
+        members.len() > 1,
+        "the workspace has {} member(s), too few to be the split",
+        members.len()
+    );
+    let census = common::rust_sources();
+    for dir in ["src", "tests"] {
+        assert_eq!(
+            common::census_gaps(&members, &census, dir),
+            Vec::<PathBuf>::new(),
+            "the source census misses a member's `{dir}/`"
+        );
+    }
+    assert_eq!(
+        common::census_gaps(&members, &common::engine_sources(), "src"),
+        Vec::<PathBuf>::new()
+    );
+    assert_eq!(
+        common::census_gaps(&members, &common::test_sources(), "tests"),
+        Vec::<PathBuf>::new()
+    );
+    // The narrowing this replaces the count for: `crates/batten` alone.
+    let batten_only: Vec<PathBuf> = members
+        .iter()
+        .filter(|member| member.ends_with("batten"))
+        .cloned()
+        .collect();
+    let narrowed = common::sources_of(&batten_only);
+    assert!(
+        narrowed.len() > 40,
+        "the narrowed census passes the old count"
+    );
+    assert!(
+        !common::census_gaps(&members, &narrowed, "src").is_empty(),
+        "a census of crates/batten alone is not refused"
+    );
+}
