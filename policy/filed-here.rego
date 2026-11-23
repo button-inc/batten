@@ -63,7 +63,7 @@
 #MUTANT blocked-recorder-still-priced|s@^\tnot closes_unreadable$@\ttrue@|a_blocked_closes_recorder_withholds_the_proximity_refusal
 #MUTANT left-open-arm-unpartitioned|s@^\tcites_only(id)$@\ttrue@|a_row_recorded_after_the_base_whose_sec1_names_the_diff_still_refuses
 #MUTANT left-open-judges-an-unread-body|s@^\tbody_read$@\ttrue@|an_unread_pr_body_leaves_the_set_unjudged
-#MUTANT older-body-still-exempts|s@^\traw := measured_closes\[count(measured_closes) - 1\]$@\tsome raw in measured_closes@|a_key_dropped_from_the_latest_body_exempts_nothing
+#MUTANT older-body-still-exempts|s@^\traw = measured_closes\[count(measured_closes) - 1\]$@\tsome raw in measured_closes@|a_key_dropped_from_the_latest_body_exempts_nothing
 #MUTANT unread-fetch-measured|s@^\tcolumns\[1\] != "-"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_exemption
 #MUTANT nothing-read-as-zero|s@^\tcontains(columns\[1\], ":")$@\ttrue@|a_measured_nothing_exempts_no_row_named_zero
 #MUTANT blocked-outranks-measured|s@^\tcount(measured_closes) == 0$@\ttrue@|a_measured_body_outranks_a_blocked_fetch
