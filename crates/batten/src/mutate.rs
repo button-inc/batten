@@ -5781,6 +5781,11 @@ mod tests {
             .collect();
         assert_eq!(slices[0], ["a", "c", "e"]);
         assert_eq!(slices[1], ["b", "d"]);
+        assert_eq!(
+            parse_shard(" 3/16 "),
+            Some((3, 16)),
+            "padding is not a part"
+        );
         for bad in ["2/2", "0/0", "1", "x/2"] {
             assert!(shard_of(&names, bad).is_err(), "{bad} is not a shard");
         }
