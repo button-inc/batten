@@ -1393,9 +1393,28 @@ fn stage(repo: &Path, out: &Path) -> Result<(PathBuf, PathBuf)> {
     Ok((check_repo, hooks))
 }
 
-/// The Rust source the commit fixture changes. Any tracked `.rs` file fires the
-/// same steps; this one is in every checkout `perf` measures.
-const COMMIT_SOURCE: &str = "crates/batten/src/lib.rs";
+/// The Rust source the commit fixture changes: a TYPICAL one, because the
+/// formatter and the cfg-gated-test step now cost what the staged file costs.
+///
+/// Chosen by measurement, not convenience (CLOUD-2789): over the 1,353 `.rs`
+/// touches of the 200 commits before 2026-11-23 (`git log -200 --numstat`), the
+/// median touched file is 1,168 lines, and that file is this one (p25 453, p75
+/// 2,850). `lib.rs`, the fixture's first choice, is 33,775 lines and 55 of the
+/// 1,353 touches: the worst case, which [`COMMIT_WORST`] records beside it.
+const COMMIT_SOURCE: &str = "crates/batten/src/hookcost.rs";
+
+/// The largest `.rs` file in the tree, which `cargo-fmt-worst` formats so the
+/// worst case a commit can pay is RECORDED rather than hidden behind the median.
+/// It carries no `perf-assert` budget: rustfmt alone is 311 ms on it, and a
+/// budget is a ceiling on the typical commit, not a description of this one.
+const COMMIT_WORST: &str = "crates/batten/src/lib.rs";
+
+/// The unbound TOML the commit fixture stages beside `batten.toml`.
+const COMMIT_TOML: &str = "mise.toml";
+
+/// The trunk ref the commit fixture's branch-relative steps judge against, which
+/// [`stage_commit`] refuses to stage without.
+const TRUNK_REF: &str = "refs/remotes/origin/main";
 
 /// Where git leaves the message `commit-msg` is handed, relative to the clone.
 const COMMIT_MESSAGE: &str = ".git/COMMIT_EDITMSG";
@@ -1416,12 +1435,28 @@ const COMMIT_EMAIL: &str = "perf@example.invalid";
 /// commit nobody makes. In-process, as `git clone --shared` (objects borrowed
 /// through alternates), because this module spawns no `git`.
 fn stage_commit(repo: &Path, out: &Path) -> Result<PathBuf> {
+    // THE TRUNK REF IS A PRECONDITION, refused here rather than discovered by
+    // hyperfine (CLOUD-2789). `cfg-gated-test-pinned` judges the branch against
+    // `origin/main`, which the clone carries only where the checkout resolves it;
+    // without it the step denies "diff read absent", exits 2 on the first warmup,
+    // and hyperfine aborts the whole run naming the arm, not the missing ref.
+    // Measured: a session that had not fetched `main` lost a 30-run baseline so.
+    if crate::git::resolve_ref(repo, TRUNK_REF)?.is_none() {
+        anyhow::bail!(
+            "perf: the commit fixture needs `{TRUNK_REF}` in {}, and it does not resolve; \
+             run `git fetch origin main` first",
+            repo.display()
+        );
+    }
     let commit = out.join("commit-repo");
     crate::gitwrite::clone_shared(repo, &commit)
         .context("perf: could not clone the commit fixture")?;
     let line = [
         (COMMIT_SOURCE, "// perf: one staged line\n"),
         ("batten.toml", "# perf: one staged line\n"),
+        // The most-edited TOML that `.taplo.toml` binds to no schema, so the
+        // commit-time `taplo` step (which skips the bound ones) has a subject.
+        (COMMIT_TOML, "# perf: one staged line\n"),
     ];
     for (path, added) in line {
         let at = commit.join(path);
@@ -1450,7 +1485,7 @@ fn stage_commit(repo: &Path, out: &Path) -> Result<PathBuf> {
     Ok(commit)
 }
 
-/// The default commit-time hk steps a `.rs` plus `batten.toml` commit fires
+/// The default commit-time hk steps a `.rs`, `batten.toml` and `mise.toml` commit fires
 /// (CLOUD-2789), each as hk runs it, with `batten` the binary under measurement.
 ///
 /// **READ OFF `hk run pre-commit --plan`, NOT GUESSED**: on that commit the plan
@@ -1460,6 +1495,9 @@ fn stage_commit(repo: &Path, out: &Path) -> Result<PathBuf> {
 /// `taplo lint {{files}}` / `taplo format --check --diff {{files}}` under
 /// `RUST_LOG=warn`. A commit hook is a batten hook and answers to the same
 /// 100 ms ceiling, which `perf-assert` holds each of these to.
+///
+/// `cargo-fmt-worst` is no step: it is `cargo-fmt` over [`COMMIT_WORST`], so the
+/// cost of the commit that stages the largest file is on the record, unbudgeted.
 fn commit_arms(bin: &str) -> Vec<(&'static str, Vec<String>)> {
     let words = |words: &[&str]| {
         words
@@ -1472,11 +1510,26 @@ fn commit_arms(bin: &str) -> Vec<(&'static str, Vec<String>)> {
             .chain(args.iter().map(|word| (*word).to_owned()))
             .collect::<Vec<_>>()
     };
+    let rustfmt = |file: &str| {
+        words(&[
+            "rustfmt",
+            "--check",
+            "--edition",
+            "2024",
+            "--config",
+            "skip_children=true",
+            file,
+        ])
+    };
     vec![
-        ("cargo-fmt", words(&["cargo", "fmt", "--all", "--check"])),
+        ("cargo-fmt", rustfmt(COMMIT_SOURCE)),
+        ("cargo-fmt-worst", rustfmt(COMMIT_WORST)),
+        // `taplo` skips the schema-bound `batten.toml` at the commit (its lint
+        // runs as the `slow` `taplo-schema` step), so its staged set is the
+        // unbound TOML; `taplo-format` formats every staged TOML in one process.
         (
             "taplo",
-            words(&["env", "RUST_LOG=warn", "taplo", "lint", "batten.toml"]),
+            words(&["env", "RUST_LOG=warn", "taplo", "lint", COMMIT_TOML]),
         ),
         (
             "taplo-format",
@@ -1488,12 +1541,13 @@ fn commit_arms(bin: &str) -> Vec<(&'static str, Vec<String>)> {
                 "--check",
                 "--diff",
                 "batten.toml",
+                COMMIT_TOML,
             ]),
         ),
         ("config-lint-pinned", batten(&["config", "lint"])),
         (
             "cfg-gated-test-pinned",
-            batten(&["check", "--rule", "test cover missing"]),
+            batten(&["check", "--staged", "--rule", "test cover missing"]),
         ),
         (
             "merge-conflict-markers",
@@ -4663,24 +4717,28 @@ mod tests {
         std::fs::create_dir_all(repo.join("crates/batten/src"))?;
         std::fs::write(repo.join(COMMIT_SOURCE), "fn main() {}\n")?;
         std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
+        std::fs::write(repo.join(COMMIT_TOML), "[tools]\n")?;
         std::fs::write(repo.join("other.txt"), "untouched\n")?;
         crate::gitwrite::commit_paths(
             &repo,
             &[
                 COMMIT_SOURCE.to_owned(),
                 String::from("batten.toml"),
+                COMMIT_TOML.to_owned(),
                 String::from("other.txt"),
             ],
             "base\n",
         )?;
+        pin_trunk(&repo)?;
         let out = perf_scratch("commit-out");
         let commit = stage_commit(&repo, &out)?;
         assert_eq!(commit, out.join("commit-repo"));
         let staged: Vec<String> = crate::git::staged_paths(&commit)?.into_iter().collect();
-        assert_eq!(staged, ["batten.toml", COMMIT_SOURCE]);
+        assert_eq!(staged, ["batten.toml", COMMIT_SOURCE, COMMIT_TOML]);
         for (path, before) in [
             (COMMIT_SOURCE, "fn main() {}\n"),
             ("batten.toml", "version = 1\n"),
+            (COMMIT_TOML, "[tools]\n"),
         ] {
             let after = crate::fsio::read_to_string(commit.join(path))?;
             let added = after.strip_prefix(before).unwrap_or_default();
@@ -4689,6 +4747,44 @@ mod tests {
         assert!(crate::fsio::read_to_string(commit.join(COMMIT_MESSAGE))?.contains(':'));
         let config = crate::fsio::read_to_string(commit.join(".git/config"))?;
         assert!(config.contains(COMMIT_EMAIL), "{config}");
+        assert!(
+            crate::git::resolve_ref(&commit, TRUNK_REF)?.is_some(),
+            "the clone carries the trunk ref the branch-relative steps read"
+        );
+        Ok(())
+    }
+
+    /// Point `origin/main` at `repo`'s `HEAD`, as a fetched checkout has it.
+    fn pin_trunk(repo: &Path) -> Result<()> {
+        let head = crate::git::resolve_ref(repo, "HEAD")?
+            .ok_or_else(|| anyhow::anyhow!("the fixture has a HEAD"))?;
+        let at = repo.join(".git").join(TRUNK_REF);
+        std::fs::create_dir_all(at.parent().unwrap_or(repo))?;
+        std::fs::write(at, format!("{head}\n"))?;
+        Ok(())
+    }
+
+    /// A checkout with no `origin/main` is refused at staging, naming the ref
+    /// and the fetch, instead of reaching hyperfine as an arm that exits 2.
+    ///
+    /// Fails by: the precondition dropped (the clone is staged and the
+    /// cfg-gated-test arm later denies "diff read absent"), or a refusal that
+    /// does not name what to fetch.
+    #[test]
+    fn a_checkout_without_the_trunk_ref_is_refused_before_staging() -> Result<()> {
+        let repo = perf_scratch("commit-no-trunk");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
+        crate::gitwrite::commit_paths(&repo, &[String::from("batten.toml")], "base\n")?;
+        let out = perf_scratch("commit-no-trunk-out");
+        let refusal = stage_commit(&repo, &out)
+            .expect_err("no origin/main, no fixture")
+            .to_string();
+        assert!(
+            refusal.contains(TRUNK_REF) && refusal.contains("git fetch origin main"),
+            "{refusal}"
+        );
+        assert!(!out.join("commit-repo").exists(), "nothing was staged");
         Ok(())
     }
 

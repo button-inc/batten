@@ -591,6 +591,8 @@ fn measurable(name: &str) -> std::path::PathBuf {
         )
         .file("Cargo.toml", "[workspace]\n")
         .file("crates/batten/src/lib.rs", "// base\n")
+        .file("crates/batten/src/hookcost.rs", "// base\n")
+        .file("mise.toml", "[tools]\n")
         .file(".gitignore", "stub-bin/\ninstruments.log\ntarget/\n");
     for file in ["batten.toml.in", "lib.rs.in"] {
         let path = format!("crates/batten/tests/fixtures/repos/forbid-clean/{file}");
@@ -682,6 +684,7 @@ fn a_measurement_times_every_path_off_its_release_build() {
         "stop",
         "wired",
         "cargo-fmt",
+        "cargo-fmt-worst",
         "taplo",
         "taplo-format",
         "config-lint-pinned",
@@ -701,16 +704,27 @@ fn a_measurement_times_every_path_off_its_release_build() {
         .lines()
         .filter(|line| line.starts_with("hyperfine "))
         .collect();
-    assert_eq!(timed.len(), 15, "{argv}");
+    assert_eq!(timed.len(), 16, "{argv}");
     // A multi-word argument reaches hyperfine quoted, or it splits the rule
     // name into three words and the arm measures a usage error.
-    assert!(argv.contains("check --rule 'test cover missing'"), "{argv}");
+    assert!(
+        argv.contains("check --staged --rule 'test cover missing'"),
+        "{argv}"
+    );
+    // The formatter arms run rustfmt over ONE file each, children skipped: the
+    // median staged file, and the largest as the unbudgeted worst case.
+    for file in ["crates/batten/src/hookcost.rs", "crates/batten/src/lib.rs"] {
+        assert!(
+            argv.contains(&format!("--config skip_children=true {file}")),
+            "{argv}"
+        );
+    }
     // The commit fixture carries its one staged change per subject.
     let commit = repo.join("target/perf/commit-repo");
     let staged = common::git_in(&commit, &["diff", "--cached", "--name-only"]);
     assert_eq!(
         staged.lines().collect::<Vec<_>>(),
-        ["batten.toml", "crates/batten/src/lib.rs"]
+        ["batten.toml", "crates/batten/src/hookcost.rs", "mise.toml"]
     );
     for line in timed {
         assert_eq!(

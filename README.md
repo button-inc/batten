@@ -218,19 +218,23 @@ the launcher's own share is attributable.
 | `posttool`               | a PostToolUse call — decode, capture the response         | —      | —      | ≤ 100 ms |
 | `stop`                   | an end of turn — decode, state record, drain detached     | —      | —      | ≤ 100 ms |
 | `wired`                  | the hook as `.claude/settings.json` invokes it            | 8.0 ms | 8.4 ms | ≤ 100 ms |
-| `cargo-fmt`              | pre-commit: `cargo fmt --all --check`                     | —      | —      | ≤ 100 ms |
-| `taplo`                  | pre-commit: `taplo lint` over the staged TOML             | —      | —      | ≤ 100 ms |
+| `cargo-fmt`              | pre-commit: `rustfmt --check` over the staged `.rs` files | —      | —      | ≤ 100 ms |
+| `taplo`                  | pre-commit: `taplo lint` over the staged unbound TOML     | —      | —      | ≤ 100 ms |
 | `taplo-format`           | pre-commit: `taplo format --check` over the staged TOML   | —      | —      | ≤ 100 ms |
 | `config-lint-pinned`     | pre-commit: `batten config lint`                          | —      | —      | ≤ 100 ms |
-| `cfg-gated-test-pinned`  | pre-commit: `batten check --rule 'test cover missing'`    | —      | —      | ≤ 100 ms |
+| `cfg-gated-test-pinned`  | pre-commit: `batten check --staged --rule '…'`            | —      | —      | ≤ 100 ms |
 | `merge-conflict-markers` | pre-commit: `batten enforce --rule 'source carry broken'` | —      | —      | ≤ 100 ms |
 | `conventional-commit`    | commit-msg: `batten commit check --message`               | —      | —      | ≤ 100 ms |
 | `commit-attribution`     | commit-msg: `batten attribution check --message`          | —      | —      | ≤ 100 ms |
 
 A commit hook is a batten hook and answers to the same ceiling: the last eight
 rows are every default `pre-commit` and `commit-msg` step a commit touching a
-`.rs` file and `batten.toml` fires, each run as hk runs it in `perf`'s commit
-fixture (`target/perf/commit-repo`, a shared clone carrying that staged change).
+`.rs` file, `batten.toml` and `mise.toml` fires, each run as hk runs it in
+`perf`'s commit fixture (`target/perf/commit-repo`, a shared clone carrying that
+staged change). The `.rs` file is the median one a commit touches
+(`hookcost.rs`, 1,168 lines); `perf` also records `cargo-fmt-worst`, the
+formatter over the 33,775-line `lib.rs`, unbudgeted, so the worst case is on the
+record rather than hidden by the median.
 Their cells are `—` for `posttool`'s reason below: they have not been measured
 on the machine the series above comes from.
 
