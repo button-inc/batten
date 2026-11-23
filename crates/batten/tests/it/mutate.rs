@@ -962,7 +962,10 @@ fn a_filter_naming_no_case_is_still_a_filter_fault_and_not_a_timeout() {
 /// reader running `b-limit` under `a`'s gate would then report it caught, which
 /// is the defect `a_task_gate_sweeps_only_its_own_block` exists to see. With no
 /// `b` tier, that reader's `b-limit` row names no case and the sweep exits 3.
-#[cfg(unix)]
+///
+/// COMPILED ON EVERY TARGET: `a_recorded_row_is_judged_again_under_ci` calls it
+/// behind a `cfg!` arm rather than an attribute, so a `#[cfg(unix)]` here left
+/// that case unresolvable off unix, and `cross-check`'s Windows pass failed.
 fn two_task_repo(name: &str) -> PathBuf {
     let root = toy(name);
     write(
