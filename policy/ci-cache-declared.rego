@@ -45,7 +45,7 @@
 #MUTANT warmed-family-may-be-written|s@not reads_only(step)@false@|a_pull_request_writer_of_a_warmed_family_is_refused
 #MUTANT orphaned-reader-may-pass|s@^\tnot \[shared_key(step), arch(runner(path, name))\] in warmed$@\tfalse@|a_read_only_consumer_of_an_unwarmed_family_is_refused
 #MUTANT cargo-reach-unbounded|s@\tsome reached in graph.reachable(task_graph, \[name\])@\tsome reached in [name]@|a_cargo_reach_deeper_than_the_old_bound_is_seen
-#MUTANT scheduled-writer-may-not-warm|s@trunk_writer(path) if _ := triggers(path).schedule@trunk_writer(path) if false@|a_scheduled_trunk_writer_warms_the_family
+#MUTANT scheduled-writer-may-not-warm|s@trunk_writer(path) if _ = triggers(path).schedule@trunk_writer(path) if false@|a_scheduled_trunk_writer_warms_the_family
 
 # METADATA
 # description: |
