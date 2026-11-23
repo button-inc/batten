@@ -1720,9 +1720,20 @@ fn evict(entries: &[(String, String)], cap: usize) -> Vec<String> {
         .collect()
 }
 
-/// `batten step graph run <group> [--jobs N]` (CLOUD-2785): every row of
-/// `group`, each as a child process from its `run` argv, a row starting only
-/// once every `depends_on` exited 0, at most `jobs` at once.
+/// `batten step graph run <group>... [--jobs N]` (CLOUD-2785): every row of
+/// each group, each as a child process from its `run` argv, a row starting only
+/// once every `depends_on` exited 0, at most `jobs` at once (or the group's own
+/// `NAME=N`).
+///
+/// THE GROUPS RUN IN ORDER AND A RED ONE STOPS NONE AFTER IT (CLOUD-2789). One
+/// `step graph run` per tier made the task runner's `run` array the scheduler,
+/// and it stops at the first failing line, so a lap reported one tier's reds
+/// and the next tier's only on the lap after, once those were fixed. Here a
+/// failure skips only the rows that name it in `depends_on`, and every red row
+/// is listed once more at the end, so one run
+/// reports every failure. A group still starts only after the one before it
+/// has finished, which keeps the green path's phases, and so its wall time,
+/// what the separate calls had.
 ///
 /// A CHILD PROCESS PER NODE, never `run_step` on a thread: `check`, `record`
 /// and `declared` read the working directory, `announce` pushes one phase per
@@ -1736,32 +1747,99 @@ fn evict(entries: &[(String, String)], cap: usize) -> Vec<String> {
 /// # Errors
 ///
 /// An I/O error when a line cannot be written.
-pub fn run_graph(group: &str, jobs: Option<&str>, err: &mut dyn Write) -> Result<ExitCode> {
-    let jobs = match jobs.map(str::parse::<std::num::NonZeroUsize>) {
+pub fn run_graph(groups: &[String], jobs: Option<&str>, err: &mut dyn Write) -> Result<ExitCode> {
+    let positive = |text: &str| text.parse::<std::num::NonZeroUsize>().ok();
+    let jobs = match jobs.map(positive) {
         None => None,
-        Some(Ok(jobs)) => Some(jobs),
-        Some(Err(_)) => {
+        Some(Some(jobs)) => Some(jobs),
+        Some(None) => {
             writeln!(err, "step graph: --jobs takes a positive integer")?;
             return Ok(ExitCode::Usage);
         }
     };
-    let rows: Vec<Step> = match crate::resolve::committed(Path::new("."), &Overrides::default()) {
-        Ok(config) => config
-            .steps
-            .into_iter()
-            .filter(|row| row.group.as_deref() == Some(group))
-            .collect(),
+    let steps = match crate::resolve::committed(Path::new("."), &Overrides::default()) {
+        Ok(config) => config.steps,
         Err(error) => {
             writeln!(err, "step graph: the step table did not load: {error}")?;
             return Ok(ExitCode::Usage);
         }
     };
-    if rows.is_empty() {
-        writeln!(err, "step graph: no [[step]] row is in group {group}")?;
-        return Ok(ExitCode::Usage);
+    // EVERY GROUP IS RESOLVED BEFORE ANY ROW RUNS, so a misspelt third group is
+    // a usage error, not a refusal an hour in.
+    let mut phases: Vec<(&str, Vec<&Step>, Option<std::num::NonZeroUsize>)> = Vec::new();
+    for spelled in groups {
+        let (group, bound) = match spelled.split_once('=') {
+            None => (spelled.as_str(), jobs),
+            Some((group, bound)) => match positive(bound) {
+                Some(bound) => (group, Some(bound)),
+                None => {
+                    writeln!(
+                        err,
+                        "step graph: {spelled}: a group's bound is a positive integer"
+                    )?;
+                    return Ok(ExitCode::Usage);
+                }
+            },
+        };
+        let rows: Vec<&Step> = steps
+            .iter()
+            .filter(|row| row.group.as_deref() == Some(group))
+            .collect();
+        if rows.is_empty() {
+            writeln!(err, "step graph: no [[step]] row is in group {group}")?;
+            return Ok(ExitCode::Usage);
+        }
+        phases.push((group, rows, bound));
     }
+    let mut done: BTreeMap<String, i32> = BTreeMap::new();
+    let mut worst = 0_i32;
+    for (group, rows, bound) in &phases {
+        let outcome = graph_phase(rows, *bound, &mut done);
+        for line in &outcome.lines {
+            writeln!(err, "step graph: {line}")?;
+        }
+        writeln!(
+            err,
+            "step graph: {group} peak {} of {}",
+            outcome.peak,
+            bound.map_or_else(|| String::from("unbounded"), |jobs| jobs.to_string())
+        )?;
+        worst = worst.max(outcome.worst);
+    }
+    // THE LAP'S ONE LIST OF REDS (CLOUD-2789): every row that ran and failed, in
+    // run order, after every group has finished — the pointer each needs is its
+    // id and code, and its own output is above, under its runner's prefix.
+    for (group, rows, _) in &phases {
+        for row in rows {
+            if let Some(code) = done.get(&row.id).filter(|code| **code != 0) {
+                let how = if *code == SKIPPED {
+                    String::from("skipped")
+                } else {
+                    format!("ran {code}")
+                };
+                writeln!(err, "step graph: red {group} {} {how}", row.id)?;
+            }
+        }
+    }
+    if worst == 0 {
+        return Ok(ExitCode::Success);
+    }
+    ExitCode::from_code(worst).map_or_else(|| Err(crate::error::Passthrough::raise(worst)), Ok)
+}
+
+/// The code a skipped row is recorded under: never a code a child exits with,
+/// so the red list can tell a row that ran and failed from one that never ran.
+const SKIPPED: i32 = -1;
+
+/// One group of [`run_graph`]: its rows, run as child processes, against the
+/// codes every earlier group left in `done`.
+fn graph_phase(
+    rows: &[&Step],
+    jobs: Option<std::num::NonZeroUsize>,
+    done: &mut BTreeMap<String, i32>,
+) -> Scheduled {
     let bound = jobs.map_or(usize::MAX, std::num::NonZeroUsize::get);
-    let outcome = schedule(&rows, bound, &|row: &Step| {
+    schedule(rows, bound, done, &|row: &Step| {
         let mut settings = crate::config_model::ExecConfig::DEFAULT;
         settings.tee = true;
         let argv = row.run.clone().unwrap_or_default();
@@ -1780,21 +1858,7 @@ pub fn run_graph(group: &str, jobs: Option<&str>, err: &mut dyn Write) -> Result
             record_pass(&row.id);
         }
         code
-    });
-    for line in &outcome.lines {
-        writeln!(err, "step graph: {line}")?;
-    }
-    writeln!(
-        err,
-        "step graph: {group} peak {} of {}",
-        outcome.peak,
-        jobs.map_or_else(|| String::from("unbounded"), |jobs| jobs.to_string())
-    )?;
-    if outcome.worst == 0 {
-        return Ok(ExitCode::Success);
-    }
-    ExitCode::from_code(outcome.worst)
-        .map_or_else(|| Err(crate::error::Passthrough::raise(outcome.worst)), Ok)
+    })
 }
 
 /// What a scheduled graph did: a pointer line per node, the most rows that ran
@@ -1806,11 +1870,16 @@ struct Scheduled {
 }
 
 /// Run `rows` as a dependency graph with at most `bound` at once, each through
-/// `run`. Pure over `run`, so the order, the bound and the skips are testable
-/// without a process.
-fn schedule(rows: &[Step], bound: usize, run: &(dyn Fn(&Step) -> i32 + Sync)) -> Scheduled {
-    let mut done: BTreeMap<&str, i32> = BTreeMap::new();
-    let mut waiting: Vec<&Step> = rows.iter().collect();
+/// `run`, recording each row's code in `done`. A `depends_on` names a row of
+/// its own group (the step table refuses any other at load). Pure over `run`,
+/// so the order, the bound and the skips are testable without a process.
+fn schedule(
+    rows: &[&Step],
+    bound: usize,
+    done: &mut BTreeMap<String, i32>,
+    run: &(dyn Fn(&Step) -> i32 + Sync),
+) -> Scheduled {
+    let mut waiting: Vec<&Step> = rows.to_vec();
     let mut lines = Vec::new();
     let (mut running, mut peak) = (0_usize, 0_usize);
     let mut worst = 0_i32;
@@ -1827,7 +1896,7 @@ fn schedule(rows: &[Step], bound: usize, run: &(dyn Fn(&Step) -> i32 + Sync)) ->
             }) {
                 let row = waiting.remove(at);
                 lines.push(format!("{} skipped ({dependency} failed)", row.id));
-                done.insert(row.id.as_str(), ExitCode::Internal.code());
+                done.insert(row.id.clone(), SKIPPED);
             }
             while running < bound {
                 let Some(at) = waiting.iter().position(|row| {
@@ -1856,7 +1925,7 @@ fn schedule(rows: &[Step], bound: usize, run: &(dyn Fn(&Step) -> i32 + Sync)) ->
             running -= 1;
             lines.push(format!("{id} ran {code} {seconds:.3}"));
             worst = worst.max(code);
-            done.insert(id, code);
+            done.insert(id.to_owned(), code);
         }
     });
     Scheduled { lines, peak, worst }

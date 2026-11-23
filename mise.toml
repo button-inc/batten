@@ -4929,14 +4929,22 @@ depends = ["tree-clean"]
 # here rather than inside the array because the shell census reads every array
 # line, comments included.
 #
-# THREE TIERS, NOT ONE FAN (owner ruling, 2026-11-11). One fan started every gate
-# at once, so ordering it cheapest-first bought nothing: on #1276 the seconds-long
+# TIERS, NOT ONE FAN (owner ruling, 2026-11-11). One fan started every gate at
+# once, so ordering it cheapest-first bought nothing: on #1276 the seconds-long
 # gates (`config-lint`, `engine-pin-check`, `commit-lint`, `deny`) failed while
 # `ci` — hk's whole suite, `mutant:changed` and `mutant:declared` included — ran
-# on for 41 minutes over a head they had already refused. Each tier is its own
-# `--continue-on-error` fan, so a tier still reports every failure it holds in one
-# pass, and the `run` array stops at the first failing tier, so nothing slower
-# starts over a head something cheaper refused.
+# on for 41 minutes over a head they had already refused. So the cheap tier
+# still reports first, and a tier starts only once the one before it ended.
+#
+# BUT A RED TIER NO LONGER STOPS THE NEXT (CLOUD-2789). The tiers were one `run`
+# line each, and mise stops a `run` array at its first failing line, so for
+# weeks every lap reported one tier's reds and stopped: the next tier's defects
+# surfaced only on the lap after those were fixed, one tier per lap. The tiers
+# are now the groups of ONE `step graph run`, which runs them in order and lets
+# a failure skip only the rows naming it in `depends_on`, then lists every red
+# row (`step graph: red …`) before exiting with the worst code. A genuine
+# dependency stays one: every tier-1 gate still waits on the record writes. The
+# green path's phases, and so its wall time, are the separate calls'.
 #   1. seconds: the lap's commits and config, the diff and pin questions, the
 #      workflow audit, the cfg-gated-test ratchet, cargo-deny, the instruction
 #      budget, the policy modules' own tests, and `batten-check` (the whole
@@ -4949,7 +4957,10 @@ depends = ["tree-clean"]
 #   2. minutes: semver, the test replay, the two cross builds, clippy, and every
 #      hk step but the suite and the mutants (`ci:checks`).
 #   3. the suite: `ci`, whose other steps the first two tiers already receipted,
-#      so what runs is the suite and the mutants.
+#      so what runs is the suite and the mutants; then CI's slow-tier question.
+#   4. `perf-gate`, alone (CLOUD-2283), every other row having exited.
+# `modules-ratchet:check` is a tier-1 row: a seconds read that sat alone
+# between the tiers.
 #
 # TIERS 1 AND 2 ARE STEP GRAPHS (CLOUD-2785): their order and fan width were
 # positions in this array, which the engine could not bound, time or report.
@@ -4961,15 +4972,21 @@ depends = ["tree-clean"]
 # call the same tasks. A failure skips only what depends on it, and each node
 # prints its code and seconds.
 run = [
-  "{{vars.batten}} step graph run verify-1",
-  "mise run modules-ratchet:check",
-  "{{vars.batten}} step graph run verify-2 --jobs 2",
-  "{{vars.batten}} step run ci-suite -- mise run ci",
-  "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
-  "mise run perf-gate",
+  "{{vars.batten}} step graph run verify-1 verify-2=2 verify-3=1 verify-4",
   "{{vars.batten}} step cover",
   "{{vars.batten}} receipt record verify",
 ]
+
+# THE SUITE TIER'S TWO NODES, as tasks (CLOUD-2789): a `[[step]]` row's argv
+# reaches the tree's engine through `mise run batten`, and mise drops the `--`
+# that `step run` and `ci step` need before the wrapped command.
+[tasks."verify:ci-suite"]
+description = "The suite, through its keyed `ci-suite` step — invoked through `verify`'s third tier"
+run = "{{vars.batten}} step run ci-suite -- mise run ci"
+
+[tasks."verify:ci-slow-needed"]
+description = "CI's slow-tier question, asked as the `ci` job asks it — invoked through `verify`'s third tier"
+run = "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main"
 
 # THE LAP'S COMMIT RANGE, AS DATA (CLOUD-1702). `commit-lint` reads
 # `BASE_SHA`/`HEAD_SHA`, which CI sets from the pull request and this sets from the
