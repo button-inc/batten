@@ -380,6 +380,35 @@ fn a_write_inside_the_tree_is_selected() {
     );
 }
 
+/// THIS REPOSITORY'S `filed-row-settled` IS THE ROW THE COLUMN WAS BUILT FOR.
+///
+/// Measured on #1276: the row refused a subagent's Write into the session
+/// scratchpad, outside the checkout, because the row never declared the column
+/// the cases above prove; [`TREE_CONFIG`] called itself "the shape
+/// `filed-row-settled` declares" while the authority did not declare it.
+///
+/// Fails by: the committed row dropping `tree_only`, which refuses every write
+/// outside the repository while a filed row is unsettled.
+#[test]
+fn this_repositorys_filed_row_settled_is_tree_only() {
+    use batten::facts::{Format, Look, Node};
+    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("read the authority");
+    let Look::Is(config) = Format::Toml.read(&text) else {
+        panic!("the authority did not parse");
+    };
+    let Look::Is(Node::List(handlers)) = config.at("hook.handler") else {
+        panic!("the authority declares no handler table");
+    };
+    let row = handlers
+        .iter()
+        .find(|row| matches!(row.at("id"), Look::Is(Node::Text(id)) if id == "filed-row-settled"))
+        .expect("the authority declares filed-row-settled");
+    assert!(
+        matches!(row.at("tree_only"), Look::Is(Node::Bool(true))),
+        "filed-row-settled must declare tree_only = true"
+    );
+}
+
 /// [`TREE_CONFIG`] plus a policy row whose module does not exist: the handler
 /// table still resolves, but the policy it sits beside cannot be built, so the
 /// hook is on its load-fault floor.
