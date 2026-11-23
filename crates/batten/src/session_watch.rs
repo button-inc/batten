@@ -516,6 +516,21 @@ impl Watch {
         Some((reports, ending))
     }
 
+    /// Whether `report`'s child reached an ending on the last poll: done, dead,
+    /// or unstarted across [`UNSTARTED_POLLS`] polls. The children whose
+    /// ending dispatches an event.
+    #[must_use]
+    pub fn ended(&self, report: &Report) -> bool {
+        match report.state {
+            State::Done | State::Dead => true,
+            State::Unstarted => self
+                .streaks
+                .get(&report.session)
+                .is_some_and(|streak| *streak >= UNSTARTED_POLLS),
+            State::Working | State::Waiting => false,
+        }
+    }
+
     /// The rows to judge: every listed child not archived, or the named ones.
     fn rows(&self, source: &mut dyn Source) -> Option<Vec<Row>> {
         let mut rows = Vec::new();
@@ -626,6 +641,61 @@ impl Source for Mcp {
         }
         self.call(LIST_EVENTS, &arguments)
     }
+}
+
+/// The hook event a child's ending dispatches (CLOUD-2826): `session.done`,
+/// `session.dead` or `session.unstarted`, on [`crate::config_model::Event::ChildSession`].
+///
+/// A `[[hook.handler]]` row on `child-session` selects it by that name through
+/// its `matcher`, as a `forge` row selects `pull_request.opened`. The input is
+/// tokens only — the session id, the state, the open count and the open task
+/// ids — never a transcript byte (rule 4).
+#[must_use]
+pub fn envelope(report: &Report) -> crate::hook::Envelope {
+    use crate::config_model::Event;
+    use crate::hook::EventExt as _;
+    let state = report.state.as_str();
+    crate::hook::Envelope {
+        event: Event::ChildSession,
+        raw_event: Event::ChildSession.as_str().to_owned(),
+        raw_tool: format!("session.{state}"),
+        operation: crate::hook::Operation::Other("session".to_owned()),
+        input: serde_json::json!({
+            "session": report.session,
+            "state": state,
+            "open": report.inventory.open(),
+        }),
+        result: Value::Null,
+        command: String::new(),
+        writes: None,
+        reads: None,
+        cwd: None,
+        session: None,
+        agent: None,
+        start_source: None,
+        call_id: None,
+        background_ceiling: None,
+        stop_active: None,
+        last_message: None,
+        transcript: None,
+        mode: None,
+        forge: None,
+        mediated: None,
+    }
+}
+
+/// The key one ending is remembered under, so a later watch over the same
+/// unchanged transcript does not fire it again: the session, the state, and
+/// the newest event read. A child that takes another turn and ends again has a
+/// new cursor, and so a new key.
+#[must_use]
+pub fn ending_key(report: &Report) -> String {
+    format!(
+        "{}:{}:{}",
+        report.session,
+        report.state.as_str(),
+        report.inventory.cursor.as_deref().unwrap_or("-")
+    )
 }
 
 /// The full inventory, as the capture file holds it.

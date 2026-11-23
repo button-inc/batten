@@ -287,3 +287,62 @@ fn a_child_whose_prompt_never_arrived_is_unstarted() {
     let idle = Row::of(&row("s", "IDLE", None)).unwrap();
     assert_ne!(state(&idle, &inventory), State::Unstarted);
 }
+
+/// The `child-session` event a child's ending dispatches (CLOUD-2826): its name
+/// is the state, its input is tokens only, and only a child that ENDED fires —
+/// a waiting child, or an unstarted one short of the poll count, does not.
+#[test]
+fn an_ended_child_dispatches_its_state_as_a_child_session_event() {
+    use batten::config_model::Event;
+    use batten::session_watch::{ending_key, envelope};
+
+    let mut transcript = events("worker-events.json");
+    transcript.extend(events("shard-exit.json"));
+    let mut source = Recorded::new(100)
+        .child(row("session_done", "IDLE", None), transcript)
+        .child(
+            row("session_waiting", "IDLE", None),
+            events("worker-events.json"),
+        );
+    let mut watch = Watch::new(Vec::new());
+    let (reports, _) = watch.poll(&mut source, &cache("events")).unwrap();
+    let done = reports
+        .iter()
+        .find(|r| r.session == "session_done")
+        .unwrap();
+    let waiting = reports
+        .iter()
+        .find(|r| r.session == "session_waiting")
+        .unwrap();
+
+    assert!(watch.ended(done));
+    assert!(!watch.ended(waiting), "a waiting child ends nothing");
+    let event = envelope(done);
+    assert_eq!(event.event, Event::ChildSession);
+    assert_eq!(event.raw_tool, "session.done");
+    assert_eq!(
+        event.input,
+        serde_json::json!({"session": "session_done", "state": "done", "open": []})
+    );
+    assert!(
+        !event.input.to_string().contains("Run shard"),
+        "no transcript byte reaches the event"
+    );
+    assert_ne!(ending_key(done), ending_key(waiting));
+
+    // Unstarted ends, and so dispatches, only at the poll count.
+    let mut source = Recorded::new(100).child(
+        row("session_unstarted", "IDLE", None),
+        events("unstarted-events.json"),
+    );
+    let mut watch = Watch::new(Vec::new());
+    let store = cache("events-unstarted");
+    for poll in 1..=UNSTARTED_POLLS {
+        let (reports, _) = watch.poll(&mut source, &store).unwrap();
+        assert_eq!(
+            watch.ended(&reports[0]),
+            poll == UNSTARTED_POLLS,
+            "poll {poll}"
+        );
+    }
+}
