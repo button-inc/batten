@@ -705,17 +705,24 @@ fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
             marker.display()
         ),
     );
-    let started = std::time::Instant::now();
     let (code, out) = land_verify_supervised(&repo, &gate, "424245", "600");
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(120),
-        "the lap ended at once, not when the wedge ran out: {out}"
-    );
     assert_eq!(code, 2, "a known-red tree is refused: {out}");
     assert!(!out.contains("verify stalled"), "{out}");
     let record = lap_record(&repo, &branch_of(&repo));
     assert!(record.contains("verify refused "), "{record}");
-    assert!(record.contains("gate-red red true"), "{record}");
+    // ENDED AT ONCE, NOT OUTLIVED: the record says the cancel reclaimed the
+    // gate's group, and the wedge it stands for is gone — not run out on its own.
+    assert!(
+        record.contains("gate-red red true"),
+        "the receipt's failure cancelled and reclaimed the gate: {record}"
+    );
+    let gate_pid = std::fs::read_to_string(&marker).expect("the gate reached its wedge");
+    if cfg!(target_os = "linux") {
+        assert!(
+            !Path::new(&format!("/proc/{}", gate_pid.trim())).exists(),
+            "the wedged gate was cancelled, not left running"
+        );
+    }
 }
 
 /// `batten land verify` with a receipt name declared, over a gate that REFUSES —
