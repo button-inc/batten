@@ -150,8 +150,15 @@ added_lines(path) := added if {
 # `#![allow(clippy::expect_used)]` is the idiom every suite in this crate already
 # uses — panicking loudly is how a test fails — so a rule firing on those would
 # be switched off within a day, which is the failure mode that ends gates.
+#
+# EVERY PACKAGE'S SOURCE, read from the path rather than a list of crates
+# (#1276): `crates/<crate>/src/**`. A prefix naming one crate stopped counting
+# every module the split moved while the row's globs still listed them.
 engine_source(path) if {
-	startswith(path, "crates/batten/src/")
+	parts := split(path, "/")
+	count(parts) > 3
+	parts[0] == "crates"
+	parts[2] == "src"
 	endswith(path, ".rs")
 }
 
@@ -436,6 +443,37 @@ test_a_lint_outside_the_idiom_set_is_still_refused if {
 	count(violation) == 1 with input as tree(
 		{"crates/batten/src/thing.rs": ["#[allow(clippy::too_many_arguments)]"]},
 		{"crates/batten/src/thing.rs": []},
+	)
+}
+
+# EVERY PACKAGE'S SOURCE (#1276). The crate split moved half the engine into
+# sibling packages, and a prefix naming one crate stopped counting an escape in
+# any of them while the row's globs still listed them.
+test_an_added_escape_in_another_crates_source_is_refused if {
+	count(violation) == 1 with input as tree(
+		{"crates/batten-base/src/thing.rs": ["fn a() {}", "    clippy::disallowed_types,"]},
+		{"crates/batten-base/src/thing.rs": ["fn a() {}"]},
+	)
+}
+
+test_another_crates_suite_is_out_of_scope if {
+	count(violation) == 0 with input as tree(
+		{"crates/batten-core/tests/thing.rs": ["#![allow(clippy::too_many_arguments)]"]},
+		{"crates/batten-core/tests/thing.rs": []},
+	)
+}
+
+# An escape MOVED between crates is no growth: the split's own shape.
+test_an_escape_moved_into_another_crate_is_clean if {
+	count(violation) == 0 with input as tree(
+		{
+			"crates/batten/src/exec.rs": ["fn a() {}"],
+			"crates/batten-core/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,"],
+		},
+		{
+			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,"],
+			"crates/batten-core/src/exec.rs": ["fn a() {}"],
+		},
 	)
 }
 
