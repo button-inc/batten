@@ -1744,6 +1744,12 @@ fn evict(entries: &[(String, String)], cap: usize) -> Vec<String> {
 /// Prints one pointer line per node (`ran <code> <seconds>` or `skipped`) and
 /// the peak concurrency reached, and exits with the worst node's code.
 ///
+/// EACH NODE'S VERDICT IS WRITTEN WHEN THE NODE ENDS (CLOUD-2838):
+/// `step graph: <ok|red> <group> <id> <exit> <seconds> <pointer>`, the pointer
+/// being its captured streams' handles, comma-joined, or `-`. The per-group and
+/// end-of-lap lists still follow, and they come after every node. On #1276 a
+/// tier-2 red waited behind the ~25-minute suite before anyone could read it.
+///
 /// # Errors
 ///
 /// An I/O error when a line cannot be written.
@@ -1794,7 +1800,7 @@ pub fn run_graph(groups: &[String], jobs: Option<&str>, err: &mut dyn Write) -> 
     let mut done: BTreeMap<String, i32> = BTreeMap::new();
     let mut worst = 0_i32;
     for (group, rows, bound) in &phases {
-        let outcome = graph_phase(rows, *bound, &mut done);
+        let outcome = graph_phase(group, rows, *bound, &mut done, err);
         for line in &outcome.lines {
             writeln!(err, "step graph: {line}")?;
         }
@@ -1834,19 +1840,24 @@ const SKIPPED: i32 = -1;
 /// One group of [`run_graph`]: its rows, run as child processes, against the
 /// codes every earlier group left in `done`.
 fn graph_phase(
+    group: &str,
     rows: &[&Step],
     jobs: Option<std::num::NonZeroUsize>,
     done: &mut BTreeMap<String, i32>,
+    err: &mut dyn Write,
 ) -> Scheduled {
     let bound = jobs.map_or(usize::MAX, std::num::NonZeroUsize::get);
-    schedule(rows, bound, done, &|row: &Step| {
+    let run = |row: &Step| {
         let mut settings = crate::config_model::ExecConfig::DEFAULT;
         settings.tee = true;
         let argv = row.run.clone().unwrap_or_default();
+        // THE EXEC REPORT IS KEPT FOR ITS CAPTURE HANDLES (CLOUD-2838): the
+        // pointer a node's verdict line carries ([`logged`]).
+        let mut report = Vec::new();
         // A NON-ZERO CHILD ARRIVES AS A `Passthrough` carrying its own code,
         // which may sit outside the §7 table; anything else is a spawn that
         // never decided, which is internal.
-        let code = match crate::exec::run_with(&argv, &[], &settings, &mut std::io::sink()) {
+        let code = match crate::exec::run_with(&argv, &[], &settings, &mut report) {
             Ok(code) => code.code(),
             Err(error) => error
                 .downcast_ref::<crate::error::Passthrough>()
@@ -1857,8 +1868,25 @@ fn graph_phase(
         if code == 0 {
             record_pass(&row.id);
         }
-        code
-    })
+        (code, logged(&report))
+    };
+    let mut emit = |line: String| {
+        let _ = writeln!(err, "step graph: {line}");
+        let _ = err.flush();
+    };
+    schedule(group, rows, bound, done, &run, &mut emit)
+}
+
+/// A node's verdict line as it ends (CLOUD-2838), after `step graph: `:
+/// `<ok|red> <group> <id> <exit> <seconds> <pointer>`. The pointer is the
+/// node's capture handles joined by `,`, so it stays one field, or `-`.
+fn verdict_line(group: &str, id: &str, code: i32, seconds: f64, log: Option<&str>) -> String {
+    let verdict = if code == 0 { "ok" } else { "red" };
+    let pointer = log.map_or_else(
+        || String::from("-"),
+        |handles| handles.split_whitespace().collect::<Vec<_>>().join(","),
+    );
+    format!("{verdict} {group} {id} {code} {seconds:.3} {pointer}")
 }
 
 /// What a scheduled graph did: a pointer line per node, the most rows that ran
@@ -1870,21 +1898,24 @@ struct Scheduled {
 }
 
 /// Run `rows` as a dependency graph with at most `bound` at once, each through
-/// `run`, recording each row's code in `done`. A `depends_on` names a row of
+/// `run`, recording each row's code in `done`. Each row's [`verdict_line`]
+/// goes to `emit` the moment its run returns. A `depends_on` names a row of
 /// its own group (the step table refuses any other at load). Pure over `run`,
 /// so the order, the bound and the skips are testable without a process.
 fn schedule(
+    group: &str,
     rows: &[&Step],
     bound: usize,
     done: &mut BTreeMap<String, i32>,
-    run: &(dyn Fn(&Step) -> i32 + Sync),
+    run: &(dyn Fn(&Step) -> (i32, Option<String>) + Sync),
+    emit: &mut dyn FnMut(String),
 ) -> Scheduled {
     let mut waiting: Vec<&Step> = rows.to_vec();
     let mut lines = Vec::new();
     let (mut running, mut peak) = (0_usize, 0_usize);
     let mut worst = 0_i32;
     std::thread::scope(|scope| {
-        let (finished, arrivals) = std::sync::mpsc::channel::<(&str, i32, f64)>();
+        let (finished, arrivals) = std::sync::mpsc::channel::<(&str, i32, f64, Option<String>)>();
         loop {
             // A ROW WHOSE DEPENDENCY FAILED NEVER STARTS, and neither does any
             // row waiting on it: repeat until no skip uncovers another.
@@ -1912,17 +1943,19 @@ fn schedule(
                 let finished = finished.clone();
                 scope.spawn(move || {
                     let started = std::time::Instant::now();
-                    let code = run(row);
-                    let _ = finished.send((row.id.as_str(), code, started.elapsed().as_secs_f64()));
+                    let (code, log) = run(row);
+                    let seconds = started.elapsed().as_secs_f64();
+                    let _ = finished.send((row.id.as_str(), code, seconds, log));
                 });
             }
             if running == 0 {
                 break;
             }
-            let Ok((id, code, seconds)) = arrivals.recv() else {
+            let Ok((id, code, seconds, log)) = arrivals.recv() else {
                 break;
             };
             running -= 1;
+            emit(verdict_line(group, id, code, seconds, log.as_deref()));
             lines.push(format!("{id} ran {code} {seconds:.3}"));
             worst = worst.max(code);
             done.insert(id.to_owned(), code);
