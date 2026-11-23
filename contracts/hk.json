@@ -331,6 +331,7 @@
           "stepIds": [
             "shfmt",
             "taplo-format",
+            "taplo-format-schema",
             "pkl-format",
             "prettier",
             "deno-fmt",
@@ -354,39 +355,45 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl-format",
+          "name": "taplo-format-schema",
           "status": "included",
           "orderIndex": 2,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "prettier",
+          "name": "pkl-format",
           "status": "included",
           "orderIndex": 3,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "deno-fmt",
+          "name": "prettier",
           "status": "included",
           "orderIndex": 4,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "rego",
+          "name": "deno-fmt",
           "status": "included",
           "orderIndex": 5,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "engine-pin",
+          "name": "rego",
           "status": "included",
           "orderIndex": 6,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-fmt",
+          "name": "engine-pin",
           "status": "included",
           "orderIndex": 7,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "cargo-fmt",
+          "status": "included",
+          "orderIndex": 8,
           "parallelGroupId": "group_0"
         }
       ]
