@@ -228,6 +228,48 @@ fn a_job_that_runs_on_a_draft_is_refused_and_named() {
     );
 }
 
+/// `ci.yml`'s `final`, reduced: a fan-in that only reads its dependencies'
+/// results and exits, under `always()` and deliberately not draft-gated
+/// (CLOUD-2317).
+const AGGREGATOR: &str = "  final:
+    name: final
+    if: ${{ always() }}
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert all required jobs passed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') }}
+        run: exit 1
+";
+
+/// A pure aggregator spends nothing, so it is not refused for running on a
+/// draft (#1276). Fails by: the exemption dropped, so `final` is refused —
+/// which no remedy satisfies, since `ci-parity` refuses a draft guard there.
+#[test]
+fn a_pure_aggregator_under_always_is_not_a_spend() {
+    let root = tree("aggregator", &format!("{SOUND}{AGGREGATOR}"));
+    let found = findings(&root);
+    assert!(found.is_empty(), "a pure aggregator is clean: {found:?}");
+}
+
+/// One checkout makes an aggregator a spend again. Fails by: `uses:` unread,
+/// so a fan-in that checks out runs on every draft unrefused.
+#[test]
+fn an_aggregator_that_checks_out_is_still_refused() {
+    let checks_out = AGGREGATOR.replace(
+        "    steps:\n",
+        "    steps:\n      - uses: actions/checkout@v4\n",
+    );
+    let root = tree("aggregator-checkout", &format!("{SOUND}{checks_out}"));
+    let found = findings(&root);
+    assert!(
+        found
+            .iter()
+            .any(|(path, _)| path == ".github/workflows/ci.yml"),
+        "an aggregator that checks out is refused: {found:?}"
+    );
+}
+
 #[test]
 fn a_step_level_draft_guard_is_read_too() {
     // A reading that reached only the job level would refuse a workflow that is
