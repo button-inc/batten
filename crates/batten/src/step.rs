@@ -71,8 +71,26 @@
 //!
 //! `run` is the pair composed so a caller writes no shell around it: check, run
 //! the command on a miss through [`crate::exec::run`] (the child's code is the
-//! verb's, passed through unchanged), and record only on a zero exit. A record
-//! that refuses after a passing run is an economy lost, never the step's verdict.
+//! verb's, passed through unchanged), and record the verdict. A record that
+//! refuses after a run is an economy lost, never the step's verdict.
+//!
+//! # A failure is a verdict too (CLOUD-2253)
+//!
+//! A receipt written only on a pass left a failed step with no record of its
+//! inputs, so a lap on a known-red tree re-ran the whole fan to say red again
+//! (measured on #1276: three failures known, a held lap still ran ~35 minutes).
+//! So `run` records a FAILURE receipt under exactly the key a pass would use,
+//! carrying the child's code and a pointer to its stored log, and a later `run`
+//! at that key answers `red` with that code without running anything. A pass
+//! at the key replaces it, and [`BYPASS`] still forces a run.
+//!
+//! Red is reused only where the change could have caused it: a journaled run
+//! whose every failing case is flaky-suspect (its sealed reach misses the
+//! change, CLOUD-2786) is recorded as such and re-runs. A code past 125 is a
+//! signal or a shell that could not start the command, never a verdict over
+//! the inputs, and is not recorded. The failure's first line keeps the key off
+//! its last field, so an engine released before this reads it as no receipt
+//! and runs the step — never as a pass.
 //!
 //! # Local only
 //!
@@ -153,6 +171,22 @@ enum Answer {
     Hit(String),
     /// A key, and no receipt for it.
     Miss(String),
+    /// A failure receipt covers this exact key (CLOUD-2253): not re-run.
+    Red(String, Failure),
+    /// A failure receipt covers this key, but every failing case was a flaky
+    /// suspect: run again, like a miss.
+    Suspect(String),
+}
+
+/// What a failure receipt recorded: the child's code and its pointers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Failure {
+    /// The code the failed run exited with.
+    code: i32,
+    /// The stored streams' capture handles, space-separated.
+    log: Option<String>,
+    /// The failing cases and the command that confirms a fix, as said.
+    cases: Option<String>,
 }
 
 impl Answer {
@@ -176,6 +210,24 @@ impl Answer {
                     shown(key)
                 )
             }
+            Answer::Red(key, failure) => format!(
+                "red {} — {step}: a failure receipt (exit {}) already covers these exact \
+                 inputs, command and tools; not re-running",
+                shown(key),
+                failure.code
+            ),
+            Answer::Suspect(key) => format!(
+                "miss — {step}: the failure recorded for {} is flaky-suspect; running the step",
+                shown(key)
+            ),
+        }
+    }
+
+    /// The key a run of this answer records under, where it may record.
+    fn recording(&self) -> Option<&str> {
+        match self {
+            Answer::Miss(key) | Answer::Suspect(key) => Some(key),
+            _ => None,
         }
     }
 
@@ -580,19 +632,70 @@ fn check(step: &str, args: &[String], command: Option<&[String]>) -> Answer {
     // THE RECEIPT FOR THIS KEY, among the step's many (CLOUD-2784): one record
     // per key it passed under, so the lookup is by the fresh key itself, and its
     // last field still has to equal that key for a hit.
-    let stored = git_dir
+    let body = git_dir
         .as_deref()
-        .and_then(|git_dir| crate::record::keyed_group_read(git_dir, RECEIPTS, step, &key))
-        .and_then(|value| stored_key(&value));
+        .and_then(|git_dir| crate::record::keyed_group_read(git_dir, RECEIPTS, step, &key));
+    let stored = body.as_deref().and_then(stored_key);
     if stored.as_deref() == Some(key.as_str()) {
         return Answer::Hit(key);
     }
+    // A FAILURE AT THIS KEY (CLOUD-2253), read only where `run` wrote it: a
+    // check's key carries no command, so it never meets one.
+    let failed = command
+        .and(body.as_deref())
+        .and_then(|body| failure_of(body, &key));
+    if let Some((failure, false)) = failed {
+        return Answer::Red(key, failure);
+    }
+    let suspect = failed.is_some();
     // The pending key is what a later `record` must match. A store that will not
     // take it costs the economy, never the verdict: `record` then refuses.
     if let Some(git_dir) = &git_dir {
         let _ = crate::record::keyed_write(git_dir, PENDING, step, &format!("{key}\n"));
     }
+    if suspect {
+        return Answer::Suspect(key);
+    }
     Answer::Miss(key)
+}
+
+/// The failure a receipt body records for `key`, and whether it was
+/// flaky-suspect: a first line `<stamp> <n>ms <key> exit <code>[ flaky]`, then
+/// optional `log <handles>` and `cases <said>` lines. `None` for a pass, or for
+/// anything malformed, which every caller treats as "run".
+fn failure_of(body: &str, key: &str) -> Option<(Failure, bool)> {
+    let mut lines = body.lines();
+    let first: Vec<&str> = lines.next()?.split_whitespace().collect();
+    let at = first.iter().position(|field| *field == key)?;
+    let (word, code) = (first.get(at + 1)?, first.get(at + 2)?);
+    if *word != "exit" {
+        return None;
+    }
+    let code = code.parse::<i32>().ok().filter(|code| *code != 0)?;
+    let flaky = match first.get(at + 3..)? {
+        [] => false,
+        ["flaky"] => true,
+        _ => return None,
+    };
+    let mut failure = Failure {
+        code,
+        log: None,
+        cases: None,
+    };
+    for line in lines {
+        if let Some(log) = line.strip_prefix("log ") {
+            failure.log = Some(log.to_owned());
+        } else if let Some(cases) = line.strip_prefix("cases ") {
+            failure.cases = Some(cases.to_owned());
+        }
+    }
+    Some((failure, flaky))
+}
+
+/// Whether a failed run's code is a verdict over its inputs: a child's own
+/// code, never a signal (`128 + N`) or a shell that could not run it.
+const fn recordable_failure(code: i32) -> bool {
+    1 <= code && code <= 125
 }
 
 /// Record the step's receipt, refusing when the key moved since the check.
@@ -603,6 +706,20 @@ fn record(
     args: &[String],
     command: Option<&[String]>,
     elapsed: Option<std::time::Duration>,
+    said: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    record_as(step, args, command, elapsed, None, said, err)
+}
+
+/// [`record`], of a failure when `failed` names one (CLOUD-2253): the same key,
+/// the same refusals, the same slot, so a pass and a failure replace each other.
+fn record_as(
+    step: &str,
+    args: &[String],
+    command: Option<&[String]>,
+    elapsed: Option<std::time::Duration>,
+    failed: Option<(&Failure, bool)>,
     said: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -636,10 +753,13 @@ fn record(
     // the key, so a hit can say what the run it stands for cost. The key stays
     // the last field, which is all `stored_key` reads.
     let stamp = crate::clock::rfc3339_utc(crate::clock::now_unix());
-    let receipt = elapsed.map_or_else(
+    let mut receipt = elapsed.map_or_else(
         || format!("{stamp} {expected}\n"),
         |elapsed| format!("{stamp} {}ms {expected}\n", elapsed.as_millis()),
     );
+    if let Some((failure, flaky)) = failed {
+        receipt = failure_body(&receipt, failure, flaky);
+    }
     let written = git_dir.as_deref().map(|git_dir| {
         crate::record::keyed_group_write(git_dir, RECEIPTS, step, &expected, &receipt)
     });
@@ -663,8 +783,31 @@ fn record(
             let _ = crate::record::keyed_group_remove(git_dir, RECEIPTS, step, &name);
         }
     }
-    writeln!(said, "step record: {step} — recorded {}", shown(&expected))?;
+    let what = if failed.is_some() { "failure " } else { "" };
+    writeln!(
+        said,
+        "step record: {step} — recorded {what}{}",
+        shown(&expected)
+    )?;
     Ok(ExitCode::Success)
+}
+
+/// A pass's receipt line made a failure's: the code after the key, so the key
+/// is no longer the line's last field, then the pointers.
+fn failure_body(pass: &str, failure: &Failure, flaky: bool) -> String {
+    use std::fmt::Write as _;
+    let mut body = format!(
+        "{} exit {}{}\n",
+        pass.trim_end(),
+        failure.code,
+        if flaky { " flaky" } else { "" }
+    );
+    for (tag, value) in [("log", &failure.log), ("cases", &failure.cases)] {
+        if let Some(value) = value {
+            let _ = writeln!(body, "{tag} {value}");
+        }
+    }
+    body
 }
 
 /// `batten step check <step> [--arg V]...`: `hit` or `miss`, in words, at exit 0.
@@ -745,6 +888,19 @@ pub fn run_step(
         record_pass(step);
         return Ok(ExitCode::Success);
     }
+    if let Answer::Red(key, failure) = &answer {
+        // A KNOWN FAILURE IS ANSWERED, NOT RE-RUN (CLOUD-2253): its code, the
+        // pointer to its log, the cases and the command that confirms a fix,
+        // and a word to a supervising lap, which stops at once.
+        say_failure(step, failure, err);
+        let recorded = crate::git::git_dir(Path::new("."))
+            .ok()
+            .and_then(|git_dir| crate::record::keyed_group_read(&git_dir, RECEIPTS, step, key))
+            .and_then(|body| recorded_millis(&body));
+        let _ = writeln!(err, "{}", stage_line(step, "red", recorded));
+        red_to_supervisor(step);
+        return Err(crate::error::Passthrough::raise(failure.code));
+    }
     let started = std::time::Instant::now();
     // TEED, NOT ONLY CAPTURED (CLOUD-2091). `exec::run`'s default stores the
     // child's bytes and prints none of them, which is right for `batten exec` and
@@ -772,7 +928,9 @@ pub fn run_step(
     // A MISS ON LINUX IS TRACED (CLOUD-2784), so a read outside the row's
     // declared inputs is seen before a receipt is minted over it. Where no
     // tracer answers the step runs untraced and records as before.
-    let traced = matches!(answer, Answer::Miss(_))
+    let traced = answer
+        .recording()
+        .is_some()
         .then(crate::mutate::trace::tracer)
         .flatten()
         .and_then(|strace| Some((strace, trace_file(step)?)));
@@ -782,7 +940,8 @@ pub fn run_step(
             .collect(),
         _ => running.to_vec(),
     };
-    let ran = crate::exec::run_with(&spawned, &[], &settings, &mut std::io::sink());
+    let mut report = Vec::new();
+    let ran = crate::exec::run_with(&spawned, &[], &settings, &mut report);
     // THE RUN'S DEPENDENCY PASSES OUTLIVE IT only over a tree that stood for
     // the whole of it; an economy either way, so its failure is swallowed.
     if let Some((_, root)) = &journaled {
@@ -790,8 +949,16 @@ pub fn run_step(
     }
     let elapsed = started.elapsed();
     let passed = matches!(ran, Ok(ExitCode::Success));
-    if let Some((_, root)) = journaled.as_ref().filter(|_| !passed) {
-        report_flaky(step, root, err);
+    let flaky = journaled
+        .as_ref()
+        .filter(|_| !passed)
+        .and_then(|(_, root)| report_flaky(step, root, err));
+    let cases = journaled
+        .as_ref()
+        .filter(|_| !passed)
+        .and_then(|(_, root)| failed_cases_said(root, command));
+    if let Some(cases) = &cases {
+        let _ = writeln!(err, "step run: {step} {cases}");
     }
     let linted = traced
         .as_ref()
@@ -835,7 +1002,37 @@ pub fn run_step(
             }
         }
     }
-    if passed && matches!(answer, Answer::Miss(_)) {
+    let failed_code = ran
+        .as_ref()
+        .err()
+        .and_then(|error| error.downcast_ref::<crate::error::Passthrough>())
+        .map(|carried| carried.0)
+        .filter(|code| recordable_failure(*code));
+    if let (Some(code), Some(_)) = (failed_code, answer.recording()) {
+        // THE FAILURE IS RECORDED LIKE A PASS, under the key the check filed,
+        // and every refusal and store failure is swallowed the same way.
+        let failure = Failure {
+            code,
+            log: logged(&report),
+            cases,
+        };
+        let all_suspect =
+            matches!(flaky, Some((suspects, failed)) if failed > 0 && suspects == failed);
+        let mut recorded = Vec::new();
+        let mut refused = Vec::new();
+        let _ = record_as(
+            step,
+            args,
+            Some(command),
+            Some(elapsed),
+            Some((&failure, all_suspect)),
+            &mut recorded,
+            &mut refused,
+        );
+        let _ = err.write_all(&recorded);
+        let _ = err.write_all(&refused);
+    }
+    if passed && answer.recording().is_some() {
         // A record that refuses or fails here — the inputs moved while the
         // command ran, the store would not take the write — costs the next run
         // a re-derive and says so on stderr. Its `Result` is discarded, never
@@ -881,6 +1078,107 @@ fn record_pass(step: &str) {
         return;
     };
     let _ = crate::record::keyed_write(&git_dir, PASSES, step, &format!("{tree}\n"));
+}
+
+/// The keyed family a step answered from a failure receipt is filed under,
+/// keyed by the supervising task's pid (CLOUD-2253): the lap's gate arm reads
+/// it and cancels the gate at once, so a known-red tree costs seconds.
+pub const RED: &str = "step-red";
+
+/// File that `step` was answered red under the task exported in [`TASK_PID`].
+/// Best-effort, like every supervisor write: no supervisor is a no-op.
+fn red_to_supervisor(step: &str) {
+    let Some(pid) = std::env::var(TASK_PID).ok().filter(|pid| !pid.is_empty()) else {
+        return;
+    };
+    let Ok(git_dir) = crate::git::git_dir(Path::new(".")) else {
+        return;
+    };
+    let _ = crate::record::keyed_write(&git_dir, RED, pid.trim(), &format!("{step}\n"));
+}
+
+/// The step a receipt-answered failure filed under task `pid`, if any.
+pub(crate) fn red_under(git_dir: &Path, pid: u32) -> Option<String> {
+    crate::record::keyed_read(git_dir, RED, &pid.to_string())
+        .map(|step| step.trim().to_owned())
+        .filter(|step| !step.is_empty())
+}
+
+/// Clear what [`red_under`] reads, before a gate starts under `pid`.
+pub(crate) fn clear_red(git_dir: &Path, pid: u32) {
+    let _ = crate::record::keyed_remove(git_dir, RED, &pid.to_string());
+}
+
+/// A failure's pointer lines: the code and the stored log's handles, then the
+/// cases and the focused command. Pointers only, never the log (rule 4).
+fn say_failure(step: &str, failure: &Failure, err: &mut dyn Write) {
+    let _ = match &failure.log {
+        Some(log) => writeln!(
+            err,
+            "step run: {step} failed with exit {}; read {log}",
+            failure.code
+        ),
+        None => writeln!(err, "step run: {step} failed with exit {}", failure.code),
+    };
+    if let Some(cases) = &failure.cases {
+        let _ = writeln!(err, "step run: {step} {cases}");
+    }
+}
+
+/// The capture handles `exec`'s record names, space-separated: the
+/// `exec: <stream> <n> byte(s) <handle>` lines' last fields.
+fn logged(report: &[u8]) -> Option<String> {
+    let handles: Vec<&str> = std::str::from_utf8(report)
+        .ok()?
+        .lines()
+        .filter(|line| line.starts_with("exec: ") && line.contains(" byte(s) "))
+        .filter_map(|line| line.split_whitespace().last())
+        .collect();
+    (!handles.is_empty()).then(|| handles.join(" "))
+}
+
+/// A journaled run's failing cases and the command that confirms a fix: the
+/// step's own argv before any `--`, filtered to exactly those cases.
+fn failed_cases_said(root: &Path, command: &[String]) -> Option<String> {
+    let failed = crate::mutate::resume::failed(root)?;
+    if failed.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = failed
+        .iter()
+        .map(|(name, binary)| format!("{binary} {name}"))
+        .collect();
+    let filter = failed
+        .iter()
+        .map(|(name, binary)| format!("(binary_id({binary}) & test(={name}))"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let program: Vec<String> = command
+        .iter()
+        .take_while(|word| word.as_str() != "--")
+        .map(|word| shell_word(word))
+        .collect();
+    Some(format!(
+        "failed {} case(s): {}; confirm a fix with: {} -E {}",
+        failed.len(),
+        names.join(", "),
+        program.join(" "),
+        shell_word(&filter)
+    ))
+}
+
+/// `word` as one shell word: bare where nothing in it is special, otherwise
+/// single-quoted.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || "_-./:=@,+".contains(ch));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
 }
 
 /// The roster `step cover` covers: the host's required check names.
@@ -1020,16 +1318,17 @@ pub fn run_cover(out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
 /// A RED JOURNALED RUN SAYS WHETHER THE CHANGE COULD HAVE CAUSED IT
 /// (CLOUD-2786): a failed case whose sealed reach still holds ran nothing that
 /// moved. A label beside the trace, never a verdict: the run's exit stands.
-fn report_flaky(step: &str, root: &Path, err: &mut dyn Write) {
+/// Returns the suspects and the failed count, which decide whether the
+/// failure receipt re-runs (CLOUD-2253).
+fn report_flaky(step: &str, root: &Path, err: &mut dyn Write) -> Option<(usize, usize)> {
     use std::fmt::Write as _;
-    let Some((suspects, failed)) = crate::mutate::resume::flaky_suspects(root) else {
-        return;
-    };
+    let (suspects, failed) = crate::mutate::resume::flaky_suspects(root)?;
+    let counts = (suspects.len(), failed);
     let Some(listing) = trace_file(step)
         .map(|file| file.with_extension("flaky"))
         .filter(|_| failed > 0)
     else {
-        return;
+        return Some(counts);
     };
     let body = suspects
         .iter()
@@ -1045,6 +1344,7 @@ fn report_flaky(step: &str, root: &Path, err: &mut dyn Write) {
             listing.display()
         );
     }
+    Some(counts)
 }
 
 /// Where a step's traced run writes its trace: a file directly under the git
