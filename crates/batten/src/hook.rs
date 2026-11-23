@@ -9809,11 +9809,28 @@ pub(crate) fn task_programs(command: &str, bodies: &crate::taskset::TaskBodies) 
     let mut found: Vec<Value> = Vec::new();
     let mut pending = program_reach(command);
     while let Some(entry) = pending.pop() {
+        // THE CALL'S OWN ARGUMENTS ARE PART OF WHAT THE TASK RUNS: mise appends
+        // them to the task's last `run` line. Dropped, `mise run test:filter -E
+        // 'test(x)'` read as `test:filter`'s bare body — an unfiltered suite —
+        // and `land-stage-direct` refused the very filtered run it admits.
+        let words: Vec<&str> = entry
+            .get("arguments")
+            .and_then(Value::as_array)
+            .map(|words| words.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let passed = mise_task_arguments(&words);
         for task in entry_tasks(&entry, bodies) {
             if !seen.insert(task.clone()) {
                 continue;
             }
-            for line in bodies.get(&task).into_iter().flatten() {
+            let mut lines: Vec<String> = bodies.get(&task).cloned().unwrap_or_default();
+            if let (Some(last), Some(extra)) = (lines.last_mut(), passed.get(&task)) {
+                for word in extra {
+                    last.push(' ');
+                    last.push_str(&shell_quoted(word));
+                }
+            }
+            for line in &lines {
                 for mut inner in reach_into(line, true, Some("task"), REACH_DEPTH, Stage::call()) {
                     if let Some(object) = inner.as_object_mut() {
                         object.insert("task".to_owned(), serde_json::json!(task));
@@ -13283,6 +13300,46 @@ fn mise_tasks(arguments: &[&str]) -> Option<Vec<String>> {
             })
             .collect(),
     )
+}
+
+/// The words a `mise run` call passes each task it starts: everything past the
+/// task's name in its `:::` group, a leading `--` dropped. MISE APPENDS THEM to
+/// the task's `run` line, shell-quoted (`test:filter`'s comment in `mise.toml`
+/// records the measurement), so they are part of what the task runs.
+fn mise_task_arguments(arguments: &[&str]) -> std::collections::BTreeMap<String, Vec<String>> {
+    let Some(verb) = subcommand_index(arguments, &MISE_VALUE_OPTIONS) else {
+        return std::collections::BTreeMap::new();
+    };
+    let rest = match arguments[verb] {
+        "run" | "r" => &arguments[verb + 1..],
+        "tasks" | "task" => {
+            let after = &arguments[verb + 1..];
+            match subcommand_index(after, &MISE_VALUE_OPTIONS) {
+                Some(nested) if matches!(after[nested], "run" | "r") => &after[nested + 1..],
+                _ => return std::collections::BTreeMap::new(),
+            }
+        }
+        _ => return std::collections::BTreeMap::new(),
+    };
+    rest.split(|word| *word == ":::")
+        .filter_map(|group| {
+            let at = subcommand_index(group, &MISE_VALUE_OPTIONS)?;
+            let mut passed = &group[at + 1..];
+            if passed.first() == Some(&"--") {
+                passed = &passed[1..];
+            }
+            Some((
+                group[at].to_owned(),
+                passed.iter().map(|word| (*word).to_owned()).collect(),
+            ))
+        })
+        .filter(|(_, passed): &(String, Vec<String>)| !passed.is_empty())
+        .collect()
+}
+
+/// `word` single-quoted for a POSIX shell, as mise quotes an appended argument.
+fn shell_quoted(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
 }
 
 /// The singleton task this call would start a second copy of (CLOUD-438).
@@ -22597,6 +22654,51 @@ deny contains "refused by themodule" if {
         assert_eq!(
             program_reach("mise ls").remove(0)["tasks"],
             serde_json::Value::Null
+        );
+    }
+
+    /// Fails by: the words a `mise run` call passes its task dropped, so a
+    /// filtered `mise run test:filter -E 'test(x)'` read as the task's bare,
+    /// unfiltered suite and `land-stage-direct` refused it. mise appends them
+    /// to the task's last `run` line, and only to the task they follow.
+    #[test]
+    fn a_tasks_passed_arguments_reach_its_last_line() {
+        let bodies: crate::taskset::TaskBodies = crate::facts::Look::Is(
+            [
+                (
+                    "filter",
+                    vec!["echo first", "cargo nextest run --workspace"],
+                ),
+                ("other", vec!["cargo nextest run --workspace"]),
+            ]
+            .into_iter()
+            .map(|(name, lines)| {
+                (
+                    name.to_owned(),
+                    lines.into_iter().map(str::to_owned).collect(),
+                )
+            })
+            .collect(),
+        );
+        let nextest = |command: &str| -> Vec<Vec<String>> {
+            task_programs(command, &bodies)
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|program| program["subcommand"] == "nextest")
+                .map(|program| serde_json::from_value(program["arguments"].clone()).unwrap())
+                .collect()
+        };
+        assert_eq!(
+            nextest("mise run filter -E 'test(x)'"),
+            vec![vec!["nextest", "run", "--workspace", "-E", "test(x)"]]
+        );
+        assert_eq!(
+            nextest("mise run filter -- -E 'test(x)' ::: other"),
+            vec![
+                vec!["nextest", "run", "--workspace", "-E", "test(x)"],
+                vec!["nextest", "run", "--workspace"],
+            ]
         );
     }
 
