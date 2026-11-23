@@ -552,21 +552,41 @@ pub fn dispatch(
     command: Option<&str>,
     payload: &Payload,
 ) -> Dispatched {
-    dispatch_writing(root, handlers, event, &[raw_tool], command, None, payload)
+    let routed = [Routed {
+        tool: raw_tool,
+        command,
+        payload,
+    }];
+    dispatch_writing(root, handlers, event, &routed, None)
+}
+
+/// One name a call answers to, and what a handler that name selects is
+/// handed: the command it is judged by and the payload on its stdin
+/// (CLOUD-2789). A shell call mediating a connector call answers to two: the
+/// shell, with its own command and bytes, and the connector call, with no
+/// command and the payload the host would have sent for the direct call.
+#[derive(Debug, Clone, Copy)]
+pub struct Routed<'a> {
+    /// The tool name a handler's matcher is asked about.
+    pub tool: &'a str,
+    /// The command a handler's `command_matcher` is asked about.
+    pub command: Option<&'a str>,
+    /// What the handler reads on stdin.
+    pub payload: &'a Payload,
 }
 
 /// [`dispatch`], for a call that writes `writes`, which a row's
-/// [`Handler::tree_only`] is judged against (CLOUD-2390). A sibling rather than
-/// a seventh parameter, so every caller with no path to give is unchanged.
+/// [`Handler::tree_only`] is judged against (CLOUD-2390), and that may answer
+/// to several names (CLOUD-2789): each handler runs once, handed the FIRST
+/// name in `routed` that selects it, so a row about the shell keeps the
+/// shell's bytes and a row only the mediated call selects sees that call.
 #[must_use]
 pub fn dispatch_writing(
     root: &Path,
     handlers: &[Handler],
     event: Event,
-    tools: &[&str],
-    command: Option<&str>,
+    routed: &[Routed<'_>],
     writes: Option<&str>,
-    payload: &Payload,
 ) -> Dispatched {
     let mut ran = Vec::new();
     for handler in handlers {
@@ -576,18 +596,19 @@ pub fn dispatch_writing(
         // THE HALF THAT ACTUALLY SAVES THE SPAWN. `selects` above answers whether
         // ANY handler runs; this decides per row, so a narrowed handler costs a
         // regex rather than a process on every call it does not select.
-        if !tools.iter().any(|tool| handler.selects_tool(tool)) {
-            continue;
-        }
+        //
         // AND THE SECOND NARROWING, WHICH THE FIRST STRUCTURALLY CANNOT DO
         // (CLOUD-1650). For a shell tool the tool name is `Bash` on every call, so
         // a row about a dozen commands and a row about all of them are
         // indistinguishable to `selects_tool` — this is what makes the difference
         // a regex rather than a process. Ordered after it because a tool-name
         // mismatch is the cheaper rejection and the commoner one.
-        if !handler.selects_command(command) {
+        let Some(Routed { payload, .. }) = routed
+            .iter()
+            .find(|call| handler.selects_tool(call.tool) && handler.selects_command(call.command))
+        else {
             continue;
-        }
+        };
         if !handler.selects_path(writes) {
             continue;
         }
