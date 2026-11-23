@@ -2351,6 +2351,39 @@ mod tests {
         );
     }
 
+    /// A name two modules both declare, read through both modules' globs:
+    /// the impl's home is undecidable, so it is ambiguous, AND the gated
+    /// count carries it (CLOUD-2792: "the gated count is outside +
+    /// ambiguous"). Fails by: an ambiguous impl counted but left out of the
+    /// `impls` metric the ratchet compares, so a rename hides it.
+    #[test]
+    fn an_impl_of_a_name_declared_twice_is_ambiguous_and_gated() {
+        let root = crate_root(
+            "impls-declared-twice",
+            &[
+                ("lib.rs", "mod a;\nmod b;\nmod c;\n"),
+                ("a.rs", "pub struct Pin;\n"),
+                ("b.rs", "pub type Pin = u8;\n"),
+                (
+                    "c.rs",
+                    "use crate::a::*;\nuse crate::b::*;\nimpl Pin { fn f() {} }\n",
+                ),
+            ],
+        );
+        assert_eq!(
+            impl_census(&root).unwrap(),
+            ImplCensus {
+                outside: 0,
+                ambiguous: 1
+            }
+        );
+        assert_eq!(
+            metrics(&root).unwrap().impls,
+            1,
+            "the ambiguous impl is gated"
+        );
+    }
+
     /// Fails by: `lib.rs` treated as no module, so an impl elsewhere of a type
     /// it declares goes uncounted.
     #[test]
