@@ -302,6 +302,27 @@ fn a_protected_file_restored_to_its_own_bytes_is_no_write() {
     assert!(!said.contains("path write refused"), "{said}");
 }
 
+/// THE DIGEST CACHE NEVER HIDES A WRITE. Call A warms the cache with the file
+/// at X; the file is changed to Y between calls; call B writes X back. B's
+/// pre-call must re-read Y (its stat moved since the cache), so B's change
+/// Y -> X is a write.
+///
+/// Fails by: the pre-call snapshot reusing a cached digest without comparing
+/// the stat it was taken under, which hands B the stale X and passes it.
+#[test]
+fn a_stale_digest_cache_never_hides_a_write() {
+    let dir = fixture("protected-escape-stale-cache");
+    std::fs::write(dir.join(GUARDED), "x\n").expect("the file starts at x");
+    let (code, said) = around_with(&dir, "call-warm", "ls", |_| {});
+    assert_eq!(code, Some(0), "nothing changed: {said}");
+    rewrite_via_rename(&dir, "y\n");
+    let (code, said) = around_with(&dir, "call-back", "python3 tool.py", |dir| {
+        rewrite_via_rename(dir, "x\n");
+    });
+    assert_eq!(code, Some(2), "y -> x is a write: {said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
+}
+
 /// NO HOLE FOR A LIVE BACKGROUND TASK. A foreground call that really changes a
 /// protected file's bytes is refused whether or not a backgrounded call of the
 /// same session is still running: nothing the hook can observe says which
