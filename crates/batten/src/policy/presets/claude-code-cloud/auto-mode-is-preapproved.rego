@@ -1,5 +1,6 @@
 #MUTANT-SUITE crates/batten/tests/it/permission_events.rs
 #MUTANT plan-mode-write-granted|s@^\tinput.call\["permission-mode"\] != "plan"$@\ttrue@|a_write_prompt_in_plan_mode_is_not_granted
+#MUTANT dispatch-granted-in-plan|s@^\tinput.call\["permission-mode"\] != "plan"$@\ttrue@|a_dispatch_prompt_in_plan_mode_is_not_granted
 #MUTANT grant-auto-only|s@^\tinput.call\["permission-mode"\] != "plan"$@\tinput.call["permission-mode"] == "auto"@|a_prompt_in_default_mode_is_answered_with_allow
 #MUTANT auto-grant-pre-tool-only|s@^\tinput.call.event == "permission-denied"$@\tinput.call.event == "pre-tool"@|a_denial_in_auto_is_answered_with_retry_and_counted
 #MUTANT prompt-grant-pre-tool-only|s@^granted_event(event) if event in {"pre-tool", "permission-request"}$@granted_event(event) if event == "pre-tool"@|a_prompt_in_auto_is_answered_with_allow_and_counted

@@ -5620,7 +5620,7 @@ fn fact_value(
         // tree surface does not have.
         | crate::facts::Fact::Pinned
         // CLOUD-1978: hook-surface; its question is about a call's argument.
-        | crate::facts::Fact::DispatchCleared
+        | crate::facts::Fact::DispatchBrief
         // CLOUD-2270: hook-surface; its question is about a push.
         | crate::facts::Fact::RedHead
         | crate::facts::Fact::LandLive
