@@ -525,7 +525,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // the caller supplies, and the verdict is the predicate's alone.
         Some(Command::Landed { command }) => run_landed(command, mode, &overrides, out, err),
         Some(Command::Claim { command }) => run_claim(command, mode, &overrides, out, err),
-        Some(Command::Session { command }) => run_session(&command, &overrides, out, err),
+        Some(Command::Session { command }) => run_session(&command, mode, &overrides, out, err),
         // The adopted runner's surface contract (CLOUD-947). No config chain and
         // no rule set: the subject is the pinned binary's own answer about
         // itself, and a `batten.toml` row could only say where the artifact is —
@@ -4857,6 +4857,7 @@ fn run_mcp(
 /// Pointer-only: one line per child, then the path of the full inventory.
 fn run_session(
     command: &cli::SessionCommand,
+    mode: Mode,
     overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -4907,6 +4908,7 @@ fn run_session(
         serde_json::to_vec_pretty(&session_watch::inventory_document(&reports))?,
     )?;
     writeln!(out, "inventory {}", inventory.display())?;
+    dispatch_session_endings(&watch, &reports, &dir.join("seen"), (mode, overrides), err)?;
     Ok(match ending {
         session_watch::Ending::Nothing => {
             writeln!(
@@ -4918,6 +4920,65 @@ fn run_session(
         session_watch::Ending::Done => ExitCode::Success,
         session_watch::Ending::Dead => ExitCode::Violation,
     })
+}
+
+/// Each ended child's `session.<state>` event through the hook dispatcher
+/// (CLOUD-2826), once per ending: the seen ring `forge intake` uses, keyed by
+/// [`session_watch::ending_key`]. A handler's deny is reported on stderr and
+/// never changes the watch's exit, which answers what the child did — the
+/// handler's verdict is a finding about that, as a forge refusal is.
+fn dispatch_session_endings(
+    watch: &session_watch::Watch,
+    reports: &[session_watch::Report],
+    ring: &Path,
+    (mode, overrides): (Mode, &Overrides),
+    err: &mut dyn Write,
+) -> Result<()> {
+    let _memos = hook_call_memos();
+    for report in reports.iter().filter(|report| watch.ended(report)) {
+        let key = session_watch::ending_key(report);
+        match forge_event::unseen(ring, &key) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(_) => {
+                writeln!(
+                    err,
+                    "batten: session watch: the seen ring cannot be read; no event dispatched"
+                )?;
+                return Ok(());
+            }
+        }
+        let envelope = session_watch::envelope(report);
+        let document = envelope.input.to_string();
+        let input = HookInput {
+            raw: &document,
+            envelope,
+            spilled: &[],
+            ran: None,
+        };
+        // The handler's channel is its own: what it prints is not this verb's
+        // pointer output, so stdout here is discarded.
+        let mut handler_out = std::io::sink();
+        let dispatched = dispatch_envelope(
+            crate::config_model::Harness::ExitCode,
+            std::time::SystemTime::now(),
+            mode,
+            overrides,
+            input,
+            &mut handler_out,
+            err,
+        )?;
+        if forge_event::remember(ring, &key).is_err() {
+            writeln!(
+                err,
+                "batten: session watch: the seen ring could not be written"
+            )?;
+        }
+        if let Err(denied) = dispatched.rendered {
+            writeln!(err, "{denied}")?;
+        }
+    }
+    Ok(())
 }
 
 /// What `mcp grant` was asked, as the surface parsed it.
@@ -21164,6 +21225,7 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
         // MCP call arriving at one would otherwise find no modules and no grant.
         || (hook::is_permission_event(envelope.event) && !envelope.raw_tool.is_empty())
         || envelope.event == crate::config_model::Event::Forge
+        || envelope.event == crate::config_model::Event::ChildSession
 }
 
 /// The waivers live today, read off the clock only where any is declared: an
