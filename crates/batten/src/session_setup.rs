@@ -28,13 +28,10 @@ use std::path::{Path, PathBuf};
 use crate::refusal::Refusal;
 use crate::task;
 
-// THE DECLARED MUTATION (CLOUD-2840): a `SessionStart` that dispatches its rows
-// inline again registers no task, so the door returns with nothing to name.
-// #MUTANT-SUITE crates/batten/tests/it/session_start.rs
-// #MUTANT session-start-inline|s@event == crate::config_model::Event::SessionStart@false@|a_session_start_registers_its_task_before_it_returns
-
 /// Whether `event`'s declared rows run in the setup task rather than inline:
-/// `SessionStart`'s, and no other event's. The hook asks this ONE predicate.
+/// `SessionStart`'s, and no other event's. The hook asks this ONE predicate,
+/// and `session_start::a_session_start_registers_its_task_before_it_returns`
+/// is the case that reddens when it answers `false` (CLOUD-2840).
 #[must_use]
 pub fn detaches(event: crate::config_model::Event) -> bool {
     event == crate::config_model::Event::SessionStart

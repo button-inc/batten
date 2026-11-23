@@ -11940,7 +11940,6 @@ fast_forward_branches = ["renovate/", "sbom-actions/", "release-plz-"]
 scope = ["**", "!crates/*/tests/**"]
 gates = [
   ".config/nextest.toml",
-  "crates/batten/src/session_setup.rs",
   "action.yml",
   "connector-not-granted",
   "agentic-experiment-record",
@@ -12078,6 +12077,7 @@ gates = [
   "admit-ask",
   "script-spawn-opaque",
   "lap-tree-held",
+  "install-gate",
   "profile-read-first",
   "profile-stripped",
   "sed-line-address",
