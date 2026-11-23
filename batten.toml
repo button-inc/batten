@@ -18851,6 +18851,10 @@ inputs = [
   "Cargo.lock",
   "clippy.toml",
   ".clippy.toml",
+  # Clippy walks up from the package directory for its config, so it probes
+  # `crates/` on the way to the root, and the trace refused both as undeclared.
+  "crates/clippy.toml",
+  "crates/.clippy.toml",
   ".cargo",
 ]
 tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
@@ -18915,6 +18919,10 @@ inputs = [
   "Cargo.lock",
   "clippy.toml",
   ".clippy.toml",
+  # Clippy walks up from the package directory for its config, so it probes
+  # `crates/` on the way to the root, and the trace refused both as undeclared.
+  "crates/clippy.toml",
+  "crates/.clippy.toml",
   ".cargo",
 ]
 tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
@@ -19130,6 +19138,10 @@ inputs = [
   "Cargo.lock",
   "clippy.toml",
   ".clippy.toml",
+  # Clippy walks up from the package directory for its config, so it probes
+  # `crates/` on the way to the root, and the trace refused both as undeclared.
+  "crates/clippy.toml",
+  "crates/.clippy.toml",
   ".cargo",
 ]
 tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
