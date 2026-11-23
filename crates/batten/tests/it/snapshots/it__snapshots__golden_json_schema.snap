@@ -4910,6 +4910,14 @@ expression: stdout_of(&output)
           "takes_value": false,
           "positional": false,
           "help": "Run each failing row's declared repair, then re-decide its check"
+        },
+        {
+          "name": "session",
+          "short": null,
+          "long": "session",
+          "takes_value": false,
+          "positional": false,
+          "help": "Run this session's setup task: its declared session-start handlers, repairs and health report, recorded for the next call"
         }
       ],
       "subcommands": []

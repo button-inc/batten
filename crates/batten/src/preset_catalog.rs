@@ -229,6 +229,12 @@ pub struct Install {
     pub check: &'static [&'static str],
     /// The operands that install what is outstanding, non-interactively.
     pub repair: &'static [&'static str],
+    /// Where the tool keeps what it installs (CLOUD-2840): the environment
+    /// variable naming its data directory, and the path under `$HOME` it
+    /// defaults to. A program resolving under it is one the install puts there,
+    /// so while the install runs such a program may be a shim with nothing
+    /// behind it yet.
+    pub data_dir: (&'static str, &'static str),
 }
 
 /// One vendored preset, declared once.
@@ -1335,6 +1341,9 @@ abandon the other unread.",
             separator: ",",
             check: &["ls", "--current", "--missing"],
             repair: &["install", "--yes"],
+            // `installs/` and `shims/` both live here: a shim on PATH resolves
+            // before the tool behind it is installed.
+            data_dir: ("MISE_DATA_DIR", ".local/share/mise"),
         }),
         // TWO SURFACES, ONE CONCERN (CLOUD-1672). This is the manifest that made
         // the per-module scope necessary, and the reason is that "mise" is a

@@ -247,6 +247,7 @@ mod identity_precedence;
 #[cfg(unix)]
 mod in_progress_drain;
 mod init;
+mod install_gate;
 mod install_local;
 mod install_script;
 mod install_web;
