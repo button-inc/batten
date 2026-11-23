@@ -7531,6 +7531,89 @@ pub fn call_targets(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::
     Some(std::iter::once(current).chain(operands).collect())
 }
 
+/// The directory each program of a shell call ACTS in (CLOUD-2789): the
+/// directory in effect after every followed `cd`, and for `git` that directory
+/// moved by its own `-C`, `--work-tree` and `--git-dir`. `None` for a call with
+/// no command, and where a `cd` cannot be placed.
+///
+/// [`call_targets`] answers which repository JUDGES a call, and that is the
+/// shell's directory first; a gate about one checkout's state needs where each
+/// program writes instead. Measured: with a lap live in A, `git -C <B> commit`
+/// run from A was held under A's lap, while `cd <B> && git commit` passed.
+#[must_use]
+pub fn acting_dirs(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::PathBuf>> {
+    if envelope.command.is_empty() {
+        return None;
+    }
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let mut current = start.to_path_buf();
+    let mut dirs = Vec::new();
+    for (_, segment, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+        if is_cd_segment(handed) {
+            let dir = placed_cd(segment, handed, &current)?;
+            if matches!(segment.terminator, Some(Separator::And | Separator::Semi)) {
+                current = dir;
+            }
+            continue;
+        }
+        dirs.push(git_acting_dir(handed, &current).unwrap_or_else(|| current.clone()));
+    }
+    if dirs.is_empty() {
+        dirs.push(current);
+    }
+    dirs.dedup();
+    Some(dirs)
+}
+
+/// Where a `git` program acts, as its own options move it: `-C` chains from the
+/// directory in effect, and a work tree, or a git dir's checkout, names where
+/// it writes. `None` for any other program, so its caller keeps the directory.
+fn git_acting_dir(tokens: &[&str], current: &Path) -> Option<std::path::PathBuf> {
+    let program = effective_program(tokens)?;
+    if program_name(program_token(tokens[program])) != "git" {
+        return None;
+    }
+    let arguments = &tokens[program + 1..];
+    let end = subcommand_index(arguments, &GIT_VALUE_OPTIONS).unwrap_or(arguments.len());
+    let mut dir = current.to_path_buf();
+    let (mut work_tree, mut git_dir) = (None, None);
+    let mut index = 0;
+    while index < end {
+        let word = arguments[index];
+        let (option, value) = match word {
+            "-C" | "--git-dir" | "--work-tree" => (word, arguments.get(index + 1).copied()),
+            _ => match word.split_once('=') {
+                Some((option @ ("--git-dir" | "--work-tree"), value)) => (option, Some(value)),
+                _ => (word, None),
+            },
+        };
+        if let Some(resolved) = value.and_then(|value| shell_resolved(value, Some(&dir))) {
+            match option {
+                "-C" => dir = resolved,
+                "--work-tree" => work_tree = Some(resolved),
+                _ => git_dir = Some(resolved),
+            }
+        }
+        index += if GIT_VALUE_OPTIONS.contains(&word) {
+            2
+        } else {
+            1
+        };
+    }
+    let checkout = git_dir.map(|named| {
+        if named.file_name().is_some_and(|name| name == ".git") {
+            named.parent().map_or(named.clone(), Path::to_path_buf)
+        } else {
+            named
+        }
+    });
+    Some(work_tree.or(checkout).unwrap_or(dir))
+}
+
 /// One `git checkout`/`git restore` program: the directory it runs in and the
 /// pathspecs it names, as written (CLOUD-2684).
 #[derive(Debug, Clone, PartialEq, Eq)]

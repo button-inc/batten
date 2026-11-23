@@ -931,6 +931,50 @@ fn a_redirecting_read_is_not_held_while_a_lap_is_live() {
     batten::task::singleton_release(&git_dir, "land");
 }
 
+/// **THE LAP IS JUDGED IN THE REPOSITORY THE COMMAND TARGETS, NOT THE SHELL'S
+/// CWD** (CLOUD-2789, measured on #1276): with a lap live in A, a `git -C <B>
+/// commit` run from A was refused while the same commit after `cd <B>` passed.
+/// Held in A by every spelling that targets A, from either checkout; admitted
+/// by every spelling that targets B.
+#[test]
+fn a_git_command_is_judged_by_the_repository_it_targets() {
+    let a = lap_tree_bench("land-lap-target-a");
+    let b = lap_tree_bench("land-lap-target-b");
+    let git_dir = batten::git::git_dir(&a).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    let (a_dir, b_dir) = (a.to_string_lossy(), b.to_string_lossy());
+    assert!(
+        bash_held(&a, "git commit -m wip"),
+        "a commit in the lap's checkout is held"
+    );
+    for command in [
+        format!("git -C {a_dir} commit -m wip"),
+        format!("cd {a_dir} && git commit -m wip"),
+        format!("git --git-dir={a_dir}/.git --work-tree={a_dir} commit -m wip"),
+    ] {
+        assert!(
+            bash_held(&b, &command),
+            "`{command}` from B targets A, so it is held"
+        );
+    }
+    for command in [
+        format!("git -C {b_dir} commit -m wip"),
+        format!("cd {b_dir} && git commit -m wip"),
+        format!("git --git-dir={b_dir}/.git --work-tree={b_dir} commit -m wip"),
+        format!("git -C {b_dir} add -A && git -C {b_dir} commit -m wip"),
+    ] {
+        assert!(
+            !bash_held(&a, &command),
+            "`{command}` from A targets B, so it is admitted"
+        );
+    }
+    batten::task::singleton_release(&git_dir, "land");
+}
+
 /// Whether `adjudicate` holds a host MCP call `tool` with `arguments` in `dir`.
 fn tool_held(dir: &std::path::Path, tool: &str, arguments: &serde_json::Value) -> bool {
     let payload = serde_json::json!({
