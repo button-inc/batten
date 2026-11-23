@@ -410,6 +410,38 @@ fn this_repository_declares_the_names_its_guard_translates() {
     }
 }
 
+/// THE REPOSITORY'S OWN ADDRESS RESOLVES THE LAUNCHER'S CURRENT WRAPPER (CLOUD-2789).
+///
+/// Measured 2026-11-23: the session launcher moved the toolbox upstream to
+/// `/v2/ccr-sessions/-/meta/mcp`, `batten.toml` still named `/v1/code/mcp/meta`,
+/// and the guard answered silence on every `mcp__claude-code-remote__*` call, so
+/// the host asked the owner for each one. Every case above runs its own fixture
+/// config, so none of them could see the committed address go stale.
+///
+/// Fails by: the committed `endpoint_contains` drifting from the wrapper shape
+/// the launcher writes, which leaves the committed allow untranslated.
+#[test]
+fn the_committed_address_resolves_the_launchers_wrapper() {
+    let dir = scratch("cad-launcher-wrapper");
+    write(
+        &dir,
+        "mcp-config.json",
+        r#"{"mcpServers":{"claude-code-remote":{"type":"http","url":"https://api.anthropic.com/v2/ccr-sessions/cse_X/mcp?mcp_server_id=c7e550e6-a682-5271-94e5-0cd7a03cbe1b&mcp_url=https%3A%2F%2Fapi.anthropic.com%2Fv2%2Fccr-sessions%2F-%2Fmeta%2Fmcp"}}}"#,
+    );
+    let config = dir.join("mcp-config.json");
+    let answer = stdout(&common::run(
+        &common::at_root(""),
+        &[
+            "mcp",
+            "grant",
+            "--config",
+            config.to_str().expect("utf-8 path"),
+            "mcp__claude-code-remote__send_message",
+        ],
+    ));
+    assert_eq!(answer.trim(), "allow Claude_Code_Remote", "{answer}");
+}
+
 #[test]
 fn a_name_the_guard_cannot_resolve_leaves_the_call_undecided() {
     // The load-bearing negative: a guard that refused everything would satisfy
