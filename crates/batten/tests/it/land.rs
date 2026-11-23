@@ -675,7 +675,10 @@ fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
         .git()
         .base_commit()
         .build();
-    let failing = repo.parent().expect("the fixture's scratch").join("fail.sh");
+    let failing = repo
+        .parent()
+        .expect("the fixture's scratch")
+        .join("fail.sh");
     std::fs::write(&failing, "#!/bin/sh\nexit 5\n").expect("write the step");
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -684,13 +687,13 @@ fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
     }
     let engine = env!("CARGO_BIN_EXE_batten");
     let step = format!("{engine} step run red -- {}", failing.display());
-    let seeded = std::process::Command::new("sh")
-        .args(["-c", &step])
+    let seeded = batten()
+        .args(["step", "run", "red", "--", &failing.display().to_string()])
         .current_dir(&repo)
         .env_remove("CI")
         .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
         .env_remove("BATTEN_TASK_PID")
-        .output()
+        .streamed_output()
         .expect("seed the failure");
     assert_eq!(seeded.status.code(), Some(5), "{}", stderr(&seeded));
     let marker = repo.join("gate.pid");

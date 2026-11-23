@@ -4605,7 +4605,7 @@ mod forge_tests {
         drop(arms);
         let moved = won.try_iter().find_map(|answer| match answer {
             Raced::Moved(base) => Some(base),
-            Raced::Gate(_) | Raced::Stalled(_) => None,
+            Raced::Gate(_) | Raced::Stalled(_) | Raced::Red(_) => None,
         });
         (moved, paused.into_inner())
     }
