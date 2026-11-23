@@ -6191,6 +6191,8 @@ no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a
 # `disallowed_methods` rather than the sleep paths specifically: the same
 # argument applies to every ban in that list, and a row that named only the sleep
 # would leave the multi-thread-runtime ban waivable at will for the same reason.
+#MUTANT-SUITE crates/batten/tests/it/source_scope.rs
+#MUTANT waiver-ratchet-four-crates|s@^glob = "crates/\*/src/\*\*/\*\.rs"$@glob = "crates/{batten,batten-facts,batten-base,batten-core}/src/**/*.rs"@|every_crate_scoped_row_reads_every_crate
 [[rule]]
 id = "waiver add refused"
 kind = "ratchet"
@@ -7696,7 +7698,10 @@ delta_sources = ["**"]
 # CLOUD-2157, for the same reason: a vendored module declares its rows in itself,
 # as `marker name undefined`'s set below already reads it.
 line_sources = [
-  "crates/batten/tests/**/*.rs",
+  # Every package's suites and examples, not `batten`'s (CLOUD-2789): a suite in
+  # a crate cut out of `batten` (`batten-codemods/tests/cut_crate.rs`) carries
+  # `#MUTANT-SUITE` rows as surely, and a one-crate glob left it unbindable.
+  "crates/*/{tests,examples}/**/*.rs",
   "crates/batten/src/policy/presets/**/*.rego",
   "policy/*.rego",
   "tests/**/*.bats",
@@ -7705,10 +7710,8 @@ line_sources = [
   # Every package's source, not a list of them (#1276): the list missed
   # `batten-fsio` and `batten-stream`.
   "crates/*/src/**/*.rs",
-  # The crate split's other homes (#1276): `batten-codemods` holds suites the
-  # crate-split rows name (`tests/cut_crate.rs`), and `tools/*` its own. Outside
-  # these globs an obligation naming one could never bind.
-  "crates/batten-codemods/**/*.rs",
+  # `tools/*` holds suites of its own. Outside these globs an obligation naming
+  # one could never bind.
   "tools/*/src/**/*.rs",
 ]
 module = "policy/obligations-bound.rego"
@@ -19156,7 +19159,7 @@ run = ["mise", "run", "lint:clippy"]
 [[rule]]
 id = "path read loose"
 kind = "ratchet"
-glob = "crates/{batten,batten-facts,batten-base,batten-core}/src/**/*.rs"
+glob = "crates/{batten,batten-facts,batten-base,batten-core,batten-stream,batten-codemods}/src/**/*.rs"
 pattern = 'fs::read('
 direction = "non_increasing"
 base = "origin/main"
@@ -19167,7 +19170,7 @@ no_fix_reason = "class 2 (the fsio codemod, `skills/codemod`): call `crate::fsio
 [[rule]]
 id = "source read loose"
 kind = "ratchet"
-glob = "crates/{batten,batten-facts,batten-base,batten-core}/src/**/*.rs"
+glob = "crates/{batten,batten-facts,batten-base,batten-core,batten-stream,batten-codemods}/src/**/*.rs"
 pattern = 'fs::read_to_string('
 direction = "non_increasing"
 base = "origin/main"
