@@ -596,6 +596,35 @@ fn task_alive_reads_no_program_root() {
     assert_eq!(stdout(&output), "alive: nothing registered\n");
 }
 
+/// A BLANK ROOT IS REFUSED AT LOAD (CLOUD-2370), end to end. `main`'s
+/// `a_blank_program_root_is_no_root` drove it through `task alive`; liveness no
+/// longer reads the config (CLOUD-1560), so the case drives a verb that does.
+/// The contract moved too: a config the loader refuses is bad input, exit 1,
+/// naming the key — no longer the internal 3.
+///
+/// Fails by: `Task::validate` dropped from `config::load`, so a blank root
+/// loads and `check` judges the tree.
+#[test]
+fn a_blank_program_root_is_refused_at_load() {
+    let repo = Fixture::at(scratch("task-blank-root").join("repo"))
+        .config("version = 1\n\n[task]\nprogram_root = \"\"\n")
+        .git()
+        .base_commit()
+        .build();
+    let output = batten()
+        .arg("check")
+        .current_dir(&repo)
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
+        .streamed_output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("`program_root` names no directory"),
+        "the blank root is refused with the config, naming the key: {}",
+        stderr(&output)
+    );
+}
+
 /// THE FLAG IS ACCEPTED AND UNREAD (CLOUD-1560), so a manifest written for a
 /// release that predates the change keeps parsing; CLOUD-2463 retires it.
 #[test]
