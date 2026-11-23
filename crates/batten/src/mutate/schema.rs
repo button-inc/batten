@@ -6239,6 +6239,49 @@ mod tests {
         }
     }
 
+    /// A RENDERED TREE HAS THE ORIGINAL'S MODULE GRAPH (U2): the prelude's
+    /// helpers sit in `lib.rs`, and every probe and switch names one through
+    /// `crate::`, which read as an edge from each probed module to the root
+    /// and so to every module (`module_closure`, "`markers` now reaches 118
+    /// modules", on #1276).
+    ///
+    /// Fails by: a probe or switch read as an edge, or the prelude's helpers
+    /// read as library items.
+    #[test]
+    fn a_rendered_tree_reads_as_the_original_module_graph() {
+        let lib = "mod a;\nmod b;\npub fn helper() {}\n";
+        let a = "pub fn x() -> u8 {\n    crate::b::y() + 1\n}\n";
+        let b = "pub fn y() -> u8 {\n    2\n}\n";
+        let original = crate::scratch::scratch("schema-graph-original");
+        let rendered = crate::scratch::scratch("schema-graph-rendered");
+        for (file, text) in [("lib.rs", lib), ("a.rs", a), ("b.rs", b)] {
+            std::fs::write(original.join(file), text).unwrap();
+        }
+        std::fs::write(rendered.join("lib.rs"), format!("{lib}{}", prelude(2))).unwrap();
+        let switched = render(
+            a,
+            &[(0, &listed("BinaryOperator", "-", (2, 19), (2, 20)))],
+            &BTreeSet::new(),
+            Some(0),
+        );
+        assert!(
+            switched.text.contains("crate::__batten_mutant(0)"),
+            "{}",
+            switched.text
+        );
+        assert!(
+            switched.text.contains("crate::__batten_fn(0)"),
+            "{}",
+            switched.text
+        );
+        std::fs::write(rendered.join("a.rs"), &switched.text).unwrap();
+        let probed = render(b, &[], &BTreeSet::new(), Some(1)).text;
+        assert!(probed.contains("crate::__batten_fn(1)"), "{probed}");
+        std::fs::write(rendered.join("b.rs"), probed).unwrap();
+        let read = |root: &std::path::Path| crate::module_graph::read(root).unwrap().edges;
+        assert_eq!(read(&rendered), read(&original));
+    }
+
     fn render_all(source: &str, mutants: &[Listed]) -> Rendered {
         let numbered: Vec<(u32, &Listed)> = mutants
             .iter()
