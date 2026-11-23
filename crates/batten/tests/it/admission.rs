@@ -2016,3 +2016,107 @@ fn an_admission_requested_under_config_from_spends_under_it() {
         String::from_utf8_lossy(&spent.stderr)
     );
 }
+
+// ─── A MINT UNDER THE ROW ID (CLOUD-2779) ────────────────────────────────────
+//
+// The inverse of `a_mint_for_a_policy_predicate_anchors_the_finding_not_the_call`.
+// Measured on #1276: `issue file held` for CLOUD-2826 minted with `--rule 'issue
+// file other'` — the ROW id, which the remedy line prints — at two HEADs. The row
+// selected its module, the module fired under `issue file held`, no finding
+// carried `issue file other`, and the zero arm read that as "nothing fired" and
+// bound `call:<head>`. `apply_admissions` binds `finding.rule` and a `finding:`
+// anchor, so both spends were queried by nothing; the re-mint after each commit
+// was this no-op repeated, not an anchor voiding.
+
+/// Only the predicate whose id is not the row's, so nothing the row produces
+/// carries the row id.
+fn row_id_fixture(name: &str) -> PathBuf {
+    admits_fixture_of(name, UNDER_A_ROW, &["a.rs", "b.rs"])
+}
+
+/// Fails by: against the binary as it stood, the mint exits 0 and stores a
+/// `call:` record that admits nothing.
+#[test]
+fn a_mint_under_a_row_id_whose_finding_carries_another_rule_refuses_naming_it() {
+    let root = row_id_fixture("row-id-mint");
+    let refused = common::run_with_stdin(
+        &root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "always-refuses",
+            "--verdict",
+            "always probe probe",
+            "--subject",
+            "b.rs",
+        ],
+        "precondition=the refusal is the fixture's point\nlost=minted under the row id\n\
+         rejected-route=admits fix probe has nothing to change\n",
+    );
+    let said = common::stderr(&refused);
+    assert_eq!(
+        refused.status.code(),
+        Some(batten::exit::ExitCode::Usage.code()),
+        "a subject whose finding carries another rule refuses: {said}"
+    );
+    assert!(
+        said.contains("--rule 'predicate-under-a-row'"),
+        "it names the route under the rule the finding carries: {said}"
+    );
+    assert_eq!(
+        records_in(&root),
+        0,
+        "a refused mint writes no record: {said}"
+    );
+}
+
+/// The held-row shape: an artifact-subject finding is a `Scope` fingerprint, so
+/// its admission is anchored on `(rule, subject)` and an unrelated commit
+/// leaves it bound (CLOUD-1125). Pinned beside the case above because the
+/// measured re-mints were blamed on this anchor and were the row-id no-op.
+#[test]
+fn an_unrelated_commit_leaves_a_predicate_admission_valid() {
+    let root = row_id_fixture("row-id-survives");
+    let issued = common::run_with_stdin(
+        &root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "predicate-under-a-row",
+            "--verdict",
+            "always probe probe",
+            "--subject",
+            "b.rs",
+        ],
+        "precondition=the refusal is the fixture's point\nlost=held across commits\n\
+         rejected-route=admits fix probe has nothing to change\n",
+    );
+    let address = String::from_utf8_lossy(&issued.stdout).trim().to_owned();
+    assert_eq!(address.len(), 64, "issued: {}", common::stderr(&issued));
+    let spent = common::run(
+        &root,
+        &[
+            "override",
+            "spend",
+            "--admission",
+            &address,
+            "--rule",
+            "predicate-under-a-row",
+            "--verdict",
+            "always probe probe",
+            "--subject",
+            "b.rs",
+        ],
+    );
+    assert_eq!(spent.status.code(), Some(0), "{}", common::stderr(&spent));
+    let ok = Some(batten::exit::ExitCode::Success.code());
+    let admitted = common::run(&root, &["check"]);
+    assert_eq!(admitted.status.code(), ok, "{}", common::stderr(&admitted));
+    common::write(&root, "c.rs", "fn later() {}\n");
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "-qm", "an unrelated commit"]);
+    let moved = common::run(&root, &["check"]);
+    assert_eq!(moved.status.code(), ok, "{}", common::stderr(&moved));
+}

@@ -139,6 +139,25 @@ pub enum Anchor {
         /// The commit the call was refused at.
         head: String,
     },
+    /// A mediated call, by a digest of the INPUTS its decision read
+    /// (CLOUD-2779), as [`inputs_digest`] computes it.
+    ///
+    /// `Call { head }` bound the whole commit, so every commit voided every
+    /// mediated admission whatever it touched: measured on #1276, one protected
+    /// path's admission minted and spent at two HEADs an unrelated commit apart.
+    /// What `path write refused` decides over is the PATH: whether it is
+    /// protected, which the epoch binds, and what it holds, which this binds as
+    /// the path's committed blob or its absence. A commit that leaves that blob
+    /// alone leaves the admission bound; the commit that changes it voids it.
+    ///
+    /// The COMMITTED blob, never the working tree's: the admitted write is the
+    /// thing that changes the working copy, so an anchor over it would void the
+    /// admission on its own first use and refuse the second Edit of one change.
+    ///
+    /// A rule with no declared input reader keeps `Call { head }` — the narrower
+    /// binding is earned per rule by naming what its decision reads, never
+    /// assumed (`call_anchor` in `lib.rs` is that table).
+    Inputs(String),
 }
 
 impl Anchor {
@@ -154,6 +173,7 @@ impl Anchor {
         match self {
             Anchor::Finding(fingerprint) => format!("finding:{fingerprint}"),
             Anchor::Call { head } => format!("call:{head}"),
+            Anchor::Inputs(digest) => format!("inputs:{digest}"),
         }
     }
 
@@ -166,6 +186,9 @@ impl Anchor {
     pub fn parse(token: &str) -> Option<Anchor> {
         if let Some(rest) = token.strip_prefix("finding:") {
             return Some(Anchor::Finding(rest.to_owned()));
+        }
+        if let Some(rest) = token.strip_prefix("inputs:") {
+            return Some(Anchor::Inputs(rest.to_owned()));
         }
         token.strip_prefix("call:").map(|rest| Anchor::Call {
             head: rest.to_owned(),
@@ -187,7 +210,7 @@ impl TryFrom<String> for Anchor {
     /// be matched against anything.
     fn try_from(token: String) -> std::result::Result<Anchor, String> {
         Anchor::parse(&token).ok_or_else(|| {
-            format!("`{token}` names no anchor kind; expected `finding:` or `call:`")
+            format!("`{token}` names no anchor kind; expected `finding:`, `call:` or `inputs:`")
         })
     }
 }
@@ -305,10 +328,15 @@ impl Refused {
 /// anywhere.
 #[must_use]
 pub fn address(binding: &Binding) -> String {
+    sha256_hex(PROTOCOL, &canonical(binding))
+}
+
+/// SHA-256 over `label` then `body`, as lowercase hex.
+fn sha256_hex(label: &str, body: &str) -> String {
     use sha2::{Digest as _, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(PROTOCOL.as_bytes());
-    hasher.update(canonical(binding).as_bytes());
+    hasher.update(label.as_bytes());
+    hasher.update(body.as_bytes());
     // Hex by hand rather than `{:x}`: the pinned `sha2` returns a `GenericArray`,
     // which does not implement `LowerHex`. Same fold `contract::snapshot_path`
     // uses, and one buffer rather than a `format!` per byte.
@@ -320,6 +348,36 @@ pub fn address(binding: &Binding) -> String {
             let _ = write!(hex, "{byte:02x}");
             hex
         })
+}
+
+/// The label inside an [`Anchor::Inputs`] digest, apart from [`PROTOCOL`] so an
+/// inputs digest and an admission address can never be the same bytes hashed.
+pub const INPUTS_PROTOCOL: &str = "batten-admission-inputs-v1";
+
+/// The digest of what a mediated decision read (CLOUD-2779): each input by name,
+/// with its object id, or `None` where it is absent.
+///
+/// Canonical for the same reason [`canonical`] is: a JSON object of sorted
+/// string keys, absence spelled `null` so a missing path and one named `""` are
+/// different facts.
+#[must_use]
+pub fn inputs_digest(inputs: &[(&str, Option<&str>)]) -> String {
+    let sorted: BTreeMap<&str, Option<&str>> = inputs.iter().copied().collect();
+    let members: Vec<String> = sorted
+        .iter()
+        .map(|(name, id)| member(name, &id.map_or_else(|| "null".to_owned(), string)))
+        .collect();
+    sha256_hex(INPUTS_PROTOCOL, &format!("{{{}}}", members.join(",")))
+}
+
+/// The path a mediated subject names: its first word, before the program it was
+/// refused under (`batten.toml Edit`, `batten.toml,Edit`, or the bare path).
+#[must_use]
+pub fn subject_path(subject: &str) -> &str {
+    subject
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .next()
+        .unwrap_or_default()
 }
 
 /// The canonical serialization of a binding — RFC 8785 (JCS), over the subset
@@ -1036,11 +1094,7 @@ pub fn admitted_path(
             continue;
         };
         let binding = &record.binding;
-        let named = binding
-            .subject
-            .split(|c: char| c.is_whitespace() || c == ',')
-            .next()
-            .is_some_and(|first| first == path);
+        let named = subject_path(&binding.subject) == path;
         if record.state == State::Spent
             && named
             && binding.rule == rule
@@ -1340,6 +1394,35 @@ mod tests {
                 "`{key}` is neither a string, a string map nor null — write the JCS number rule first"
             );
         }
+    }
+
+    /// Fails by: a digest that ignores the object id (every blob binds alike),
+    /// or one that spells absence as an id (a deleted path binds as present).
+    #[test]
+    fn an_inputs_digest_moves_with_each_input_and_its_absence() {
+        let at = |id: Option<&str>| inputs_digest(&[("a.md", id)]);
+        assert_ne!(at(Some("1111")), at(Some("2222")), "the blob binds");
+        assert_ne!(at(Some("1111")), at(None), "absence is its own input");
+        assert_ne!(at(Some("")), at(None), "an empty id is not absence");
+        assert_ne!(
+            inputs_digest(&[("a.md", None)]),
+            inputs_digest(&[("b.md", None)]),
+            "the path binds"
+        );
+        assert_eq!(
+            inputs_digest(&[("a", Some("1")), ("b", Some("2"))]),
+            inputs_digest(&[("b", Some("2")), ("a", Some("1"))]),
+            "order-free"
+        );
+        let anchor = Anchor::Inputs(at(None));
+        assert_eq!(Anchor::parse(&anchor.token()), Some(anchor));
+        assert_eq!(
+            Anchor::parse("call:0123"),
+            Some(Anchor::Call {
+                head: "0123".to_owned()
+            }),
+            "a legacy block still reads as it did"
+        );
     }
 
     #[test]
