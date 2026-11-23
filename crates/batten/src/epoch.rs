@@ -788,6 +788,113 @@ mod tests {
     }
 }
 
+/// An admission's epoch moves with what its rule reads and nothing else
+/// (CLOUD-2789).
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod rule_surface_tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use super::for_rule;
+
+    const RULE: &str = "issue file other";
+    const VERDICT: &str = "issue file held";
+
+    /// A module reading two named tree keys: a record and the base delta.
+    const MODULE: &str = "package batten.held\n\nimport rego.v1\n\n\
+        rules contains \"issue file held\"\n\n\
+        violation contains {\"rule\": \"issue file other\", \"verdict\": \"issue file held\", \
+        \"subjects\": []} if {\n\
+        \tsome line in input.tree.records[\"board-writes\"]\n\
+        \tcount(input.tree[\"base-delta\"]) > 0\n\
+        \tline != \"\"\n}\n";
+
+    /// `batten.toml` with `extra` spliced into the rule row and `verb` as the
+    /// one `[[verb]]` row's redirect.
+    fn config(extra: &str, verb: &str) -> String {
+        format!(
+            "version = 1\n\n[epoch]\ntracked = [\"batten.toml\", \"AGENTS.md\"]\n\n\
+             [[rule]]\nid = \"{RULE}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+             module = \"policy/held.rego\"\nseverity = \"deny\"\n{extra}\n\
+             [[rule]]\nid = \"other\"\nkind = \"policy\"\nscope = \"tree\"\n\
+             module = \"policy/other.rego\"\nseverity = \"deny\"\n\n\
+             [[verb]]\nverb = \"rm\"\neffect = \"destructive\"\nredirect = \"{verb}\"\n"
+        )
+    }
+
+    /// A scratch repository with `config`, the module and an `AGENTS.md`.
+    fn repo(name: &str, config: &str) -> PathBuf {
+        let dir = crate::scratch::scratch(name);
+        fs::create_dir_all(dir.join("policy")).unwrap();
+        fs::write(dir.join("batten.toml"), config).unwrap();
+        fs::write(dir.join("policy/held.rego"), MODULE).unwrap();
+        fs::write(
+            dir.join("policy/other.rego"),
+            "package batten.other\n\nimport rego.v1\n\nrules contains \"x\"\n",
+        )
+        .unwrap();
+        fs::write(dir.join("AGENTS.md"), "# guide\n").unwrap();
+        dir
+    }
+
+    fn epoch(dir: &Path) -> String {
+        for_rule(dir, None, RULE, VERDICT).unwrap()
+    }
+
+    /// Fails by: a table the module is never handed, or a tracked file its row
+    /// hands it no content of, still hashed into its epoch — every unrelated
+    /// config edit voiding the held admission (#1276).
+    #[test]
+    fn an_unrelated_verb_row_or_tracked_file_leaves_the_epoch() {
+        let dir = repo("epoch-rule-unrelated", &config("", "restore it"));
+        let before = epoch(&dir);
+        fs::write(dir.join("batten.toml"), config("", "copy it instead")).unwrap();
+        assert_eq!(epoch(&dir), before, "the module reads no `[[verb]]` row");
+        fs::write(dir.join("AGENTS.md"), "# guide, edited\n").unwrap();
+        assert_eq!(epoch(&dir), before, "the row hands it no `AGENTS.md` content");
+    }
+
+    /// Fails by: the narrowing reaching past the unrelated, so the rule's own
+    /// row or its module changing leaves an admission bound.
+    #[test]
+    fn its_own_row_or_module_moves_the_epoch() {
+        let dir = repo("epoch-rule-own", &config("", "restore it"));
+        let before = epoch(&dir);
+        fs::write(
+            dir.join("batten.toml"),
+            config("base = \"origin/main\"\ndelta_sources = [\"**\"]\n", "restore it"),
+        )
+        .unwrap();
+        let moved = epoch(&dir);
+        assert_ne!(moved, before, "its own row moved");
+        fs::write(dir.join("policy/held.rego"), format!("{MODULE}\n# edited\n")).unwrap();
+        assert_ne!(epoch(&dir), moved, "its module moved");
+    }
+
+    /// Fails by: a read the projection cannot name (`input.facts`) narrowed as
+    /// if it were known, or a tracked file the row DOES hand as a document
+    /// dropped.
+    #[test]
+    fn an_unnamed_read_or_a_declared_document_still_moves_the_epoch() {
+        let dir = repo("epoch-rule-opaque", &config("", "restore it"));
+        fs::write(
+            dir.join("policy/held.rego"),
+            MODULE.replace("count(input.tree[\"base-delta\"]) > 0", "input.facts.x"),
+        )
+        .unwrap();
+        let before = epoch(&dir);
+        fs::write(dir.join("batten.toml"), config("", "copy it instead")).unwrap();
+        assert_ne!(epoch(&dir), before, "an unnamed read keeps every table");
+
+        let documents = "documents = [\"AGENTS.md\"]\n";
+        let dir = repo("epoch-rule-document", &config(documents, "restore it"));
+        let before = epoch(&dir);
+        fs::write(dir.join("AGENTS.md"), "# guide, edited\n").unwrap();
+        assert_ne!(epoch(&dir), before, "a declared document is an input");
+    }
+}
+
 /// The module half of a rule's digest (#1276).
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
