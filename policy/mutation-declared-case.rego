@@ -65,10 +65,31 @@ lines := input.tree.lines
 # That undefinedness is the scope narrowing above, expressed structurally rather
 # than as a filter somebody can delete: a declaration in a file with no
 # `#MUTANT-SUITE` never binds `entry.suite`, so it never reaches the violation.
-declared_suite(path) := suite if {
-	some line in lines[path]
+#
+# PER ROW, THE NEAREST ABOVE (CLOUD-2193, as `mutate.rs` judges it): a file may
+# declare several suites, and a row above every one keeps the first. One suite
+# per file was a function with several outputs on such a file, which faults.
+suite_headers(path) := [[j, trim_space(substring(line, count("#MUTANT-SUITE "), -1))] |
+	some j, line in lines[path]
 	startswith(line, "#MUTANT-SUITE ")
-	suite := trim_space(substring(line, count("#MUTANT-SUITE "), -1))
+]
+
+suite_above(path, i) if {
+	some header in suite_headers(path)
+	header[0] < i
+}
+
+declared_suite(path, i) := suite if {
+	above := [header | some header in suite_headers(path); header[0] < i]
+	count(above) > 0
+	suite := above[count(above) - 1][1]
+}
+
+declared_suite(path, i) := suite if {
+	not suite_above(path, i)
+	headers := suite_headers(path)
+	count(headers) > 0
+	suite := headers[0][1]
 }
 
 # Every declaration whose file names a suite, as `{path, suite, case}`.
@@ -82,16 +103,21 @@ declared_suite(path) := suite if {
 # authority over a format the runner already owns.
 declaration contains entry if {
 	some path, file_lines in lines
-	some line in file_lines
+	some i, line in file_lines
 	startswith(line, "#MUTANT ")
 	fields := split(line, "|")
 	count(fields) == 3
 	entry := {
 		"path": path,
-		"suite": declared_suite(path),
+		"suite": declared_suite(path, i),
 		"case": fields[2],
 	}
 }
+
+# The case as its suite spells it: a qualified `module::case` is a nextest
+# filter the sweep selects by its whole path, and the suite holds only the
+# last segment.
+spelled(entry) := parts[count(parts) - 1] if parts := split(entry.case, "::")
 
 # How a case is spelled in the suite that holds it.
 #
@@ -103,7 +129,7 @@ needle(entry) := sprintf("@test \"%v\"", [entry.case]) if {
 	endswith(entry.suite, ".bats")
 }
 
-needle(entry) := sprintf("fn %v(", [entry.case]) if {
+needle(entry) := sprintf("fn %v(", [spelled(entry)]) if {
 	endswith(entry.suite, ".rs")
 }
 
@@ -174,6 +200,49 @@ rust_suite := {
 
 test_a_declaration_whose_suite_carries_its_case_is_silent if {
 	count(violation) == 0 with input as tree(rust_suite)
+}
+
+# THE NEAREST SUITE ABOVE, as the sweep judges it (`mutate.rs`, CLOUD-2193). A
+# file declaring two suites made the one-suite-per-file function fault, so the
+# interpreter answered could-not-look and the gate decided nothing; bytecode
+# evaluated it and refused correct rows (#1276: `lock-complete.rego`,
+# `mise.toml`). A row above every declaration keeps the first.
+test_a_row_is_judged_under_the_suite_above_it if {
+	count(violation) == 0 with input as tree({
+		"policy/a.rego": [
+			"#MUTANT-SUITE crates/batten/tests/it/first.rs",
+			"#MUTANT one|s@a@b@|in_first",
+			"#MUTANT-SUITE crates/batten/tests/it/second.rs",
+			"#MUTANT two|s@a@b@|in_second",
+		],
+		"crates/batten/tests/it/first.rs": ["fn in_first() {"],
+		"crates/batten/tests/it/second.rs": ["fn in_second() {"],
+	})
+}
+
+test_a_row_under_the_second_suite_is_not_read_against_the_first if {
+	some v in violation with input as tree({
+		"policy/a.rego": [
+			"#MUTANT-SUITE crates/batten/tests/it/first.rs",
+			"#MUTANT-SUITE crates/batten/tests/it/second.rs",
+			"#MUTANT two|s@a@b@|in_first",
+		],
+		"crates/batten/tests/it/first.rs": ["fn in_first() {"],
+		"crates/batten/tests/it/second.rs": ["fn in_second() {"],
+	})
+	v.subjects[1].path == "crates/batten/tests/it/second.rs"
+}
+
+# A QUALIFIED CASE is a nextest filter the sweep selects by its whole path
+# (`land_divergence::a_case`), so the suite spells it by its last segment.
+test_a_qualified_case_resolves_by_its_last_segment if {
+	count(violation) == 0 with input as tree({
+		"policy/a.rego": [
+			"#MUTANT-SUITE crates/batten/tests/it/a.rs",
+			"#MUTANT slug|s@a@b@|a::a_case_that_exists",
+		],
+		"crates/batten/tests/it/a.rs": ["fn a_case_that_exists() {"],
+	})
 }
 
 test_a_declaration_naming_a_case_the_suite_lacks_is_refused if {
