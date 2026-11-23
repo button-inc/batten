@@ -1030,9 +1030,15 @@ pub fn run_record(
 /// A [`crate::Passthrough`] carrying the command's non-zero code, and a
 /// [`crate::error::UsageError`] when the command cannot be started — each
 /// [`crate::exec::run`]'s own, passed through unchanged.
+///
+/// `shards` above one SHARDS A JOURNALED NEXTEST MISS (CLOUD-2843): the suite
+/// archived once and each `hash:k/n` partition run over it ([`run_sharded`]),
+/// recorded only where the shards' cases are exactly the archive's list. Never
+/// key material: a sharded pass covers the cases an unsharded one does. Any
+/// other command runs as declared.
 pub fn run_step(
     step: &str,
-    args: &[String],
+    (args, shards): (&[String], Option<u32>),
     command: &[String],
     watched: Option<&Path>,
     err: &mut dyn Write,
@@ -1099,12 +1105,6 @@ pub fn run_step(
         .flatten()
         .filter(|_| !declared(step).is_some_and(|row| untraced(&row)))
         .and_then(|strace| Some((strace, trace_file(step)?)));
-    let spawned: Vec<String> = match (&traced, running.split_first()) {
-        (Some((strace, file)), Some((program, rest))) => std::iter::once(strace.clone())
-            .chain(crate::mutate::trace::trace_args(file, program, rest))
-            .collect(),
-        _ => running.to_vec(),
-    };
     let mut report = Vec::new();
     // A WATCHED STEP TELLS ITS COMMAND SO (CLOUD-2925): the watcher collects
     // from this process, outside the trace, and a collection run inside the
@@ -1118,9 +1118,13 @@ pub fn run_step(
         .map(|root| (DISK_WATCHED.to_owned(), root.to_string_lossy().into_owned()))
         .into_iter()
         .collect();
-    let ran = crate::git::repo_root(Path::new(".")).and_then(|root| {
-        crate::exec::run_in_with_env(&root, &spawned, &[], &settings, &published, &mut report)
-    });
+    let (ran, trace_files) = run_miss(
+        (command, running),
+        (journaled.as_ref(), shards),
+        traced.as_ref(),
+        (&settings, &published, &mut report),
+        err,
+    );
     // THE RUN'S DEPENDENCY PASSES OUTLIVE IT only over a tree that stood for
     // the whole of it; an economy either way, so its failure is swallowed.
     if let Some((_, root)) = &journaled {
@@ -1143,22 +1147,29 @@ pub fn run_step(
         };
         after_failure(step, args, command, answer.recording().is_some(), &run, err);
     }
-    let linted = traced
-        .as_ref()
+    // EVERY TRACE IS LINTED, one per shard where the run was sharded, and the
+    // gravest answer stands: one shard's undeclared read refuses the receipt.
+    let stops: Vec<LintStop> = trace_files
+        .iter()
         .filter(|_| passed)
-        .map(|(_, file)| lint_trace(step, file));
+        .map(|file| lint_stop(step, lint_trace(step, file), err))
+        .collect();
     // THE TRACE IS READ ONCE, THEN REMOVED, pass or fail (lap 16): a whole
     // test run traces to gigabytes, so one kept per step filled the disk. The
     // listing beside it is what a reader needs, and it stays.
-    if let Some((_, file)) = &traced {
+    for file in &trace_files {
         let _ = std::fs::remove_file(file);
     }
-    // A HAZARD OR AN UNREAD TRACE ENDS THE STEP UNRECORDED: `Some(code)` is
-    // the hazard's own, `None` leaves the step's verdict standing.
-    match linted.map(|linted| lint_stop(step, linted, err)) {
-        Some(LintStop::Fail) => return Ok(ExitCode::Violation),
-        Some(LintStop::Unrecorded) => return ran,
-        Some(LintStop::Go) | None => {}
+    // A HAZARD OR AN UNREAD TRACE ENDS THE STEP UNRECORDED: a failure is the
+    // hazard's own code, an unread trace leaves the step's verdict standing.
+    if stops.iter().any(|stop| matches!(stop, LintStop::Fail)) {
+        return Ok(ExitCode::Violation);
+    }
+    if stops
+        .iter()
+        .any(|stop| matches!(stop, LintStop::Unrecorded))
+    {
+        return ran;
     }
     if passed && answer.recording().is_some() {
         // A record that refuses or fails here — the inputs moved while the
@@ -1184,6 +1195,318 @@ pub fn run_step(
     let millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
     let _ = writeln!(err, "{}", stage_line(step, "ran", Some(millis)));
     ran
+}
+
+/// A nextest suite case as `JUnit` and `nextest list` name it: its name and
+/// its binary id.
+type SuiteCase = (String, String);
+
+/// The options of a `cargo nextest run` that choose what is BUILT (CLOUD-2843),
+/// each with whether it takes a value: the archive takes them once, and a run
+/// or a list over the archive is given none of them.
+const BUILD_SCOPE: [(&str, bool); 23] = [
+    ("--workspace", false),
+    ("--all", false),
+    ("-p", true),
+    ("--package", true),
+    ("--exclude", true),
+    ("-F", true),
+    ("--features", true),
+    ("--all-features", false),
+    ("--no-default-features", false),
+    ("--cargo-profile", true),
+    ("--release", false),
+    ("-r", false),
+    ("--target", true),
+    ("--lib", false),
+    ("--bins", false),
+    ("--tests", false),
+    ("--examples", false),
+    ("--benches", false),
+    ("--all-targets", false),
+    ("--bin", true),
+    ("--test", true),
+    ("--example", true),
+    ("--bench", true),
+];
+
+/// `options` split into the build scope ([`BUILD_SCOPE`]) and the rest, each
+/// in the order written, a `--flag=value` and a `--flag value` alike.
+fn split_scope(options: &[String]) -> (Vec<String>, Vec<String>) {
+    let (mut scope, mut rest) = (Vec::new(), Vec::new());
+    let mut words = options.iter();
+    while let Some(word) = words.next() {
+        let head = word.split_once('=').map_or(word.as_str(), |(head, _)| head);
+        match BUILD_SCOPE.iter().find(|(flag, _)| *flag == head) {
+            Some((_, takes_value)) => {
+                scope.push(word.clone());
+                if *takes_value
+                    && !word.contains('=')
+                    && let Some(value) = words.next()
+                {
+                    scope.push(value.clone());
+                }
+            }
+            None => rest.push(word.clone()),
+        }
+    }
+    (scope, rest)
+}
+
+/// `argv` split at its first `--`: what nextest reads, and the rest with the
+/// `--`, which nextest hands to the test binaries.
+fn split_tail(argv: &[String]) -> (&[String], &[String]) {
+    argv.split_at(
+        argv.iter()
+            .position(|word| word == "--")
+            .unwrap_or(argv.len()),
+    )
+}
+
+/// The `cargo nextest archive` building what `command`, a `cargo nextest run`,
+/// would run, into `archive`; `None` for any other command.
+fn archive_argv(command: &[String], archive: &Path) -> Option<Vec<String>> {
+    let (head, _) = split_tail(command);
+    let options = head.get(3..)?;
+    if head.get(..3)? != ["cargo", "nextest", "run"] {
+        return None;
+    }
+    let mut argv: Vec<String> = ["cargo", "nextest", "archive", "--archive-file"]
+        .map(str::to_owned)
+        .to_vec();
+    argv.push(archive.to_string_lossy().into_owned());
+    argv.extend(split_scope(options).0);
+    Some(argv)
+}
+
+/// Shard `k` of `n` (CLOUD-2843): the journaled run over `archive`, its build
+/// scope dropped and its `hash:k/n` partition added ahead of any `--`.
+fn shard_argv(journaled: &[String], archive: &Path, k: u32, n: u32) -> Vec<String> {
+    let (head, tail) = split_tail(journaled);
+    let (program, options) = head.split_at(head.len().min(3));
+    let mut argv = program.to_vec();
+    argv.extend(split_scope(options).1);
+    argv.extend([
+        String::from("--archive-file"),
+        archive.to_string_lossy().into_owned(),
+        String::from("--partition"),
+        format!("hash:{k}/{n}"),
+    ]);
+    argv.extend(tail.iter().cloned());
+    argv
+}
+
+/// Every case `nextest list --message-format json` says the run selects: each
+/// suite's cases whose filter match is `matches`. `None` where it will not
+/// parse.
+fn listed_cases(json: &str) -> Option<std::collections::BTreeSet<SuiteCase>> {
+    let doc: serde_json::Value = serde_json::from_str(json).ok()?;
+    let mut listed = std::collections::BTreeSet::new();
+    for (binary, suite) in doc.get("rust-suites")?.as_object()? {
+        for (name, case) in suite.get("testcases")?.as_object()? {
+            if case["filter-match"]["status"] == "matches" {
+                listed.insert((name.clone(), binary.clone()));
+            }
+        }
+    }
+    Some(listed)
+}
+
+/// Every case a `JUnit` report shows passed: no `failure`, `error` or
+/// `skipped` beneath it. `None` where it will not parse.
+fn passed_cases(xml: &str) -> Option<std::collections::BTreeSet<SuiteCase>> {
+    let doc = roxmltree::Document::parse(xml).ok()?;
+    Some(
+        doc.descendants()
+            .filter(|node| node.has_tag_name("testcase"))
+            .filter(|case| {
+                !case
+                    .children()
+                    .any(|child| matches!(child.tag_name().name(), "failure" | "error" | "skipped"))
+            })
+            .filter_map(|case| {
+                Some((
+                    case.attribute("name")?.to_owned(),
+                    case.attribute("classname")?.to_owned(),
+                ))
+            })
+            .collect(),
+    )
+}
+
+/// Whether a sharded pass may stand for the whole suite (CLOUD-2843): the
+/// shards' cases together are exactly `listed`, and none ran nothing
+/// (CLOUD-1392's guard). Why not, otherwise.
+fn shard_coverage(
+    listed: &std::collections::BTreeSet<SuiteCase>,
+    shards: &[std::collections::BTreeSet<SuiteCase>],
+) -> Result<(), String> {
+    if listed.is_empty() {
+        return Err(String::from("the archive lists no case"));
+    }
+    if let Some(at) = shards.iter().position(std::collections::BTreeSet::is_empty) {
+        return Err(format!("shard {}/{} ran no case", at + 1, shards.len()));
+    }
+    let union: std::collections::BTreeSet<&SuiteCase> = shards.iter().flatten().collect();
+    let covered = listed.iter().filter(|case| union.contains(case)).count();
+    let unlisted = union.iter().filter(|case| !listed.contains(**case)).count();
+    if covered == listed.len() && unlisted == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "the shards ran {covered} of {} listed case(s) and {unlisted} unlisted",
+            listed.len()
+        ))
+    }
+}
+
+/// A miss's command run: sharded where `shards` asks for more than one and the
+/// command is a journaled nextest run ([`run_sharded`]), else once as
+/// `running`, under the tracer where one answers; with the trace files to lint.
+fn run_miss(
+    (command, running): (&[String], &[String]),
+    (journaled, shards): (Option<&(Vec<String>, std::path::PathBuf)>, Option<u32>),
+    traced: Option<&(String, std::path::PathBuf)>,
+    (settings, published, report): (
+        &crate::config_model::ExecConfig,
+        &[(String, String)],
+        &mut Vec<u8>,
+    ),
+    err: &mut dyn Write,
+) -> (Result<ExitCode>, Vec<std::path::PathBuf>) {
+    let sharded = shards
+        .filter(|count| *count > 1)
+        .zip(journaled)
+        .filter(|_| archive_argv(command, Path::new("")).is_some());
+    if let Some((count, (argv, root))) = sharded {
+        return run_sharded(
+            root,
+            (command, argv),
+            count,
+            traced,
+            (settings, published, report),
+            err,
+        );
+    }
+    let spawned: Vec<String> = match (traced, running.split_first()) {
+        (Some((strace, file)), Some((program, rest))) => std::iter::once(strace.clone())
+            .chain(crate::mutate::trace::trace_args(file, program, rest))
+            .collect(),
+        _ => running.to_vec(),
+    };
+    (
+        run_published(&spawned, settings, published, report),
+        traced.map(|(_, file)| file.clone()).into_iter().collect(),
+    )
+}
+
+/// One command of a miss, run at the repository root with the watcher's
+/// variables published (CLOUD-2925), as an unsharded run always was.
+fn run_published(
+    argv: &[String],
+    settings: &crate::config_model::ExecConfig,
+    published: &[(String, String)],
+    report: &mut Vec<u8>,
+) -> Result<ExitCode> {
+    crate::git::repo_root(Path::new(".")).and_then(|root| {
+        crate::exec::run_in_with_env(&root, argv, &[], settings, published, report)
+    })
+}
+
+/// A sharded miss (CLOUD-2843): the suite archived once, its case list read,
+/// then each `hash:k/n` partition of the journaled command run over the
+/// archive in turn, each traced to its own file where a tracer answers, and
+/// each shard's passes read off its `JUnit` report. Cases keep their per-case
+/// journal markers, so the shards' passes compose. The verdict is the first
+/// failing step's code, else could-not-look where the shards do not cover the
+/// list ([`shard_coverage`]); the trace files are the caller's to lint.
+fn run_sharded(
+    root: &Path,
+    (command, journaled): (&[String], &[String]),
+    shards: u32,
+    traced: Option<&(String, std::path::PathBuf)>,
+    (settings, published, report): (
+        &crate::config_model::ExecConfig,
+        &[(String, String)],
+        &mut Vec<u8>,
+    ),
+    err: &mut dyn Write,
+) -> (Result<ExitCode>, Vec<std::path::PathBuf>) {
+    let mut shard_traces = Vec::new();
+    let archive = crate::state::repo_state_dir(root)
+        .ok()
+        .map(|dir| dir.join("test-run").join("suite.tar.zst"));
+    let Some((archive, archiving)) =
+        archive.and_then(|archive| Some((archive.clone(), archive_argv(command, &archive)?)))
+    else {
+        let _ = writeln!(err, "step run: the suite cannot be archived; not recording");
+        return (Ok(ExitCode::Internal), shard_traces);
+    };
+    let built = run_published(&archiving, settings, published, report);
+    if !matches!(built, Ok(ExitCode::Success)) {
+        return (built, shard_traces);
+    }
+    let list: Vec<String> = [
+        "cargo",
+        "nextest",
+        "list",
+        "--archive-file",
+        &archive.to_string_lossy(),
+        "--message-format",
+        "json",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let Some(listed) =
+        crate::exec::piped_argv(root, &list, "", crate::exec::Diagnostics::Drop, &[])
+            .filter(|(code, _)| *code == 0)
+            .and_then(|(_, said)| listed_cases(&said))
+    else {
+        let _ = writeln!(
+            err,
+            "step run: the archive's case list cannot be read; not recording"
+        );
+        return (Ok(ExitCode::Internal), shard_traces);
+    };
+    let mut ran = Vec::new();
+    for k in 1..=shards {
+        let argv = shard_argv(journaled, &archive, k, shards);
+        let spawned: Vec<String> = match (traced, argv.split_first()) {
+            (Some((strace, file)), Some((program, rest))) => {
+                let file = file.with_extension(format!("shard{k}"));
+                let spawned = std::iter::once(strace.clone())
+                    .chain(crate::mutate::trace::trace_args(&file, program, rest))
+                    .collect();
+                shard_traces.push(file);
+                spawned
+            }
+            _ => argv,
+        };
+        // A STALE REPORT IS NO SHARD'S: cleared before each, so a shard that
+        // wrote none reads as having run nothing.
+        crate::mutate::resume::clear_report(root);
+        let outcome = run_published(&spawned, settings, published, report);
+        if !matches!(outcome, Ok(ExitCode::Success)) {
+            return (outcome, shard_traces);
+        }
+        let passed = crate::mutate::resume::report_path(root)
+            .and_then(|path| crate::fsio::read_to_string(path).ok())
+            .and_then(|xml| passed_cases(&xml))
+            .unwrap_or_default();
+        let _ = writeln!(
+            err,
+            "step run: shard {k}/{shards} passed {} case(s)",
+            passed.len()
+        );
+        ran.push(passed);
+    }
+    match shard_coverage(&listed, &ran) {
+        Ok(()) => (Ok(ExitCode::Success), shard_traces),
+        Err(why) => {
+            let _ = writeln!(err, "step run: {why}; not recording");
+            (Ok(ExitCode::Internal), shard_traces)
+        }
+    }
 }
 
 /// The keyed family a step's last pass is filed under (CLOUD-2788): per step
@@ -2930,6 +3253,79 @@ mod tests {
             Some((0, String::from("exists none"))),
             "nothing present still says something, so the step keys"
         );
+    }
+
+    fn suite(cases: &[&str]) -> std::collections::BTreeSet<super::SuiteCase> {
+        cases
+            .iter()
+            .map(|case| ((*case).to_owned(), String::from("batten")))
+            .collect()
+    }
+
+    // A SHARDED PASS IS A RECEIPT ONLY OVER THE WHOLE LIST (CLOUD-2843): the
+    // shards' cases together are the archive's, and none ran nothing.
+    #[test]
+    fn shards_record_only_when_their_union_is_the_list_and_none_is_empty() {
+        let listed = suite(&["a", "b", "c", "d"]);
+        let four = [suite(&["a"]), suite(&["b"]), suite(&["c"]), suite(&["d"])];
+        assert_eq!(super::shard_coverage(&listed, &four), Ok(()));
+        // ONE SHARD'S MARKERS DROPPED: its cases are in no shard.
+        let dropped = [suite(&["a"]), suite(&["b"]), suite(&["c"])];
+        let refused = super::shard_coverage(&listed, &dropped).unwrap_err();
+        assert!(refused.contains("3 of 4"), "{refused}");
+        let empty = [suite(&["a", "b"]), suite(&[]), suite(&["c", "d"])];
+        let refused = super::shard_coverage(&listed, &empty).unwrap_err();
+        assert!(refused.contains("shard 2/3 ran no case"), "{refused}");
+        let extra = [suite(&["a", "b"]), suite(&["c", "d", "e"])];
+        let refused = super::shard_coverage(&listed, &extra).unwrap_err();
+        assert!(refused.contains("1 unlisted"), "{refused}");
+        let refused = super::shard_coverage(&std::collections::BTreeSet::new(), &four).unwrap_err();
+        assert!(refused.contains("lists no case"), "{refused}");
+    }
+
+    // THE ARCHIVE TAKES THE BUILD SCOPE ONCE, and each shard runs the journaled
+    // command over the archive with its partition, never the scope again.
+    #[test]
+    fn a_shard_runs_the_journaled_command_over_the_archive_with_its_partition() {
+        let words = |text: &str| -> Vec<String> { text.split(' ').map(str::to_owned).collect() };
+        let command = words("cargo nextest run --workspace -p x --no-fail-fast -- --nocapture");
+        let archive = std::path::Path::new("/s/suite.tar.zst");
+        assert_eq!(
+            super::archive_argv(&command, archive),
+            Some(words(
+                "cargo nextest archive --archive-file /s/suite.tar.zst --workspace -p x"
+            ))
+        );
+        let journaled = words(
+            "cargo nextest run --workspace -p x --no-fail-fast --config-file /s/n.toml -- --nocapture",
+        );
+        assert_eq!(
+            super::shard_argv(&journaled, archive, 2, 4),
+            words(
+                "cargo nextest run --no-fail-fast --config-file /s/n.toml --archive-file \
+                 /s/suite.tar.zst --partition hash:2/4 -- --nocapture"
+            )
+        );
+        assert_eq!(
+            super::archive_argv(&words("cargo test --workspace"), archive),
+            None,
+            "only a nextest run shards"
+        );
+    }
+
+    #[test]
+    fn the_listed_and_passed_cases_are_read_as_nextest_writes_them() {
+        let listed = r#"{"rust-suites":{"batten":{"testcases":{
+            "a":{"ignored":false,"filter-match":{"status":"matches"}},
+            "b":{"ignored":true,"filter-match":{"status":"mismatch","reason":"ignored"}}}}}}"#;
+        assert_eq!(super::listed_cases(listed), Some(suite(&["a"])));
+        let junit = r#"<testsuites><testsuite name="batten">
+            <testcase name="a" classname="batten"/>
+            <testcase name="f" classname="batten"><failure message="x"/></testcase>
+            <testcase name="s" classname="batten"><skipped/></testcase>
+            </testsuite></testsuites>"#;
+        assert_eq!(super::passed_cases(junit), Some(suite(&["a"])));
+        assert_eq!(super::passed_cases("<not"), None);
     }
 
     #[test]

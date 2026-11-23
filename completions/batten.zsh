@@ -8797,6 +8797,7 @@ trace\:"Add everything"))' \
 (run)
 _arguments "${_arguments_options[@]}" : \
 '*--arg=[A value the step'\''s verdict depends on beyond its inputs, keyed in order (repeatable)]:arg:_default' \
+'--shards=[Run a journaled nextest miss as this many partitions of one archive (a positive integer; default\: 1)]:shards:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
