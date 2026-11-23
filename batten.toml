@@ -19299,7 +19299,10 @@ tools = [
 
 [[step]]
 id = "darwin-link"
-inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+# `.cargo` for `lint:clippy`'s reason, and `build.zig`, which the zig linker
+# looks for in the directory it runs in (CLOUD-2835): with the trace read
+# whole, the lint refused both as undeclared reads.
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", ".cargo", "build.zig"]
 tools = [
   ["cargo-zigbuild", "--version"],
   ["zig", "version"],
