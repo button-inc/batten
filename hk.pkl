@@ -674,8 +674,11 @@ local gate = new Mapping<String, Step> {
     check = "mise run lint:fmt"
   }
   ["cargo-clippy"] = (Builtins.cargo_clippy) {
-    // `slow` tier: a whole-workspace compile at --all-targets --all-features.
-    profiles = List("slow")
+    // AT EVERY COMMIT, NOT THE `slow` TIER. A warning is a defect, and in the slow
+    // tier it was refused only by a land lap, hours after it was written: five
+    // committed and pushed unseen on PR #1276 (census.rs, rules.rs, lib.rs). The
+    // cost is bounded by `lint:clippy`'s per-package step receipts: a package whose
+    // sources did not move is a receipt hit, so a commit pays for what it changed.
     // ONE JOB, NOT ONE PER CARGO WORKSPACE (CLOUD-2051). The builtin carries
     // `workspace_indicator = "Cargo.toml"`, so hk formed a job for `fuzz/` (its own
     // `[workspace]`) as well as the root — and both ran `lint:clippy`, which ignores
