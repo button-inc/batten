@@ -651,7 +651,7 @@ fn this_repositorys_own_census_answers() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|entry| entry["path"] == "setup.sh"),
+            .any(|entry| entry["path"] == ".claude/hooks/git-hook.sh"),
         "{document}"
     );
 }
