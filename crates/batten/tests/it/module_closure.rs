@@ -169,8 +169,10 @@ const DEEPEST_CLOSURE: usize = 89;
 /// the number is re-recorded here, deliberately.
 ///
 /// 118 since CLOUD-2840: `session_setup`, the session's setup as one detached
-/// task, is a new module added on purpose, reached only from `lib`.
-const ROOT_CLOSURE: usize = 118;
+/// task, is a new module added on purpose, reached only from `lib`. 119 since
+/// CLOUD-2826: `session_watch`, which follows dispatched children to done or
+/// dead, is another, reached from `lib`'s `session watch` verb.
+const ROOT_CLOSURE: usize = 119;
 
 /// Every top-level module of the library, mapped to the modules it reaches.
 ///
