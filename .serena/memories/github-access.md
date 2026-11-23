@@ -23,7 +23,8 @@ Going around it (`--noproxy '*'`) leaves you unauthenticated: 60/hr, and 403 for
 anything private.
 
 **Third-party release ASSETS are served; their API is not.** That is why the
-toolchain installs LOCKED (`session:install`, `setup.sh` step 2): a locked
+toolchain installs LOCKED (`session:install`, and the `toolchain-is-provisioned`
+`[[startup]]` repair): a locked
 `mise install` downloads from the URL and checksum `mise.lock` pins and never
 resolves through `api.github.com` — measured, all 38 tools into an empty data
 directory, through the proxy, lock unchanged. An UNLOCKED resolve
