@@ -1474,7 +1474,14 @@ description = "Run the Rust workspace test suite"
 # that tail, and `task_cargo` in `policy/ci-parity.rego` lifts it off the
 # `step run test:cargo -- ` wrapper. The fail-fast posture rides
 # `NEXTEST_PROFILE` in `[env]`, which every leg inherits.
-run = "{{vars.batten}} step run test:cargo -- cargo nextest run --workspace"
+# `--shards <n>` (CLOUD-2843) runs a miss as one `nextest archive` and `n`
+# `hash:k/n` partitions over it, recorded only where they cover the archive's
+# list. On one box it buys nothing, since nextest already fills every core; it is
+# the unit a lap spreads across executors.
+usage = '''
+flag "--shards <n>" default="1" help="run a miss as this many partitions of one archive"
+'''
+run = "{{vars.batten}} step run test:cargo --shards {{usage.shards}} -- cargo nextest run --workspace"
 
 # --- the four tiers `hk` reaches by name (CLOUD-1164) ---------------------------
 #

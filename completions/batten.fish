@@ -5221,6 +5221,7 @@ complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from record" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from record" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from run" -l arg -d 'A value the step\'s verdict depends on beyond its inputs, keyed in order (repeatable)' -r
+complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from run" -l shards -d 'Run a journaled nextest miss as this many partitions of one archive (a positive integer; default: 1)' -r
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from run" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

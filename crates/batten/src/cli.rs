@@ -694,6 +694,9 @@ pub enum StepCommand {
         step: String,
         /// The extra values the key depends on, in the order written.
         args: Vec<String>,
+        /// How many partitions a journaled nextest miss runs in (CLOUD-2843),
+        /// as written; the verb parses it, so a bad value is its usage error.
+        shards: Option<String>,
         /// The command, verbatim. Never empty — the surface requires it.
         command: Vec<String>,
     },
@@ -3672,6 +3675,7 @@ fn step_of(matches: &ArgMatches) -> Option<StepCommand> {
         ("run", matches) => Some(StepCommand::Run {
             step: matches.get_one::<String>("step").cloned()?,
             args: step_args(matches),
+            shards: matches.get_one::<String>("shards").cloned(),
             command: matches
                 .get_many::<String>("command")?
                 .cloned()

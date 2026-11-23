@@ -650,8 +650,19 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             cli::StepCommand::Run {
                 step,
                 args,
+                shards,
                 command,
-            } => run_step_watched(&step, &args, &command, err),
+            } => {
+                let shards = match shards.as_deref().map(str::parse::<u32>) {
+                    None => None,
+                    Some(Ok(count)) if count > 0 => Some(count),
+                    Some(_) => {
+                        writeln!(err, "step run: --shards takes a positive integer")?;
+                        return Ok(ExitCode::Usage);
+                    }
+                };
+                run_step_watched(&step, (&args, shards), &command, err)
+            }
             cli::StepCommand::Graph { groups, jobs } => {
                 crate::step::run_graph(&groups, jobs.as_deref(), err)
             }
@@ -14956,7 +14967,7 @@ fn disk_watcher<'a>(
 /// through this verb, so watching here covers them without a wrapper per task.
 fn run_step_watched(
     step: &str,
-    args: &[String],
+    args: (&[String], Option<u32>),
     command: &[String],
     err: &mut dyn Write,
 ) -> Result<ExitCode> {

@@ -865,7 +865,7 @@ fn report_name(doc: &toml_edit::DocumentMut) -> Option<String> {
 /// Where a journaled run in the checkout at `root` leaves its `JUnit` report:
 /// nextest's store (the config's `store.dir`, else `<target>/nextest`), the
 /// profile, then the report's name ([`config_text`]).
-fn report_path(root: &Path) -> Option<PathBuf> {
+pub(crate) fn report_path(root: &Path) -> Option<PathBuf> {
     let text = super::cover::wrapper_experimental(root).ok()?;
     let doc: toml_edit::DocumentMut = text.parse().ok()?;
     let store = doc

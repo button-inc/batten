@@ -2925,6 +2925,15 @@ pub(crate) const STEP_ARG: FlagDecl = FlagDecl {
     )
 };
 
+/// `--shards <n>` on `step run` (CLOUD-2843): a journaled nextest miss runs
+/// as one archive and `n` partitions over it, recorded only where they cover
+/// the archive's list. Never key material, so a flag rather than a row field.
+pub(crate) const STEP_SHARDS: FlagDecl = FlagDecl::valued(
+    "shards",
+    "shards",
+    "Run a journaled nextest miss as this many partitions of one archive (a positive integer; default: 1)",
+);
+
 /// The group `step graph run` schedules, as the step table's `group` names it.
 pub(crate) const STEP_GROUP: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
@@ -7391,7 +7400,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
-        flags: &[STEP_NAME, STEP_ARG, STEP_COMMAND],
+        flags: &[STEP_NAME, STEP_ARG, STEP_SHARDS, STEP_COMMAND],
     },
     // The step graph (CLOUD-2785): the order and fan width a lap used to spell
     // as positions in a mise array, read from the step table's `group`,
