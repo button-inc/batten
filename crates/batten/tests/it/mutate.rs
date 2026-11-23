@@ -3814,15 +3814,47 @@ fn this_repositorys_own_census_is_closed() {
     // What makes every fixture above evidence about THIS repository. A tree
     // whose census is open is a gate covered by nothing stronger than "its suite
     // is green", which CLOUD-418 measured as insufficient four times.
+    //
+    // THE SET IS THE COMMITTED `[mutate]` TABLE, run with `$MUTANT_GATES`
+    // unset (CLOUD-2010). Read from the variable, the census had no table, so
+    // its declaration arm never ran and the file-path gates (`action.yml`,
+    // `hk.pkl`, the workflows) were swept but never censused: a new file with
+    // rows that nobody enrolled read as nothing rather than `uncovered`.
     let root = common::at_root(".")
         .canonicalize()
         .expect("this checkout is where the manifest says it is");
-    let set = fs::read_to_string(root.join("mise.toml")).expect("the manifest reads");
-    let declared = set
-        .lines()
-        .find_map(|line| line.strip_prefix("MUTANT_GATES = \""))
-        .and_then(|rest| rest.strip_suffix('"'))
-        .expect("the manifest declares the enforced set");
-    let (code, out, err) = census(&root, declared);
+    let config: toml::Table = fs::read_to_string(root.join("batten.toml"))
+        .expect("the authority reads")
+        .parse()
+        .expect("the authority parses");
+    let gates = config
+        .get("mutate")
+        .and_then(|table| table.get("gates"))
+        .and_then(toml::Value::as_array)
+        .expect("the committed authority declares `[mutate] gates`");
+    assert!(
+        gates.iter().any(|gate| gate.as_str() == Some("action.yml")),
+        "the file-path gates are in the committed set"
+    );
+    let manifest = fs::read_to_string(root.join("mise.toml")).expect("the manifest reads");
+    assert!(
+        !manifest
+            .lines()
+            .any(|line| line.starts_with("MUTANT_GATES =")),
+        "one committed authority: the manifest no longer restates the set"
+    );
+    let answer = common::batten()
+        .args(["mutate", "census"])
+        .current_dir(&root)
+        .env_remove("MUTANT_GATES")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_PRESETS", "crates/batten/src/policy/presets")
+        .streamed_output()
+        .expect("run batten mutate");
+    let (code, out, err) = (
+        answer.status.code().unwrap_or(-1),
+        stdout(&answer),
+        stderr(&answer),
+    );
     assert_eq!(code, 0, "{out}{err}");
 }
