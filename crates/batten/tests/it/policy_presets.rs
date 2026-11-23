@@ -16,6 +16,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use batten::preset::ManifestExt as _;
+use batten::preset::PresetModuleExt as _;
 use std::fs;
 use std::path::PathBuf;
 
@@ -1462,7 +1463,8 @@ fn an_excepted_module_lets_a_local_copy_load_without_collision() {
     // own inline patterns.
     let copied = format!(
         "# batten-ejected: claude-code-cloud/dispatch-is-preapproved version {}\n{}",
-        manifest.version, dispatch.source
+        manifest.version,
+        dispatch.text()
     );
     fs::write(root.join("dispatch.rego"), &copied).expect("write the copy");
     let copy: Rule = serde_json::from_value(serde_json::json!({

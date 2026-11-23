@@ -1436,14 +1436,16 @@ fn provider_repair(reads: &[&str]) -> String {
 /// Each source `batten preset eject` wrote, keyed by path, to the vendored
 /// module source its header names (CLOUD-2290). A header naming nothing this
 /// binary ships maps to nothing, so it exempts nothing.
-fn ejected_originals(sources: &[(String, String)]) -> BTreeMap<String, &'static str> {
+fn ejected_originals(
+    sources: &[(String, String)],
+) -> BTreeMap<String, std::borrow::Cow<'static, str>> {
     sources
         .iter()
         .filter_map(|(path, text)| {
             let (preset, module, _) = crate::preset::ejected_from(text)?;
             let original = crate::preset_catalog::find(&preset)?
                 .module(&module)?
-                .source;
+                .text();
             Some((path.clone(), original))
         })
         .collect()
@@ -4329,7 +4331,7 @@ fn check_patterns(
     declared: &BTreeSet<&str>,
     source: &str,
     // Module path to the VENDORED source it was ejected from (CLOUD-2290).
-    vendored: &BTreeMap<String, &'static str>,
+    vendored: &BTreeMap<String, std::borrow::Cow<'static, str>>,
 ) -> Result<()> {
     let Some(described) = bundle.described() else {
         // Could-not-look on the AST is not a refusal, for the reason the sibling
@@ -6182,7 +6184,7 @@ rules contains not_quoted\n";
         ]);
         assert_eq!(
             originals,
-            BTreeMap::from([("policy/git/copy.rego".to_owned(), module.source)])
+            BTreeMap::from([("policy/git/copy.rego".to_owned(), module.text())])
         );
     }
 
@@ -6648,19 +6650,19 @@ violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects
                 scope: crate::preset_catalog::RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:mixed>/t1.rego",
-                source: "package t1\n",
+                embedded_source: "package t1\n",
             },
             crate::preset_catalog::PresetModule {
                 scope: crate::preset_catalog::RuleScope::Tree,
                 provider: Some("github"),
                 pointer: "<preset:mixed>/t2.rego",
-                source: "package t2\n",
+                embedded_source: "package t2\n",
             },
             crate::preset_catalog::PresetModule {
                 scope: crate::preset_catalog::RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:mixed>/m.rego",
-                source: "package m\n",
+                embedded_source: "package m\n",
             },
         ],
         verdicts: &[],
