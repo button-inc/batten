@@ -25988,7 +25988,9 @@ fn write_records_for(
         .get("command")
         .and_then(serde_json::Value::as_str)
         .and_then(hook::mediated_mcp_call);
-    let selected_tool = mediated.as_ref().map_or(raw_tool, |(tool, _)| tool.as_str());
+    let selected_tool = mediated
+        .as_ref()
+        .map_or(raw_tool, |(tool, _)| tool.as_str());
     let Some(result) = facts::payload_in(raw) else {
         return;
     };
