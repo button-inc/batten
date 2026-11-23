@@ -110,7 +110,10 @@ impl Inventory {
             let inner = body.get("internal_anthropic_catchall").unwrap_or(body);
             match kind {
                 "system" => self.fold_system(inner),
-                "user" if self.handoff => self.prompted = true,
+                // Unguarded on purpose: a `user` event before any handoff sets
+                // `prompted`, and the handoff that follows resets it, so only a
+                // `user` event AFTER the latest handoff survives to be read.
+                "user" => self.prompted = true,
                 _ => {}
             }
         }
@@ -330,10 +333,12 @@ impl Cache {
     }
 
     fn file(&self, session: &str) -> Option<PathBuf> {
-        session
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-            .then(|| self.dir.join(format!("{session}.json")))
+        // Non-empty: an empty id would name the file `.json`, which no session is.
+        (!session.is_empty()
+            && session
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
+        .then(|| self.dir.join(format!("{session}.json")))
     }
 
     /// The kept reduction, or `None` on any miss — absent, evicted, torn.
@@ -444,8 +449,9 @@ impl Report {
     }
 }
 
-/// How a watch ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How a watch ended, ordered by precedence: one dead child is the answer
+/// whatever else ended, so `Dead` is declared last and outranks `Done`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Ending {
     /// Nothing to watch: no unarchived child, or none of the named sessions.
     /// A statement about the invocation, since waiting on it would never end.
@@ -553,24 +559,6 @@ impl Watch {
     }
 }
 
-impl PartialOrd for Ending {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Ending {
-    /// `Dead` outranks `Done`: one dead child is the answer whatever else ended.
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let rank = |ending: &Self| match ending {
-            Self::Nothing => 0,
-            Self::Done => 1,
-            Self::Dead => 2,
-        };
-        rank(self).cmp(&rank(other))
-    }
-}
-
 /// The first delay between polls, doubled each poll up to [`MAX_DELAY`].
 pub const FIRST_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 /// The longest delay between polls.
@@ -612,35 +600,59 @@ impl Mcp {
         Self { wiring }
     }
 
+    /// The one live step: dispatch, then [`page_of_result`]. Everything it
+    /// decides is in that function and the two argument builders, which the
+    /// suite drives over recorded answers; this wrapper is the transport alone.
     fn call(&self, method: &str, arguments: &Value) -> Option<Page> {
         let params = serde_json::json!({"name": method, "arguments": arguments});
         let result = crate::mcp::dispatch(&self.wiring, "tools/call", &params).ok()?;
-        if crate::mcp::failed(&result) {
-            return None;
-        }
-        Page::of(&document(&crate::mcp::payload(&result).value)?)
+        page_of_result(&result)
     }
 }
 
 impl Source for Mcp {
     fn sessions(&mut self, after: Option<&str>) -> Option<Page> {
-        let mut arguments = serde_json::json!({"children": true, "limit": PAGE});
-        if let Some(after) = after {
-            arguments["after_id"] = Value::from(after);
-        }
-        self.call(LIST_SESSIONS, &arguments)
+        self.call(LIST_SESSIONS, &sessions_arguments(after))
     }
 
     fn events(&mut self, session: &str, before: Option<&str>, after: Option<&str>) -> Option<Page> {
-        let mut arguments = serde_json::json!({"session_id": session, "limit": PAGE});
-        if let Some(before) = before {
-            arguments["before_id"] = Value::from(before);
-        }
-        if let Some(after) = after {
-            arguments["after_id"] = Value::from(after);
-        }
-        self.call(LIST_EVENTS, &arguments)
+        self.call(LIST_EVENTS, &events_arguments(session, before, after))
     }
+}
+
+/// The `list_sessions` arguments for one page of the caller's children.
+#[must_use]
+pub fn sessions_arguments(after: Option<&str>) -> Value {
+    let mut arguments = serde_json::json!({"children": true, "limit": PAGE});
+    if let Some(after) = after {
+        arguments["after_id"] = Value::from(after);
+    }
+    arguments
+}
+
+/// The `list_events` arguments for one page of `session`'s transcript.
+#[must_use]
+pub fn events_arguments(session: &str, before: Option<&str>, after: Option<&str>) -> Value {
+    let mut arguments = serde_json::json!({"session_id": session, "limit": PAGE});
+    if let Some(before) = before {
+        arguments["before_id"] = Value::from(before);
+    }
+    if let Some(after) = after {
+        arguments["after_id"] = Value::from(after);
+    }
+    arguments
+}
+
+/// The page a `tools/call` result carries: `None` for a result the server
+/// marked failed or one whose payload carries no page — could-not-look, never
+/// an empty page, because an empty transcript and an unread one must not read
+/// alike.
+#[must_use]
+pub fn page_of_result(result: &Value) -> Option<Page> {
+    if crate::mcp::failed(result) {
+        return None;
+    }
+    Page::of(&document(&crate::mcp::payload(result).value)?)
 }
 
 /// The hook event a child's ending dispatches (CLOUD-2826): `session.done`,
