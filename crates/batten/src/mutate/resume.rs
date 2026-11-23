@@ -107,7 +107,10 @@ pub fn journaled(root: &Path, command: &[String]) -> Result<Vec<String>> {
     clear_report(root);
     // THE SELECTION IS AN ECONOMY: a store that cannot be read or a digest
     // that cannot be taken leaves every case on the build key, never a skip.
-    let _ = select(root, &state, &resources, command);
+    let held = select(root, &state, &resources, command).ok();
+    // WHAT THE SELECTION HELD, for the seed to weigh against what passed
+    // ([`seed`]); a selection that could not be made held nothing.
+    let _ = crate::durable::replace(state.join(HELD), held.unwrap_or(0).to_string());
     wrap(root, &state, &inputs, command)
 }
 
@@ -774,6 +777,180 @@ pub fn promote_pending(state: &Path, stood: bool) -> Result<usize> {
     }
     std::fs::remove_dir_all(&pending)?;
     Ok(promoted)
+}
+
+/// Under the run state: how many cases this run's selection held ([`select`]).
+const HELD: &str = "held";
+
+/// Under the run state: a reach seed is owed and waits for the lap that holds
+/// the land singleton to end ([`lap_ended`]).
+const SEED_PENDING: &str = "seed-pending";
+
+/// The variable that makes `batten mutate cargo` the reach seed: the reach
+/// phase over every workspace package, not a change's (CLOUD-2842).
+pub const SEED_ENV: &str = "BATTEN_REACH_SEED";
+
+/// The singleton and registry name a running seed holds, so two never stack
+/// and a lap can find the one to preempt.
+pub const SEED_TASK: &str = "reach-seed";
+
+/// The singleton a landing lap holds (`batten land lap`).
+const LAND_TASK: &str = "land";
+
+/// What [`seed`] did after a passing journaled run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seeded {
+    /// On CI: no reader restores the store there, so a seed spends metered
+    /// minutes for nothing.
+    NotOnCi,
+    /// Inside a reach or sweep run, or a seed itself: a nested seed would
+    /// sweep a fixture and stack under the running one.
+    Nested,
+    /// The selection held every case that passed: nothing to seed.
+    Covered,
+    /// A lap holds the land singleton: the seed waits for it to end.
+    Deferred,
+    /// The seed was spawned detached, or one already runs.
+    Spawned,
+}
+
+/// After a passing journaled run in the checkout at `root`: seed the reach
+/// store when the selection held fewer cases than the run passed, so the next
+/// head selects what this one could not (CLOUD-2842).
+///
+/// AN ECONOMY, NEVER A VERDICT: whatever it decides, the step's exit stands,
+/// and a seed that fails leaves the selection as it was, which re-runs.
+#[must_use]
+pub fn seed(root: &Path) -> Seeded {
+    if on_ci() {
+        return Seeded::NotOnCi;
+    }
+    if nested() {
+        return Seeded::Nested;
+    }
+    let Ok(state) = crate::state::repo_state_dir(root).map(|dir| dir.join("test-run")) else {
+        return Seeded::Covered;
+    };
+    let held = crate::fsio::read_to_string(state.join(HELD))
+        .ok()
+        .and_then(|held| held.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    let passed = report_path(root)
+        .and_then(|report| crate::fsio::read_to_string(report).ok())
+        .and_then(|xml| passed_cases(&xml))
+        .unwrap_or(0);
+    if held >= passed {
+        return Seeded::Covered;
+    }
+    request_seed(root)
+}
+
+/// Whether this process runs on CI: `CI` set to anything but empty.
+fn on_ci() -> bool {
+    std::env::var_os("CI").is_some_and(|ci| !ci.is_empty())
+}
+
+/// Whether this process runs inside a reach or sweep run, or is a seed.
+fn nested() -> bool {
+    [SEED_ENV, schema::REACH, schema::RECORD, schema::ACTIVE]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+}
+
+/// Spawn the seed, or leave it owed while a lap holds the land singleton.
+fn request_seed(root: &Path) -> Seeded {
+    let Ok(git_dir) = crate::git::git_dir(root) else {
+        return Seeded::Covered;
+    };
+    if lap_live(root) {
+        return Seeded::Deferred;
+    }
+    if batten_base::task::singleton_holder(&git_dir, SEED_TASK).is_some() {
+        return Seeded::Spawned;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return Seeded::Covered;
+    };
+    crate::exec::detached(
+        &exe,
+        &[String::from("mutate"), String::from("cargo")],
+        &[(SEED_ENV, "1"), (schema::PHASE, "reach")],
+    );
+    Seeded::Spawned
+}
+
+/// Whether a lap holds the land singleton in the checkout at `root`; when one
+/// does, the seed is left owed ([`lap_ended`] spawns it).
+#[must_use]
+pub fn lap_live(root: &Path) -> bool {
+    let Ok(git_dir) = crate::git::git_dir(root) else {
+        return false;
+    };
+    if batten_base::task::singleton_holder(&git_dir, LAND_TASK).is_none() {
+        return false;
+    }
+    if let Ok(state) = crate::state::repo_state_dir(root).map(|dir| dir.join("test-run")) {
+        let _ = std::fs::create_dir_all(&state);
+        let _ = crate::durable::replace(state.join(SEED_PENDING), "");
+    }
+    true
+}
+
+/// A landing lap in the checkout at `root` released the land singleton: spawn
+/// the seed a run during it left owed. `None` when none was owed.
+#[must_use]
+pub fn lap_ended(root: &Path) -> Option<Seeded> {
+    let state = crate::state::repo_state_dir(root).ok()?.join("test-run");
+    std::fs::remove_file(state.join(SEED_PENDING)).ok()?;
+    if on_ci() {
+        return Some(Seeded::NotOnCi);
+    }
+    Some(request_seed(root))
+}
+
+/// A landing lap in the checkout at `root` took the land singleton: end a
+/// running seed's process group and leave the seed owed, so it starts over
+/// once the lap ends. Whether a seed was ended.
+///
+/// THE LAP COMES FIRST: a first seed is a schema build and a whole reach run,
+/// minutes of every core, and the lap's own gates must not queue behind it.
+/// `carry_forward` keeps what the ended seed finished.
+#[must_use]
+pub fn preempt(root: &Path) -> bool {
+    let Ok(git_dir) = crate::git::git_dir(root) else {
+        return false;
+    };
+    let Some(holder) = batten_base::task::singleton_holder(&git_dir, SEED_TASK) else {
+        return false;
+    };
+    // A DETACHED SEED LEADS ITS OWN GROUP (`exec::detached`), so its pid is
+    // the group's id and every build and case it spawned goes with it.
+    let ended = crate::exec::terminate_group(&holder);
+    batten_base::task::unregister(&git_dir, &holder);
+    batten_base::task::singleton_release(&git_dir, SEED_TASK);
+    if let Ok(state) = crate::state::repo_state_dir(root).map(|dir| dir.join("test-run")) {
+        let _ = std::fs::create_dir_all(&state);
+        let _ = crate::durable::replace(state.join(SEED_PENDING), "");
+    }
+    ended
+}
+
+/// How many cases a nextest `JUnit` report names as passed: no `<failure>`,
+/// `<error>` or `<skipped>` child. `None` when it is not XML.
+fn passed_cases(xml: &str) -> Option<usize> {
+    let doc = roxmltree::Document::parse(xml).ok()?;
+    Some(
+        doc.descendants()
+            .filter(|node| node.has_tag_name("testcase"))
+            .filter(|case| {
+                !case.children().any(|child| {
+                    child.has_tag_name("failure")
+                        || child.has_tag_name("error")
+                        || child.has_tag_name("skipped")
+                })
+            })
+            .count(),
+    )
 }
 
 /// Remove every journal under `state` but `keep`.

@@ -12664,6 +12664,11 @@ impl Drop for LandSingleton {
     fn drop(&mut self) {
         task::unregister(&self.git_dir, &self.pid);
         task::singleton_release(&self.git_dir, LAND_TASK);
+        // A REACH SEED OWED DURING THE LAP STARTS NOW (CLOUD-2842), once no
+        // lap holds the lock it waited on.
+        if let Ok(root) = git::repo_root(Path::new(".")) {
+            let _ = mutate::resume::lap_ended(&root);
+        }
     }
 }
 
@@ -12793,9 +12798,15 @@ fn run_land_singleton(
     // THE LOCK. `recheck` is the pause a reclaim needs between two sightings;
     // production takes the default, as `singleton_acquire`'s own doc states.
     match task::singleton_acquire(&git_dir, LAND_TASK, &pid, SINGLETON_RECHECK) {
-        task::Claim::Taken => forget_dispatch(root, &git_dir),
+        task::Claim::Taken => {
+            forget_dispatch(root, &git_dir);
+            // THE LAP COMES FIRST (CLOUD-2842): a reach seed running now is
+            // ended and left owed until this lap releases the lock.
+            let _ = mutate::resume::preempt(root);
+        }
         task::Claim::Reclaimed(corpse) => {
             forget_dispatch(root, &git_dir);
+            let _ = mutate::resume::preempt(root);
             writeln!(
                 out,
                 "land: reclaimed the landing lock from {corpse}, which is gone"
@@ -18458,6 +18469,70 @@ fn run_mutate(
     }
 }
 
+/// The reach seed's hold on its singleton and registry entry, both dropped
+/// however the seed ends.
+struct SeedHold {
+    git_dir: PathBuf,
+    pid: String,
+}
+
+impl Drop for SeedHold {
+    fn drop(&mut self) {
+        task::unregister(&self.git_dir, &self.pid);
+        task::singleton_release(&self.git_dir, mutate::resume::SEED_TASK);
+    }
+}
+
+/// `batten mutate cargo` as the reach seed (CLOUD-2842, `BATTEN_REACH_SEED`):
+/// the reach phase over every mutant of the workspace, not a change's, so a
+/// `step run` with no sweep behind it leaves the next head a selection.
+///
+/// ONE AT A TIME AND NEVER BESIDE A LAP: it holds its own singleton, and a lap
+/// holding the land singleton leaves it owed until that lap ends.
+fn run_reach_seed(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let git_dir = git::git_dir(root)?;
+    let pid = std::process::id().to_string();
+    match task::singleton_acquire(&git_dir, mutate::resume::SEED_TASK, &pid, SINGLETON_RECHECK) {
+        task::Claim::Taken | task::Claim::Reclaimed(_) => {}
+        task::Claim::Held { .. } | task::Claim::CouldNotLook(_) => return Ok(ExitCode::Success),
+    }
+    let _hold = SeedHold {
+        git_dir: git_dir.clone(),
+        pid: pid.clone(),
+    };
+    // A LAP THAT STARTED BETWEEN THE SPAWN AND THIS HOLD keeps the seed owed.
+    if mutate::resume::lap_live(root) {
+        return Ok(ExitCode::Success);
+    }
+    task::register(
+        &git_dir,
+        mutate::resume::SEED_TASK,
+        &pid,
+        "reach",
+        boundary_epoch(),
+    );
+    let Some(runner) = provisioned_binary("cargo-mutants", &Overrides::default()) else {
+        writeln!(
+            err,
+            "::error:: mutate cargo: no [[provision]] row ships cargo-mutants, or it could not be applied; run `batten provision apply`"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let listed_over = mutate::cover::source_digest(root)?;
+    let listed = mutate::list_mutants(root, &runner, None)?;
+    writeln!(
+        out,
+        "mutate cargo: reach seed over {} mutant(s) of the workspace",
+        listed.len()
+    )?;
+    let scope = mutate::schema::Scope {
+        shard: None,
+        phase: mutate::schema::Phase::Reach,
+    };
+    let swept = mutate::schema::sweep(root, &listed, &listed_over, (1, scope), None, out)?;
+    Ok(mutate::schema::exit_of(swept.code))
+}
+
 /// `batten mutate cargo`: every mutant cargo-mutants makes of the change since
 /// `$MUTANT_CHANGED_SINCE`, judged in one schema build (`mutate::schema`), and
 /// the ones the schema hands back judged inside the sweep by cargo-mutants in
@@ -18467,6 +18542,11 @@ fn run_mutate(
 /// The disk floor is the collector's own, so the jobs never spend the room it
 /// exists to keep.
 fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    // THE REACH SEED IS DETACHED ON PURPOSE (CLOUD-2842): it outlives the step
+    // that spawned it, so it is dispatched before the orphan watch below.
+    if std::env::var_os(mutate::resume::SEED_ENV).is_some() {
+        return run_reach_seed(root, out, err);
+    }
     // AN ORPHANED SWEEP ENDS ITSELF (CLOUD-2854), its suites and its lock too.
     mutate::watch_parent();
     // A CHANGE OR THE WHOLE WORKSPACE, NEVER BOTH (CLOUD-2849): a schedule that
