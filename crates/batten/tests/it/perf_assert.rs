@@ -218,12 +218,10 @@ pub(crate) fn agreeing_readme() -> String {
 
 /// The default commit-time hook steps `perf measure` times in its commit fixture
 /// (CLOUD-2789), each budgeted like any other path.
-pub(crate) const COMMIT_STEPS: [&str; 8] = [
+pub(crate) const COMMIT_STEPS: [&str; 6] = [
     "cargo-fmt",
     "taplo",
     "taplo-format",
-    "config-lint-pinned",
-    "cfg-gated-test-pinned",
     "merge-conflict-markers",
     "conventional-commit",
     "commit-attribution",

@@ -562,8 +562,19 @@ local gate = new Mapping<String, Step> {
     profiles = List("slow")
     glob = schema_bound_toml
   }
+  // THE FORMATTER SPLITS ALONG THE SAME LINE (CLOUD-2852). `taplo format --check`
+  // over `batten.toml` and the unbound TOML measured 101 ms p50 / 129 ms p95 in
+  // `perf`'s commit fixture, and `batten.toml` is the cost for `taplo`'s reason
+  // above. The commit formats the unbound TOML; the schema-bound files are
+  // format-checked in `slow`, which `verify` reaches before anything lands.
   ["taplo-format"] = (Builtins.taplo_format) {
     depends = List("taplo")
+    exclude = schema_bound_toml
+  }
+  ["taplo-format-schema"] = (Builtins.taplo_format) {
+    profiles = List("slow")
+    depends = List("taplo-schema")
+    glob = schema_bound_toml
   }
   // `pkl eval` is the only thing that proves this file is valid. Without it a
   // malformed hk.pkl surfaces when a hook tries to run — the worst possible
@@ -1124,6 +1135,14 @@ hooks {
   // commit pay a compile (CLOUD-1397). The PINNED engine pays none: these steps
   // call it directly, as `filed-here:guard` does before every write, so the
   // refusal lands on the commit that introduced the weakening.
+  //
+  // TWO OF THEM COULD NOT STAY THERE, MEASURED (CLOUD-2852). A commit step answers
+  // to the 100 ms hook ceiling, and `perf`'s commit fixture timed
+  // `config-lint-pinned` at 2,872 ms p50 / 3,631 ms p95 (the whole 19k-line
+  // config loaded and linted) and `cfg-gated-test-pinned` at 407 ms / 519 ms
+  // (the staged sources judged against the trunk). Neither cost is a constant a
+  // patch removes, so both are `slow`: `verify` reaches them before anything
+  // lands, and the weakening is refused at the landing rather than at its commit.
   ["pre-commit"] {
     // Check only what is staged, and never let a fixer clobber unstaged work:
     // hk stashes the working tree, runs the steps, then restores it via
@@ -1132,10 +1151,12 @@ hooks {
     stash = "patch-file"
     steps = (gate) {
       ["config-lint-pinned"] {
+        profiles = List("slow")
         glob = List("batten.toml", ".batten/asked.jsonl")
         check = "batten config lint"
       }
       ["cfg-gated-test-pinned"] {
+        profiles = List("slow")
         glob = List("**/*.rs")
         // `--staged`: the module reads the staged `.rs` files' lines, never the
         // whole tree's (CLOUD-2789: 4.4 s p50 over every tracked file).

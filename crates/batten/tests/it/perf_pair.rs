@@ -687,8 +687,6 @@ fn a_measurement_times_every_path_off_its_release_build() {
         "cargo-fmt-worst",
         "taplo",
         "taplo-format",
-        "config-lint-pinned",
-        "cfg-gated-test-pinned",
         "merge-conflict-markers",
         "conventional-commit",
         "commit-attribution",

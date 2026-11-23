@@ -19243,10 +19243,23 @@ fn commit_arm_sequencing(
 ///
 /// `None` when either side is unparseable, which leaves the commit unjudged
 /// rather than reading every arm the head declares as introduced.
+///
+/// # No arm-shaped line moved, nothing to parse (CLOUD-2852)
+///
+/// Two full parses of a 19k-line config were half of `commit check --message`
+/// (`introduced_arms` 40% inclusive, 124 ms p95 against the 100 ms commit
+/// ceiling), on commits that touched no conserves table. A token is spendable
+/// only through a line that names an arm key or `conserves`, under a table
+/// header, outside a multi-line string, so when that ordered skeleton is the
+/// same on both sides the token set is too, and the answer is the empty map
+/// without either parse.
 fn introduced_arms(
     before: &str,
     after: &str,
 ) -> Option<std::collections::BTreeMap<String, String>> {
+    if arm_skeleton(before).eq(arm_skeleton(after)) {
+        return Some(std::collections::BTreeMap::new());
+    }
     let held = conserves_arms(before, "the parent revision's batten.toml")?;
     Some(
         conserves_arms(after, crate::config_model::CONFIG_FILE)?
@@ -19255,6 +19268,23 @@ fn introduced_arms(
             .map(|(token, pointer)| (pointer, token))
             .collect(),
     )
+}
+
+/// The lines of a config that can decide which `[rule.conserves]` arm tokens it
+/// declares, in order: every table header, every line naming `conserves` or an
+/// arm key (bare or quoted, so an inline or dotted spelling is kept too), and
+/// every multi-line string delimiter, which changes how the lines between are
+/// read. Comment lines are dropped: they declare nothing.
+fn arm_skeleton(text: &str) -> impl Iterator<Item = &str> {
+    const ARM_KEYS: [&str; 5] = ["carried", "subsumed", "changed", "withdrawn", "ported"];
+    text.lines().map(str::trim).filter(|line| {
+        let key = line.trim_start_matches(['"', '\'']);
+        line.starts_with('[')
+            || line.contains("conserves")
+            || line.contains("'''")
+            || line.contains("\"\"\"")
+            || ARM_KEYS.iter().any(|arm| key.starts_with(arm))
+    })
 }
 
 /// One commit's two sets, resolved.
@@ -32919,6 +32949,55 @@ mod mutation_markers;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// A config change no arm-shaped line moved is answered without a parse:
+    /// two texts no build can parse, differing only in a comment and a plain
+    /// key, come back as "nothing introduced" rather than could-not-look.
+    ///
+    /// Fails by: the skeleton comparison removed, so both sides are parsed
+    /// again on every commit (CLOUD-2852: 124 ms p95 at the commit), and this
+    /// reads `None`.
+    #[test]
+    fn an_unchanged_arm_skeleton_skips_the_parse() {
+        let before = "[[rule]\nid = \"a b c\"\n# one\nreason = \"x\"\n";
+        let after = "[[rule]\nid = \"a b c\"\n# two\nreason = \"y\"\n";
+        assert_eq!(
+            super::introduced_arms(before, after),
+            Some(std::collections::BTreeMap::new())
+        );
+    }
+
+    /// Every line that can move a conserves token is in the skeleton: an arm
+    /// key, bare or quoted, a `conserves` table or key, a header, and a
+    /// multi-line string delimiter.
+    ///
+    /// Fails by: any one of the skeleton's arms dropped, which lets a commit
+    /// introducing an arm through that spelling read as unchanged and skip the
+    /// comparison that would refuse it.
+    #[test]
+    fn every_arm_shaped_line_is_in_the_skeleton() {
+        let base = "[[rule]]\nid = \"a b c\"\n";
+        for added in [
+            "carried = \"t\"",
+            "subsumed = \"t\"",
+            "changed = \"t\"",
+            "withdrawn = \"t\"",
+            "ported = \"t\"",
+            "\"carried\" = \"t\"",
+            "conserves = { carried = \"t\" }",
+            "[rule.conserves]",
+            "reason = '''",
+            "reason = \"\"\"",
+        ] {
+            let after = format!("{base}{added}\n");
+            assert!(
+                !super::arm_skeleton(base).eq(super::arm_skeleton(&after)),
+                "{added} must be in the skeleton"
+            );
+        }
+        let commented = format!("{base}# carried = \"t\"\n");
+        assert!(super::arm_skeleton(base).eq(super::arm_skeleton(&commented)));
+    }
 
     #[cfg(test)]
     /// A split request carries the half and the keyed bases it was split on,

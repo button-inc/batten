@@ -1476,7 +1476,9 @@ const COMMIT_EMAIL: &str = "perf@example.invalid";
 /// through alternates), because this module spawns no `git`.
 fn stage_commit(repo: &Path, out: &Path, toml: &str) -> Result<PathBuf> {
     // THE TRUNK REF IS A PRECONDITION, refused here rather than discovered by
-    // hyperfine (CLOUD-2789). `cfg-gated-test-pinned` judges the branch against
+    // hyperfine (CLOUD-2789). `cfg-gated-test-pinned`, timed here until it moved
+    // to `slow` (CLOUD-2852) and still profiled in this fixture by
+    // `mise run profile`, judges the branch against
     // `origin/main`, which the clone carries only where the checkout resolves it;
     // without it the step denies "diff read absent", exits 2 on the first warmup,
     // and hyperfine aborts the whole run naming the arm, not the missing ref.
@@ -1529,12 +1531,14 @@ fn stage_commit(repo: &Path, out: &Path, toml: &str) -> Result<PathBuf> {
 /// (CLOUD-2789), each as hk runs it, with `batten` the binary under measurement.
 ///
 /// **READ OFF `hk run pre-commit --plan`, NOT GUESSED**: on that commit the plan
-/// includes exactly `cargo-fmt`, `taplo`, `taplo-format`, `config-lint-pinned`,
-/// `cfg-gated-test-pinned` and `merge-conflict-markers`; `commit-msg` runs both
-/// of its steps on every commit. `taplo`'s two are hk builtins whose argv is
-/// `taplo lint {{files}}` / `taplo format --check --diff {{files}}` under
-/// `RUST_LOG=warn`. A commit hook is a batten hook and answers to the same
-/// 100 ms ceiling, which `perf-assert` holds each of these to.
+/// includes exactly `cargo-fmt`, `taplo`, `taplo-format` and
+/// `merge-conflict-markers`; `commit-msg` runs both of its steps on every
+/// commit. `config-lint-pinned` and `cfg-gated-test-pinned` were in it until
+/// they measured 29x and 5x the ceiling and moved to `slow` (CLOUD-2852).
+/// `taplo`'s two are hk builtins whose argv is `taplo lint {{files}}` /
+/// `taplo format --check --diff {{files}}` under `RUST_LOG=warn`. A commit hook
+/// is a batten hook and answers to the same 100 ms ceiling, which `perf-assert`
+/// holds each of these to.
 ///
 /// `cargo-fmt-worst` is no step: it is `cargo-fmt` over [`COMMIT_WORST`], so the
 /// cost of the commit that stages the largest file is on the record, unbudgeted.
@@ -1564,9 +1568,9 @@ fn commit_arms(bin: &str, toml: &str) -> Vec<(&'static str, Vec<String>)> {
     vec![
         ("cargo-fmt", rustfmt(COMMIT_SOURCE)),
         ("cargo-fmt-worst", rustfmt(COMMIT_WORST)),
-        // `taplo` skips the schema-bound `batten.toml` at the commit (its lint
-        // runs as the `slow` `taplo-schema` step), so its staged set is the
-        // unbound TOML; `taplo-format` formats every staged TOML in one process.
+        // Both taplo steps skip the schema-bound `batten.toml` at the commit
+        // (`taplo-schema` and `taplo-format-schema` run it in `slow`,
+        // CLOUD-2852), so their staged set is the unbound TOML.
         (
             "taplo",
             words(&["env", "RUST_LOG=warn", "taplo", "lint", toml]),
@@ -1580,14 +1584,8 @@ fn commit_arms(bin: &str, toml: &str) -> Vec<(&'static str, Vec<String>)> {
                 "format",
                 "--check",
                 "--diff",
-                "batten.toml",
                 toml,
             ]),
-        ),
-        ("config-lint-pinned", batten(&["config", "lint"])),
-        (
-            "cfg-gated-test-pinned",
-            batten(&["check", "--staged", "--rule", "test cover missing"]),
         ),
         (
             "merge-conflict-markers",
