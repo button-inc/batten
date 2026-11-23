@@ -12070,6 +12070,7 @@ gates = [
   "task-verify",
   "task-alive",
   "task-mutant",
+  "task-mutant:rust",
   ".github/workflows/release-plz.yml",
   ".github/workflows/release-land.yml",
   ".github/workflows/release-artifacts.yml",
