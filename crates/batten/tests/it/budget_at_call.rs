@@ -173,6 +173,22 @@ fn a_glob_set_judges_bytes_but_not_totals_at_the_call() {
     );
 }
 
+/// A set with an `embedded` entry does not judge `max_tokens` at the call: the
+/// key's string is a parsed document (`Surface::Check`), so `check` judges it.
+#[test]
+fn a_set_with_an_embedded_entry_does_not_judge_max_tokens_at_the_call() {
+    let dir = fixture(
+        "budget-embedded",
+        "version = 1\n\n[budget.always]\nfiles = [\"CLAUDE.md\"]\nmax_tokens = 1\n\n[[budget.always.embedded]]\npath = \"host.toml\"\nkey = \"prompt\"\n",
+        &[("CLAUDE.md", CONTRACT), ("host.toml", "prompt = \"hi\"\n")],
+    );
+    let grown = format!("One line of rules.{}", " more words".repeat(4));
+    assert!(
+        denied(&edit(&dir, "CLAUDE.md", "One line of rules.", &grown)).is_none(),
+        "an embedded set's totals are not judged at the call"
+    );
+}
+
 #[test]
 fn a_missing_literal_member_leaves_the_totals_unjudged() {
     let dir = fixture(
