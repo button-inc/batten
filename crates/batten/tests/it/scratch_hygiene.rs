@@ -210,6 +210,44 @@ fn a_run_in_another_checkout_defers_only_the_shared_root() {
     );
 }
 
+/// A RUN IN ANOTHER CHECKOUT SHARING THIS TARGET DIR IS A RUN HERE (#1276).
+///
+/// Measured on #1276: two agents' clones shared one absolute `CARGO_TARGET_DIR`,
+/// and each one's collector judged "here" by the other run's working directory
+/// alone, so it deleted `target/tmp` under the other's live cases, which then
+/// read their scratch as empty. The owner of `target/tmp` is the target dir, so
+/// a run whose `CARGO_TARGET_DIR` resolves to this one defers it.
+///
+/// Fails by: the collector comparing working directories only, so the sentinel
+/// is taken while the sharing run is alive.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the other run is a real process whose environment `/proc` reports"
+)]
+fn a_run_sharing_this_target_dir_from_another_checkout_defers_it() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let root = crate::common::scratch("clear-scratch-shared-target");
+    let elsewhere = root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let mut other = std::process::Command::new("sleep")
+        .arg("60")
+        .current_dir(&elsewhere)
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .spawn()
+        .expect("start the sharing run");
+    let (survived, published) = collect_seeded_at(&root, &other.id().to_string(), &["tmp"]);
+    let _ = other.kill();
+    let _ = other.wait();
+    assert_eq!(
+        survived,
+        vec![true],
+        "a live run on this target dir keeps its scratch: {published}"
+    );
+}
+
 /// The committed `clear-scratch` command, exactly as nextest runs it.
 fn collector_command() -> String {
     let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
@@ -252,7 +290,17 @@ fn line_of(published: &str, key: &str) -> String {
     reason = "stays, and test-only: the subject is the shell command nextest runs, so asserting it means running `sh`"
 )]
 fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, String) {
-    let root = crate::common::scratch(name);
+    collect_seeded_at(&crate::common::scratch(name), others, seeds)
+}
+
+/// [`collect_seeded`] over a fixture root the caller already made, so a case can
+/// point another process at its target dir before the collector runs.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the subject is the shell command nextest runs, so asserting it means running `sh`"
+)]
+fn collect_seeded_at(root: &std::path::Path, others: &str, seeds: &[&str]) -> (Vec<bool>, String) {
+    let root = root.to_path_buf();
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let stub = bin.join("pgrep");
