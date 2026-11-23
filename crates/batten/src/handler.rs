@@ -1073,6 +1073,20 @@ mod tests {
         assert!(!selects(&rows, Event::PostTool, &["pull_request.opened"]));
     }
 
+    /// A row on `child-session` selects a child's ending by name (CLOUD-2826),
+    /// through the same matcher column a `forge` row uses: one that wants
+    /// `session.dead` is not woken by a child that finished.
+    #[test]
+    fn a_child_session_handler_selects_its_ending_only() {
+        let mut row = handler("child-dead", "child-session", &["true"]);
+        row.matcher = Some("^session\\.dead$".to_owned());
+        let rows = [row];
+        assert!(validate(&rows).is_ok(), "{:?}", validate(&rows));
+        assert!(selects(&rows, Event::ChildSession, &["session.dead"]));
+        assert!(!selects(&rows, Event::ChildSession, &["session.done"]));
+        assert!(!selects(&rows, Event::Forge, &["session.dead"]));
+    }
+
     fn handler(id: &str, on: &str, run: &[&str]) -> Handler {
         Handler {
             id: id.to_owned(),

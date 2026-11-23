@@ -7761,6 +7761,12 @@ pub enum Event {
     /// registers it; `forge intake` is its door. Its verdict is a finding about
     /// something that already happened, as on `post-tool`.
     Forge,
+    /// A child session this one dispatched reached an end (CLOUD-2826):
+    /// `session.done`, `session.dead` or `session.unstarted`, from
+    /// `batten session watch`. A harness-provider lifecycle source
+    /// (CLOUD-1728's taxonomy) no host emits, so, like [`Event::Forge`], no
+    /// wiring registers it. Appended for the discriminant reason above.
+    ChildSession,
 }
 
 /// What batten does about one name in a [`HookSource`]'s vocabulary.
