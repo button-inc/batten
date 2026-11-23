@@ -160,3 +160,25 @@ fn a_quoted_mention_is_not_an_invocation() {
     // re-derived: prose naming the variable is not a command setting it.
     allowed("echo 'set HK_SKIP_STEPS=x to skip a step'");
 }
+
+#[test]
+fn a_plumbing_commit_is_refused() {
+    // CLOUD-2847, the measured route: a refused worktree pushed a subagent onto
+    // `merge-tree` / `commit-tree` / `update-ref`, and 18 commits reached pushed
+    // branches without one commit-time hook running.
+    denied_by_this_row("git commit-tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904 -p HEAD -m x");
+    denied_by_this_row("cd /tmp && git -C /tmp/clone commit-tree 4b825dc -m x");
+}
+
+#[test]
+fn a_branch_ref_written_by_hand_is_refused() {
+    denied_by_this_row("git update-ref refs/heads/feat 4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+}
+
+#[test]
+fn plumbing_that_mints_no_branch_commit_is_left_alone() {
+    // ANTI-VACUITY for the two clauses above: reading a log that names the
+    // command, and moving a ref outside `refs/heads/`, mint no unjudged commit.
+    allowed("git log --grep commit-tree");
+    allowed("git update-ref refs/notes/x 4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+}
