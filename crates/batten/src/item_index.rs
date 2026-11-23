@@ -39,6 +39,9 @@ struct Module {
     declared: BTreeMap<String, String>,
     /// `use` aliases: the name visible here to the path it stands for.
     aliases: BTreeMap<String, Vec<String>>,
+    /// Each `use p::*;` here, as `p` written: a name no declaration or alias
+    /// binds may be one of its target's.
+    globs: Vec<Vec<String>>,
 }
 
 /// Every module of every crate in one tree.
@@ -219,6 +222,18 @@ impl Index {
                                     .into_iter()
                                     .map(|leaf| (leaf.name, leaf.path)),
                             );
+                            if tree.star_token().is_some()
+                                && let Some(path) = tree.path()
+                            {
+                                entry.globs.push(
+                                    path.syntax()
+                                        .text()
+                                        .to_string()
+                                        .split("::")
+                                        .map(|segment| segment.trim().to_owned())
+                                        .collect(),
+                                );
+                            }
                         }
                     }
                     ast::Item::Module(nested) => {
@@ -277,6 +292,14 @@ impl Index {
     /// and how many of its segments that consumed; or `None` when it does not
     /// resolve within `depth` alias hops.
     fn resolve_from(&self, segments: &[String], depth: u8) -> Option<(Key, usize)> {
+        self.resolve_through(segments, depth, false)
+    }
+
+    /// [`Index::resolve_from`], reading through a glob re-export too when
+    /// `globs` is set: only where HEAD's own `use` chain is being followed
+    /// ([`moved_through_uses`]). A canonical reading never does — a glob names
+    /// nothing a reader can see (`a_glob_names_nothing`).
+    fn resolve_through(&self, segments: &[String], depth: u8, globs: bool) -> Option<(Key, usize)> {
         if depth == 0 {
             return None;
         }
@@ -294,7 +317,30 @@ impl Index {
                 let file = self.file_of(krate, &module)?;
                 return Some(((file, segment.clone()), at + 2));
             }
-            let target = here.aliases.get(segment)?;
+            let Some(target) = here.aliases.get(segment) else {
+                // A GLOB RE-EXPORT (`pub use batten_facts::error::*;`) binds
+                // every public name of its target (CLOUD-2789).
+                // EXACTLY ONE glob may bind it: two that both do are the
+                // ambiguity rustc refuses, so neither is taken.
+                if !globs {
+                    return None;
+                }
+                let bound: Vec<(Key, usize)> = here
+                    .globs
+                    .iter()
+                    .filter_map(|glob| {
+                        let mut absolute = self.anchored(krate, &module, glob)?;
+                        let glob_len = absolute.len();
+                        absolute.extend(rest[at..].iter().cloned());
+                        let (key, used) = self.resolve_through(&absolute, depth - 1, globs)?;
+                        (used > glob_len).then(|| (key, at + 1 + used - glob_len))
+                    })
+                    .collect();
+                return match bound.as_slice() {
+                    [one] => Some(one.clone()),
+                    _ => None,
+                };
+            };
             let mut absolute: Vec<String> = match target.first().map(String::as_str) {
                 Some("crate") => std::iter::once(krate.clone())
                     .chain(target[1..].iter().cloned())
@@ -308,12 +354,28 @@ impl Index {
             };
             let alias_len = absolute.len();
             absolute.extend(rest[at + 1..].iter().cloned());
-            let (key, used) = self.resolve_from(&absolute, depth - 1)?;
+            let (key, used) = self.resolve_through(&absolute, depth - 1, globs)?;
             // The original path consumed everything through this segment,
             // plus whatever of its remainder the alias's resolution used.
             return Some((key, at + 2 + used.saturating_sub(alias_len)));
         }
         None
+    }
+
+    /// A `use` target written in `module` of `krate`, as an absolute path:
+    /// `crate::` and `self::` anchored there, a crate's name as written.
+    fn anchored(&self, krate: &str, module: &[String], target: &[String]) -> Option<Vec<String>> {
+        Some(match target.first().map(String::as_str) {
+            Some("crate") => std::iter::once(krate.to_owned())
+                .chain(target[1..].iter().cloned())
+                .collect(),
+            Some("self") => std::iter::once(krate.to_owned())
+                .chain(module.iter().cloned())
+                .chain(target[1..].iter().cloned())
+                .collect(),
+            Some("super") | None => return None,
+            _ => target.to_vec(),
+        })
     }
 
     /// `path` as an absolute path (`[crate, ..]`) read from inside `krate`:
@@ -564,7 +626,7 @@ pub fn moved_through_uses(before: &Index, after: &Index) -> BTreeMap<Key, Key> {
                     .chain(inside.iter().cloned())
                     .chain(std::iter::once(name.clone()))
                     .collect();
-                if let Some((site, used)) = after.resolve_from(&path, 8)
+                if let Some((site, used)) = after.resolve_through(&path, 8, true)
                     && used == path.len()
                     && site.0 != *file
                 {
@@ -1618,6 +1680,27 @@ mod tests {
             ("two/src/error.rs", &edited),
         ]);
         assert!(moved_items(&base, &head).is_empty());
+        let moves = moved_through_uses(&base, &head);
+        assert_eq!(
+            respell_span_at_moves(&base, &head, &moves, "one/src/other.rs", text, span, "one"),
+            "{ two::error::Native::A; }"
+        );
+        // #1276's own chain: the old home's `use` reaches the item through a
+        // glob re-export (`pub use two::error::*;`).
+        let head = index(&[
+            ("Cargo.toml", "[workspace]\n"),
+            ("one/Cargo.toml", "[package]\nname = \"one\"\n"),
+            ("two/Cargo.toml", "[package]\nname = \"two\"\n"),
+            (
+                "one/src/lib.rs",
+                "pub mod error;\npub mod verdict;\npub mod other;\n",
+            ),
+            ("one/src/error.rs", "pub use two::error::*;\n"),
+            ("one/src/verdict.rs", "use crate::error::Native;\n"),
+            ("one/src/other.rs", text),
+            ("two/src/lib.rs", "pub mod error;\n"),
+            ("two/src/error.rs", &edited),
+        ]);
         let moves = moved_through_uses(&base, &head);
         assert_eq!(
             respell_span_at_moves(&base, &head, &moves, "one/src/other.rs", text, span, "one"),
