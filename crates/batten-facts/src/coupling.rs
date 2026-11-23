@@ -159,9 +159,8 @@ pub fn measure(graph: &FileGraph) -> Coupling {
         .iter()
         .map(|component| shape_of(component, &files, &reaches))
         .collect();
-    #[allow(clippy::cast_precision_loss)]
     let propagation_cost =
-        reaches.values().map(BTreeSet::len).sum::<usize>() as f64 / (all as f64 * all as f64);
+        exact(reaches.values().map(BTreeSet::len).sum::<usize>()) / (exact(all) * exact(all));
     Coupling {
         mscore: mscore_of(graph, &components, &shapes, all),
         decoupling_level: decoupling_level_of(&shapes, all),
@@ -218,10 +217,18 @@ fn shape_of(component: &BTreeSet<String>, files: &BTreeSet<String>, reaches: &Re
     (component.len(), dependents, depth)
 }
 
+/// A count as a float, LOSSLESS BY CONSTRUCTION rather than by annotation, as
+/// `pr_watch::interval_for` is (CLOUD-1338): narrowing to `u32` first makes the
+/// conversion exact for every value that survives it, and saturating states the
+/// bound in code. A graph of `u32::MAX` files was never going to be measured.
+#[must_use]
+pub fn exact(count: usize) -> f64 {
+    f64::from(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
 /// A component's share of all files.
-#[allow(clippy::cast_precision_loss)]
 fn weight(size: usize, all: usize) -> f64 {
-    size as f64 / all as f64
+    exact(size) / exact(all)
 }
 
 /// Decoupling Level (Mo et al. 2016, equations 2 to 5) over the components' shapes.
@@ -230,9 +237,8 @@ fn decoupling_level_of(shapes: &[Shape], all: usize) -> f64 {
     for &(size, deps, own_depth) in shapes {
         if deps == 0 {
             // Last layer: SizeFactor (equations 3 to 5).
-            #[allow(clippy::cast_precision_loss)]
             let penalty = if size > 5 {
-                (size as f64).log(5.0).recip()
+                exact(size).log(5.0).recip()
             } else {
                 1.0
             };
@@ -246,11 +252,10 @@ fn decoupling_level_of(shapes: &[Shape], all: usize) -> f64 {
                 .map(|(size, ..)| size)
                 .sum();
             let lower = all - upper_not_lower;
-            #[allow(clippy::cast_precision_loss)]
             let ratio = if lower == 0 {
                 1.0
             } else {
-                deps as f64 / lower as f64
+                exact(deps) / exact(lower)
             };
             level += weight(size, all) * (1.0 - ratio);
         }
@@ -276,9 +281,8 @@ fn mscore_of(
         .collect();
     let mut mscore = 0.0;
     for (component, &(size, deps, own_depth)) in components.iter().zip(shapes) {
-        #[allow(clippy::cast_precision_loss)]
         let penalty = if size >= 5 {
-            (size as f64).log(5.0).recip()
+            exact(size).log(5.0).recip()
         } else {
             1.0
         };
@@ -296,22 +300,18 @@ fn mscore_of(
                 .iter()
                 .filter(|(from, target)| component.contains(*target) && !upper.contains(from))
                 .count();
-            #[allow(clippy::cast_precision_loss)]
-            let density = if lower == 0 {
+            if lower == 0 {
                 0.0
             } else {
-                into as f64 / (lower * size) as f64
-            };
-            density
+                exact(into) / exact(lower * size)
+            }
         };
         let inner = if size >= 5 {
             let internal = edges
                 .iter()
                 .filter(|(from, target)| component.contains(*from) && component.contains(*target))
                 .count();
-            #[allow(clippy::cast_precision_loss)]
-            let density = internal as f64 / ((size - 1) * size) as f64;
-            density
+            exact(internal) / exact((size - 1) * size)
         } else {
             0.0
         };
