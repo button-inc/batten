@@ -1023,3 +1023,45 @@ fn a_bash_pointer_resolves_and_its_shell_reads_are_not_recaptured() {
         "capture show --lines",
     );
 }
+
+/// Fails by: `capture show <leaf> --field /0/text` refusing a spilled MCP
+/// leaf as "not a JSON document" (CLOUD-2284), or a `Read` of the leaf
+/// bounded into another pointer.
+#[test]
+fn an_mcp_pointer_resolves_by_field_and_reading_its_leaf_is_not_recaptured() {
+    let dir = repo("result-bound-surface-mcp");
+    let body = payload(2000);
+    let posted = mcp_post(&dir, &body);
+    let (_, leaf) = resolves(&posted, "/0/text", &body);
+    let note = note_of(&posted.stdout);
+    let shown = common::run(
+        &dir,
+        &[
+            "capture",
+            "show",
+            &leaf_handle(&note),
+            "--field",
+            "/0/text",
+            "--lines",
+            "2000-2000",
+        ],
+    );
+    assert_eq!(
+        shown.status.code(),
+        Some(0),
+        "--field reads the spilled leaf: {}",
+        common::stderr(&shown)
+    );
+    assert!(
+        String::from_utf8_lossy(&shown.stdout).contains("payload line 01999 of the log"),
+        "{}",
+        String::from_utf8_lossy(&shown.stdout)
+    );
+    let followed = post_call(
+        &dir,
+        "Read",
+        &serde_json::json!({ "file_path": leaf.display().to_string() }),
+        &read_result(&body),
+    );
+    left_alone(&followed, "a Read of the stored MCP leaf");
+}
