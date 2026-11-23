@@ -2437,6 +2437,31 @@ mod tests {
         );
     }
 
+    /// A LIBRARY LOOKUP NEVER REFUSES A RECEIPT, A TREE READ STILL DOES
+    /// (CLOUD-2870): the linker's bare `libgcc_s.so.1` probe that refused
+    /// `lint:clippy`, and the loader's bare open, read end to end, name no
+    /// undeclared path, and a real read of an undeclared repo file beside them
+    /// is still named.
+    ///
+    /// Fails by: the trace walk keeping the bare soname (it is listed, the
+    /// exit-2 refusal), or the lint dropping a relative read it should keep
+    /// (`build.rs` vanishes, a receipt over an input nobody declared).
+    #[test]
+    fn a_library_lookup_is_never_undeclared_and_a_tree_read_still_is() {
+        let trace = "7     execve(\"/bin/sh\", [\"sh\"], 0x0 /* 0 vars */) = 0\n\
+             7     access(\"libgcc_s.so.1\", F_OK)     = -1 ENOENT (No such file or directory)\n\
+             7     openat(AT_FDCWD</repo>, \"libgcc_s.so.1\", O_RDONLY|O_CLOEXEC) = -1 ENOENT \
+             (No such file or directory)\n\
+             7     openat(AT_FDCWD</repo>, \"src/x.rs\", O_RDONLY|O_CLOEXEC) = 3</repo/src/x.rs>\n\
+             7     openat(AT_FDCWD</repo>, \"build.rs\", O_RDONLY|O_CLOEXEC) = 3</repo/build.rs>\n\
+             7     +++ exited with 0 +++\n";
+        let root = Path::new("/repo");
+        let accessed = crate::mutate::trace::accesses(trace, Some(root)).expect("a whole trace");
+        let inputs = vec!["src".to_owned()];
+        let found = super::undeclared(root, &inputs, &[], &accessed, &mut |_| false);
+        assert_eq!(found, vec!["build.rs".to_owned()]);
+    }
+
     /// Fails by: an edit to an existence path's bytes moving the key (every
     /// sibling-crate edit re-running the row), or adding or removing one
     /// leaving it unmoved (a receipt over a target cargo no longer builds).
