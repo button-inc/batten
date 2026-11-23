@@ -449,6 +449,16 @@ pub fn build_digest(
     root: &Path,
     resources: &std::collections::BTreeMap<String, String>,
 ) -> Option<String> {
+    Some(build_digest_with(root, resources, &compiler_version(root)?))
+}
+
+/// [`build_digest`] with the compiler's `-vV` already in hand.
+#[must_use]
+pub fn build_digest_with(
+    root: &Path,
+    resources: &std::collections::BTreeMap<String, String>,
+    compiler: &[u8],
+) -> String {
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for path in resources.keys() {
         let file = path.rsplit('/').next().unwrap_or(path);
@@ -482,13 +492,14 @@ pub fn build_digest(
         hasher.update(resources.get(path).map_or("-", String::as_str).as_bytes());
         hasher.update(b"\x1e");
     }
-    hasher.update(&compiler_version(root)?);
-    Some(hasher.finalize().to_hex().to_string())
+    hasher.update(compiler);
+    hasher.finalize().to_hex().to_string()
 }
 
 /// `rustc -vV` as the toolchain ladder resolves the compiler, through the
 /// placed adapter.
-fn compiler_version(root: &Path) -> Option<Vec<u8>> {
+#[must_use]
+pub fn compiler_version(root: &Path) -> Option<Vec<u8>> {
     let argv = ["rustc", "-vV"].map(str::to_owned);
     let (code, said) =
         crate::exec::piped_argv(root, &argv, "", crate::exec::Diagnostics::Drop, &[])?;
