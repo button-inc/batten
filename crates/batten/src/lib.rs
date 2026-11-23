@@ -22689,7 +22689,7 @@ fn fill_turn_advice(
             refusal.read_through(&policy.redirects),
         );
     }
-    for nudge in stop_nudges(overrides, envelope, raw, &mut block) {
+    for nudge in stop_nudges(policy, overrides, envelope, raw, &mut block) {
         push_finding(advice, severity::AdvisoryTier::Caution, nudge);
     }
     // EVERY NONBLOCKING FINDING IS RECORDED, AND `advise` IS ALSO SPOKEN
@@ -25193,6 +25193,7 @@ fn record_history_reads(envelope: &hook::Envelope) {
 /// a draft is what survives a container reclaim. So every unreadable path,
 /// missing program and unresolvable branch yields `None`.
 fn stop_nudges(
+    policy: &hook::Policy,
     overrides: &Overrides,
     envelope: &hook::Envelope,
     raw: &str,
@@ -25314,6 +25315,11 @@ fn stop_nudges(
         let (refused, advised) = watchdog_stop(root, landing);
         *block = refused;
         rungs.extend(advised);
+    }
+    // THE OPERATOR ANSWERED (CLOUD-2861), the third native Stop refusal, and
+    // again only where the two above decided nothing: one refusal per Stop.
+    if block.is_none() {
+        *block = unanswered_operator_block(policy, envelope, root);
     }
     // RULE 2 — the consumer's declared `[[hook.handler]] on = "stop"` rows, in
     // declaration order, the first that speaks. This is where a program reading
@@ -25885,6 +25891,78 @@ fn refused_stop(
 /// The receipt family recording that a Stop was refused over the claim
 /// (CLOUD-2441). Branch-keyed like its sibling, and re-armed with it.
 const UNLANDED_REFUSED: &str = "unlanded-refused";
+
+/// The receipt family recording that a Stop was refused over an unanswered
+/// operator message (CLOUD-2861), one `<session> <line>` line per message.
+const ANSWER_REFUSED: &str = "answer-refused";
+
+/// The class the per-call `answer-the-operator` row raises, which the Stop
+/// refusal reuses rather than minting a second spelling of one finding.
+const TURN_ANSWER_MISSING: &str = "turn answer missing";
+
+/// Refuse a Stop that would end a turn the operator opened and nothing but tool
+/// calls answered (CLOUD-2861).
+///
+/// # Why at Stop, and why natively
+///
+/// The per-call row stays `warn`: denying the call refused the work that would
+/// answer (CLOUD-2044). A Stop carries no policy verdict
+/// (`Event::carries_a_verdict`), so a module or handler deny there is only
+/// advice; this ladder's native refusal is the one route that can hold the turn
+/// open. It fires only where the transcript's own count says so:
+/// `unanswered_human_calls` counts tool calls since the last marker, and only
+/// when that marker was an authored operator turn, so a task notification or a
+/// tool result never arms it and any assistant text clears it.
+///
+/// # The bound
+///
+/// One refusal per operator message, keyed on the session and the message's
+/// transcript line in the `answer-refused` receipt; a second Stop over the same
+/// message reads the receipt and passes, so the refusal cannot loop
+/// (CLOUD-889). The pointer names the line, never what is on it.
+fn unanswered_operator_block(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    root: &Path,
+) -> Option<refusal::Refusal> {
+    let source = envelope.transcript.as_deref()?;
+    let hook::TranscriptShape::Surveyed(shape) = policy.harness().transcript_shape() else {
+        return None;
+    };
+    let repeats = transcript::tally_appended(Path::new(source), shape)?.repeats();
+    if repeats.unanswered_human_calls == 0 {
+        return None;
+    }
+    let line = u64::try_from(repeats.operator_line?).ok()?;
+    let config = resolve::resolve(root, &Overrides::default()).ok()?;
+    // THE COMMITTED LINK, when declared, so the pointer is repo-relative and
+    // stable; the host's own path otherwise.
+    let path = config
+        .transcript
+        .as_ref()
+        .and_then(|transcript| transcript.path.clone())
+        .unwrap_or_else(|| source.to_owned());
+    let git_dir = git::git_dir(root).ok()?;
+    let session = envelope.session.as_deref().unwrap_or("-");
+    let receipt = recorder::record_path(&git_dir, ANSWER_REFUSED, session, None);
+    let key = format!("{session} {line}");
+    if already_marked(Some(&receipt), &key) {
+        return None;
+    }
+    if let Some(parent) = receipt.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // An unwritable receipt would refuse every Stop: a refusal that cannot
+    // record itself is not issued.
+    crate::durable::append(&receipt, &key).ok()?;
+    Some(refusal::Refusal::from_class(
+        TURN_ANSWER_MISSING,
+        &config.verdicts,
+        TURN_ANSWER_MISSING,
+        &[verdict::Subject::Line { path, line }],
+        refusal::Fix::None,
+    ))
+}
 
 /// The receipt family recording that a call started `land` and no Stop has
 /// yet been excused by it (CLOUD-2441).
