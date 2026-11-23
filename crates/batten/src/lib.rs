@@ -18343,6 +18343,14 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
             return Ok(ExitCode::Usage);
         }
     };
+    let phase =
+        match mutate::schema::phase_parsed(std::env::var(mutate::schema::PHASE).ok().as_deref()) {
+            Ok(phase) => phase,
+            Err(reason) => {
+                writeln!(err, "::error:: mutate cargo: {reason}")?;
+                return Ok(ExitCode::Usage);
+            }
+        };
     let registry = match mutate::Registry::from_env() {
         Ok(registry) => registry,
         Err(reason) => {
@@ -18381,12 +18389,17 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // with every mutant switched in, one reach run, each mutant judged by the
     // cases that reach it. Measured on #1276: 3,132 mutants, the classic tool
     // building each one, against one 195 s build.
-    let mine = mutate::schema::shard_of(mutate::list_mutants(root, &runner, &diff)?, shard);
+    //
+    // THE WHOLE LISTING IS BUILT AND REACHED, AND THE SHARD NARROWS ONLY THE
+    // JUDGING (CLOUD-2789): sliced here, each shard built a different schema
+    // and paid its own build and reach run, which one job now pays for all.
+    let listed = mutate::list_mutants(root, &runner, &diff)?;
+    let scope = mutate::schema::Scope { shard, phase };
     let workers = mutate::judging_jobs(machine);
     writeln!(
         out,
         "mutate cargo: {} mutant(s) of {sources} changed source(s), switched in one schema build, judged on {workers} worker(s)",
-        mine.len()
+        listed.len()
     )?;
     // THE HANDED-BACK MUTANTS ARE JUDGED INSIDE THE SWEEP, in place, on the
     // cases that can observe each, under the same journal: the classic stage
@@ -18396,7 +18409,14 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         runner: &runner,
         diff: &diff,
     };
-    let swept = mutate::schema::sweep(root, &mine, &listed_over, workers, Some(&handback), out)?;
+    let swept = mutate::schema::sweep(
+        root,
+        &listed,
+        &listed_over,
+        (workers, scope),
+        Some(&handback),
+        out,
+    )?;
     Ok(mutate::schema::exit_of(swept.code))
 }
 
@@ -18409,6 +18429,23 @@ fn run_mutate_sweep(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    // A DECLARED ROW HAS NO BUILD OR REACH TO SHARE (CLOUD-2789): under the
+    // reach phase every row is left to the shards, which judge it as before.
+    match mutate::schema::phase_parsed(std::env::var(mutate::schema::PHASE).ok().as_deref()) {
+        Ok(mutate::schema::Phase::Judge) => {}
+        Ok(mutate::schema::Phase::Reach) => {
+            writeln!(
+                out,
+                "mutate: {}=reach: the declared rows share no build or reach; the shards judge them",
+                mutate::schema::PHASE
+            )?;
+            return Ok(ExitCode::Success);
+        }
+        Err(reason) => {
+            writeln!(err, "::error:: mutate: {reason}")?;
+            return Ok(ExitCode::Usage);
+        }
+    }
     let registry =
         match mutate::Registry::from_env().and_then(|registry| registry.with_command(command)) {
             Ok(registry) => registry,
