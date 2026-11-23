@@ -889,17 +889,7 @@ pub fn run_step(
         return Ok(ExitCode::Success);
     }
     if let Answer::Red(key, failure) = &answer {
-        // A KNOWN FAILURE IS ANSWERED, NOT RE-RUN (CLOUD-2253): its code, the
-        // pointer to its log, the cases and the command that confirms a fix,
-        // and a word to a supervising lap, which stops at once.
-        say_failure(step, failure, err);
-        let recorded = crate::git::git_dir(Path::new("."))
-            .ok()
-            .and_then(|git_dir| crate::record::keyed_group_read(&git_dir, RECEIPTS, step, key))
-            .and_then(|body| recorded_millis(&body));
-        let _ = writeln!(err, "{}", stage_line(step, "red", recorded));
-        red_to_supervisor(step);
-        return Err(crate::error::Passthrough::raise(failure.code));
+        return answer_red(step, key, failure, err);
     }
     let started = std::time::Instant::now();
     // TEED, NOT ONLY CAPTURED (CLOUD-2091). `exec::run`'s default stores the
@@ -949,16 +939,14 @@ pub fn run_step(
     }
     let elapsed = started.elapsed();
     let passed = matches!(ran, Ok(ExitCode::Success));
-    let flaky = journaled
-        .as_ref()
-        .filter(|_| !passed)
-        .and_then(|(_, root)| report_flaky(step, root, err));
-    let cases = journaled
-        .as_ref()
-        .filter(|_| !passed)
-        .and_then(|(_, root)| failed_cases_said(root, command));
-    if let Some(cases) = &cases {
-        let _ = writeln!(err, "step run: {step} {cases}");
+    if !passed {
+        let run = Ran {
+            root: journaled.as_ref().map(|(_, root)| root.as_path()),
+            outcome: &ran,
+            elapsed,
+            report: &report,
+        };
+        after_failure(step, args, command, answer.recording().is_some(), &run, err);
     }
     let linted = traced
         .as_ref()
@@ -970,67 +958,12 @@ pub fn run_step(
     if let Some((_, file)) = &traced {
         let _ = std::fs::remove_file(file);
     }
-    if let Some(linted) = linted {
-        match linted {
-            Linted::Wrote(count, listing) => {
-                let _ = writeln!(
-                    err,
-                    "step run: {step} wrote {count} declared input(s); read {}",
-                    listing.display()
-                );
-                return Ok(ExitCode::Violation);
-            }
-            Linted::Undeclared(count, listing) => {
-                let _ = writeln!(
-                    err,
-                    "step run: {step} read {count} path(s) outside its inputs; read {}",
-                    listing.display()
-                );
-                return Ok(ExitCode::Violation);
-            }
-            // The row no longer reads (the command moved the authority): the
-            // record below recomputes the key and refuses on its own words.
-            Linted::Declared | Linted::RowUnread => {}
-            Linted::Unread => {
-                // A trace that cannot be read whole proves nothing about the
-                // declaration, so no receipt: the step's own verdict stands.
-                let _ = writeln!(
-                    err,
-                    "step run: {step} — its trace could not be read whole; not recording"
-                );
-                return ran;
-            }
-        }
-    }
-    let failed_code = ran
-        .as_ref()
-        .err()
-        .and_then(|error| error.downcast_ref::<crate::error::Passthrough>())
-        .map(|carried| carried.0)
-        .filter(|code| recordable_failure(*code));
-    if let (Some(code), Some(_)) = (failed_code, answer.recording()) {
-        // THE FAILURE IS RECORDED LIKE A PASS, under the key the check filed,
-        // and every refusal and store failure is swallowed the same way.
-        let failure = Failure {
-            code,
-            log: logged(&report),
-            cases,
-        };
-        let all_suspect =
-            matches!(flaky, Some((suspects, failed)) if failed > 0 && suspects == failed);
-        let mut recorded = Vec::new();
-        let mut refused = Vec::new();
-        let _ = record_as(
-            step,
-            args,
-            Some(command),
-            Some(elapsed),
-            Some((&failure, all_suspect)),
-            &mut recorded,
-            &mut refused,
-        );
-        let _ = err.write_all(&recorded);
-        let _ = err.write_all(&refused);
+    // A HAZARD OR AN UNREAD TRACE ENDS THE STEP UNRECORDED: `Some(code)` is
+    // the hazard's own, `None` leaves the step's verdict standing.
+    match linted.map(|linted| lint_stop(step, linted, err)) {
+        Some(LintStop::Fail) => return Ok(ExitCode::Violation),
+        Some(LintStop::Unrecorded) => return ran,
+        Some(LintStop::Go) | None => {}
     }
     if passed && answer.recording().is_some() {
         // A record that refuses or fails here — the inputs moved while the
@@ -1078,6 +1011,144 @@ fn record_pass(step: &str) {
         return;
     };
     let _ = crate::record::keyed_write(&git_dir, PASSES, step, &format!("{tree}\n"));
+}
+
+/// A KNOWN FAILURE IS ANSWERED, NOT RE-RUN (CLOUD-2253): its code, the pointer
+/// to its log, the cases and the command that confirms a fix, and a word to a
+/// supervising lap, which stops at once. The code is the recorded run's.
+fn answer_red(step: &str, key: &str, failure: &Failure, err: &mut dyn Write) -> Result<ExitCode> {
+    say_failure(step, failure, err);
+    let recorded = crate::git::git_dir(Path::new("."))
+        .ok()
+        .and_then(|git_dir| crate::record::keyed_group_read(&git_dir, RECEIPTS, step, key))
+        .and_then(|body| recorded_millis(&body));
+    let _ = writeln!(err, "{}", stage_line(step, "red", recorded));
+    red_to_supervisor(step);
+    Err(crate::error::Passthrough::raise(failure.code))
+}
+
+/// What a traced pass's lint leaves the step to do.
+enum LintStop {
+    /// A written or undeclared input: the step fails, unrecorded.
+    Fail,
+    /// A trace that cannot be read whole: no receipt, the verdict stands.
+    Unrecorded,
+    /// Nothing the lint can see: on to the record.
+    Go,
+}
+
+/// What a traced pass's lint ends the step with, saying why on `err`.
+fn lint_stop(step: &str, linted: Linted, err: &mut dyn Write) -> LintStop {
+    match linted {
+        Linted::Wrote(count, listing) => {
+            let _ = writeln!(
+                err,
+                "step run: {step} wrote {count} declared input(s); read {}",
+                listing.display()
+            );
+            LintStop::Fail
+        }
+        Linted::Undeclared(count, listing) => {
+            let _ = writeln!(
+                err,
+                "step run: {step} read {count} path(s) outside its inputs; read {}",
+                listing.display()
+            );
+            LintStop::Fail
+        }
+        // The row no longer reads (the command moved the authority): the
+        // record below recomputes the key and refuses on its own words.
+        Linted::Declared | Linted::RowUnread => LintStop::Go,
+        Linted::Unread => {
+            // A trace that cannot be read whole proves nothing about the
+            // declaration, so no receipt: the step's own verdict stands.
+            let _ = writeln!(
+                err,
+                "step run: {step} — its trace could not be read whole; not recording"
+            );
+            LintStop::Unrecorded
+        }
+    }
+}
+
+/// What a failed run left for [`after_failure`].
+struct Ran<'a> {
+    /// The checkout a journaled run ran in, which holds its report.
+    root: Option<&'a Path>,
+    /// The run's own answer.
+    outcome: &'a Result<ExitCode>,
+    /// How long it ran.
+    elapsed: std::time::Duration,
+    /// `exec`'s record of it, which names the stored streams.
+    report: &'a [u8],
+}
+
+/// After a failed run: the flaky-suspect label and the failing cases with
+/// the command that confirms a fix (a journaled run's), then the failure
+/// receipt where the answer had a key and the code is a verdict (CLOUD-2253).
+fn after_failure(
+    step: &str,
+    args: &[String],
+    command: &[String],
+    keyed: bool,
+    run: &Ran<'_>,
+    err: &mut dyn Write,
+) {
+    let flaky = run.root.and_then(|root| report_flaky(step, root, err));
+    let cases = run.root.and_then(|root| failed_cases_said(root, command));
+    if let Some(cases) = &cases {
+        let _ = writeln!(err, "step run: {step} {cases}");
+    }
+    let code = run
+        .outcome
+        .as_ref()
+        .err()
+        .and_then(|error| error.downcast_ref::<crate::error::Passthrough>())
+        .map(|carried| carried.0)
+        .filter(|code| recordable_failure(*code));
+    if let (Some(code), true) = (code, keyed) {
+        let failure = Failure {
+            code,
+            log: logged(run.report),
+            cases,
+        };
+        let all_suspect =
+            matches!(flaky, Some((suspects, failed)) if failed > 0 && suspects == failed);
+        record_failure(
+            step,
+            args,
+            command,
+            run.elapsed,
+            (&failure, all_suspect),
+            err,
+        );
+    }
+}
+
+/// THE FAILURE IS RECORDED LIKE A PASS, under the key the check filed, and
+/// every refusal and store failure is swallowed the same way: the step's
+/// verdict is its command's, and the receipt is an economy.
+fn record_failure(
+    step: &str,
+    args: &[String],
+    command: &[String],
+    elapsed: std::time::Duration,
+    failed: (&Failure, bool),
+    err: &mut dyn Write,
+) {
+    let mut recorded = Vec::new();
+    let mut refused = Vec::new();
+    let _ = record_as(
+        step,
+        args,
+        Some(command),
+        Some(elapsed),
+        Some(failed),
+        &mut recorded,
+        &mut refused,
+    );
+    let _ = err.write_all(&recorded);
+    let _ = err.write_all(&refused);
 }
 
 /// The keyed family a step answered from a failure receipt is filed under,
