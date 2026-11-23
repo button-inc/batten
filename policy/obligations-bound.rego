@@ -482,26 +482,26 @@ test_a_bound_obligation_is_clean if {
 }
 
 # EACH CONJUNCT OF THE ROW ARM, refused alone (#1276). Every one of these bound
-# under the retired substring reading.
-refused_over(lines_by_file) if {
-	some v in violation with input as board([bound], ["tests/a.rs"], lines_by_file)
+# under the retired substring reading. Each case writes its own `with`: a helper
+# that writes one keeps its cases off bytecode.
+test_a_slug_in_prose_is_unbound if {
+	some v in violation with input as board([bound], ["tests/a.rs"], row_lines("# see MUTANT slug-one|s@a@b@|the_case"))
 	v.verdict == "test name undefined"
 }
 
-test_a_slug_in_prose_is_unbound if {
-	refused_over(row_lines("# see MUTANT slug-one|s@a@b@|the_case"))
-}
-
 test_an_indented_row_is_unbound if {
-	refused_over(row_lines("  #MUTANT slug-one|s@a@b@|the_case"))
+	some v in violation with input as board([bound], ["tests/a.rs"], row_lines("  #MUTANT slug-one|s@a@b@|the_case"))
+	v.verdict == "test name undefined"
 }
 
 test_a_two_field_row_is_unbound if {
-	refused_over(row_lines("#MUTANT slug-one|the_case"))
+	some v in violation with input as board([bound], ["tests/a.rs"], row_lines("#MUTANT slug-one|the_case"))
+	v.verdict == "test name undefined"
 }
 
 test_a_row_whose_case_its_suite_lacks_is_unbound if {
-	refused_over(row_lines("#MUTANT slug-one|s@a@b@|a_case_nobody_wrote"))
+	some v in violation with input as board([bound], ["tests/a.rs"], row_lines("#MUTANT slug-one|s@a@b@|a_case_nobody_wrote"))
+	v.verdict == "test name undefined"
 }
 
 test_a_row_in_a_file_no_gate_enrolls_is_unbound if {
@@ -513,7 +513,8 @@ test_a_row_in_a_file_no_gate_enrolls_is_unbound if {
 }
 
 test_a_suite_less_row_is_unbound if {
-	refused_over({"tests/a.rs": ["#MUTANT slug-one|s@a@b@|the_case"]})
+	some v in violation with input as board([bound], ["tests/a.rs"], {"tests/a.rs": ["#MUTANT slug-one|s@a@b@|the_case"]})
+	v.verdict == "test name undefined"
 }
 
 # And the spellings that DO bind, so the refusals above are not a rule that
