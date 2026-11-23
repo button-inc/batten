@@ -26,6 +26,9 @@ fn fixture(name: &str) -> std::path::PathBuf {
              [[pattern]]\n\
              id = \"finding-path\"\n\
              regex = '[A-Za-z0-9_./-]+\\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z0-9_:]+)?'\n\n\
+             [[pattern]]\n\
+             id = \"ledger-pair\"\n\
+             regex = '\\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_]+\\[[^\\]]+\\](?:\\.[A-Za-z0-9_]+)*)'\n\n\
              [[verdict]]\n\
              id = \"call ask loose\"\n\
              gloss = \"a question asks to admit a finding in words the ledger cannot bind\"\n\
@@ -101,5 +104,31 @@ fn an_admit_ask_without_the_exact_pair_is_refused() {
     assert!(
         !exact.contains(VERDICT),
         "the exact pair with an `Admit` option is asked: {exact}"
+    );
+}
+
+/// Fails by: a question naming the path and the rule id apart, with no
+/// `<smell-id> <key>` pair side by side, reaching the owner (the #1276 fourth
+/// round: its answer bound nothing), or a config-key pair refused.
+#[test]
+fn an_admit_ask_naming_no_ledger_pair_is_refused() {
+    let dir = fixture("admit-ask-pair");
+    let apart = ask(
+        &dir,
+        "Admit the change to layer place wrong's use_sources key in batten.toml?",
+        &["Admit the change", "Refuse"],
+    );
+    assert!(
+        apart.contains("\"deny\"") && apart.contains(VERDICT),
+        "a path and an id in prose bind nothing: {apart}"
+    );
+    let paired = ask(
+        &dir,
+        "Admit rule-predicate-changed rule[layer place wrong].use_sources?",
+        &["Admit the change", "Refuse"],
+    );
+    assert!(
+        !paired.contains(VERDICT),
+        "the ledger's own pair is asked: {paired}"
     );
 }
