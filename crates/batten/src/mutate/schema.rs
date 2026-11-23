@@ -1783,22 +1783,54 @@ fn run_cases(
     mutant: &Listed,
     cases: &BTreeSet<Case>,
 ) -> anyhow::Result<(Verdict, Option<Case>, Vec<Case>)> {
+    let (ran, xml) = judge_run(judging, &id.to_string(), mutant, cases);
+    let report = xml.as_deref().and_then(junit_cases);
+    let ran = ran?;
+    let judged = verdict_of_run(ran.outcome, report.as_deref(), cases);
+    if judged.0 == Verdict::Error {
+        // THE RUN'S OWN WORDS, KEPT: on #1276 2,213 runs failed before a
+        // case started and said nothing anywhere, so an error now leaves
+        // its output beside the tree, where the summary points.
+        keep_error(judging, id, &ran.output);
+    }
+    Ok(judged)
+}
+
+/// What the judge's `BATTEN_MUTANT` is under the control run: no switch
+/// answers it, so no mutant is active ([`control_red`]).
+const NULL_MUTANT: &str = "none";
+
+/// One judging run of `cases` with `BATTEN_MUTANT=active`, under its own
+/// scratch inside the mirror, and its `JUnit` report, if it wrote one. The
+/// one argv and environment every judging run and the control share.
+fn judge_run(
+    judging: &Judging<'_>,
+    active: &str,
+    mutant: &Listed,
+    cases: &BTreeSet<Case>,
+) -> (anyhow::Result<super::Ran>, Option<String>) {
     let mut args = nextest_args(mutant, cases);
     args.extend(cargo_dirs(judging.target));
-    let own = judging.scratch.join(id.to_string());
+    // INSIDE THE MIRROR (W2), as the reach run's fixtures are: a case whose
+    // fixture needs a checkout around it passed under reach and failed here,
+    // which read as a kill.
+    let own = judging.scratch.join(active);
     let _ = std::fs::create_dir_all(own.join("tmp"));
     let _ = std::fs::create_dir_all(own.join("fixtures"));
     // THE VERDICT IS READ FROM THE RUN'S OWN JUNIT REPORT, written under this
     // run's scratch so no two workers share one (#1276).
     let store = own.join("store");
     let config = own.join("nextest.toml");
-    crate::durable::replace(&config, judge_config(judging.work, &store)?)?;
+    if let Err(why) = judge_config(judging.work, &store)
+        .and_then(|text| Ok(crate::durable::replace(&config, text)?))
+    {
+        return (Err(why), None);
+    }
     args.extend([
         String::from("--config-file"),
         config.to_string_lossy().into_owned(),
     ]);
-    let mut env: Vec<(String, String)> = Vec::new();
-    env.extend([
+    let env = [
         // EACH RUN ITS OWN TEMP AND FIXTURE ROOTS, under the sweep's scratch:
         // a fixture at a fixed path is then never shared by two workers
         // running one case, so no run waits on another's cases, and what a
@@ -1811,8 +1843,8 @@ fn run_cases(
             String::from(TEST_TMPDIR),
             own.join("fixtures").to_string_lossy().into_owned(),
         ),
-        (String::from(ACTIVE), id.to_string()),
-    ]);
+        (String::from(ACTIVE), active.to_owned()),
+    ];
     // KEPT, NEVER ECHOED: the verdict is the report and an error keeps its
     // words below, so the run's output is shown nowhere ([`super::Said::Kept`]).
     let ran = super::spawn_suite(
@@ -1823,20 +1855,55 @@ fn run_cases(
         case_bound(cases, judging.seconds).min(super::runner_bound()),
         super::Said::Kept,
     );
-    let report = crate::fsio::read_to_string(store.join(JUDGE_PROFILE).join(JUDGE_REPORT))
-        .ok()
-        .and_then(|xml| junit_cases(&xml));
+    let xml = crate::fsio::read_to_string(store.join(JUDGE_PROFILE).join(JUDGE_REPORT)).ok();
     // THE RUN'S OWN SCRATCH GOES WITH IT: nothing else ever reads it.
     let _ = std::fs::remove_dir_all(&own);
-    let ran = ran?;
-    let judged = verdict_of_run(ran.outcome, report.as_deref(), cases);
-    if judged.0 == Verdict::Error {
-        // THE RUN'S OWN WORDS, KEPT: on #1276 2,213 runs failed before a
-        // case started and said nothing anywhere, so an error now leaves
-        // its output beside the tree, where the summary points.
-        keep_error(judging, id, &ran.output);
+    (ran, xml)
+}
+
+/// Every baseline-red case, and every case that reaches a site and is red
+/// under the judge's own argv and environment with no mutant active, with its
+/// failure line: one control run per sweep, in filtersets that fit
+/// ([`batches`]).
+///
+/// A CASE GREEN UNDER REACH CAN BE RED HERE (W2): reach runs under its own
+/// profile and environment, and a case that fails only under the judge's read
+/// as the kill of every mutant it reaches. Each one is excluded as a
+/// baseline-red case is.
+///
+/// # Errors
+///
+/// A control run could not start, or failed and named no failed case.
+fn control_red(judging: &Judging<'_>, out: &mut dyn std::io::Write) -> anyhow::Result<Red> {
+    let cases: BTreeSet<Case> = judging
+        .reach
+        .values()
+        .flatten()
+        .filter(|case| !judging.red.contains_key(*case))
+        .cloned()
+        .collect();
+    let mut red = Red::new();
+    let Some(mutant) = judging.mutants.first() else {
+        return Ok(judging.red.clone());
+    };
+    for batch in batches(&cases) {
+        let (ran, xml) = judge_run(judging, NULL_MUTANT, mutant, &batch);
+        let ran = ran?;
+        let found = xml.as_deref().and_then(junit_failures).unwrap_or_default();
+        anyhow::ensure!(
+            !found.is_empty() || matches!(ran.outcome, super::Outcome::Passed),
+            "the null-mutant control run failed and its report names no failed case, so no \
+             judging run's verdict would mean anything"
+        );
+        red.extend(found.into_iter().filter(|(case, _)| batch.contains(case)));
     }
-    Ok(judged)
+    writeln!(
+        out,
+        "mutate schema: control run found {} case(s) red under the judge",
+        red.len()
+    )?;
+    red.extend(judging.red.clone());
+    Ok(red)
 }
 
 /// The nextest profile every judging run uses ([`nextest_args`]).
@@ -3701,6 +3768,7 @@ pub fn ran(args: impl Iterator<Item = std::ffi::OsString>) -> Option<std::proces
 }
 
 /// What judging a mutant reads, shared by every worker.
+#[derive(Clone, Copy)]
 struct Judging<'a> {
     work: &'a std::path::Path,
     target: &'a std::path::Path,
@@ -3721,6 +3789,13 @@ struct Judging<'a> {
     /// Every case that failed the unmutated baseline ([`baseline_red`]): never
     /// run against a mutant, never a kill.
     red: &'a Red,
+}
+
+impl<'a> Judging<'a> {
+    /// The same judging with `red` as its red cases.
+    const fn with_red(self, red: &'a Red) -> Self {
+        Self { red, ..self }
+    }
 }
 
 /// How many verdicts pass between two progress lines.
@@ -4435,13 +4510,11 @@ pub fn sweep(
         ids,
         out,
     )?;
-    let scratch = state.join("scratch");
-    std::fs::create_dir_all(&scratch)?;
     let todo = judged_by_switch(mutants.len(), &unviable, &classic)?;
     let judging = Judging {
         work: &work,
         target: &target,
-        scratch: &scratch,
+        scratch: &target.join("tmp").join("judge"),
         root: &root,
         mutants,
         reach: &reach.sites,
@@ -4451,6 +4524,8 @@ pub fn sweep(
         store: &cache_path,
         red: &red,
     };
+    let red = control_red(&judging, out)?;
+    let judging = judging.with_red(&red);
     let mut verdicts = judge_all(&judging, &todo, jobs, out);
     let (names, handed_unviable) = match handback {
         Some(handback) => {
