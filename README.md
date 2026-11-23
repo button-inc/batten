@@ -209,15 +209,30 @@ measure time** rather than hardcoded — so the published figure describes what 
 installed rather than a binary nothing calls. `hook` stays measured beside it so
 the launcher's own share is attributable.
 
-| path          | what it does                                           | p50    | p95    | budget   |
-| ------------- | ------------------------------------------------------ | ------ | ------ | -------- |
-| `noop`        | process start, command tree, render                    | 2.1 ms | 2.4 ms | ≤ 100 ms |
-| `check`       | + config load, trust resolution, one-rule tree         | 2.3 ms | 2.7 ms | ≤ 100 ms |
-| `hook`        | + envelope decode, adjudication, decision write        | 2.8 ms | 3.0 ms | ≤ 100 ms |
-| `passthrough` | a call no rule selects — decode, allow, no config load | —      | —      | ≤ 100 ms |
-| `posttool`    | a PostToolUse call — decode, capture the response      | —      | —      | ≤ 100 ms |
-| `stop`        | an end of turn — decode, state record, drain detached  | —      | —      | ≤ 100 ms |
-| `wired`       | the hook as `.claude/settings.json` invokes it         | 8.0 ms | 8.4 ms | ≤ 100 ms |
+| path                     | what it does                                              | p50    | p95    | budget   |
+| ------------------------ | --------------------------------------------------------- | ------ | ------ | -------- |
+| `noop`                   | process start, command tree, render                       | 2.1 ms | 2.4 ms | ≤ 100 ms |
+| `check`                  | + config load, trust resolution, one-rule tree            | 2.3 ms | 2.7 ms | ≤ 100 ms |
+| `hook`                   | + envelope decode, adjudication, decision write           | 2.8 ms | 3.0 ms | ≤ 100 ms |
+| `passthrough`            | a call no rule selects — decode, allow, no config load    | —      | —      | ≤ 100 ms |
+| `posttool`               | a PostToolUse call — decode, capture the response         | —      | —      | ≤ 100 ms |
+| `stop`                   | an end of turn — decode, state record, drain detached     | —      | —      | ≤ 100 ms |
+| `wired`                  | the hook as `.claude/settings.json` invokes it            | 8.0 ms | 8.4 ms | ≤ 100 ms |
+| `cargo-fmt`              | pre-commit: `cargo fmt --all --check`                     | —      | —      | ≤ 100 ms |
+| `taplo`                  | pre-commit: `taplo lint` over the staged TOML             | —      | —      | ≤ 100 ms |
+| `taplo-format`           | pre-commit: `taplo format --check` over the staged TOML   | —      | —      | ≤ 100 ms |
+| `config-lint-pinned`     | pre-commit: `batten config lint`                          | —      | —      | ≤ 100 ms |
+| `cfg-gated-test-pinned`  | pre-commit: `batten check --rule 'test cover missing'`    | —      | —      | ≤ 100 ms |
+| `merge-conflict-markers` | pre-commit: `batten enforce --rule 'source carry broken'` | —      | —      | ≤ 100 ms |
+| `conventional-commit`    | commit-msg: `batten commit check --message`               | —      | —      | ≤ 100 ms |
+| `commit-attribution`     | commit-msg: `batten attribution check --message`          | —      | —      | ≤ 100 ms |
+
+A commit hook is a batten hook and answers to the same ceiling: the last eight
+rows are every default `pre-commit` and `commit-msg` step a commit touching a
+`.rs` file and `batten.toml` fires, each run as hk runs it in `perf`'s commit
+fixture (`target/perf/commit-repo`, a shared clone carrying that staged change).
+Their cells are `—` for `posttool`'s reason below: they have not been measured
+on the machine the series above comes from.
 
 `posttool` is the same envelope decode plus the response capture, and its cells
 are `—` for `passthrough`'s reason: the series above comes from a quieter

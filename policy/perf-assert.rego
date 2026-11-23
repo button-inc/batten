@@ -106,6 +106,17 @@ budgets := {
 	"hook": 100,
 	"wired": 100,
 	"check": 100,
+	# CLOUD-2789: a commit hook is a batten hook. Every default commit-time hk
+	# step a Rust-plus-config commit fires, timed in `perf measure`'s commit
+	# fixture as hk runs it.
+	"cargo-fmt": 100,
+	"taplo": 100,
+	"taplo-format": 100,
+	"config-lint-pinned": 100,
+	"cfg-gated-test-pinned": 100,
+	"merge-conflict-markers": 100,
+	"conventional-commit": 100,
+	"commit-attribution": 100,
 }
 
 # The record ids this module owns.
@@ -270,6 +281,24 @@ agreeing_readme := [
 	"| `posttool` | a PostToolUse call | — | — | ≤ 100 ms |",
 	"| `stop` | an end of turn | — | — | ≤ 100 ms |",
 	"| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |",
+	"| `cargo-fmt` | a commit-time hook step | — | — | ≤ 100 ms |",
+	"| `taplo` | a commit-time hook step | — | — | ≤ 100 ms |",
+	"| `taplo-format` | a commit-time hook step | — | — | ≤ 100 ms |",
+	"| `config-lint-pinned` | a commit-time hook step | — | — | ≤ 100 ms |",
+	"| `cfg-gated-test-pinned` | a commit-time hook step | — | — | ≤ 100 ms |",
+	"| `merge-conflict-markers` | a commit-time hook step | — | — | ≤ 100 ms |",
+	"| `conventional-commit` | a commit-time hook step | — | — | ≤ 100 ms |",
+	"| `commit-attribution` | a commit-time hook step | — | — | ≤ 100 ms |",
+]
+
+# The commit-time steps' rows, for a case whose own README has a different
+# shape (`test_a_reordered_budget_column_is_still_found`).
+commit_rows := [sprintf("| `%s` | ≤ 100 ms | — | — |", [id]) |
+	some id in [
+		"cargo-fmt", "taplo", "taplo-format", "config-lint-pinned",
+		"cfg-gated-test-pinned", "merge-conflict-markers",
+		"conventional-commit", "commit-attribution",
+	]
 ]
 
 # Every budgeted path measured, comfortably inside.
@@ -281,6 +310,14 @@ clean_record := {
 	"posttool": "2.3",
 	"stop": "2.6",
 	"wired": "8.4",
+	"cargo-fmt": "9.0",
+	"taplo": "9.0",
+	"taplo-format": "9.0",
+	"config-lint-pinned": "9.0",
+	"cfg-gated-test-pinned": "9.0",
+	"merge-conflict-markers": "9.0",
+	"conventional-commit": "9.0",
+	"commit-attribution": "9.0",
 }
 
 test_a_measurement_inside_every_budget_is_silent if {
@@ -383,17 +420,20 @@ test_a_readme_publishing_no_budget_for_a_gated_path_is_refused if {
 # the right cell. A fixed index would silently start reading `p95` here.
 test_a_reordered_budget_column_is_still_found if {
 	count(violation) == 0 with input as {"tree": {
-		"lines": {"README.md": [
-			"| path | budget | p50 | p95 |",
-			"| ---- | ------ | --- | --- |",
-			"| `noop` | ≤ 100 ms | 2.1 ms | 2.4 ms |",
-			"| `check` | ≤ 100 ms | 2.3 ms | 2.7 ms |",
-			"| `hook` | ≤ 100 ms | 2.8 ms | 3.0 ms |",
-			"| `passthrough` | ≤ 100 ms | — | — |",
-			"| `posttool` | ≤ 100 ms | — | — |",
-			"| `stop` | ≤ 100 ms | — | — |",
-			"| `wired` | ≤ 100 ms | 8.0 ms | 8.4 ms |",
-		]},
+		"lines": {"README.md": array.concat(
+			[
+				"| path | budget | p50 | p95 |",
+				"| ---- | ------ | --- | --- |",
+				"| `noop` | ≤ 100 ms | 2.1 ms | 2.4 ms |",
+				"| `check` | ≤ 100 ms | 2.3 ms | 2.7 ms |",
+				"| `hook` | ≤ 100 ms | 2.8 ms | 3.0 ms |",
+				"| `passthrough` | ≤ 100 ms | — | — |",
+				"| `posttool` | ≤ 100 ms | — | — |",
+				"| `stop` | ≤ 100 ms | — | — |",
+				"| `wired` | ≤ 100 ms | 8.0 ms | 8.4 ms |",
+			],
+			commit_rows,
+		)},
 		"tool-verdict": {"perf-p95": clean_record},
 	}}
 }

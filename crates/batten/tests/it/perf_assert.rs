@@ -204,12 +204,33 @@ pub(crate) fn agreeing_readme() -> String {
      | `stop` | an end of turn | — | — | ≤ 100 ms |\n\
      | `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |\n"
         .to_owned()
+        + &COMMIT_STEPS
+            .iter()
+            .map(|step| format!("| `{step}` | a commit-time hook step | — | — | ≤ 100 ms |\n"))
+            .collect::<String>()
 }
+
+/// The default commit-time hook steps `perf measure` times in its commit fixture
+/// (CLOUD-2789), each budgeted like any other path.
+pub(crate) const COMMIT_STEPS: [&str; 8] = [
+    "cargo-fmt",
+    "taplo",
+    "taplo-format",
+    "config-lint-pinned",
+    "cfg-gated-test-pinned",
+    "merge-conflict-markers",
+    "conventional-commit",
+    "commit-attribution",
+];
 
 /// Every budgeted path measured comfortably inside its ceiling, as the producer
 /// takes them: `<name> <token>` per line.
 pub(crate) fn clean_record() -> String {
     "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nstop 2.6\nwired 8.4\n".to_owned()
+        + &COMMIT_STEPS
+            .iter()
+            .map(|step| format!("{step} 9.0\n"))
+            .collect::<String>()
 }
 
 /// A scratch repository carrying the fixture config, the COMMITTED module, and
@@ -338,6 +359,26 @@ fn a_record_does_not_survive_its_subject() {
     );
 }
 
+/// A commit hook is a batten hook (CLOUD-2789): each default commit-time step
+/// over the 100 ms ceiling is refused, as any invocation path is.
+///
+/// Fails by: a step's row dropped from `perf-assert`'s budgets, which leaves
+/// its arm measured and never gated.
+#[test]
+fn a_commit_time_step_over_its_budget_is_refused() {
+    for step in COMMIT_STEPS {
+        let dir = repo(&format!("commit-over-{step}"), Some(&agreeing_readme()));
+        let over = clean_record().replace(&format!("\n{step} 9.0\n"), &format!("\n{step} 150\n"));
+        assert_ne!(over, clean_record(), "the clean record carries {step}");
+        record(&dir, &over);
+        let answer = findings(&dir);
+        assert!(
+            answer.contains("path measure late"),
+            "{step} over its ceiling is a finding:\n{answer}"
+        );
+    }
+}
+
 #[test]
 fn a_readme_publishing_a_different_budget_is_refused() {
     let dir = repo(
@@ -426,7 +467,8 @@ fn measured() -> String {
         ("stop", "2.6"),
         ("wired", "8.4"),
     ]
-    .iter()
+    .into_iter()
+    .chain(COMMIT_STEPS.map(|step| (step, "9.0")))
     .fold(String::new(), |mut lines, (path, p95)| {
         let _ = writeln!(lines, "path={path} p50=1.9 p95={p95} mean=2.0 runs=30");
         lines
