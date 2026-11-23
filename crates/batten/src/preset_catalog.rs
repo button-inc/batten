@@ -2114,7 +2114,7 @@ one. Fetch the cited issue and pipe the set again.",
     // consumer fact travels inside one.
     Manifest {
         name: "supply-chain",
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         install: None,
         modules: &[
