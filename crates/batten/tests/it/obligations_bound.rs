@@ -101,23 +101,24 @@ fn install_module(root: &Path) {
 /// The committed row's shape, including `line_sources` — the field this suite
 /// exists to keep honest, since a glob that misses the named file makes every
 /// obligation unbindable for a reason no message would name.
+///
+/// READ from `batten.toml`, never copied (#1276): the copy pinned four globs
+/// while the committed row had grown to eleven and still missed
+/// `.config/nextest.toml`, `action.yml`, the workflows and
+/// `hk-fix-selection.pkl`, and every case here passed over it.
 fn row() -> Rule {
-    serde_json::from_value(serde_json::json!({
-        "id": "test name undefined",
-        "kind": "policy",
-        "scope": "tree",
-        "base": "origin/main",
-        "delta_sources": ["**"],
-        "line_sources": [
-            "crates/batten/tests/**/*.rs",
-            "policy/*.rego",
-            "mise.toml",
-            "crates/batten/src/**/*.rs"
-        ],
-        "module": "policy/obligations-bound.rego",
-        "severity": "deny",
-    }))
-    .expect("the loader accepts the committed row's shape")
+    common::committed_rule(UNBOUND)
+}
+
+/// THE POPULATION, over this repository: every tracked file declaring a row is
+/// one the committed row reads, so an obligation naming any of them can bind.
+#[test]
+fn every_declaring_file_in_this_repository_is_read() {
+    let unread = common::declaring_files_unread(&row());
+    assert!(
+        unread.is_empty(),
+        "declaring files outside `{UNBOUND}`'s line_sources: {unread:?}"
+    );
 }
 
 /// Two recorders, because the module reads two records: the board writes it
