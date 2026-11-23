@@ -3052,7 +3052,15 @@ fn run_suite(
     let binary = prebuilt
         .filter(|_| cargo)
         .and_then(|built| suite_binary(&built.metadata, dir, suite.path()));
-    let (cwd, mut argv) = invocation(dir, suite, want, binary.as_deref(), &junit);
+    let config = harness_config(root, dir);
+    let (cwd, mut argv) = invocation(
+        dir,
+        suite,
+        want,
+        binary.as_deref(),
+        &junit,
+        config.as_deref(),
+    );
     if let Some(built) = reuse {
         argv.extend(built.reuse_args());
     } else if cargo {
@@ -3178,14 +3186,37 @@ fn pointer(words: &[&str]) -> String {
     words.iter().take(5).copied().collect::<Vec<_>>().join(" ")
 }
 
+/// Where nextest reads its own configuration, relative to the tree it runs in.
+const NEXTEST_CONFIG: &str = ".config/nextest.toml";
+
+/// The unmutated nextest config a Cargo suite in `dir` runs under, where the
+/// row being judged mutated `dir`'s copy (#1276): `root`'s own, the bytes the
+/// staged copy was taken from. `None` where the two agree, or either is absent,
+/// and nextest reads `dir`'s as it always has.
+///
+/// THE HARNESS IS NOT THE SUBJECT. A row in `.config/nextest.toml` mutates the
+/// file the suite's harness reads before it selects a case, so a mutation that
+/// breaks its syntax or its profile stopped nextest with nothing run, and the
+/// row read could-not-look; one that loosens it changed which cases ran and how
+/// they were judged. The case still reads the mutated file as data, which is
+/// what the row is about.
+fn harness_config(root: &Path, dir: &Path) -> Option<PathBuf> {
+    let original = root.join(NEXTEST_CONFIG);
+    let staged = crate::fsio::read(dir.join(NEXTEST_CONFIG)).ok()?;
+    let unmutated = crate::fsio::read(&original).ok()?;
+    (staged != unmutated).then_some(original)
+}
+
 /// Where each harness runs and what it is handed: the working directory and
-/// the argv, program first.
+/// the argv, program first. `config` is the nextest config a Cargo suite runs
+/// under instead of the staged tree's ([`harness_config`]).
 fn invocation(
     dir: &Path,
     suite: &Suite,
     want: &str,
     binary: Option<&str>,
     junit: &Path,
+    config: Option<&Path>,
 ) -> (PathBuf, Vec<String>) {
     let argv = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
     match suite {
@@ -3227,6 +3258,10 @@ fn invocation(
                 "--no-tests=pass",
                 "--color=never",
             ];
+            let config = config.map(|path| path.to_string_lossy().into_owned());
+            if let Some(config) = &config {
+                words.extend(["--config-file", config]);
+            }
             words.extend(NEXTEST_VERDICT_FLAGS);
             words.extend(["-E", &filter]);
             (dir.to_path_buf(), argv(&words))
@@ -6241,6 +6276,40 @@ mod tests {
     ///
     /// Fails by: `Overlay::declared` answering `None` whatever is set, or
     /// `overlay_features` answering empty or a blank feature.
+    /// A staged nextest config that differs from the checkout's is the row's
+    /// subject, so the Cargo suite is handed the checkout's with
+    /// `--config-file`; one that agrees, or is absent, adds nothing (#1276).
+    /// Fails by: the suite run under the config the row is mutating.
+    #[test]
+    fn a_mutated_nextest_config_is_not_the_harness() {
+        let root = fixture("harness-config-root");
+        let dir = fixture("harness-config-staged");
+        let suite = Suite::Cargo {
+            path: String::from("tests/a.rs"),
+        };
+        let junit = Path::new("junit.xml");
+        let argv_with = |config: Option<PathBuf>| {
+            invocation(&dir, &suite, "a", None, junit, config.as_deref()).1
+        };
+        assert_eq!(harness_config(&root, &dir), None, "no config at all");
+        put(&root, NEXTEST_CONFIG, "[profile.default]\n");
+        put(&dir, NEXTEST_CONFIG, "[profile.default]\n");
+        assert_eq!(harness_config(&root, &dir), None, "an unmutated copy");
+        assert!(!argv_with(None).contains(&String::from("--config-file")));
+        put(&dir, NEXTEST_CONFIG, "[profile.default\n");
+        let config = harness_config(&root, &dir);
+        assert_eq!(config, Some(root.join(NEXTEST_CONFIG)), "the checkout's");
+        let argv = argv_with(config);
+        let at = argv
+            .iter()
+            .position(|word| word == "--config-file")
+            .expect("the config is named");
+        assert_eq!(
+            argv.get(at + 1).map(String::as_str),
+            Some(root.join(NEXTEST_CONFIG).to_string_lossy().as_ref())
+        );
+    }
+
     #[test]
     fn a_declared_overlay_names_its_features_to_every_invocation() {
         let root = Path::new("/r");
