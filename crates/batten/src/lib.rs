@@ -18530,6 +18530,13 @@ fn run_reach_seed(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         phase: mutate::schema::Phase::Reach,
     };
     let swept = mutate::schema::sweep(root, &listed, &listed_over, (1, scope), None, out)?;
+    if swept.code == 0 {
+        let keyed = mutate::resume::seed_passes(root)?;
+        writeln!(
+            out,
+            "mutate cargo: reach seed keyed {keyed} journaled pass(es) for the next head"
+        )?;
+    }
     Ok(mutate::schema::exit_of(swept.code))
 }
 

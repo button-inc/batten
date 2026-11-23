@@ -675,3 +675,143 @@ fn a_step_run_on_ci_seeds_nothing() {
     assert!(!seed_owed(&repo), "no seed is owed on CI\n{err}");
     assert!(!singleton(&repo, "reach-seed").exists(), "{err}");
 }
+
+/// The `[[provision]]` row `batten mutate cargo` resolves cargo-mutants by,
+/// as the repository's own `batten.toml` pins it: the reach seed lists the
+/// workspace with it.
+const MUTANTS_PROVISION: &str = "\n[[provision]]\nname = \"cargo-mutants\"\nversion = \"27.1.0\"\n\
+unpack = \"tar_gz\"\nbinary = \"cargo-mutants\"\n\n\
+[provision.platforms.linux-x86_64]\n\
+url = \"https://github.com/cargo-bins/cargo-quickinstall/releases/download/cargo-mutants-27.1.0/cargo-mutants-27.1.0-x86_64-unknown-linux-gnu.tar.gz\"\n\
+sha256 = \"0ce4de19c451cc03093405441e2be51ae88c5f18e78e75661489747d892b147a\"\n\n\
+[provision.platforms.linux-aarch64]\n\
+url = \"https://github.com/cargo-bins/cargo-quickinstall/releases/download/cargo-mutants-27.1.0/cargo-mutants-27.1.0-aarch64-unknown-linux-gnu.tar.gz\"\n\
+sha256 = \"f1f2e2dd680ac281467b39d43a6cbc9d6a9d367362ca4450158120a811cb1994\"\n";
+
+/// [`unseeded_repo`] over `source`, with cargo-mutants provisioned and a
+/// `fixtures/` directory holding one file, committed.
+fn seedable_repo(name: &str, source: &str) -> std::path::PathBuf {
+    let repo = selected_repo_with(name, source);
+    let state = batten::state::repo_state_dir(&repo).expect("the state dir");
+    std::fs::remove_dir_all(state.join("mutate").join("schema").join("reach"))
+        .expect("clear the reach store");
+    let config = std::fs::read_to_string(repo.join("batten.toml")).expect("the config");
+    common::write(
+        &repo,
+        "batten.toml",
+        &format!("{config}{MUTANTS_PROVISION}"),
+    );
+    common::write(&repo, "fixtures/a.txt", "a fixture\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-qm", "provision and fixtures"]);
+    repo
+}
+
+/// The reach seed a lap's end spawns, run in the foreground over `repo`: its
+/// reach run's cases count under `log`, apart from the step's.
+fn run_seed(repo: &std::path::Path, log: &std::path::Path) -> (bool, String) {
+    let output = common::batten()
+        .args(["mutate", "cargo"])
+        .current_dir(repo)
+        .env(batten::mutate::resume::SEED_ENV, "1")
+        .env("MUTANT_PHASE", "reach")
+        .env("FIXTURE_LOG", log)
+        .env_remove("CI")
+        .env_remove("MUTANT_CHANGED_SINCE")
+        .streamed_output()
+        .expect("run batten");
+    let mut said = String::from_utf8_lossy(&output.stdout).into_owned();
+    said.push_str(&common::stderr(&output));
+    (output.status.success(), said)
+}
+
+/// A seed's run with no lap holding the land singleton: release it, seed,
+/// and hold it again for the step runs that follow, so no detached seed runs
+/// beside the case.
+fn seed_between_laps(repo: &std::path::Path, log: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(singleton(repo, "land"));
+    let (seeded, said) = run_seed(repo, log);
+    assert!(seeded, "the seed passes\n{said}");
+    hold(repo, "land", std::process::id());
+}
+
+/// From an empty reach store, one passing run owes a seed; once it has run,
+/// the next head selects: an edit to one function reruns only the case that
+/// reached it (CLOUD-2842).
+///
+/// Fails by: no seed owed, a seed that records nothing selectable, or the
+/// next head rerunning cases the edit could not reach (passes not keyed).
+#[test]
+fn a_step_run_with_no_sweep_seeds_the_next_heads_selection() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = seedable_repo("step-seed-next", SELECTED);
+    let log = common::scratch("step-seed-next-log");
+    hold(&repo, "land", std::process::id());
+    let (passed, err) = seeding_step(&repo, &log, false);
+    assert!(passed, "{err}");
+    assert_eq!(counts(&log), [1, 1, 1, 1], "{err}");
+    assert!(seed_owed(&repo), "{err}");
+    seed_between_laps(&repo, &common::scratch("step-seed-next-seed"));
+    common::write(
+        &repo,
+        "src/lib.rs",
+        &SELECTED.replace("pub fn beta() -> u8 { 2 }", "pub fn beta() -> u8 { 1 + 1 }"),
+    );
+    let (passed, err) = seeding_step(&repo, &log, false);
+    assert!(passed, "{err}");
+    assert_eq!(
+        counts(&log),
+        [1, 2, 1, 1],
+        "the edit to `beta` reruns the case that reached it alone\n{err}"
+    );
+}
+
+/// [`SELECTED`] with a case that lists the package's `fixtures/` directory.
+fn globbing_source() -> String {
+    SELECTED.replace(
+        "    #[test]\n    fn unrecorded()",
+        "    #[test]\n    fn lists_fixtures() {\n        log(\"lists_fixtures\");\n        \
+         let dir = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"fixtures\");\n        \
+         assert!(std::fs::read_dir(dir).unwrap().count() > 0);\n    }\n    \
+         #[test]\n    fn unrecorded()",
+    )
+}
+
+/// A seeded case that lists a directory keys on that listing: an edit it
+/// never reached leaves it held, and a file added to the directory reruns it
+/// (CLOUD-2842).
+///
+/// Fails by: the listing case rerun over an unrelated edit (nothing recorded
+/// for it), or skipped when its directory gained a file (the listing unkeyed).
+#[test]
+fn a_globbing_case_reruns_only_when_its_directory_listing_moves() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let source = globbing_source();
+    let repo = seedable_repo("step-seed-glob", &source);
+    let log = common::scratch("step-seed-glob-log");
+    hold(&repo, "land", std::process::id());
+    let (passed, err) = seeding_step(&repo, &log, false);
+    assert!(passed, "{err}");
+    assert_eq!(runs(&log, "lists_fixtures"), 1, "{err}");
+    seed_between_laps(&repo, &common::scratch("step-seed-glob-seed"));
+    common::write(
+        &repo,
+        "src/lib.rs",
+        &source.replace("pub fn beta() -> u8 { 2 }", "pub fn beta() -> u8 { 1 + 1 }"),
+    );
+    let (passed, err) = seeding_step(&repo, &log, false);
+    assert!(passed, "{err}");
+    assert_eq!(
+        runs(&log, "lists_fixtures"),
+        1,
+        "an edit it never reached leaves it held\n{err}"
+    );
+    common::write(&repo, "fixtures/new.txt", "an added fixture\n");
+    let (passed, err) = seeding_step(&repo, &log, false);
+    assert!(passed, "{err}");
+    assert_eq!(
+        runs(&log, "lists_fixtures"),
+        2,
+        "a file added to its directory reruns it\n{err}"
+    );
+}
