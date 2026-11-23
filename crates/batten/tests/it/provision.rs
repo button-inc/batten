@@ -1749,34 +1749,15 @@ fn forbidden_fragments() -> Vec<(String, &'static str)> {
     // here, because a ban on the constant would ban the convention.
 }
 
-/// Every `.rs` under `crates/batten/src`, which is what rule 1 binds.
+/// Every `.rs` under EVERY workspace crate's `src/`, which is what rule 1
+/// binds since the split (CLOUD-2789): a consumer word cut into `batten-base`
+/// is still in the core.
 ///
 /// `src` alone, deliberately: `tests/` is this repository's own corpus and is
 /// entitled to name this repository, which is why the fragments above are
 /// assembled rather than spelled.
 fn engine_sources() -> Vec<PathBuf> {
-    fn walk(at: &Path, into: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(at) else {
-            return;
-        };
-        let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-        // Sorted so a finding is reported at the same place on every run, which
-        // is what makes the output byte-stable (house style §6).
-        paths.sort();
-        for path in paths {
-            if path.is_dir() {
-                walk(&path, into);
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                into.push(path);
-            }
-        }
-    }
-    let mut found = Vec::new();
-    walk(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut found,
-    );
-    found
+    common::engine_sources()
 }
 
 /// `path:line why` for every forbidden fragment in `text`.

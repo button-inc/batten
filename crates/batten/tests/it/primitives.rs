@@ -1095,13 +1095,11 @@ fn the_crate_bakes_in_no_consumer_vocabulary() {
         .chain(config.verbs.iter().map(|verb| verb.verb.clone()))
         .collect();
 
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    // EVERY CRATE'S `src/`, RECURSIVELY (CLOUD-2833): since the split the
+    // library is not `crates/batten/src` alone, and a module one directory
+    // down was never read.
     let mut scanned = 0;
-    for entry in fs::read_dir(&src).expect("read src/") {
-        let path = entry.expect("read dir entry").path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-            continue;
-        }
+    for path in common::engine_sources() {
         scanned += 1;
         let source = fs::read_to_string(&path).expect("read source");
         for token in &vocabulary {
