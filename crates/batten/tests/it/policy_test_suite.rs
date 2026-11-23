@@ -106,7 +106,7 @@ fn suite_with_scope(source: &str, mediated: bool) -> Suite {
         &serde_json::json!({}),
     )
     .expect("the fixture compiles");
-    match policy::test(&bundle, "{}", mediated).expect("the suite runs") {
+    match policy::test(&bundle, "{}", mediated, None).expect("the suite runs") {
         Look::Is(suite) => suite,
         Look::IsNot | Look::CouldNotLook => panic!("the suite did not run"),
     }
