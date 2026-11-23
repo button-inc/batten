@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use batten::crate_cut::{Cut, Plan, cut_crate};
+use batten::crate_cut::{Cut, Plan, cut_crate, respell_body};
 
 fn tree() -> (BTreeMap<String, String>, BTreeMap<String, String>) {
     let files = [
@@ -168,4 +168,24 @@ fn a_set_reaching_an_unmoved_module_is_refused_with_each_site() {
         ]
     );
     assert!(plan.writes.is_empty() && plan.removes.is_empty());
+}
+
+/// Fails by: a base test body spliced into HEAD in a spelling the cut no
+/// longer compiles (CLOUD-2789's replay), or respelled where the cut would
+/// not: a comment, a string, a module that stayed.
+#[test]
+fn a_body_is_respelled_as_the_cut_respells_a_file() {
+    let modules = ["git"].into_iter().collect();
+    let body = "{\n    // crate::git::run\n    let _ = \"crate::git\";\n    assert_eq!(crate::git::run(), 1);\n    m!(crate::git::run);\n    crate::other::run();\n}";
+    assert_eq!(
+        respell_body(body, "crate", &modules, "two").as_deref(),
+        Some(
+            "{\n    // crate::git::run\n    let _ = \"crate::git\";\n    assert_eq!(two::git::run(), 1);\n    m!(two::git::run);\n    crate::other::run();\n}"
+        )
+    );
+    // A use group mixing a moved and a kept module is the cut's remainder.
+    assert_eq!(
+        respell_body("{ use crate::{git, other}; }", "crate", &modules, "two"),
+        None
+    );
 }

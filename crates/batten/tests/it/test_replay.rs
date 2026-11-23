@@ -490,3 +490,114 @@ fn a_test_moved_to_another_crate_is_not_removed() {
         text(&output)
     );
 }
+
+/// A file `git.rs` with a helper whose name another file shares (so no
+/// tree-wide unique name pairs it), its own test, and a test left behind in
+/// `other.rs` naming it through `crate::`.
+fn git_rs(returns: &str, moved_expects: &str) -> String {
+    format!(
+        "pub fn run() -> u8 {{\n    {returns}\n}}\n\n#[cfg(test)]\nmod tests {{\n    #[test]\n    fn moved() {{\n        assert_eq!(crate::git::run(), {moved_expects});\n    }}\n}}\n"
+    )
+}
+
+fn other_rs(call: &str, expects: &str) -> String {
+    format!(
+        "pub fn run() -> u8 {{\n    9\n}}\n\n#[cfg(test)]\nmod tests {{\n    #[test]\n    fn uses() {{\n        let got = {call};\n        assert_eq!(got, {expects});\n    }}\n}}\n"
+    )
+}
+
+/// `one` holding `git` and `other`, committed as base.
+fn uncut(name: &str) -> (PathBuf, String) {
+    let dir = common::scratch(name);
+    common::write(
+        &dir,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"one\"]\nresolver = \"2\"\n",
+    );
+    common::write(
+        &dir,
+        "one/Cargo.toml",
+        "[package]\nname = \"one\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    common::write(&dir, "one/src/lib.rs", "pub mod git;\npub mod other;\n");
+    common::write(&dir, "one/src/git.rs", &git_rs("1", "1"));
+    common::write(
+        &dir,
+        "one/src/other.rs",
+        &other_rs("crate::git::run()", "1"),
+    );
+    common::write(&dir, ".gitignore", "target/\nCargo.lock\n");
+    common::init_repo(&dir);
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-qm", "base"]);
+    let base = common::git_in(&dir, &["rev-parse", "HEAD"]);
+    (dir, base)
+}
+
+/// `git` cut out of `one` into `two` as `cut-crate` cuts it: the file moved
+/// verbatim, and `other.rs`' path to it respelled `two::git`.
+fn cut(dir: &Path, git: &str, other: &str) {
+    common::write(
+        dir,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"one\", \"two\"]\nresolver = \"2\"\n",
+    );
+    common::write(
+        dir,
+        "one/Cargo.toml",
+        "[package]\nname = \"one\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\ntwo = { path = \"../two\" }\n",
+    );
+    common::write(
+        dir,
+        "two/Cargo.toml",
+        "[package]\nname = \"two\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    common::write(dir, "one/src/lib.rs", "pub mod other;\n");
+    std::fs::remove_file(dir.join("one/src/git.rs")).unwrap();
+    common::write(dir, "two/src/lib.rs", "pub mod git;\n");
+    common::write(dir, "two/src/git.rs", git);
+    common::write(dir, "one/src/other.rs", other);
+    common::git_in(dir, &["add", "-A"]);
+    common::git_in(dir, &["commit", "-qm", "cut"]);
+}
+
+/// Fails by: a test the cut moved reads as modified, since `run` is declared
+/// in two files and no tree-wide pairing follows it, and a left-behind test
+/// whose base body says `crate::git` is spliced unrespelled, so it does not
+/// compile at HEAD and is refused as an expectation change. Measured on #1276:
+/// 750 such refusals at c4426587.
+#[test]
+fn a_test_moved_by_a_crate_cut_replays_clean() {
+    let (dir, base) = uncut("replay-cut-clean");
+    // `uses` is rewritten beyond the respelling, so its base body is spliced
+    // and run: it must be spliced in the cut's spelling to compile.
+    cut(
+        &dir,
+        &git_rs("1", "1"),
+        &other_rs("two::git::run() + 0", "1"),
+    );
+    let output = replay(&dir, base.trim());
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(output.stdout.is_empty(), "{}", text(&output));
+}
+
+/// Anti-vacuity for the test above: the same cut with each assertion changed
+/// is still refused, by name, for both the moved test and the left-behind one.
+#[test]
+fn a_test_moved_by_a_crate_cut_with_a_changed_assertion_is_refused() {
+    let (dir, base) = uncut("replay-cut-changed");
+    cut(&dir, &git_rs("2", "2"), &other_rs("two::git::run()", "2"));
+    let output = replay(&dir, base.trim());
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for test in [
+        "two/src/git.rs::tests::moved",
+        "one/src/other.rs::tests::uses",
+    ] {
+        assert!(
+            stdout.contains(&format!("test-expectation-changed {test}")),
+            "{}",
+            text(&output)
+        );
+    }
+}
