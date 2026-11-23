@@ -394,28 +394,22 @@ readme_without_row(index) := array.concat(
 	array.slice(agreeing_readme, index + 1, count(agreeing_readme)),
 )
 
+# The tree a README case runs over. Each `with` term builds its README itself
+# rather than reading a case local: a second `with` reading a local keeps the
+# case off bytecode (#1276).
+readme_tree(readme) := {"tree": {
+	"lines": {"README.md": readme},
+	"tool-verdict": {"perf-p95": clean_record},
+}}
+
 test_a_readme_publishing_a_different_budget_is_refused if {
-	readme := readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 50 ms |")
-	count(violation) == 1 with input as {"tree": {
-		"lines": {"README.md": readme},
-		"tool-verdict": {"perf-p95": clean_record},
-	}}
-	disagreeing == {"noop"} with input as {"tree": {
-		"lines": {"README.md": readme},
-		"tool-verdict": {"perf-p95": clean_record},
-	}}
+	count(violation) == 1 with input as readme_tree(readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 50 ms |"))
+	disagreeing == {"noop"} with input as readme_tree(readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 50 ms |"))
 }
 
 test_a_readme_with_no_row_for_a_budgeted_path_is_refused if {
-	readme := readme_without_row(8)
-	count(violation) == 1 with input as {"tree": {
-		"lines": {"README.md": readme},
-		"tool-verdict": {"perf-p95": clean_record},
-	}}
-	disagreeing == {"wired"} with input as {"tree": {
-		"lines": {"README.md": readme},
-		"tool-verdict": {"perf-p95": clean_record},
-	}}
+	count(violation) == 1 with input as readme_tree(readme_without_row(8))
+	disagreeing == {"wired"} with input as readme_tree(readme_without_row(8))
 }
 
 # THE UNGATED CELL IS THE DISAGREEMENT WRITTEN THE OTHER WAY ROUND. `—` publishes
@@ -423,15 +417,8 @@ test_a_readme_with_no_row_for_a_budgeted_path_is_refused if {
 # published column and the enforced table drift apart in the direction nobody
 # notices.
 test_a_readme_publishing_no_budget_for_a_gated_path_is_refused if {
-	readme := readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | — |")
-	count(violation) == 1 with input as {"tree": {
-		"lines": {"README.md": readme},
-		"tool-verdict": {"perf-p95": clean_record},
-	}}
-	disagreeing == {"noop"} with input as {"tree": {
-		"lines": {"README.md": readme},
-		"tool-verdict": {"perf-p95": clean_record},
-	}}
+	count(violation) == 1 with input as readme_tree(readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | — |"))
+	disagreeing == {"noop"} with input as readme_tree(readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | — |"))
 }
 
 # THE COLUMN IS FOUND BY ITS HEADER, so a table that grows a column still compares

@@ -593,10 +593,11 @@ fn every_policy_case_decides_alike_on_bytecode_and_the_interpreter() {
     // `with` term reading a variable bound under `with` (24), a function reading
     // the input under `with` (15), three bundles with no expressible case. Each
     // is a desugaring still to write, or a case to respell; lower the ceiling
-    // with the count.
+    // with the count. 213 once the `ntia`, `obligations-bound` and `perf-assert`
+    // cases were respelled to write their own `with`.
     assert!(
-        off.len() <= 216,
-        "a case left bytecode for the interpreter ({} > 216):\n{}",
+        off.len() <= 213,
+        "a case left bytecode for the interpreter ({} > 213):\n{}",
         off.len(),
         off.join("\n")
     );
