@@ -244,6 +244,43 @@ pub(crate) fn at_root(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// The `[[rule]]` row the committed `batten.toml` declares under `id` — read,
+/// never copied, so a suite exercising a row cannot drift from the row the
+/// engine runs (the `line_sources` a copy pins is exactly the field that rots).
+pub(crate) fn committed_rule(id: &str) -> batten::config_model::Rule {
+    batten::config::load(&at_root("batten.toml"))
+        .expect("the committed config loads")
+        .rules
+        .into_iter()
+        .find(|rule| rule.id == id)
+        .unwrap_or_else(|| panic!("the committed config declares `{id}`"))
+}
+
+/// Every tracked file in this repository declaring a `MUTANT` row at column
+/// zero, under either opener `mutate.rs` honours — the population a row gate
+/// over declarations must be able to read.
+pub(crate) fn declaring_files() -> Vec<String> {
+    let root = at_root(".").canonicalize().expect("this checkout exists");
+    git_in(&root, &["grep", "-lE", "^(#|//)MUTANT "])
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The declaring files no glob in `rule`'s `line_sources` selects, as the
+/// engine selects them (`batten::selector`, `literal_separator`).
+pub(crate) fn declaring_files_unread(rule: &batten::config_model::Rule) -> Vec<String> {
+    let selectors: Vec<batten::selector::Selector> = rule
+        .line_sources
+        .iter()
+        .map(|glob| batten::selector::Selector::new(glob).expect("a committed glob compiles"))
+        .collect();
+    declaring_files()
+        .into_iter()
+        .filter(|path| !selectors.iter().any(|selector| selector.matches(path)))
+        .collect()
+}
+
 /// The committed `dist-workspace.toml`, parsed: cargo-dist's config, which the
 /// release, its installers and the package channels all read.
 pub(crate) fn dist_config() -> toml::Table {
