@@ -1183,31 +1183,110 @@ pub fn touched(
     names
         .iter()
         .filter(|name| {
-            resolve(root, name).is_none_or(|gate| changed_by(&gate, name, changed, code_changed))
+            resolve(root, name)
+                .is_none_or(|gate| changed_by(root, &gate, name, changed, code_changed))
         })
         .cloned()
         .collect()
 }
 
 /// Whether the change moves `gate`: a changed path is one of its sources, a
-/// [`Gate::suites`] entry whose code changed, or inside its preset directory
-/// ([`touched`]'s three arms).
+/// [`Gate::suites`] entry whose code changed, inside its preset directory, or a
+/// file one of its rows' cases lives in ([`case_files`], #1276) whose code
+/// changed ([`touched`]'s arms).
 fn changed_by(
+    root: &Path,
     gate: &Gate,
     name: &str,
     changed: &std::collections::BTreeSet<String>,
     code_changed: &std::collections::BTreeSet<String>,
 ) -> bool {
     let by_source = gate.sources.iter().any(|path| changed.contains(path));
-    let by_suite = gate
-        .suites()
+    let by_suite = || {
+        gate.suites()
+            .iter()
+            .any(|s| code_changed.contains(s.path()))
+    };
+    let by_preset = || {
+        presets_dir().is_some_and(|presets| {
+            let dir = format!("{presets}/{name}/");
+            changed.iter().any(|path| path.starts_with(&dir))
+        })
+    };
+    let by_case = || {
+        gate.rows.iter().any(|row| {
+            gate.suite_for(row).is_some_and(|suite| {
+                case_files(root, suite, &row.want)
+                    .iter()
+                    .any(|path| code_changed.contains(path))
+            })
+        })
+    };
+    by_source || by_suite() || by_preset() || by_case()
+}
+
+/// The names of `names` a change ENROLLED since `base` (#1276): a gate joining
+/// the set moves nothing of its own, so [`touched`] alone never swept it, and a
+/// new gate's first survivor waited for some later edit to its source.
+///
+/// READ FROM THE TWO FILES THE SET IS DECLARED IN, the committed authority's
+/// `[mutate]` and the task manifest `$MUTANT_TASKS` names beside
+/// `$MUTANT_GATES`, and only where the change touched one: a name occurring
+/// more often in one now than at `base` was enrolled. A glob newly written
+/// there enrolls every name whose sources it matches. It counts words, not
+/// keys, so a name newly mentioned elsewhere in either file widens the sweep,
+/// which is the direction could-not-look takes here; a base that cannot be
+/// read is an empty file, and widens the same way.
+#[must_use]
+pub fn enrolled_since(
+    root: &Path,
+    base: &str,
+    names: &[String],
+    changed: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let mut declaring = vec![crate::config_model::CONFIG_FILE.to_owned()];
+    declaring.extend(task_manifest());
+    let mut grown: BTreeMap<String, isize> = BTreeMap::new();
+    for path in declaring.iter().filter(|path| changed.contains(*path)) {
+        let now = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
+        let then = crate::git::show(root, base, path).unwrap_or_default();
+        for word in set_words(&now) {
+            *grown.entry(word.to_owned()).or_default() += 1;
+        }
+        for word in set_words(&then) {
+            *grown.entry(word.to_owned()).or_default() -= 1;
+        }
+    }
+    let new: std::collections::BTreeSet<String> = grown
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(word, _)| word)
+        .collect();
+    let globs: Vec<crate::selector::Selector> = new
         .iter()
-        .any(|s| code_changed.contains(s.path()));
-    let by_preset = presets_dir().is_some_and(|presets| {
-        let dir = format!("{presets}/{name}/");
-        changed.iter().any(|path| path.starts_with(&dir))
-    });
-    by_source || by_suite || by_preset
+        .filter(|word| word.contains('*'))
+        .filter_map(|word| crate::selector::Selector::new(word).ok())
+        .collect();
+    names
+        .iter()
+        .filter(|name| {
+            new.contains(*name)
+                || (!globs.is_empty()
+                    && resolve(root, name).is_some_and(|gate| {
+                        gate.sources
+                            .iter()
+                            .any(|source| globs.iter().any(|glob| glob.matches(source)))
+                    }))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The words a set declaration can carry a name or glob in: runs of the
+/// characters a gate name, path or glob is spelled with.
+fn set_words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !(c.is_alphanumeric() || "._-/*".contains(c)))
+        .filter(|word| !word.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -3949,8 +4028,138 @@ fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
         let path = suite.path();
         let text = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
         material.extend(crate::git::without_comments(path, &text).into_bytes());
+        // AND EVERY FILE ITS CASE CAN LIVE IN (#1276): a case weakened in a
+        // sibling module must not keep the catch recorded against the suite.
+        for path in case_files(root, suite, &row.want) {
+            let text = crate::fsio::read_to_string(root.join(&path)).unwrap_or_default();
+            material.push(0);
+            material.extend(path.as_bytes());
+            material.push(0);
+            material.extend(crate::git::without_comments(&path, &text).into_bytes());
+        }
     }
     crate::digest::sha256_hex(&material)
+}
+
+/// The files other than `suite`'s own that define a case `want` selects
+/// (#1276), sorted.
+///
+/// A suite's runner selects a case wherever it compiled or loaded, not in the
+/// declared file alone: `cargo test -- <want>` matches every function whose
+/// name carries `want` across the targets under the suite's directory, and
+/// `conftest verify -p <dir>` loads every module there. So a case moved into a
+/// sibling (`tests/<dir>/main.rs` declaring a module of cases) is still the
+/// row's evidence, and reading the declared path alone let a change weakening
+/// it touch no gate and keep its recorded catch. The other runners name their
+/// case in the declared file itself, and answer none.
+///
+/// A function NAMED like the case is enough, so a name the filter does not in
+/// fact select (another module's path prefix) widens; it never narrows.
+fn case_files(root: &Path, suite: &Suite, want: &str) -> Vec<String> {
+    // libtest's filter is a substring of the case's path; a `test_` rule is
+    // named exactly.
+    let (extension, wanted, exact) = match suite {
+        Suite::Cargo { .. } => (
+            "rs",
+            want.rsplit("::").next().unwrap_or(want).to_owned(),
+            false,
+        ),
+        Suite::Conftest { .. } => ("rego", format!("test_{want}"), true),
+        Suite::Tofu { .. } | Suite::Kyverno { .. } | Suite::Pytest { .. } => return Vec::new(),
+    };
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let selects = |name: &String| {
+        if exact {
+            *name == wanted
+        } else {
+            name.contains(&wanted)
+        }
+    };
+    let own = suite.path();
+    let dir = own.rsplit_once('/').map_or("", |(dir, _)| dir);
+    case_index(root, dir, extension)
+        .iter()
+        .filter(|(path, names)| path != own && names.iter().any(selects))
+        .map(|(path, _)| path.clone())
+        .collect()
+}
+
+/// The case names each `extension` file under `dir` defines, by path, read once
+/// per process: a sweep keys every row and a narrowing walks every gate, and
+/// both ask the same directory each time.
+fn case_index(root: &Path, dir: &str, extension: &'static str) -> Vec<(String, Vec<String>)> {
+    type Index =
+        std::collections::HashMap<(PathBuf, String, &'static str), Vec<(String, Vec<String>)>>;
+    static INDEX: std::sync::OnceLock<std::sync::Mutex<Index>> = std::sync::OnceLock::new();
+    let key = (root.to_path_buf(), dir.to_owned(), extension);
+    let index = INDEX.get_or_init(Default::default);
+    if let Some(found) = index.lock().ok().and_then(|held| held.get(&key).cloned()) {
+        return found;
+    }
+    let mut files = Vec::new();
+    // A suite at the root walks the root's own files alone: recursing there
+    // would read the build directory and every other tree in the checkout.
+    collect_files(root, dir, extension, !dir.is_empty(), &mut files);
+    files.sort();
+    let built: Vec<(String, Vec<String>)> = files
+        .into_iter()
+        .filter_map(|path| {
+            let text = crate::fsio::read_to_string(root.join(&path)).ok()?;
+            Some((path, case_names(&text, extension)))
+        })
+        .collect();
+    if let Ok(mut held) = index.lock() {
+        held.insert(key, built.clone());
+    }
+    built
+}
+
+/// Every `extension` file under `dir`, repo-relative, recursing where `deep`.
+/// A hidden directory and a `target` directory are never entered.
+fn collect_files(root: &Path, dir: &str, extension: &str, deep: bool, into: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(root.join(dir)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = if dir.is_empty() {
+            name.clone()
+        } else {
+            format!("{dir}/{name}")
+        };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            if deep && !name.starts_with('.') && name != "target" {
+                collect_files(root, &path, extension, deep, into);
+            }
+        } else if has_extension(&path, extension) {
+            into.push(path);
+        }
+    }
+}
+
+/// The case names a file defines: a Rust `fn`'s name, or a Rego `test_` rule's.
+fn case_names(text: &str, extension: &str) -> Vec<String> {
+    let ident = |rest: &str| -> String {
+        rest.chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect()
+    };
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let name = if extension == "rego" {
+                line.starts_with("test_").then(|| ident(line))
+            } else {
+                line.split_once("fn ").map(|(_, rest)| ident(rest))
+            }?;
+            (!name.is_empty()).then_some(name)
+        })
+        .collect()
 }
 
 /// The keys recorded caught; an unreadable record is an empty one. A line is a
