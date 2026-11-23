@@ -310,18 +310,30 @@ fn expand_graphs(
     for lines in bodies.values_mut() {
         let mut expanded = Vec::with_capacity(lines.len());
         for line in lines.drain(..) {
-            let rows = graph_group(&line).and_then(|group| groups.get(group));
+            let rows: Vec<String> = graph_groups(&line)
+                .into_iter()
+                .filter_map(|group| groups.get(group))
+                .flatten()
+                .cloned()
+                .collect();
             expanded.push(line.clone());
-            expanded.extend(rows.into_iter().flatten().cloned());
+            expanded.extend(rows);
         }
         *lines = expanded;
     }
 }
 
-/// The group a `… step graph run <group>` line names.
-fn graph_group(line: &str) -> Option<&str> {
-    let (_, rest) = line.split_once("step graph run ")?;
-    rest.split_whitespace().next()
+/// The groups a `… step graph run <group>...` line names, in order: each word
+/// up to the first flag, a `NAME=N` bound read as its `NAME` (CLOUD-2789).
+fn graph_groups(line: &str) -> Vec<&str> {
+    let Some((_, rest)) = line.split_once("step graph run ") else {
+        return Vec::new();
+    };
+    rest.split_whitespace()
+        .map(|word| word.trim_matches('"'))
+        .take_while(|word| !word.is_empty() && !word.starts_with('-'))
+        .map(|word| word.split_once('=').map_or(word, |(group, _)| group))
+        .collect()
 }
 
 /// Write `tasks` as `root`'s record, keyed to `configs` as they stand.

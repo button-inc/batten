@@ -19255,6 +19255,12 @@ group = "verify-1"
 run = ["mise", "run", "batten-check"]
 depends_on = ["gate:config-validator"]
 
+[[step]]
+id = "gate:modules-ratchet"
+group = "verify-1"
+run = ["mise", "run", "modules-ratchet:check"]
+depends_on = ["gate:config-validator"]
+
 # verify-2: the five builds, independent of one another, bounded by the
 # call's `--jobs`.
 [[step]]
@@ -19288,6 +19294,25 @@ run = ["mise", "run", "darwin-link"]
 id = "gate:clippy"
 group = "verify-2"
 run = ["mise", "run", "lint:clippy"]
+
+# verify-3 and verify-4 (CLOUD-2789): the suite tier, then `perf-gate` alone.
+# They were lines of `verify:gated`'s `run` array, which a red tier stopped
+# before they started; as groups of the same call, a red tier 1 or 2 no longer
+# hides what the suite would say. `verify-3=1` keeps them one at a time.
+[[step]]
+id = "gate:ci-suite"
+group = "verify-3"
+run = ["mise", "run", "verify:ci-suite"]
+
+[[step]]
+id = "gate:ci-slow-needed"
+group = "verify-3"
+run = ["mise", "run", "verify:ci-slow-needed"]
+
+[[step]]
+id = "gate:perf-gate"
+group = "verify-4"
+run = ["mise", "run", "perf-gate"]
 
 # EVERY FILESYSTEM READ GOES THROUGH `crate::fsio` (CLOUD-2692, CLOUD-2384). The
 # fsio codemod moved 374 direct `std::fs` reads in `crates/batten/src` onto the
