@@ -2202,11 +2202,12 @@ impl Fact {
     ///
     /// Exhaustive with no wildcard arm, like the two matches above: a new fact
     /// decides its schema here or fails to compile.
+    ///
+    /// The per-file source facts (`Units`, `Base`, `Invocations`, `Uses`) and
+    /// the engine-written stores (`Records`, `RecordsBlocked`, `Produced`) each
+    /// state their fragment in a function of their own (#1276): the match hit
+    /// its 100-line ceiling again, and the ceiling is right.
     #[must_use]
-    // ONE ARM PER FACT, exhaustive by construction: a new variant fails to compile
-    // until its schema is written here. Splitting the match to satisfy a line count
-    // would scatter one table across helpers no reader opens together.
-    #[allow(clippy::too_many_lines)]
     pub fn schema_fragment(self) -> serde_json::Value {
         match self {
             Fact::Document => serde_json::json!({
@@ -2230,15 +2231,7 @@ impl Fact {
                 "additionalProperties": {"type": "array", "items": {"type": "string"}},
             }),
             Fact::External => Self::external_schema_fragment(),
-            Fact::Units => serde_json::json!({
-                "type": "object",
-                "description": "Fact::Units (CLOUD-1008). Path -> {nodes}: every function, comment and string literal in that source file as a D4 node `{kind, position, line, name, offset, bytes, counts}`. Rust is read through the one lossless parse; Rego through regorus, as `function` (counts.total: has a default or an else) and `binding` (a `:=` bound to a call; name is the callee) nodes. Counts are integers and booleans only, never source text; a Rust `fn`'s counts carry `tokens` (o200k_base over its slice, the capture-view reader's counter). A path absent from this map is could-not-look; a path present with no nodes parsed and holds none.",
-                "additionalProperties": {
-                    "type": "object",
-                    "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
-                    "required": ["nodes"],
-                },
-            }),
+            Fact::Units => Self::units_schema_fragment(),
             Fact::Coupling => serde_json::json!({
                 "type": "object",
                 "description": "Fact::Coupling (plan step 3). Measures over the row's declared `use` graph at file level, each an object {decoupling_level, propagation_cost, largest_component, files}: `head` over the working tree, `base` over the row's `base` rev (absent when the row declares none). Decoupling Level is Mo et al. ICSE 2016 §3.1 with SCCs standing in for Design Rule Hierarchy modules (checked against the paper's Figure 2); propagation cost is reported for a reader and falls as unconnected files are added, so a ratchet gates `decoupling_level`, never it.",
@@ -2247,70 +2240,21 @@ impl Fact {
                     "base": {"type": "object"},
                 },
             }),
-            Fact::Base => serde_json::json!({
-                "type": "object",
-                "description": "Fact::Base (plan item 4, CLOUD-1008's base side). The per-file facts a row declares, acquired at the row's `base` rev from git objects rather than the working tree, keyed by family: `units` is Path -> {nodes} exactly as Fact::Units, at the base; `uses` is Path -> that file's `use` edges exactly as Fact::Uses, resolved against the BASE root's re-export table. A path the base does not hold, or whose blob its parser refused, is absent (could-not-look), never an empty node list.",
-                "properties": {
-                    "units": {
-                        "type": "object",
-                        "additionalProperties": {
-                            "type": "object",
-                            "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
-                            "required": ["nodes"],
-                        },
-                    },
-                    "uses": {
-                        "type": "object",
-                        "additionalProperties": {"type": "array", "items": {"type": "object"}},
-                    },
-                },
-            }),
-            Fact::Invocations => serde_json::json!({
-                "type": "object",
-                "description": "Fact::Invocations (CLOUD-914). Path -> the call sites in that Rust file, each `program` (the callee as written), `arguments` (the string literals it PASSES -- never its receiver) and `line`. A path absent from this map is could-not-look: the parser could not read it. A path present with an empty list is a file that parsed and calls nothing. Rego reads an undefined path as `does not hold`, so those two must never collapse.",
-                "additionalProperties": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "program": {"type": "string"},
-                            "arguments": {"type": "array", "items": {"type": "string"}},
-                            "line": {"type": "integer"},
-                        },
-                        "additionalProperties": false,
-                    },
-                },
-            }),
+            Fact::Base => Self::base_schema_fragment(),
+            Fact::Invocations => Self::invocations_schema_fragment(),
             Fact::Staged
             | Fact::State
             | Fact::Forge
             | Fact::ToolVerdict
             | Fact::Minted
-            | Fact::Captured
-            | Fact::Produced
-            | Fact::Records
-            | Fact::RecordsBlocked => Self::keyed_read_schema_fragment(self),
+            | Fact::Captured => Self::keyed_read_schema_fragment(self),
+            Fact::Records => Self::records_schema_fragment(),
+            Fact::RecordsBlocked => Self::records_blocked_schema_fragment(),
+            Fact::Produced => Self::produced_schema_fragment(),
             Fact::Symbols => Self::symbols_schema_fragment(),
             Fact::Plan => Self::plan_schema_fragment(),
             Fact::Review => Self::review_schema_fragment(),
-            Fact::Uses => serde_json::json!({
-                "type": "object",
-                "description": "Fact::Uses (CLOUD-762). Path -> that file's `use` edges. `to` is the module or crate reached AFTER resolution through the crate root's re-export table; `item` the imported leaf name; `origin` one of internal/external/root-item/local; `via_root` whether resolution supplied `to` rather than the text, which is the flag that marks an edge a line predicate reads wrongly. `qualified` whether the edge was written as a qualified path in code (`crate::m::f()`, a `crate::m::T` type) rather than a `use` item; one per distinct (to, item) per file, and paths inside macro token streams are not seen. An edge still `root-item` is one the root's table could not name, and is could-not-look at the edge level rather than an edge onto nothing. A path absent from this map could not be parsed; a path present with an empty array imports nothing.",
-                "additionalProperties": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "to": {"type": "string"},
-                            "item": {"type": "string"},
-                            "origin": {"type": "string"},
-                            "via-root": {"type": "boolean"},
-                            "line": {"type": "integer"},
-                        },
-                        "additionalProperties": false,
-                    },
-                },
-            }),
+            Fact::Uses => Self::uses_schema_fragment(),
             // The SCALAR family delegates (CLOUD-1170 split this out). Two facts
             // whose value is one constrained primitive rather than a container
             // keyed by a declared subject — which is a real seam and not a line
@@ -2363,6 +2307,83 @@ impl Fact {
                 Self::repository_schema_fragment(self)
             }
         }
+    }
+
+    /// [`Fact::Units`]'s fragment (CLOUD-1008).
+    fn units_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Units (CLOUD-1008). Path -> {nodes}: every function, comment and string literal in that source file as a D4 node `{kind, position, line, name, offset, bytes, counts}`. Rust is read through the one lossless parse; Rego through regorus, as `function` (counts.total: has a default or an else) and `binding` (a `:=` bound to a call; name is the callee) nodes. Counts are integers and booleans only, never source text; a Rust `fn`'s counts carry `tokens` (o200k_base over its slice, the capture-view reader's counter). A path absent from this map is could-not-look; a path present with no nodes parsed and holds none.",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
+                "required": ["nodes"],
+            },
+        })
+    }
+
+    /// [`Fact::Base`]'s fragment: the per-file facts at the row's `base` rev.
+    fn base_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Base (plan item 4, CLOUD-1008's base side). The per-file facts a row declares, acquired at the row's `base` rev from git objects rather than the working tree, keyed by family: `units` is Path -> {nodes} exactly as Fact::Units, at the base; `uses` is Path -> that file's `use` edges exactly as Fact::Uses, resolved against the BASE root's re-export table. A path the base does not hold, or whose blob its parser refused, is absent (could-not-look), never an empty node list.",
+            "properties": {
+                "units": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
+                        "required": ["nodes"],
+                    },
+                },
+                "uses": {
+                    "type": "object",
+                    "additionalProperties": {"type": "array", "items": {"type": "object"}},
+                },
+            },
+        })
+    }
+
+    /// [`Fact::Invocations`]'s fragment (CLOUD-914).
+    fn invocations_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Invocations (CLOUD-914). Path -> the call sites in that Rust file, each `program` (the callee as written), `arguments` (the string literals it PASSES -- never its receiver) and `line`. A path absent from this map is could-not-look: the parser could not read it. A path present with an empty list is a file that parsed and calls nothing. Rego reads an undefined path as `does not hold`, so those two must never collapse.",
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "program": {"type": "string"},
+                        "arguments": {"type": "array", "items": {"type": "string"}},
+                        "line": {"type": "integer"},
+                    },
+                    "additionalProperties": false,
+                },
+            },
+        })
+    }
+
+    /// [`Fact::Uses`]'s fragment (CLOUD-762).
+    fn uses_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Uses (CLOUD-762). Path -> that file's `use` edges. `to` is the module or crate reached AFTER resolution through the crate root's re-export table; `item` the imported leaf name; `origin` one of internal/external/root-item/local; `via_root` whether resolution supplied `to` rather than the text, which is the flag that marks an edge a line predicate reads wrongly. `qualified` whether the edge was written as a qualified path in code (`crate::m::f()`, a `crate::m::T` type) rather than a `use` item; one per distinct (to, item) per file, and paths inside macro token streams are not seen. An edge still `root-item` is one the root's table could not name, and is could-not-look at the edge level rather than an edge onto nothing. A path absent from this map could not be parsed; a path present with an empty array imports nothing.",
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string"},
+                        "item": {"type": "string"},
+                        "origin": {"type": "string"},
+                        "via-root": {"type": "boolean"},
+                        "line": {"type": "integer"},
+                    },
+                    "additionalProperties": false,
+                },
+            },
+        })
     }
 
     /// [`Fact::Shell`]'s fragment (CLOUD-2625).
@@ -2937,10 +2958,10 @@ impl Fact {
     /// one, and the thing could not be opened. A schema typing either as a bare
     /// object would refuse the module that handles them, which `opa check -s`
     /// catches and which is the whole argument for deriving these from the fact.
-    // ONE ARM PER FACT, exhaustive by construction: a new variant fails to compile
-    // until its schema is written here. Splitting the match to satisfy a line count
-    // would scatter one table across helpers no reader opens together.
-    #[allow(clippy::too_many_lines)]
+    ///
+    /// The stores the engine writes itself (`Records`, `RecordsBlocked`,
+    /// `Produced`) left for functions of their own (#1276): they are not reads
+    /// of a record a producer wrote outside the engine, which this family is.
     fn keyed_read_schema_fragment(self) -> serde_json::Value {
         match self {
             Fact::Forge => serde_json::json!({
@@ -2971,24 +2992,6 @@ impl Fact {
                 "type": ["object", "null"],
                 "description": "Fact::Captured (CLOUD-1188). Declared id -> the REDUCTION that row asked for over a response the agent already captured: a boolean for `present`, an integer for `count`, a bounded whitespace-free string for `token`. THE REDUCTION IS PART OF THE FACT rather than the consumer's discipline -- a payload on this document could be lifted into a `subjects` pointer by any module, so non-negotiable rule 4 is decided here. A `token` reduction over a value that is not a bounded token is REFUSED and the id is absent, which is what makes `tokens, not prose` structural. Resolved from the capture store and NEVER from stdin: the store is sorted by handle, so two runs over unchanged bytes agree, which is what `Surface::Check` requires. NULL when no row declared a reduction and when no store is readable; a declared id no capture answers is ABSENT from the map, never a false negative.",
                 "additionalProperties": {"type": ["boolean", "integer", "string"]},
-            }),
-            Fact::RecordsBlocked => serde_json::json!({
-                "type": "object",
-                "description": "Fact::RecordsBlocked (CLOUD-1126). RECORDER id -> the reason class its selected call could not be answered, e.g. `required-absent`. The could-not-look channel `input.tree.records` does not have: a record ABSENT from that map could not be read and a short one is a recorder that ran and found nothing, while an entry HERE is a row whose subject arrived and whose call produced none of the inputs the row reads. Two pointers per entry -- a declared id and a class -- and never a byte of what the call produced (non-negotiable rule 4). An EMPTY object is an answer and means nothing was blocked on this branch: the store is written only when something is, so its absence and its emptiness are one fact. A recorder absent from the map is therefore NOT blocked, and a predicate must read a PRESENT entry rather than infer one from an absence.",
-                "additionalProperties": {"type": "string"},
-            }),
-            Fact::Records => serde_json::json!({
-                "type": "object",
-                "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
-                "additionalProperties": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-            }),
-            Fact::Produced => serde_json::json!({
-                "type": "object",
-                "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
-                "additionalProperties": {"type": "string"},
             }),
             Fact::Staged => serde_json::json!({
                 "type": ["object", "null"],
@@ -3047,10 +3050,43 @@ impl Fact {
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::Produced
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
         }
+    }
+
+    /// [`Fact::RecordsBlocked`]'s fragment (CLOUD-1126).
+    fn records_blocked_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::RecordsBlocked (CLOUD-1126). RECORDER id -> the reason class its selected call could not be answered, e.g. `required-absent`. The could-not-look channel `input.tree.records` does not have: a record ABSENT from that map could not be read and a short one is a recorder that ran and found nothing, while an entry HERE is a row whose subject arrived and whose call produced none of the inputs the row reads. Two pointers per entry -- a declared id and a class -- and never a byte of what the call produced (non-negotiable rule 4). An EMPTY object is an answer and means nothing was blocked on this branch: the store is written only when something is, so its absence and its emptiness are one fact. A recorder absent from the map is therefore NOT blocked, and a predicate must read a PRESENT entry rather than infer one from an absence.",
+            "additionalProperties": {"type": "string"},
+        })
+    }
+
+    /// [`Fact::Records`]'s fragment (CLOUD-1051).
+    fn records_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
+            "additionalProperties": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        })
+    }
+
+    /// [`Fact::Produced`]'s fragment (CLOUD-851).
+    fn produced_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
+            "additionalProperties": {"type": "string"},
+        })
     }
 
     /// The schema fragment for the commit-metadata family (CLOUD-1187).
