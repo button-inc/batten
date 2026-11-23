@@ -10017,11 +10017,12 @@ severity = "deny"
 # it, both clauses run over a map that never held its lines, and the gate reports
 # clean. That is the same silence the two paragraphs above record being caught by
 # seeding rather than by reading. Found in review of PR #848.
+#
+# EVERY PACKAGE, not a list of them (#1276): the per-crate list missed
+# `batten-fsio`, `batten-stream` and `batten-codemods`, the same hole across
+# crates that the paragraph above names within one.
 delta_sources = [
-  "crates/batten/src/**/*.rs",
-  "crates/batten-facts/src/**/*.rs",
-  "crates/batten-base/src/**/*.rs",
-  "crates/batten-core/src/**/*.rs",
+  "crates/*/src/**/*.rs",
   "policy/spawn-adapters.rego",
 ]
 # AND `line_sources` FOR THE WORKING SIDE, because the two keys fill different
@@ -10037,10 +10038,7 @@ delta_sources = [
 # would leave a nested module's lines on one side only — which is the same read
 # as not seeing it at all.
 line_sources = [
-  "crates/batten/src/**/*.rs",
-  "crates/batten-facts/src/**/*.rs",
-  "crates/batten-base/src/**/*.rs",
-  "crates/batten-core/src/**/*.rs",
+  "crates/*/src/**/*.rs",
   "policy/spawn-adapters.rego",
 ]
 
