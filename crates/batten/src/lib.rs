@@ -10647,17 +10647,13 @@ fn admission_anchor(
     class: &str,
     subject: &str,
 ) -> Result<(admission::Anchor, String)> {
-    // The HEAD is READ, never defaulted. `unwrap_or_default()` here would bind
-    // `call:` on a repository this cannot resolve, so two different
+    // The call's anchor is READ, never defaulted. `unwrap_or_default()` here
+    // would bind `call:` on a repository this cannot resolve, so two different
     // could-not-look states would share one address and an admission minted in
-    // either would spend against the other.
+    // either would spend against the other. Since CLOUD-2779 it is the inputs
+    // the rule's decision read where the rule names them ([`call_anchor`]).
     let head = || -> Result<(admission::Anchor, String)> {
-        Ok((
-            admission::Anchor::Call {
-                head: git::head_commit(root)?,
-            },
-            subject.to_owned(),
-        ))
+        Ok((call_anchor(root, rule, subject)?, subject.to_owned()))
     };
     // `RunOverSelection`, never `Run`: this is a NARROWED read — one rule, one
     // subject — and registry equality's exhausted half is a property of the whole
@@ -10812,6 +10808,57 @@ fn admission_anchor(
     anchor_among(&scan.findings, rule, class, subject, head)
 }
 
+/// The anchor a MEDIATED `(rule, subject)` is answered about (CLOUD-2779): a
+/// digest of the inputs that rule's decision read, where the rule names them,
+/// else the HEAD as every call binding was.
+///
+/// One table, read by the mint and by both lookups (`admit_mediated`,
+/// `protected_escape`), so the three cannot disagree on what binds.
+///
+/// **`protected-mutation` reads the path**, so it binds the path's committed blob
+/// or its absence ([`admission::Anchor::Inputs`]). Every other mediated rule keeps
+/// `call:<head>`: a narrower anchor is a claim about what the decision read, and
+/// a rule whose decision reads the call alone would bind nothing at all — an
+/// admission that outlived every commit. That claim is made per rule or not at
+/// all.
+///
+/// # Errors
+///
+/// When HEAD, or the path's blob at HEAD, cannot be read: could-not-look binds
+/// nothing rather than a value two unreadable states would share.
+fn call_anchor(root: &Path, rule: &str, subject: &str) -> Result<admission::Anchor> {
+    if rule == hook::PROTECTED_MUTATION {
+        let path = admission::subject_path(subject);
+        let blobs = git::blob_ids_at(root, "HEAD", &[path])?;
+        return Ok(admission::Anchor::Inputs(admission::inputs_digest(&[(
+            path,
+            blobs.get(path).map(String::as_str),
+        )])));
+    }
+    Ok(admission::Anchor::Call {
+        head: git::head_commit(root)?,
+    })
+}
+
+/// The anchors a mediated lookup tries for `subject`: the current one
+/// ([`call_anchor`]), then `call:<head>`, so a record spent before CLOUD-2779
+/// still admits at its HEAD exactly as it did. One entry where the two agree.
+fn call_anchors(root: &Path, rule: &str, subject: &str, head: &str) -> Vec<String> {
+    let legacy = admission::Anchor::Call {
+        head: head.to_owned(),
+    }
+    .token();
+    let mut anchors: Vec<String> = call_anchor(root, rule, subject)
+        .ok()
+        .map(|anchor| anchor.token())
+        .into_iter()
+        .collect();
+    if !anchors.contains(&legacy) {
+        anchors.push(legacy);
+    }
+    anchors
+}
+
 /// Which one of `findings` a `(rule, subject)` pair addresses, and the subject
 /// that binds it — [`admission_anchor`]'s decision over the scan it ran.
 fn anchor_among(
@@ -10867,6 +10914,35 @@ fn anchor_among(
                 .collect();
             named.sort_unstable();
             named.dedup();
+            // THE SUBJECT NAMES A FINDING UNDER ANOTHER RULE (CLOUD-2779): the
+            // caller named the ROW (`issue file other`) and its module fired
+            // under a predicate (`issue file held`). `apply_admissions` binds
+            // `finding.rule`, so a `call:` fallback here is queried by nothing —
+            // measured on #1276, minted and spent at two HEADs and admitting
+            // nothing either time. It refuses naming the rule the finding
+            // carries, with the subject as given.
+            let mut carried: Vec<&str> = findings
+                .iter()
+                .filter(|finding| {
+                    finding.path == subject || finding.identity.fingerprint.to_hex() == subject
+                })
+                .map(|finding| finding.rule.as_str())
+                .collect();
+            carried.sort_unstable();
+            carried.dedup();
+            if named.is_empty() && !carried.is_empty() {
+                let routes: Vec<String> = carried
+                    .iter()
+                    .map(|carrier| refusal::override_routes(carrier, class, &[subject]))
+                    .collect();
+                return Err(UsageError::raise(format!(
+                    "no finding for rule `{rule}` names subject `{subject}`; the finding it \
+                     names carries rule `{}`, so an admission bound under `{rule}` would \
+                     suppress nothing; {}",
+                    carried.join("`, `"),
+                    routes.join("; ")
+                )));
+            }
             if named.is_empty() {
                 // NOTHING THIS RULE PRODUCED, so there is no tree finding to
                 // address and the fallback is never weaker than what shipped: a
@@ -21680,8 +21756,10 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     };
     // Which spellings a mediated refusal binds, and why each, is
     // `refusal::admission_bindings`'s (CLOUD-1826); the first that admits wins.
-    // What pins the admission to a situation is the anchor below:
-    // `Anchor::Call { head }`, so one commit unbinds it as it voids a receipt.
+    // What pins the admission to a situation is the anchor below: the inputs
+    // the rule's decision read where it names them, else the HEAD
+    // ([`call_anchor`], CLOUD-2779), and `call:<head>` for a record spent
+    // before that.
     let root = hook_authority_root();
     let Ok(head) = git::head_commit(root) else {
         return Ok(decision);
@@ -21694,11 +21772,15 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     let Ok(epoch) = epoch::for_rule_cached(root, None, refusal.rule(), class) else {
         return Ok(decision);
     };
-    let anchor = admission::Anchor::Call { head }.token();
     for subject in refusal.bindings() {
-        let Some(address) =
-            admission::admitted(root, refusal.rule(), class, subject, &anchor, &epoch)?
-        else {
+        let mut found = None;
+        for anchor in call_anchors(root, refusal.rule(), subject, &head) {
+            found = admission::admitted(root, refusal.rule(), class, subject, &anchor, &epoch)?;
+            if found.is_some() {
+                break;
+            }
+        }
+        let Some(address) = found else {
             continue;
         };
         // POINTER, NEVER THE ANSWERS (rule 4), and the same line `filter_admitted`
@@ -21891,18 +21973,23 @@ fn protected_escape(
         .zip(epoch::for_rule_cached(&root, None, "protected-mutation", "path write refused").ok());
     let mut unnamed = Vec::new();
     for changed_path in changed {
-        let admitted = match &situation {
-            Some((head, epoch)) => admission::admitted_path(
-                &root,
-                "protected-mutation",
-                "path write refused",
-                &changed_path,
-                &admission::Anchor::Call { head: head.clone() }.token(),
-                epoch,
-            )?
-            .is_some(),
-            None => false,
-        };
+        let mut admitted = false;
+        if let Some((head, epoch)) = &situation {
+            for anchor in call_anchors(&root, hook::PROTECTED_MUTATION, &changed_path, head) {
+                admitted = admission::admitted_path(
+                    &root,
+                    hook::PROTECTED_MUTATION,
+                    "path write refused",
+                    &changed_path,
+                    &anchor,
+                    epoch,
+                )?
+                .is_some();
+                if admitted {
+                    break;
+                }
+            }
+        }
         if !admitted {
             unnamed.push(changed_path);
         }
