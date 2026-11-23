@@ -882,13 +882,23 @@ fn failed_cases(xml: &str) -> Option<std::collections::BTreeSet<(String, String)
     )
 }
 
+/// After a failing journaled run in the checkout at `root`: every failed case
+/// by name and binary id, in order. `None` where the report cannot be read.
+#[must_use]
+pub fn failed(root: &Path) -> Option<Vec<(String, String)>> {
+    let report = crate::fsio::read_to_string(report_path(root)?).ok()?;
+    Some(failed_cases(&report)?.into_iter().collect())
+}
+
 /// After a failing journaled run in the checkout at `root`: the failed cases
 /// whose sealed reach record still holds on this tree — nothing any of them
 /// ran or read moved since it was recorded, so no change here can have caused
 /// the failure (`DeFlaker`, Bell et al. ICSE 2018) — and how many cases failed.
 /// `None` where the run's report cannot be read.
 ///
-/// A LABEL, NEVER A VERDICT: red is never reused, and the step's exit stands.
+/// A LABEL, NEVER A VERDICT: the step's exit stands. It decides only whether
+/// the failure receipt the step records re-runs (CLOUD-2253): a failure whose
+/// every failing case is a suspect does, any other is red until its inputs move.
 #[must_use]
 pub fn flaky_suspects(root: &Path) -> Option<(Vec<(String, String)>, usize)> {
     let report = crate::fsio::read_to_string(report_path(root)?).ok()?;

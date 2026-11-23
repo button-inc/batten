@@ -15105,6 +15105,7 @@ fn verify_stall(root: &Path, registered: Option<u32>) -> Option<land::Stall> {
         beat: std::time::Duration::from_secs(beat.unsigned_abs()),
         beats,
         progress: stall_progress,
+        red: step::red_under,
     })
 }
 
@@ -15201,6 +15202,9 @@ fn run_land_verify_seen(
     // moved the registry the stall arm reads.
     let stall = verify_stall(root, registered);
     if let Some(stall) = &stall {
+        // A red answer filed under this task by an earlier gate is not this
+        // gate's (CLOUD-2253).
+        step::clear_red(&stall.git_dir, stall.pid);
         published.push((step::TASK_PID.to_owned(), stall.pid.to_string()));
     }
     let environment = verify_environment(root);
