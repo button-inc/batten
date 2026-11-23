@@ -4000,76 +4000,16 @@ run = [
   "git --no-pager diff --stat --exit-code -- mise.lock",
 ]
 
-# ONE TURN'S CROSS-TRIPLE TYPE-CHECK, DETACHED (CLOUD-1731).
-#
-# `cross-check` runs in exactly one place — inside `verify` — so "this does not
-# compile on Windows" is learned at the cadence of the whole gate, which in
-# practice means after the author has moved on. `rules/rust.md` states the cost
-# in its own words ("the next edit to the other one is discovered by CI") and
-# CLOUD-1148 is the recorded instance: the `windows` job reddening alone, and the
-# first fix making it worse.
-#
-# AFFORDABLE BECAUSE OF THE RECEIPT, measured 2026-09-09 rather than assumed:
-# a re-run whose inputs, command and toolchain are unchanged answers from
-# its step receipt in **1.0s**; a run that must re-derive takes 54s cold. So the
-# per-turn cost is a second on every turn that changed no Rust, and 54s on the
-# turns that changed some — which are the turns that need it.
-#
-# DETACHED, BECAUSE A HANDLER THAT WAITS IS A HANDLER THAT TAXES EVERY TURN. The
-# verdict is not needed before the turn proceeds; it is needed before the author
-# stops thinking about the change, which is a much weaker deadline. `verify`
-# remains the blocking authority and this never substitutes for it.
-#
-# THE FAILURE IS REPORTED ON THE NEXT TURN AND SUCCESS IS SILENT. A log nobody
-# reads is sensor-only (non-negotiable rule 2), so the marker file is what turns
-# this from a log into a mechanism: the next invocation prints it and clears it.
-# Success says nothing, because a line on every turn is noise that trains the
-# reader to skip the one turn it matters.
-#
-# THE PATTERN TOLERATES COLOUR RATHER THAN SUPPRESSING IT, and that is the third
-# draft of this line. `[env]` sets `CARGO_TERM_COLOR = "always"` repo-wide, so a
-# machine-read log carries escapes between `: ` and `error`: the first draft
-# scraped `-->` and got nothing, the second matched `: error` and got nothing,
-# and the third set `CARGO_TERM_COLOR=never` on the invocation — which ALSO got
-# nothing, because a task's own environment beats a value inherited from the
-# caller. Three silent failures, each announcing a break with no pointer.
-#
-# So the pattern anchors on the SHAPE `--message-format=short` guarantees —
-# `path:line:col: ` — and lets `.*` span whatever decoration sits after it. It
-# needs no escape literal, survives either colour setting, and excludes the
-# trailing `error: could not compile` summaries, which carry no location and
-# would have spent the cap on nothing.
-#
-# BOUNDED AT FIVE LINES, AND BOUNDED IS NOT THE SAME AS USEFUL. The first draft
-# emitted one fixed sentence, which is cheap and costs the reader a whole turn
-# re-running the check to learn what broke — bounded and useless is its own
-# waste. What it emits instead is the first THREE `path:line` pointers and a
-# path to the rest: actionable enough to fix without a second run, and
-# pointer-only per non-negotiable rule 4, since a compiler's full output is the
-# payload and these are the pointer. The window cost of a failing turn is five
-# lines; of a passing turn, zero.
-#
-# `[hook_output] max_repeats = 1` IS SATISFIED BY THE CLEAR, not by luck: the
-# marker is removed once printed, so one failure is announced once rather than
-# on every turn until it is fixed — which is what would otherwise trip that
-# ceiling and, worse, train the reader to skip the line.
-#
-# ON STDOUT, AND THAT IS THE WHOLE DIFFERENCE BETWEEN AN ALARM AND A LOG.
-# `handler.rs` states the contract: "Exit `0` with stdout: advisory text, to be
-# merged into Batten's own" — so stdout is what reaches the AGENT and stderr is
-# what reaches a log nobody opens. The first draft of this line wrote the marker
-# to stderr, which would have printed the failure, cleared it, and shown it to
-# no one: a sensor wearing an alarm's clothes, one layer inside the rule against
-# exactly that. Caught in review before it landed.
-#
-# ONE LINE JOINED BY `;` RATHER THAN A `"""` BODY, for `deps-install`'s reason:
-# `inline-task-bodies-not-growing-basic` is `non_increasing` against
-# `origin/main` with no `admits_with`, so a new block body is refused and the
-# only routes are extraction or a waiver. Neither is worth spending here.
-#
-# `batten singleton` RATHER THAN A PROCESS PROBE: the lock is the declared
-# mechanism for "may a second copy start in this clone", and polling the process
-# table for one is the shape `polls-a-local-process` refuses.
+# THE PER-TURN DETACHED CROSS-CHECK IS RETIRED (229841f43). `cross-turn` ran
+# `cross-check` detached on every turn under a `batten singleton` lock, and
+# reduced a failure to three `path:line` pointers through a
+# `compiler-error-pointer` `[[pattern]]` row; the task, the verb and the row are
+# all gone. `[tasks.cross-check]` below is what remains: CI's `cross` job
+# (`rust.yml`, `release-plz.yml`), run by hand to prove it locally, never a
+# per-turn handler. It keeps
+# `--message-format=short` on every `cargo check` so a failure there still names
+# its line as one `path:line:col: error: …` row
+# (`cross_check.rs`'s `the_cross_check_asks_the_compiler_for_one_line_per_diagnostic`).
 # The provisioning `mise-tasks/doctor.sh` owned, as the declared table that
 # replaces it (CLOUD-1753). `--repair` because that is what the program did: it
 # checked and then FIXED what it could, and a session that only reported would
