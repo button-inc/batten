@@ -1680,13 +1680,13 @@ fn case_bound(
 }
 
 /// Each case's measured seconds, from a nextest `JUnit` report: the `name`,
-/// `classname` (the binary) and `time` of every `<testcase>`.
-fn durations(junit: &str) -> std::collections::BTreeMap<Case, f64> {
+/// `classname` (the binary) and `time` of every `<testcase>`. `None` when the
+/// report is not XML.
+fn durations(junit: &str) -> Option<std::collections::BTreeMap<Case, f64>> {
     // AS XML, as the judge reads its report (#1276), never split on text.
-    let Ok(doc) = roxmltree::Document::parse(junit) else {
-        return std::collections::BTreeMap::new();
-    };
-    doc.descendants()
+    let doc = roxmltree::Document::parse(junit).ok()?;
+    let measured = doc
+        .descendants()
         .filter(|node| node.has_tag_name("testcase"))
         .filter_map(|case| {
             let time = case.attribute("time")?.parse::<f64>().ok()?;
@@ -1698,7 +1698,8 @@ fn durations(junit: &str) -> std::collections::BTreeMap<Case, f64> {
                 time,
             ))
         })
-        .collect()
+        .collect();
+    Some(measured)
 }
 
 /// The two runs a mutant is judged by. The first holds the cases that killed a
@@ -2161,6 +2162,9 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     let key = blake3::hash(test.join("\u{1f}").as_bytes()).to_hex()[..16].to_owned();
     let dir = base.join(key);
     if finished_passing(&dir) {
+        // MARKED, so the near-zero this skip reports is never sealed as the
+        // case's time ([`measured_seconds`]).
+        crate::durable::replace(dir.join(SKIPPED), "")?;
         return Ok(0);
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -2224,6 +2228,11 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
 
 /// The file a case's record holds once its process exited, with its exit code.
 const DONE: &str = "done";
+
+/// The mark a case's record holds when this run's recorder skipped it: the
+/// report times a skip, not the case, so its time is never sealed. Dropped by
+/// the seal.
+const SKIPPED: &str = "skipped";
 
 /// Whether the case recorded at `dir` finished and passed: the one record a
 /// resumed run keeps.
@@ -2500,8 +2509,26 @@ pub struct Reach {
     /// Each carried case's seconds as sealed: this run skipped it, so its own
     /// timing reads as nothing.
     pub seconds: std::collections::BTreeMap<Case, f64>,
+    /// Each case this run's recorder skipped ([`SKIPPED`]): the report's time
+    /// for it is a skip's, never the case's.
+    pub skipped: BTreeSet<Case>,
     /// The schema tree the record is over ([`tree_digest`]).
     pub tree: String,
+}
+
+/// Each case's seconds: the report's for a case that ran, and the sealed ones
+/// alone for a case the recorder skipped, which has none when it was never
+/// sealed. A carried case keeps the larger of the two.
+fn measured_seconds(
+    mut report: std::collections::BTreeMap<Case, f64>,
+    reach: &Reach,
+) -> std::collections::BTreeMap<Case, f64> {
+    report.retain(|case, _| !reach.skipped.contains(case));
+    for (case, took) in &reach.seconds {
+        let held = report.entry(case.clone()).or_insert(0.0);
+        *held = held.max(*took);
+    }
+    report
 }
 
 /// Every mutant site each case reached and every function it executed, from
@@ -2537,6 +2564,9 @@ fn collect_dirs(
         let Some(case) = kept_case(&dir) else {
             continue;
         };
+        if dir.join(SKIPPED).is_file() {
+            reach.skipped.insert(case.clone());
+        }
         if let Ok(listing) = crate::fsio::read_to_string(dir.join(READ)) {
             reach
                 .read
@@ -2566,10 +2596,9 @@ fn collect_dirs(
         }
         for file in std::fs::read_dir(&dir)? {
             let path = file?.path();
-            if path
-                .file_name()
-                .is_some_and(|f| f == "case" || f == DONE || f == TRACE || f == READ || f == OVER)
-            {
+            if path.file_name().is_some_and(|f| {
+                f == "case" || f == DONE || f == TRACE || f == READ || f == OVER || f == SKIPPED
+            }) {
                 continue;
             }
             let text = crate::fsio::read_to_string(&path).unwrap_or_default();
@@ -3626,16 +3655,13 @@ pub fn load_verdicts(text: &str) -> std::collections::BTreeMap<String, String> {
 }
 
 /// Whether a stored verdict may stand in for a run: every decided verdict,
-/// never a run that erred. A SURVIVOR TOO: its key holds the cases that reach
+/// never a run that erred or hung, which decided nothing. A SURVIVOR TOO: its key holds the cases that reach
 /// its site and their files, so a case added that reaches it, or an edit to
 /// one that does, moves the key and it is judged again. Re-judging survivors
 /// whose key held cost most of a lap's judging on #1276.
 #[must_use]
 pub fn reusable(verdict: &str) -> bool {
-    matches!(
-        verdict,
-        "caught" | "timeout" | "unviable" | "missed" | "uncovered"
-    )
+    matches!(verdict, "caught" | "unviable" | "missed" | "uncovered")
 }
 
 /// The first argument that runs a schema sweep over a listing file.
@@ -3754,7 +3780,6 @@ fn judge_all(
                     }
                     let verdict = match reused.map(String::as_str) {
                         Some("caught") => Verdict::Caught,
-                        Some("timeout") => Verdict::Timeout,
                         Some("missed") => Verdict::Missed,
                         // A stored `uncovered` needs no arm: its key was taken
                         // over no reaching case, so the same key reaches none
@@ -3890,7 +3915,7 @@ fn unprobe_key(root: &std::path::Path, file: &str) -> String {
 
 /// Print each baseline-red case with its failure line, every verdict that is
 /// not a kill (an unjudged one naming the red case that poisoned it), and the
-/// counts, and answer the sweep's exit: 3 when a run erred, 2 when a mutant
+/// counts, and answer the sweep's exit: 3 when a run erred or hung, 2 when a mutant
 /// survived or went unjudged or a case was red unmutated, else 0.
 fn report(
     out: &mut dyn std::io::Write,
@@ -3943,6 +3968,16 @@ fn report(
             out,
             "mutate schema: run errors kept under {}",
             state.join("errors").display()
+        )?;
+        return Ok(3);
+    }
+    // A HANG DECIDED NOTHING EITHER: the run was stopped before a case could
+    // fail or pass, so a sweep holding one is could-not-look, never green.
+    let hung = counts.get(Verdict::Timeout.name()).copied().unwrap_or(0);
+    if hung > 0 {
+        writeln!(
+            out,
+            "mutate schema: {hung} run(s) timed out, which decided nothing"
         )?;
         return Ok(3);
     }
@@ -4604,11 +4639,7 @@ fn reached(
         recorded.entry(case.clone()).or_default();
     }
     let digests = digests_with(root, &dirs, schema, ids, &recorded, &reach.read);
-    let mut seconds = case_seconds(state);
-    for (case, took) in &reach.seconds {
-        let held = seconds.entry(case.clone()).or_insert(0.0);
-        *held = held.max(*took);
-    }
+    let seconds = measured_seconds(case_seconds(state)?, &reach);
     seal_reach(
         &state.join("reach"),
         &reach,
@@ -4699,18 +4730,22 @@ fn sweep_format(
     }
 }
 
-/// Each case's measured seconds from the reach run's junit report, or none
-/// when it left no report.
-fn case_seconds(state: &std::path::Path) -> std::collections::BTreeMap<Case, f64> {
-    durations(
-        &crate::fsio::read_to_string(
-            state
-                .join("nextest")
-                .join("batten-cover")
-                .join(super::cover::JUNIT),
-        )
-        .unwrap_or_default(),
-    )
+/// Each case's measured seconds from the reach run's junit report.
+///
+/// # Errors
+///
+/// A COULD-NOT-LOOK: the report is absent or is not XML. Read as no
+/// measurements, every case would cost [`UNMEASURED_SECONDS`] and every
+/// mutant's bound would sit at the floor, so a slow kill reads as a hang.
+fn case_seconds(state: &std::path::Path) -> anyhow::Result<std::collections::BTreeMap<Case, f64>> {
+    let at = state
+        .join("nextest")
+        .join("batten-cover")
+        .join(super::cover::JUNIT);
+    let text = crate::fsio::read_to_string(&at)
+        .map_err(|why| anyhow::anyhow!("the reach run's report {}: {why}", at.display()))?;
+    durations(&text)
+        .ok_or_else(|| anyhow::anyhow!("the reach run's report {} is not XML", at.display()))
 }
 
 // ---------------------------------------------------------------------------
@@ -5810,6 +5845,10 @@ mod tests {
             !reusable(HANDED) && !reusable(UNPROBED),
             "neither stands in for a run"
         );
+        assert!(
+            !reusable("timeout"),
+            "a hang decided nothing, so it is judged again"
+        );
         assert_eq!(loaded.get("u").map(String::as_str), Some("uncovered"));
         assert_eq!(loaded.len(), 4);
         assert_eq!(journal_line(None, "missed", "m"), "-\tmissed\tm\n");
@@ -6176,11 +6215,100 @@ mod tests {
         std::fs::create_dir_all(base.join(&key)).unwrap();
         std::fs::write(base.join(&key).join(DONE), "0").unwrap();
         assert_eq!(record_into(&base, &test).unwrap(), 0, "skipped");
+        assert!(
+            base.join(&key).join(SKIPPED).is_file(),
+            "a skip is marked, so its run's time is never sealed"
+        );
         std::fs::write(base.join(&key).join(DONE), "101").unwrap();
         // Run again either way the host runs it: untraced, the missing
         // program is a spawn error; under a tracer, the tracer's own failing
         // exit. Only the skip answers a clean 0.
         assert!(!matches!(record_into(&base, &test), Ok(0)), "run again");
+        assert!(
+            !base.join(&key).join(SKIPPED).exists(),
+            "a case that ran is not marked skipped"
+        );
+    }
+
+    /// A case the recorder skipped keeps the seconds it was sealed with, or
+    /// none, never the near-zero its skipped run reported; a case that ran
+    /// takes its report's seconds; and the skip mark is never sealed.
+    ///
+    /// Fails by: a skipped case sealed at its skip's time (its next judge
+    /// bound sized for a case that never ran, so a live mutant times out), or
+    /// a run's own time dropped.
+    #[test]
+    fn a_skipped_case_keeps_the_seconds_it_was_sealed_with() {
+        let base = crate::scratch::scratch("schema-reach-skipped-seconds");
+        record(
+            &base,
+            "carried",
+            "carried",
+            Some("0"),
+            &[(SKIPPED, ""), (DEPENDS, "Dd1\nT2.5\n")],
+        );
+        record(&base, "resumed", "resumed", Some("0"), &[(SKIPPED, "")]);
+        record(&base, "ran", "ran", Some("0"), &[]);
+        let reach = collect_reach(&base, &no_identity()).unwrap();
+        let case = |name: &str| (String::from(name), String::from("bin"));
+        assert_eq!(
+            reach.skipped,
+            BTreeSet::from([case("carried"), case("resumed")])
+        );
+        let report = [
+            (case("carried"), 0.01),
+            (case("resumed"), 0.01),
+            (case("ran"), 3.0),
+        ]
+        .into();
+        let seconds = measured_seconds(report, &reach);
+        assert_eq!(
+            seconds,
+            [(case("carried"), 2.5), (case("ran"), 3.0)].into(),
+            "a skip's time is never a case's"
+        );
+        let digests = [
+            (case("carried"), String::from("d1")),
+            (case("resumed"), String::from("d2")),
+            (case("ran"), String::from("d3")),
+        ]
+        .into();
+        seal_reach(&base, &reach, &digests, &no_identity(), &seconds, false).unwrap();
+        let sealed = |dir: &str| std::fs::read_to_string(base.join(dir).join(DEPENDS)).unwrap();
+        assert_eq!(sealed("carried"), "Dd1\nT2.5\n");
+        assert_eq!(
+            sealed("resumed"),
+            "Dd2\n",
+            "no time it was never measured at"
+        );
+        assert_eq!(sealed("ran"), "Dd3\nT3\n");
+        assert!(!base.join("carried").join(SKIPPED).exists());
+    }
+
+    /// A reach run's seconds are read from its report, and a report that is
+    /// absent or unreadable is a could-not-look, never every case at the
+    /// unmeasured default.
+    ///
+    /// Fails by: a missing report read as no measurements, which bounds every
+    /// mutant's run at the floor and reads a slow kill as a timeout.
+    #[test]
+    fn a_missing_report_is_a_could_not_look_not_unmeasured() {
+        let state = crate::scratch::scratch("schema-case-seconds");
+        assert!(case_seconds(&state).is_err(), "no report");
+        let report = state.join("nextest").join("batten-cover");
+        std::fs::create_dir_all(&report).unwrap();
+        std::fs::write(report.join(super::super::cover::JUNIT), "<testsuites").unwrap();
+        assert!(case_seconds(&state).is_err(), "an unreadable report");
+        std::fs::write(
+            report.join(super::super::cover::JUNIT),
+            "<testsuites><testsuite><testcase name=\"t\" classname=\"b\" time=\"1.5\"/>\
+             </testsuite></testsuites>",
+        )
+        .unwrap();
+        assert_eq!(
+            case_seconds(&state).unwrap(),
+            [((String::from("t"), String::from("b")), 1.5)].into()
+        );
     }
 
     /// The exit-code file is the record's own, never a site: `0` would read as
@@ -6429,7 +6557,7 @@ mod tests {
         let report = "<testsuite name=\"batten::it\"><testcase name=\"a::b&lt;1&gt;\" \
                       classname=\"batten::it\" timestamp=\"x\" time=\"0.250\">\
                       </testcase><testcase name=\"c\" classname=\"batten\" time=\"2\"/></testsuite>";
-        let timed = durations(report);
+        let timed = durations(report).unwrap();
         assert_eq!(timed.get(&case("a::b<1>")), Some(&0.25));
         assert_eq!(
             timed.get(&(String::from("c"), String::from("batten"))),
@@ -7948,6 +8076,13 @@ mod tests {
         let none = (&Red::new(), &std::collections::BTreeMap::new());
         let code = report(&mut out, &mutants, &verdicts[..1], none, (0, 0), &state, 7).unwrap();
         assert_eq!(code, 0);
+        // A HANG DECIDED NOTHING: could-not-look, never a pass.
+        let mut out = Vec::new();
+        let hung = [(0, Verdict::Caught), (1, Verdict::Timeout)];
+        let code = report(&mut out, &mutants, &hung, none, (0, 0), &state, 7).unwrap();
+        let said = String::from_utf8(out).unwrap();
+        assert_eq!(code, 3, "{said}");
+        assert!(said.contains("timeout\tm1\n"), "{said}");
         // A RED CASE IS LISTED WITH ITS LINE, AN UNJUDGED MUTANT NAMES IT, AND
         // THE EXIT IS 2 EVEN WHEN EVERY MUTANT WAS CAUGHT.
         let case = (String::from("tests::red"), String::from("fix"));
@@ -8173,7 +8308,11 @@ mod tests {
         let mut verdicts = judge_all(&judging, &todo, 2, &mut out);
         verdicts.sort_by_key(|(id, _)| *id);
         assert!(verdicts[..101].iter().all(|(_, v)| *v == Verdict::Caught));
-        assert_eq!(verdicts[101].1, Verdict::Timeout);
+        assert_eq!(
+            verdicts[101].1,
+            Verdict::Uncovered,
+            "a stored timeout is judged again, never reused"
+        );
         assert_eq!(verdicts[102].1, Verdict::Uncovered);
         assert_eq!(
             verdicts[103].1,
@@ -8188,7 +8327,7 @@ mod tests {
             .map(|line| line.split(" in ").next().unwrap_or_default())
             .collect();
         assert!(
-            said.contains("mutate schema: reused 104 of 105 verdict(s)"),
+            said.contains("mutate schema: reused 103 of 105 verdict(s)"),
             "{said}"
         );
         assert_eq!(
@@ -8199,9 +8338,16 @@ mod tests {
             ]
         );
         let journaled = std::fs::read_to_string(&store).unwrap();
+        let mut lines: Vec<&str> = journaled.lines().collect();
+        lines.sort_unstable();
+        let mut expected = [
+            journal_line(Some(&key(&mutants[101])), "uncovered", "hang"),
+            journal_line(Some(&key(&mutants[102])), "uncovered", "none"),
+        ];
+        expected.sort_unstable();
         assert_eq!(
-            journaled,
-            journal_line(Some(&key(&mutants[102])), "uncovered", "none")
+            lines,
+            expected.iter().map(|l| l.trim_end()).collect::<Vec<_>>()
         );
     }
 
