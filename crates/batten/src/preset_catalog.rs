@@ -204,7 +204,7 @@ pub struct PresetModule {
     /// `<preset:name>/….rego`, the pointer a refusal prints.
     pub pointer: &'static str,
     /// The module source, `include_str!`d at build time.
-    pub source: &'static str,
+    pub embedded_source: &'static str,
 }
 
 /// How a preset's tool installs a consumer's chosen environments (CLOUD-2633).
@@ -345,7 +345,7 @@ impl Manifest {
                 )
                 .as_bytes(),
             );
-            for line in decided_lines(module.source) {
+            for line in decided_lines(module.embedded_source) {
                 hasher.update(line.as_bytes());
                 hasher.update(b"\n");
             }
@@ -448,7 +448,7 @@ pub const MANIFESTS: &[Manifest] = &[
             // reads as no answer yet, which fails closed rather than clean.
             provider: None,
             pointer: "<preset:check-verdict>/latest-run-decides.rego",
-            source: include_str!("policy/presets/check-verdict/latest-run-decides.rego"),
+            embedded_source: include_str!("policy/presets/check-verdict/latest-run-decides.rego"),
         }],
         verdicts: &[
             VendoredVerdict {
@@ -513,7 +513,7 @@ writing the family, and re-mint the record from the query.",
                 // empty and every rule here refuses nothing (CLOUD-1625).
                 provider: Some("github-actions"),
                 pointer: "<preset:ci-hygiene>/spend-is-authorised.rego",
-                source: include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
+                embedded_source: include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
             },
             PresetModule {
                 scope: RuleScope::Tree,
@@ -521,7 +521,9 @@ writing the family, and re-mint the record from the query.",
                 // `github.event.workflow_run` — the same language, same reason.
                 provider: Some("github-actions"),
                 pointer: "<preset:ci-hygiene>/wiring-can-be-reached.rego",
-                source: include_str!("policy/presets/ci-hygiene/wiring-can-be-reached.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/ci-hygiene/wiring-can-be-reached.rego"
+                ),
             },
         ],
         verdicts: &[
@@ -711,13 +713,13 @@ value is what does the work, and it is a boolean rather than the string `true`."
                 // expression language is in it.
                 provider: None,
                 pointer: "<preset:ci-signal>/landing-stays-linear.rego",
-                source: include_str!("policy/presets/ci-signal/landing-stays-linear.rego"),
+                embedded_source: include_str!("policy/presets/ci-signal/landing-stays-linear.rego"),
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:ci-signal>/required-failures-reach-a-verdict.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/ci-signal/required-failures-reach-a-verdict.rego"
                 ),
             },
@@ -731,7 +733,7 @@ value is what does the work, and it is a boolean rather than the string `true`."
                 // (CLOUD-1625).
                 provider: Some("github-actions"),
                 pointer: "<preset:ci-signal>/timeout-tracks-its-measurement.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/ci-signal/timeout-tracks-its-measurement.rego"
                 ),
             },
@@ -949,7 +951,7 @@ than its producer, which writes whole or removes, and reads the same way.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/mcp-grants-are-honoured.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego"
                 ),
             },
@@ -957,7 +959,7 @@ than its producer, which writes whole or removes, and reads the same way.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/allowed-call-is-preapproved.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/allowed-call-is-preapproved.rego"
                 ),
             },
@@ -965,7 +967,7 @@ than its producer, which writes whole or removes, and reads the same way.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/dispatch-is-preapproved.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/dispatch-is-preapproved.rego"
                 ),
             },
@@ -973,7 +975,7 @@ than its producer, which writes whole or removes, and reads the same way.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/subagent-is-preapproved.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/subagent-is-preapproved.rego"
                 ),
             },
@@ -981,7 +983,7 @@ than its producer, which writes whole or removes, and reads the same way.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/unwatch-is-preapproved.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/unwatch-is-preapproved.rego"
                 ),
             },
@@ -989,7 +991,7 @@ than its producer, which writes whole or removes, and reads the same way.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/plan-mode-refuses-writes.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/plan-mode-refuses-writes.rego"
                 ),
             },
@@ -997,7 +999,9 @@ than its producer, which writes whole or removes, and reads the same way.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/write-is-preapproved.rego",
-                source: include_str!("policy/presets/claude-code-cloud/write-is-preapproved.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/claude-code-cloud/write-is-preapproved.rego"
+                ),
             },
             // CLOUD-2157: a backgrounded call that names no timeout runs with
             // the host's maximum, carried on the grant above it.
@@ -1005,7 +1009,7 @@ than its producer, which writes whole or removes, and reads the same way.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/background-timeout-is-maximal.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/background-timeout-is-maximal.rego"
                 ),
             },
@@ -1013,7 +1017,7 @@ than its producer, which writes whole or removes, and reads the same way.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/read-only-is-preapproved.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/read-only-is-preapproved.rego"
                 ),
             },
@@ -1023,7 +1027,7 @@ than its producer, which writes whole or removes, and reads the same way.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/auto-mode-is-preapproved.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/auto-mode-is-preapproved.rego"
                 ),
             },
@@ -1109,7 +1113,7 @@ could-not-look arm exists to refuse.",
             scope: RuleScope::MediatedCall,
             provider: None,
             pointer: "<preset:commit-hygiene>/no-empty-commit.rego",
-            source: include_str!("policy/presets/commit-hygiene/no-empty-commit.rego"),
+            embedded_source: include_str!("policy/presets/commit-hygiene/no-empty-commit.rego"),
         }],
         verdicts: &[VendoredVerdict {
             id: "commit ship empty",
@@ -1133,7 +1137,7 @@ the pipeline.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:landing-loop>/graded-head-is-not-regraded.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/landing-loop/graded-head-is-not-regraded.rego"
                 ),
             },
@@ -1141,7 +1145,7 @@ the pipeline.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:landing-loop>/already-landed-work-is-not-relanded.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/landing-loop/already-landed-work-is-not-relanded.rego"
                 ),
             },
@@ -1149,7 +1153,7 @@ the pipeline.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:landing-loop>/lease-authorises-the-branch.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/landing-loop/lease-authorises-the-branch.rego"
                 ),
             },
@@ -1157,7 +1161,7 @@ the pipeline.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:landing-loop>/rebase-conflict-stops-the-lap.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/landing-loop/rebase-conflict-stops-the-lap.rego"
                 ),
             },
@@ -1165,7 +1169,9 @@ the pipeline.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:landing-loop>/lap-waits-on-one-answer.rego",
-                source: include_str!("policy/presets/landing-loop/lap-waits-on-one-answer.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/landing-loop/lap-waits-on-one-answer.rego"
+                ),
             },
         ],
         verdicts: &[
@@ -1345,7 +1351,7 @@ abandon the other unread.",
                 // provider is involved, so it applies everywhere.
                 provider: None,
                 pointer: "<preset:mise>/task-over-executable.rego",
-                source: include_str!("policy/presets/mise/task-over-executable.rego"),
+                embedded_source: include_str!("policy/presets/mise/task-over-executable.rego"),
             },
             PresetModule {
                 scope: RuleScope::Tree,
@@ -1359,7 +1365,9 @@ abandon the other unread.",
                 // `scope`, one subject later.
                 provider: Some("github-actions"),
                 pointer: "<preset:mise>/action-version-matches-the-pin.rego",
-                source: include_str!("policy/presets/mise/action-version-matches-the-pin.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/mise/action-version-matches-the-pin.rego"
+                ),
             },
         ],
         verdicts: &[
@@ -1432,7 +1440,7 @@ could not, which is a gate reporting on a surface it never saw.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:pinned-toolchain>/pinned-program-via-the-pin.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"
                 ),
             },
@@ -1440,7 +1448,7 @@ could not, which is a gate reporting on a surface it never saw.",
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:pinned-toolchain>/pinned-program-probed-bare.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/pinned-toolchain/pinned-program-probed-bare.rego"
                 ),
             },
@@ -1503,7 +1511,9 @@ declares, and a probe inside the pin's environment is already correct",
             // expression language is involved, so it applies anywhere.
             provider: None,
             pointer: "<preset:release-hygiene>/checksums-cover-the-release.rego",
-            source: include_str!("policy/presets/release-hygiene/checksums-cover-the-release.rego"),
+            embedded_source: include_str!(
+                "policy/presets/release-hygiene/checksums-cover-the-release.rego"
+            ),
         }],
         verdicts: &[
             VendoredVerdict {
@@ -1553,7 +1563,7 @@ the record rather than a verdict about the release. Record it again.",
             // expression language is involved, so it applies anywhere.
             provider: None,
             pointer: "<preset:engine-hygiene>/engine-pin-fresh.rego",
-            source: include_str!("policy/presets/engine-hygiene/engine-pin-fresh.rego"),
+            embedded_source: include_str!("policy/presets/engine-hygiene/engine-pin-fresh.rego"),
         }],
         verdicts: &[VendoredVerdict {
             id: "release pin stale",
@@ -1599,7 +1609,7 @@ step.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:shell-hygiene>/shebang-names-its-language.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/shell-hygiene/shebang-names-its-language.rego"
                 ),
             },
@@ -1607,7 +1617,7 @@ step.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:shell-hygiene>/sibling-resolves.rego",
-                source: include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
+                embedded_source: include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
             },
             PresetModule {
                 scope: RuleScope::Tree,
@@ -1618,13 +1628,13 @@ step.",
                 // manifest and file arms read no provider at all.
                 provider: None,
                 pointer: "<preset:shell-hygiene>/no-new-shell.rego",
-                source: include_str!("policy/presets/shell-hygiene/no-new-shell.rego"),
+                embedded_source: include_str!("policy/presets/shell-hygiene/no-new-shell.rego"),
             },
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:shell-hygiene>/no-shell-written.rego",
-                source: include_str!("policy/presets/shell-hygiene/no-shell-written.rego"),
+                embedded_source: include_str!("policy/presets/shell-hygiene/no-shell-written.rego"),
             },
         ],
         verdicts: &[
@@ -1813,31 +1823,39 @@ commit.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/closing-key-closes.rego",
-                source: include_str!("policy/presets/tracker-hygiene/closing-key-closes.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/tracker-hygiene/closing-key-closes.rego"
+                ),
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/deferral-has-an-owner.rego",
-                source: include_str!("policy/presets/tracker-hygiene/deferral-has-an-owner.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/tracker-hygiene/deferral-has-an-owner.rego"
+                ),
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/done-has-no-open-pull.rego",
-                source: include_str!("policy/presets/tracker-hygiene/done-has-no-open-pull.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/tracker-hygiene/done-has-no-open-pull.rego"
+                ),
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/done-is-released.rego",
-                source: include_str!("policy/presets/tracker-hygiene/done-is-released.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/tracker-hygiene/done-is-released.rego"
+                ),
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/duplicate-close-is-argued.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/tracker-hygiene/duplicate-close-is-argued.rego"
                 ),
             },
@@ -1845,7 +1863,7 @@ commit.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/shipping-is-not-sufficient.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/tracker-hygiene/shipping-is-not-sufficient.rego"
                 ),
             },
@@ -1853,7 +1871,7 @@ commit.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/board-columns-tell-the-truth.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/tracker-hygiene/board-columns-tell-the-truth.rego"
                 ),
             },
@@ -1861,25 +1879,33 @@ commit.",
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/board-graph-is-acyclic.rego",
-                source: include_str!("policy/presets/tracker-hygiene/board-graph-is-acyclic.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/tracker-hygiene/board-graph-is-acyclic.rego"
+                ),
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/board-claims-agree.rego",
-                source: include_str!("policy/presets/tracker-hygiene/board-claims-agree.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/tracker-hygiene/board-claims-agree.rego"
+                ),
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/board-frontier-is-ready.rego",
-                source: include_str!("policy/presets/tracker-hygiene/board-frontier-is-ready.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/tracker-hygiene/board-frontier-is-ready.rego"
+                ),
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:tracker-hygiene>/board-citations-resolve.rego",
-                source: include_str!("policy/presets/tracker-hygiene/board-citations-resolve.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/tracker-hygiene/board-citations-resolve.rego"
+                ),
             },
         ],
         verdicts: &[
@@ -2124,20 +2150,24 @@ one. Fetch the cited issue and pipe the set again.",
                 // producer, never a workflow's expression language.
                 provider: None,
                 pointer: "<preset:supply-chain>/attestation-is-verified.rego",
-                source: include_str!("policy/presets/supply-chain/attestation-is-verified.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/supply-chain/attestation-is-verified.rego"
+                ),
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 // git's own config scopes and commit headers; no CI provider.
                 provider: None,
                 pointer: "<preset:supply-chain>/signer-is-verifiable.rego",
-                source: include_str!("policy/presets/supply-chain/signer-is-verifiable.rego"),
+                embedded_source: include_str!(
+                    "policy/presets/supply-chain/signer-is-verifiable.rego"
+                ),
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:supply-chain>/binary-inventory-is-lockfile-bound.rego",
-                source: include_str!(
+                embedded_source: include_str!(
                     "policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego"
                 ),
             },
@@ -2250,7 +2280,7 @@ dependencies. A recovered crate outside it means the binary was not built from t
             scope: RuleScope::MediatedCall,
             provider: None,
             pointer: "<preset:lease-asserted>/lease-unasserted.rego",
-            source: include_str!("policy/presets/lease-asserted/lease-unasserted.rego"),
+            embedded_source: include_str!("policy/presets/lease-asserted/lease-unasserted.rego"),
         }],
         verdicts: &[VendoredVerdict {
             id: "branch write unnamed",
@@ -2290,7 +2320,7 @@ fetched it, so there is no expected value to name that a reader could check",
             scope: RuleScope::MediatedCall,
             provider: None,
             pointer: "<preset:trunk-based>/no-force-push.rego",
-            source: include_str!("policy/presets/trunk-based/no-force-push.rego"),
+            embedded_source: include_str!("policy/presets/trunk-based/no-force-push.rego"),
         }],
         verdicts: &[VendoredVerdict {
             id: "trunk push forced",
@@ -2326,7 +2356,9 @@ remote moved, which is the same operation with the one check that makes it safe.
             scope: RuleScope::MediatedCall,
             provider: None,
             pointer: "<preset:linear-history>/no-merge-into-branch.rego",
-            source: include_str!("policy/presets/linear-history/no-merge-into-branch.rego"),
+            embedded_source: include_str!(
+                "policy/presets/linear-history/no-merge-into-branch.rego"
+            ),
         }],
         verdicts: &[VendoredVerdict {
             id: "commit write loose",
@@ -2363,7 +2395,7 @@ push --force-with-lease=<branch>:<the head you rebased onto>",
             scope: RuleScope::Tree,
             provider: None,
             pointer: "<preset:rust-quality>/decoupling-level.rego",
-            source: include_str!("policy/presets/rust-quality/decoupling-level.rego"),
+            embedded_source: include_str!("policy/presets/rust-quality/decoupling-level.rego"),
         }],
         verdicts: &[
             VendoredVerdict {
@@ -2414,7 +2446,7 @@ and remove it, move the item down, or inject it",
             scope: RuleScope::Tree,
             provider: None,
             pointer: "<preset:rust>/crate-reach.rego",
-            source: include_str!("policy/presets/rust/crate-reach.rego"),
+            embedded_source: include_str!("policy/presets/rust/crate-reach.rego"),
         }],
         verdicts: &[
             VendoredVerdict {
@@ -2474,7 +2506,7 @@ workspace packages it may reach, `^$` for none",
             scope: RuleScope::MediatedCall,
             provider: None,
             pointer: "<preset:red-head>/no-push-over-unread-red.rego",
-            source: include_str!("policy/presets/red-head/no-push-over-unread-red.rego"),
+            embedded_source: include_str!("policy/presets/red-head/no-push-over-unread-red.rego"),
         }],
         verdicts: &[VendoredVerdict {
             id: "job read unread",
@@ -2511,7 +2543,7 @@ look at again. Read each named failed job's log first; reading is what admits th
             scope: RuleScope::MediatedCall,
             provider: None,
             pointer: "<preset:git>/git-call-is-preapproved.rego",
-            source: include_str!("policy/presets/git/git-call-is-preapproved.rego"),
+            embedded_source: include_str!("policy/presets/git/git-call-is-preapproved.rego"),
         }],
         verdicts: &[],
         patterns: &[],
@@ -2539,7 +2571,7 @@ look at again. Read each named failed job's log first; reading is what admits th
             scope: RuleScope::MediatedCall,
             provider: None,
             pointer: "<preset:claude-code-plan>/first-plan-is-pressure-tested.rego",
-            source: include_str!(
+            embedded_source: include_str!(
                 "policy/presets/claude-code-plan/first-plan-is-pressure-tested.rego"
             ),
         }],
@@ -2671,13 +2703,13 @@ mod tests {
         scope: RuleScope::Tree,
         provider: None,
         pointer: "<preset:fixture>/a.rego",
-        source: "package a\n",
+        embedded_source: "package a\n",
     }];
     const AFTER: &[PresetModule] = &[PresetModule {
         scope: RuleScope::Tree,
         provider: None,
         pointer: "<preset:fixture>/a.rego",
-        source: "package a\nrefused if { true }\n",
+        embedded_source: "package a\nrefused if { true }\n",
     }];
 
     fn fixture(version: semver::Version, modules: &'static [PresetModule]) -> Manifest {
@@ -2720,7 +2752,7 @@ mod tests {
         scope: RuleScope::Tree,
         provider: None,
         pointer: "<preset:fixture>/a.rego",
-        source: "#MUTANT-SUITE fixture\n#MUTANT a.rego true false\npackage a\n",
+        embedded_source: "#MUTANT-SUITE fixture\n#MUTANT a.rego true false\npackage a\n",
     }];
 
     /// Fails by: a `#MUTANT`/`#MUTANT-SUITE` row moving the digest. Those rows
