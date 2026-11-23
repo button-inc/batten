@@ -561,11 +561,13 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
 /// so the whole-tree schedule is not turned into a base-and-tree usage error
 /// (CLOUD-2849). Fails by: the default deleted (`rust-base-undeclared`), a
 /// caller's base overridden, or the default leaking into the whole-tree run.
-#[cfg(unix)]
 #[test]
 fn mutant_rust_runs_on_its_own_against_a_declared_base() {
-    use std::os::unix::fs::PermissionsExt as _;
-
+    // The stub engine is a `sh` script, which no Windows runner executes; the
+    // case compiles there and says so (`cfg!`, never `#[cfg]`).
+    if !cfg!(unix) {
+        return;
+    }
     let dir = common::scratch_repo("mutant-rust-base");
     let stub = dir.join("batten-stub");
     std::fs::write(
@@ -573,8 +575,7 @@ fn mutant_rust_runs_on_its_own_against_a_declared_base() {
         "#!/bin/sh\nprintf 'base=[%s] whole=[%s] argv=[%s]\\n' \"$MUTANT_CHANGED_SINCE\" \"$MUTANT_WHOLE_TREE\" \"$*\"\n",
     )
     .expect("plant the stub engine");
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-        .expect("make the stub executable");
+    make_executable(&stub);
     let bin = stub.to_string_lossy().into_owned();
     let run = |env: &[(&str, &str)]| {
         let mut all = vec![("BATTEN_BIN", bin.as_str())];
@@ -599,3 +600,13 @@ fn mutant_rust_runs_on_its_own_against_a_declared_base() {
     let whole = run(&[("MUTANT_WHOLE_TREE", "1")]);
     assert!(whole.contains("base=[] whole=[1]"), "{whole}");
 }
+
+#[cfg(unix)]
+fn make_executable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+        .expect("make the stub executable");
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &std::path::Path) {}
