@@ -66,31 +66,141 @@ fn step_excludes(pkl: &str, step: &str) -> Option<Vec<String>> {
     Some(globs)
 }
 
-/// Clippy runs at every commit, never only in the `slow` tier: a warning is a
-/// defect, and in that tier one was refused only by a land lap, hours after it
-/// was written (five reached PR #1276's pushed head that way).
+/// The commands no commit-time hook step may run: each compiles, and a commit
+/// hook is a batten hook held to the same 10 ms / 100 ms budget. `cargo fmt` is
+/// absent on purpose: it formats, it does not build.
+const COMPILES: &[&str] = &[
+    "cargo clippy",
+    "cargo build",
+    "cargo run",
+    "cargo test",
+    "cargo check",
+    "cargo nextest",
+    "cargo mutants",
+    "{{vars.batten}}",
+];
+
+/// The `check`/`fix` commands of every step a plain commit runs: the `gate`
+/// steps outside a profile, plus the steps the `pre-commit` and `commit-msg`
+/// hooks declare inline. A profiled step (`slow`) runs only where landing asks.
+fn commit_time_commands(pkl: &str) -> Vec<(String, String)> {
+    let mut commands = Vec::new();
+    let mut in_gate = false;
+    let mut hook: Option<String> = None;
+    let mut step: Option<(String, Vec<String>, bool)> = None;
+    let flush = |step: &mut Option<(String, Vec<String>, bool)>,
+                 out: &mut Vec<(String, String)>| {
+        if let Some((name, cmds, profiled)) = step.take()
+            && !profiled
+        {
+            out.extend(cmds.into_iter().map(|cmd| (name.clone(), cmd)));
+        }
+    };
+    for line in pkl.lines() {
+        if line.starts_with("local gate = ") {
+            in_gate = true;
+            continue;
+        }
+        if in_gate && line == "}" {
+            flush(&mut step, &mut commands);
+            in_gate = false;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("  [\"") {
+            let name = rest.split('"').next().unwrap_or_default().to_owned();
+            flush(&mut step, &mut commands);
+            if in_gate {
+                step = Some((name, Vec::new(), false));
+            } else {
+                hook = Some(name);
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("      [\"")
+            && matches!(hook.as_deref(), Some("pre-commit" | "commit-msg"))
+        {
+            flush(&mut step, &mut commands);
+            let name = rest.split('"').next().unwrap_or_default().to_owned();
+            step = Some((name, Vec::new(), false));
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if let Some((_, cmds, profiled)) = step.as_mut() {
+            if trimmed.starts_with("profiles") {
+                *profiled = true;
+            } else if let Some(cmd) = trimmed
+                .strip_prefix("check = \"")
+                .or_else(|| trimmed.strip_prefix("fix = \""))
+            {
+                cmds.push(cmd.trim_end_matches('"').to_owned());
+            }
+        }
+    }
+    flush(&mut step, &mut commands);
+    commands
+}
+
+/// The body a `mise run <task>` resolves to, one level down, so a step that
+/// hides a compile inside a task is still seen.
+fn task_body(mise: &toml::Table, command: &str) -> String {
+    let Some(rest) = command.split("mise run").nth(1) else {
+        return String::new();
+    };
+    let task = rest
+        .split_whitespace()
+        .find(|word| !word.starts_with('-'))
+        .unwrap_or_default();
+    mise.get("tasks")
+        .and_then(|tasks| tasks.get(task))
+        .and_then(|row| row.get("run"))
+        .map(|run| match run {
+            toml::Value::String(text) => text.clone(),
+            toml::Value::Array(items) => items
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        })
+        .unwrap_or_default()
+}
+
+/// No step a plain commit runs compiles anything, directly or through the
+/// `mise` task it calls. Commits are made early and often and pushed to draft
+/// pull requests; a commit hook proves the commit well-formed on pinned
+/// released binaries, and landing proves the tree.
 ///
-/// Fails by: `profiles = List("slow")`, or any profile list, put back on the step.
+/// Fails by: a compiling step moved out of the `slow` profile (clippy, the
+/// module census on the tree's engine), or a step calling a task whose body
+/// spells `{{vars.batten}}`, which is `cargo run`.
 #[test]
-fn clippy_runs_at_every_commit_not_only_in_the_slow_tier() {
-    let pkl = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../hk.pkl"),
-    )
-    .expect("hk.pkl reads");
-    let opener = "  [\"cargo-clippy\"] = ";
-    let start = pkl
-        .lines()
-        .position(|line| line.starts_with(opener))
-        .expect("hk.pkl still declares the cargo-clippy step");
-    let profiled: Vec<&str> = pkl
-        .lines()
-        .skip(start + 1)
-        .take_while(|line| *line != "  }")
-        .filter(|line| line.trim_start().starts_with("profiles"))
+fn no_commit_time_hook_step_compiles() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pkl = fs::read_to_string(root.join("hk.pkl")).expect("hk.pkl reads");
+    let mise: toml::Table = fs::read_to_string(root.join("mise.toml"))
+        .expect("mise.toml reads")
+        .parse()
+        .expect("mise.toml parses");
+    let commands = commit_time_commands(&pkl);
+    assert!(
+        commands
+            .iter()
+            .any(|(name, _)| name == "conventional-commit"),
+        "the parse found the commit-msg steps: {commands:?}"
+    );
+    let compiling: Vec<String> = commands
+        .iter()
+        .filter_map(|(name, command)| {
+            let body = task_body(&mise, command);
+            COMPILES
+                .iter()
+                .find(|form| command.contains(*form) || body.contains(*form))
+                .map(|form| format!("{name}: `{form}`"))
+        })
         .collect();
     assert!(
-        profiled.is_empty(),
-        "the clippy step is profile-gated: {profiled:?}"
+        compiling.is_empty(),
+        "commit-time steps compile: {compiling:?}"
     );
 }
 
