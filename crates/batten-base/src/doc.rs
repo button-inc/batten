@@ -131,7 +131,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
     VendoredDoc {
         id: "rule read missing",
         why: Some(
-            "A rule changed by a reader who never saw why it exists loses the reason it was written",
+            "A rule changed by a reader who never saw why it exists loses the reason it was written; only an unpiped read counts, `cd <dir> &&` before it allowed",
         ),
         act: &[
             "run the `batten policy explain '<id>' --history` the line names, one call with no pipe",

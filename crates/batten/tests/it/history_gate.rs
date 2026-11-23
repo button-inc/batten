@@ -48,11 +48,19 @@ fn fixture(name: &str) -> PathBuf {
     staged.git().base_commit().build()
 }
 
-/// A `PreToolUse` `Edit` of the authority in `session`, replacing `old` with `new`.
-fn edit(repo: &Path, session: &str, old: &str, new: &str) -> String {
-    let payload = serde_json::json!({
+/// The payload's context: `session`, plus `agent` when a subagent is the caller.
+fn context(payload: &mut serde_json::Value, session: &str, agent: Option<&str>) {
+    payload["session_id"] = session.into();
+    if let Some(agent) = agent {
+        payload["agent_id"] = agent.into();
+    }
+}
+
+/// A `PreToolUse` `Edit` of the authority in `session` (and `agent`, when a
+/// subagent makes it), replacing `old` with `new`.
+fn edit(repo: &Path, session: &str, agent: Option<&str>, old: &str, new: &str) -> String {
+    let mut payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": session,
         "tool_name": "Edit",
         "tool_input": {
             "file_path": repo.join("batten.toml").display().to_string(),
@@ -60,6 +68,7 @@ fn edit(repo: &Path, session: &str, old: &str, new: &str) -> String {
             "new_string": new,
         },
     });
+    context(&mut payload, session, agent);
     // Claude Code's adapter, whose tool vocabulary names `Edit` as a write; the
     // refusal travels in its decision document on stdout.
     let run = run_with_stdin(
@@ -72,18 +81,35 @@ fn edit(repo: &Path, session: &str, old: &str, new: &str) -> String {
 
 /// The row's own line, edited in place.
 fn edit_row(repo: &Path, session: &str) -> String {
-    edit(repo, session, ROW_LINE, &format!("{ROW_LINE}\n# touched"))
+    edit_row_as(repo, session, None)
 }
 
-/// The `PostToolUse` a `--history` read of `ROW` produces, in `session`.
-fn read_history(repo: &Path, session: &str) {
-    let payload = serde_json::json!({
+/// The row's own line, edited in place by `agent` in `session`.
+fn edit_row_as(repo: &Path, session: &str, agent: Option<&str>) -> String {
+    edit(
+        repo,
+        session,
+        agent,
+        ROW_LINE,
+        &format!("{ROW_LINE}\n# touched"),
+    )
+}
+
+/// The bare `--history` read of `ROW`, the one shape CLOUD-2144 minted.
+fn bare_read() -> String {
+    format!("batten policy explain '{ROW}' --history")
+}
+
+/// The `PostToolUse` a `--history` read spelled `command` produces, in
+/// `session` (and `agent`, when a subagent runs it).
+fn read_history(repo: &Path, session: &str, agent: Option<&str>, command: &str) {
+    let mut payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": session,
         "tool_name": "Bash",
-        "tool_input": { "command": format!("batten policy explain '{ROW}' --history") },
+        "tool_input": { "command": command },
         "tool_response": { "stdout": "the history", "stderr": "", "interrupted": false },
     });
+    context(&mut payload, session, agent);
     let _ = run_with_stdin(
         repo,
         &["adjudicate", "--harness", "claude-code"],
@@ -166,15 +192,67 @@ fn an_edit_to_a_rule_row_without_its_history_read_is_refused() {
         line.contains("--history"),
         "and the line names the read that admits: {line}"
     );
-    read_history(&repo, "s1");
+    // CLOUD-2865: the explanation says which spelling counts, and the remedy
+    // stays the runnable command alone. #MUTANT rust-history-read-remedy-prose.
+    assert!(
+        line.contains("unpiped"),
+        "the explanation names the spelling that counts: {line}"
+    );
+    assert!(
+        line.contains(&format!("Do: {}. ", bare_read())),
+        "the remedy is the bare read: {line}"
+    );
+    read_history(&repo, "s1", None, &bare_read());
     let line = edit_row(&repo, "s1");
     assert!(!refused(&line), "the same edit after the read: {line}");
+}
+
+/// CLOUD-2865: a piped read behind `cd <repo> &&` shows a part of the history,
+/// so it mints nothing and the same context's edit stays refused. Its own
+/// fixture and agent, so no admitted case's receipt can make it pass.
+/// #MUTANT rust-history-read-pipe-admitted: the pipe test removed.
+#[test]
+fn a_piped_read_after_cd_does_not_admit_its_edit() {
+    let repo = fixture("history-cd-piped");
+    let command = format!("cd {} && {} | head -3", repo.display(), bare_read());
+    read_history(&repo, "s1", Some("a2"), &command);
+    let line = edit_row_as(&repo, "s1", Some("a2"));
+    assert!(refused(&line), "a piped read is not a read: {line}");
+}
+
+/// CLOUD-2865: a subagent's read spelled `cd <repo> && batten policy explain
+/// … --history` admits that subagent's edit of the row. Before the change
+/// the list minted nothing. #MUTANT rust-history-read-cd-list.
+#[test]
+fn a_subagent_read_after_cd_admits_its_edit() {
+    let repo = fixture("history-cd-read");
+    assert!(
+        refused(&edit_row_as(&repo, "s1", Some("a1"))),
+        "unread, so refused"
+    );
+    let command = format!("cd {} && {}", repo.display(), bare_read());
+    read_history(&repo, "s1", Some("a1"), &command);
+    let line = edit_row_as(&repo, "s1", Some("a1"));
+    assert!(!refused(&line), "the read behind cd admits: {line}");
+}
+
+/// CLOUD-2865: a read behind a `cd` into ANOTHER repository is that
+/// repository's history, and never admits an edit here.
+/// #MUTANT rust-history-read-cd-outside: the inside-the-repository test removed.
+#[test]
+fn a_read_after_cd_out_of_the_repository_does_not_admit() {
+    let repo = fixture("history-cd-outside");
+    let other = fixture("history-cd-outside-other");
+    let command = format!("cd {} && {}", other.display(), bare_read());
+    read_history(&repo, "s1", Some("a3"), &command);
+    let line = edit_row_as(&repo, "s1", Some("a3"));
+    assert!(refused(&line), "another repository's read: {line}");
 }
 
 #[test]
 fn another_contexts_receipt_does_not_admit() {
     let repo = fixture("history-other-context");
-    read_history(&repo, "s2");
+    read_history(&repo, "s2", None, &bare_read());
     let line = edit_row(&repo, "s1");
     assert!(refused(&line), "s2's read is not s1's: {line}");
 }
@@ -182,7 +260,7 @@ fn another_contexts_receipt_does_not_admit() {
 #[test]
 fn a_new_commit_to_the_rule_invalidates_the_history_receipt() {
     let repo = fixture("history-new-commit");
-    read_history(&repo, "s1");
+    read_history(&repo, "s1", None, &bare_read());
     assert!(!refused(&edit_row(&repo, "s1")), "read, so admitted");
     // A commit that changes the row: the old receipt file stays in place, and
     // only its digest no longer matches.
@@ -201,7 +279,7 @@ fn a_new_commit_to_the_rule_invalidates_the_history_receipt() {
 #[test]
 fn a_compaction_drops_the_history_receipt() {
     let repo = fixture("history-compaction");
-    read_history(&repo, "s1");
+    read_history(&repo, "s1", None, &bare_read());
     assert!(!refused(&edit_row(&repo, "s1")), "read, so admitted");
     let start = serde_json::json!({
         "hook_event_name": "SessionStart",
@@ -216,7 +294,7 @@ fn a_compaction_drops_the_history_receipt() {
     let line = edit_row(&repo, "s1");
     assert!(refused(&line), "what was read left the window: {line}");
     // RESUME KEEPS IT: the window carried over.
-    read_history(&repo, "s1");
+    read_history(&repo, "s1", None, &bare_read());
     let resume = serde_json::json!({
         "hook_event_name": "SessionStart",
         "session_id": "s1",
@@ -381,7 +459,7 @@ fn a_new_row_is_admitted_and_an_existing_one_is_not() {
     // Inserted beside an id-less row, so the edit touches no gated row.
     let anchor = "[[mint]]\nname = \"issue-read\"";
     let new_row = format!("[[rule]]\nid = \"brand new row\"\nkind = \"x\"\n\n{anchor}");
-    let line = edit(&repo, "s1", anchor, &new_row);
+    let line = edit(&repo, "s1", None, anchor, &new_row);
     assert!(
         !line.contains("rule read missing"),
         "a new row owes no history: {line}"

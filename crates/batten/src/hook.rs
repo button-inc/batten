@@ -10092,18 +10092,40 @@ fn program_name(token: &str) -> &str {
 /// The row ids a `batten policy explain … --history` call names, when the call
 /// is exactly that and nothing else (CLOUD-2144).
 ///
-/// ONE segment on ONE line: a piped read (`… | head`) shows the agent a part of
-/// the history, and a list (`… && x`) could have its output buried, so neither
-/// mints a read. The program is resolved through [`effective_program`], so
-/// `mise exec -- batten` and an env prefix are the same call.
+/// The ids alone; [`history_read`] also carries the `cd` operand a read was
+/// prefixed with, which the receipt writer must place before it mints.
 #[must_use]
 pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
+    history_read(command).map(|(_, ids)| ids)
+}
+
+/// A history read's `cd` operand, as written, and the row ids it names.
+///
+/// ONE read on ONE line: a piped read (`… | head`) shows the agent a part of
+/// the history, and a list (`… ; x`, `… && x`) could have its output buried, so
+/// neither mints a read. The program is resolved through [`effective_program`],
+/// so `mise exec -- batten` and an env prefix are the same call.
+///
+/// ONE PREFIX IS ACCEPTED, `cd <dir> &&` (CLOUD-2865). A subagent's working
+/// directory resets between shell calls, so the natural spelling of a read in a
+/// clone carries it, and refusing it left a remedy that spelling could never
+/// satisfy. Exactly two top-level segments: a bare `cd` with one operand and no
+/// redirect, then `&&`, then the bare read. `pushd`, `cd -`, a flag, a pipe, a
+/// `;` or `||`, and any third segment mint nothing. Where the operand resolves
+/// is the caller's question: it alone knows the session's repository.
+#[must_use]
+pub fn history_read(command: &str) -> Option<(Option<String>, Vec<String>)> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return None;
     };
-    let [segment] = parsed.as_slice() else {
-        return None;
+    let (dir, segment) = match parsed.as_slice() {
+        [segment] => (None, segment),
+        [cd, segment] => (Some(history_read_cd(cd)?), segment),
+        _ => return None,
     };
+    if segment.terminator.is_some() {
+        return None;
+    }
     let [line] = segment.lines.as_slice() else {
         return None;
     };
@@ -10126,7 +10148,38 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
         .filter(|word| !word.starts_with('-'))
         .map(|word| (*word).to_owned())
         .collect();
-    (!ids.is_empty()).then_some(ids)
+    (!ids.is_empty()).then_some((dir, ids))
+}
+
+/// The operand of a history read's `cd <dir> &&` prefix, or `None` for any
+/// other first segment (CLOUD-2865).
+///
+/// `cd` itself, not [`is_cd_segment`]'s `pushd` or a `command`/`builtin`
+/// prefix: one operand, not a flag or `-`, no redirect, on one line, outside
+/// any group or substitution, and joined by `&&` alone.
+fn history_read_cd(segment: &Segment) -> Option<String> {
+    if segment.terminator != Some(Separator::And)
+        || segment.grouped
+        || segment.nested
+        || segment.construct.is_some()
+    {
+        return None;
+    }
+    let [line] = segment.lines.as_slice() else {
+        return None;
+    };
+    // The words the program was handed: the redirects are their suffix, so the
+    // operand count is read without them and the redirect test below decides
+    // that case on its own.
+    let words: Vec<&str> = line.words.iter().map(String::as_str).collect();
+    let handed = &words[..words.len().saturating_sub(line.redirects.len())];
+    let ["cd", operand] = handed else {
+        return None;
+    };
+    if !line.redirects.is_empty() {
+        return None;
+    }
+    (!operand.starts_with('-')).then(|| (*operand).to_owned())
 }
 
 /// The connector call a shell command MEDIATES, as the host would have named
@@ -22579,10 +22632,12 @@ deny contains "refused by themodule" if {
     }
 
     /// A history read names the ids after `policy explain … --history`, on
-    /// `batten` alone, and nothing for any other shape.
+    /// `batten` alone or behind one `cd <dir> &&`, and nothing for any other
+    /// shape.
     ///
     /// Fails by: a constant answer, the program test inverted, the window
-    /// misplaced, the flag test inverted, or flags taken for ids.
+    /// misplaced, the flag test inverted, flags taken for ids, or any `cd`,
+    /// operand, redirect or separator test dropped.
     #[test]
     fn a_history_read_names_its_ids() {
         assert_eq!(
@@ -22599,6 +22654,40 @@ deny contains "refused by themodule" if {
             None
         );
         assert_eq!(history_read_ids("batten policy explain --history"), None);
+
+        // Behind `cd <dir> &&` it names its ids and carries the operand; every
+        // other prefix, and a `cd` of any other shape, names nothing
+        // (CLOUD-2865). #MUTANT rust-history-read-cd-list: the `cd` test
+        // replaced with `true`, killed by `rm -f x &&`. #MUTANT
+        // rust-history-read-cd-operands: the operand count or the redirect test
+        // removed, killed by `cd &&`, `cd a b &&` and the redirect.
+        let read = "batten policy explain row-a --history";
+        assert_eq!(
+            history_read_ids(&format!("cd /x && {read}")),
+            Some(owned(&["row-a"]))
+        );
+        assert_eq!(
+            history_read(&format!("cd /x && {read}")),
+            Some((Some("/x".to_owned()), owned(&["row-a"])))
+        );
+        assert_eq!(history_read(read), Some((None, owned(&["row-a"]))));
+        for refused in [
+            format!("cd && {read}"),
+            format!("cd a b && {read}"),
+            format!("cd /x >/dev/null && {read}"),
+            format!("cd /x && {read} | head"),
+            format!("rm -f x && {read}"),
+            format!("cd /x; {read}"),
+            format!("cd /x || {read}"),
+            format!("pushd /x && {read}"),
+            format!("cd - && {read}"),
+            format!("cd -P /x && {read}"),
+            format!("cd /x && cd /y && {read}"),
+            format!("cd /x && {read} &"),
+            format!("(cd /x) && {read}"),
+        ] {
+            assert_eq!(history_read_ids(&refused), None, "{refused}");
+        }
     }
 
     /// Each line's program is projected with its name and arguments.

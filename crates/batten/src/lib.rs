@@ -25127,9 +25127,27 @@ fn record_history_reads(envelope: &hook::Envelope) {
     if envelope.event != crate::config_model::Event::PostTool || envelope.result.is_null() {
         return;
     }
-    let Some(ids) = hook::history_read_ids(&envelope.command) else {
+    let Some((dir, ids)) = hook::history_read(&envelope.command) else {
         return;
     };
+    let root = hook_session_home();
+    // A `cd <dir> &&` read counts only where `<dir>` is this repository
+    // (CLOUD-2865): another checkout's history is another config's, and a read
+    // of it never admits an edit here. An operand that does not resolve to a
+    // repository at all mints nothing either.
+    if let Some(dir) = dir {
+        let start = envelope
+            .cwd
+            .as_deref()
+            .map_or_else(|| PathBuf::from(&dir), |here| here.join(&dir));
+        let same = git::repo_root(&start)
+            .ok()
+            .zip(git::repo_root(root).ok())
+            .is_some_and(|(there, here)| there == here);
+        if !same {
+            return;
+        }
+    }
     if facts::payload_in(&envelope.result)
         .unwrap_or_else(|| envelope.result.clone())
         .pointer("/is_error")
@@ -25138,7 +25156,6 @@ fn record_history_reads(envelope: &hook::Envelope) {
     {
         return;
     }
-    let root = hook_session_home();
     let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(root)) else {
         return;
     };
