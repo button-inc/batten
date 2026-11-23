@@ -600,6 +600,7 @@ mod tests {
         name: "fixture",
         version: semver::Version::new(3, 1, 0),
         suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
