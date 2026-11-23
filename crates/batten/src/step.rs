@@ -247,9 +247,19 @@ fn shown(key: &str) -> &str {
 /// [`BYPASS`]. Also the rule the mutation pass record follows
 /// (`mutate::ChangePass`), so every local-only answer is off in the same place.
 pub(crate) fn bypassed() -> bool {
-    ["CI", BYPASS]
-        .iter()
-        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+    under_ci() || set(BYPASS)
+}
+
+/// Whether this is a forge runner's `$CI`: the half of [`bypassed`] under which
+/// no journal answers either (CLOUD-2850). [`BYPASS`] switches off the receipt
+/// alone and keeps the journals, which a fixture needs to drive them.
+pub(crate) fn under_ci() -> bool {
+    set("CI")
+}
+
+/// Whether `name` is set to something.
+fn set(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
 /// Say which step a supervising task is on (CLOUD-425). Best-effort:
@@ -906,8 +916,11 @@ pub fn run_step(
     // receipt's key stays the declared command's; a journal that cannot be set
     // up runs the command as declared, because the journal is an economy and
     // the step's verdict is the command's alone.
-    // BY THE ROW, NEVER BY THE ARGV (CLOUD-2785): `journal = "nextest"`.
+    // BY THE ROW, NEVER BY THE ARGV (CLOUD-2785): `journal = "nextest"`. NOT
+    // UNDER CI (CLOUD-2850), for "Local only"'s reason: a runner that kept the
+    // journal would answer a case from an earlier run.
     let journaled = declared(step)
+        .filter(|_| !under_ci())
         .is_some_and(|row| row.journal == Some(crate::step_table::Journal::Nextest))
         .then_some(command)
         .and_then(|_| crate::git::repo_root(Path::new(".")).ok())

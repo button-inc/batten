@@ -24,17 +24,11 @@ fn runs(log: &std::path::Path, name: &str) -> usize {
     std::fs::read_to_string(log.join(name)).map_or(0, |text| text.lines().count())
 }
 
-/// A run that stops keeps every case it passed; the next run, over the same
-/// binary and inputs, runs only what did not pass; a moved non-Rust input runs
-/// every case again.
-///
-/// Fails by: a passed case re-run after a failed run (the journal unread, or
-/// unwritten), a failed case skipped (a failure journaled as a pass), or a case
-/// skipped over a moved input (a stale pass reused).
-#[test]
-fn a_journaled_step_runs_each_passed_case_once_per_input_state() {
+/// A committed checkout of the [`LIB`] fixture with a `suite` step whose row
+/// journals its nextest run.
+fn journal_fixture(name: &str) -> std::path::PathBuf {
     let _ = common::require_bin("nextest", "cargo-nextest");
-    let repo = common::scratch_repo("step-journal");
+    let repo = common::scratch_repo(name);
     common::write(
         &repo,
         "Cargo.toml",
@@ -60,6 +54,19 @@ fn a_journaled_step_runs_each_passed_case_once_per_input_state() {
     );
     common::git_in(&repo, &["add", "-A"]);
     common::git_in(&repo, &["commit", "-qm", "seed"]);
+    repo
+}
+
+/// A run that stops keeps every case it passed; the next run, over the same
+/// binary and inputs, runs only what did not pass; a moved non-Rust input runs
+/// every case again.
+///
+/// Fails by: a passed case re-run after a failed run (the journal unread, or
+/// unwritten), a failed case skipped (a failure journaled as a pass), or a case
+/// skipped over a moved input (a stale pass reused).
+#[test]
+fn a_journaled_step_runs_each_passed_case_once_per_input_state() {
+    let repo = journal_fixture("step-journal");
     let log = common::scratch("step-journal-log");
     // THE RECEIPT IS BYPASSED, the journal is not: this fixture's failure
     // switch is a file outside the tree, which no step key can see, so a step
@@ -70,6 +77,7 @@ fn a_journaled_step_runs_each_passed_case_once_per_input_state() {
             .current_dir(&repo)
             .env("FIXTURE_LOG", &log)
             .env("BATTEN_STEP_RECEIPT_BYPASS", "1")
+            .env_remove("CI")
             .streamed_output()
             .expect("run batten");
         (output.status.success(), common::stderr(&output))
@@ -106,6 +114,64 @@ fn a_journaled_step_runs_each_passed_case_once_per_input_state() {
         (2, 4),
         "a moved non-Rust input runs every case again\n{err}"
     );
+}
+
+/// `step run suite` over [`journal_fixture`] with `env` set and `CI` and the
+/// receipt bypass otherwise removed: whether it passed and what it said.
+fn journal_step(
+    repo: &std::path::Path,
+    log: &std::path::Path,
+    env: (&str, &str),
+) -> (bool, String) {
+    let output = common::batten()
+        .args(["step", "run", "suite", "--", "cargo", "nextest", "run"])
+        .current_dir(repo)
+        .env("FIXTURE_LOG", log)
+        .env_remove("CI")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+        .env(env.0, env.1)
+        .streamed_output()
+        .expect("run batten");
+    (output.status.success(), common::stderr(&output))
+}
+
+/// CI confirms independently (CLOUD-2850): under `CI` a journaled step runs
+/// every case on every run, however many a journal holds as passed.
+///
+/// Fails by: a passed case answered from the journal on a CI runner.
+#[test]
+fn under_ci_a_journaled_step_runs_every_case_every_time() {
+    let repo = journal_fixture("step-journal-ci");
+    let log = common::scratch("step-journal-ci-log");
+    for run in 1..=2 {
+        let (passed, err) = journal_step(&repo, &log, ("CI", "true"));
+        assert!(passed, "{err}");
+        assert_eq!(
+            (runs(&log, "counted"), runs(&log, "flaky")),
+            (run, run),
+            "run {run}: every case runs again under CI\n{err}"
+        );
+    }
+}
+
+/// The receipt bypass is not CI (CLOUD-2850): it switches off the step
+/// receipt alone, and the journal still keeps every passed case.
+///
+/// Fails by: a journal gated on every bypass rather than on `CI` alone, so a
+/// passed case runs again.
+#[test]
+fn the_receipt_bypass_keeps_the_journal() {
+    let repo = journal_fixture("step-journal-bypass");
+    let log = common::scratch("step-journal-bypass-log");
+    for _ in 1..=2 {
+        let (passed, err) = journal_step(&repo, &log, ("BATTEN_STEP_RECEIPT_BYPASS", "1"));
+        assert!(passed, "{err}");
+        assert_eq!(
+            (runs(&log, "counted"), runs(&log, "flaky")),
+            (1, 1),
+            "a passed case is kept under the bypass\n{err}"
+        );
+    }
 }
 
 /// The cross-head fixture: three library functions, one reading a template
@@ -229,6 +295,7 @@ fn selected_step(repo: &std::path::Path, log: &std::path::Path) -> (bool, String
         .args(["step", "run", "suite", "--", "cargo", "nextest", "run"])
         .current_dir(repo)
         .env("FIXTURE_LOG", log)
+        .env_remove("CI")
         .streamed_output()
         .expect("run batten");
     (output.status.success(), common::stderr(&output))
@@ -368,6 +435,7 @@ fn failing_step(repo: &std::path::Path, log: &std::path::Path) -> (bool, String)
         .current_dir(repo)
         .env("FIXTURE_LOG", log)
         .env("FIXTURE_FAIL", "1")
+        .env_remove("CI")
         .streamed_output()
         .expect("run batten");
     (output.status.success(), common::stderr(&output))

@@ -685,3 +685,52 @@ fn a_tree_with_no_workflow_is_not_this_presets_business() {
         findings(&root)
     );
 }
+
+/// Every `path` a step of `steps` caches, as written.
+fn cached_paths(node: &yaml_rust2::Yaml, out: &mut Vec<String>) {
+    match node {
+        yaml_rust2::Yaml::Hash(map) => {
+            for (key, value) in map {
+                if key.as_str() == Some("path")
+                    && let Some(text) = value.as_str()
+                {
+                    out.push(text.to_owned());
+                }
+                cached_paths(value, out);
+            }
+        }
+        yaml_rust2::Yaml::Array(items) => {
+            for item in items {
+                cached_paths(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// CI confirms independently (CLOUD-2850): no step of `ci.yml` carries the
+/// schema sweep's verdict journal from one run, or one job, to another, so no
+/// mutant's verdict on a runner is answered from a journal.
+///
+/// Fails by: a restore, save or mirror of `mutate/schema/verdicts` in any job.
+#[test]
+fn no_ci_step_carries_the_mutant_verdict_journal() {
+    let text = std::fs::read_to_string(common::at_root(".github/workflows/ci.yml"))
+        .expect("ci.yml is committed");
+    let docs = yaml_rust2::YamlLoader::load_from_str(&text).expect("ci.yml parses");
+    let mut paths = Vec::new();
+    for doc in &docs {
+        cached_paths(doc, &mut paths);
+    }
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.contains("mutate/schema/reach")),
+        "the walk reads the mirror's paths, so an absence below is real: {paths:?}"
+    );
+    let carried: Vec<&String> = paths
+        .iter()
+        .filter(|path| path.contains("mutate/schema/verdicts"))
+        .collect();
+    assert!(carried.is_empty(), "{carried:?}");
+}
