@@ -55,7 +55,7 @@
 #MUTANT block-may-span-code|s@^\tattribute_or_doc(lines\[start + [12]\])$@\ttrue@|a_cfg_far_from_the_test_with_code_between_is_not_a_gated_test
 #MUTANT reach-may-be-empty|s@^reach := \[1, 2, 3\]$@reach := []@|a_branch_that_adds_a_platform_gated_test_is_refused
 #MUTANT direction-may-invert|s@\tafter > base@\tafter < base@|a_branch_that_adds_a_platform_gated_test_is_refused
-#MUTANT base-may-read-as-empty|s@\tbase := gated_tests(base_lines_of(path))@\tbase := 0@|a_pre_existing_platform_gated_test_survives_an_edit
+#MUTANT base-may-read-as-empty|s@\tbase = gated_tests(base_lines_of(path))@\tbase = 0@|a_pre_existing_platform_gated_test_survives_an_edit
 package batten
 
 import rego.v1
