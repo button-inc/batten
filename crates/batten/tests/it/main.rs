@@ -156,6 +156,7 @@ mod container_health;
 mod content_address;
 mod contract_drift;
 mod could_not_look_laundered;
+mod could_not_look_tree;
 mod cross_check;
 mod dead_capability;
 mod decision_record;
