@@ -306,17 +306,18 @@ fn is_issue_key(text: &str) -> bool {
 // advisory FIRES would stay green under this patch, because an over-firing
 // handler fires. The case has to assert the calls it does NOT select.
 
-/// Whether any declared handler runs at `event`.
+/// Whether any declared handler runs at `event` for a call answering to any of
+/// `tools` (a mediated call answers to its connector name too, CLOUD-2789).
 ///
 /// **The narrowing, and the reason `pre-tool` is affordable** (CLOUD-460). A
 /// repository declaring no handler for the event pays one slice scan and nothing
 /// else — no spawn, no pipe, no read. Called before any work, so the hot path
 /// stays what §4 promises: cheap when irrelevant.
 #[must_use]
-pub fn selects(handlers: &[Handler], event: Event, raw_tool: &str) -> bool {
-    handlers
-        .iter()
-        .any(|handler| handler.event() == Some(event) && handler.selects_tool(raw_tool))
+pub fn selects(handlers: &[Handler], event: Event, tools: &[&str]) -> bool {
+    handlers.iter().any(|handler| {
+        handler.event() == Some(event) && tools.iter().any(|tool| handler.selects_tool(tool))
+    })
 }
 
 /// Why a handler's answer could not be taken at face value.
@@ -551,7 +552,7 @@ pub fn dispatch(
     command: Option<&str>,
     payload: &Payload,
 ) -> Dispatched {
-    dispatch_writing(root, handlers, event, raw_tool, command, None, payload)
+    dispatch_writing(root, handlers, event, &[raw_tool], command, None, payload)
 }
 
 /// [`dispatch`], for a call that writes `writes`, which a row's
@@ -562,7 +563,7 @@ pub fn dispatch_writing(
     root: &Path,
     handlers: &[Handler],
     event: Event,
-    raw_tool: &str,
+    tools: &[&str],
     command: Option<&str>,
     writes: Option<&str>,
     payload: &Payload,
@@ -575,7 +576,7 @@ pub fn dispatch_writing(
         // THE HALF THAT ACTUALLY SAVES THE SPAWN. `selects` above answers whether
         // ANY handler runs; this decides per row, so a narrowed handler costs a
         // regex rather than a process on every call it does not select.
-        if !handler.selects_tool(raw_tool) {
+        if !tools.iter().any(|tool| handler.selects_tool(tool)) {
             continue;
         }
         // AND THE SECOND NARROWING, WHICH THE FIRST STRUCTURALLY CANNOT DO
@@ -1039,9 +1040,9 @@ mod tests {
         row.matcher = Some("^pull_request\\.opened$".to_owned());
         let rows = [row];
         assert!(validate(&rows).is_ok(), "{:?}", validate(&rows));
-        assert!(selects(&rows, Event::Forge, "pull_request.opened"));
-        assert!(!selects(&rows, Event::Forge, "issues.opened"));
-        assert!(!selects(&rows, Event::PostTool, "pull_request.opened"));
+        assert!(selects(&rows, Event::Forge, &["pull_request.opened"]));
+        assert!(!selects(&rows, Event::Forge, &["issues.opened"]));
+        assert!(!selects(&rows, Event::PostTool, &["pull_request.opened"]));
     }
 
     fn handler(id: &str, on: &str, run: &[&str]) -> Handler {
@@ -1295,9 +1296,9 @@ mod tests {
         // repository declaring nothing for the event answers without touching a
         // process. The end-to-end cost assertion is the CLI suite's.
         let rows = vec![handler("h", Event::Stop.as_str(), &["true"])];
-        assert!(selects(&rows, Event::Stop, ""));
-        assert!(!selects(&rows, Event::PreTool, ""));
-        assert!(!selects(&[], Event::Stop, ""));
+        assert!(selects(&rows, Event::Stop, &[""]));
+        assert!(!selects(&rows, Event::PreTool, &[""]));
+        assert!(!selects(&[], Event::Stop, &[""]));
     }
 
     #[test]
@@ -1311,17 +1312,17 @@ mod tests {
         row.matcher = Some("^mcp__".to_owned());
         let rows = vec![row];
         assert!(
-            selects(&rows, Event::PreTool, "mcp__Linear__save_issue"),
+            selects(&rows, Event::PreTool, &["mcp__Linear__save_issue"]),
             "the calls the matcher names still select it"
         );
         assert!(
-            !selects(&rows, Event::PreTool, "Bash"),
+            !selects(&rows, Event::PreTool, &["Bash"]),
             "and a call it does not name costs a regex rather than a process"
         );
         // Absence is the behaviour every row had before the column existed, so no
         // landed row changes by its arrival.
         let bare = vec![handler("h", Event::PreTool.as_str(), &["true"])];
-        assert!(selects(&bare, Event::PreTool, "Bash"));
+        assert!(selects(&bare, Event::PreTool, &["Bash"]));
     }
 
     #[test]
