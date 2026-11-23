@@ -235,7 +235,8 @@ fn mediated_pull_request_call(root: &Path, tool: &str, input: &str) {
 /// over a body closing 77 keys.
 #[test]
 fn a_mediated_edit_records_its_body_as_the_direct_tool_does() {
-    let input = r#"{"owner":"o","repo":"r","pullNumber":7,"body":"Closes CLOUD-11\nCloses CLOUD-12\n"}"#;
+    let input =
+        r#"{"owner":"o","repo":"r","pullNumber":7,"body":"Closes CLOUD-11\nCloses CLOUD-12\n"}"#;
     let direct = body_recorder_repo("record-closes-direct-twin");
     edit_pull_request(&direct, input);
     let mediated = body_recorder_repo("record-closes-mediated");
@@ -244,7 +245,11 @@ fn a_mediated_edit_records_its_body_as_the_direct_tool_does() {
         recorded(&mediated).as_deref(),
         Some("closes 2:CLOUD-11,CLOUD-12\n")
     );
-    assert_eq!(recorded(&mediated), recorded(&direct), "one call, one record");
+    assert_eq!(
+        recorded(&mediated),
+        recorded(&direct),
+        "one call, one record"
+    );
 
     // ANTI-VACUITY: a mediated call of a method no row names records nothing.
     let other = body_recorder_repo("record-closes-mediated-other");
