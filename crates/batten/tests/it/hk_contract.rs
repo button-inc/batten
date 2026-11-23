@@ -250,15 +250,8 @@ fn command_text(spec: &serde_json::Value) -> Option<String> {
 
 /// `hk.pkl` as hk resolves it: `pkl eval` with its pinned `Builtins`.
 fn resolved_hk() -> serde_json::Value {
-    let pkl = common::require_tool("pkl");
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: the subject IS hk's resolved config, builtins included, and `pkl eval` is the evaluator of hk's config language; a read with no effect"
-    )]
-    let mut command = std::process::Command::new(pkl);
+    let mut command = common::pkl_command();
     command
-        .arg("eval")
-        .args(common::pkl_ca_args())
         .args(["-f", "json", "hk.pkl"])
         .current_dir(common::at_root("."));
     let output = command.streamed_output().expect("pkl evaluates hk.pkl");
