@@ -2220,6 +2220,41 @@ fn a_row_in_a_source_cargo_mutants_owns_is_refused() {
     }
 }
 
+/// A REGISTERED RUNNER THAT DOES NOT RESOLVE CANNOT LOOK: a `command` runner
+/// whose program is not there is `command runner-absent`, exit 3, before
+/// anything spawns, and never every source caught. Fails by: the
+/// `mutate::unresolvable` probe dropped from the registered path, which leaves
+/// a spawn error with no `runner-absent` naming the runner, or its exit read
+/// as a verdict.
+///
+/// Carries `main`'s `a_registered_runner_that_does_not_resolve_cannot_look`,
+/// whose runner (cargo-mutants through this verb) is a usage error since
+/// CLOUD-2253; `command` is the registered runner the verb still spawns.
+#[test]
+fn a_command_runner_that_does_not_resolve_cannot_look() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
+    let root = rust_gate_repo("command-unresolved");
+    write(
+        &root,
+        "batten.toml",
+        "version = 1\n\n[mutate]\ncommand = [\"./no-such-runner.sh\"]\n",
+    );
+    let (code, out, err) = sweep_registered(
+        &root,
+        "toy,other",
+        "HEAD",
+        "command=crates/**/*.rs",
+        Some("command"),
+    );
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(out.contains("command runner-absent"), "{out}{err}");
+    assert!(!out.contains("every one caught"), "{out}{err}");
+}
+
 /// A `command` runner (CLOUD-2211) over the changed Rust gate: `[mutate]
 /// command` names a stub that records its argv and exits `code`.
 fn sweep_command(name: &str, code: i32) -> (PathBuf, i32, String, String) {
