@@ -1,6 +1,5 @@
 ---
 source: crates/batten/tests/it/snapshots.rs
-assertion_line: 142
 expression: stdout_of(&output)
 ---
 {
@@ -5145,7 +5144,7 @@ expression: stdout_of(&output)
                   "long": null,
                   "takes_value": true,
                   "positional": true,
-                  "help": "The graph to run, as the step table's `group` field names it"
+                  "help": "The graphs to run, in order, as the step table's `group` field names them; `NAME=N` runs that one at most N at once"
                 },
                 {
                   "name": "jobs",
