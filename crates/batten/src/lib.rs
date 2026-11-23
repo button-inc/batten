@@ -14896,7 +14896,12 @@ fn guard_compile(rustc_args: &[std::ffi::OsString]) {
     let Ok(repo) = git::repo_root(&out_dir) else {
         return;
     };
-    let Some(pruning) = resolve::resolve(&repo, &Overrides::default())
+    // `[prune]` FROM THE WORKTREE'S AUTHORITY (CLOUD-2532), the collection over
+    // the repository: `collect::trees` already ranks every linked worktree's.
+    let Ok(authority) = config::authority_root(&out_dir) else {
+        return;
+    };
+    let Some(pruning) = resolve::resolve(&authority, &Overrides::default())
         .ok()
         .and_then(|resolved| resolved.prune)
     else {
@@ -31248,7 +31253,10 @@ fn report_unresolvable(config: &resolve::Resolved, mode: Mode, err: &mut dyn Wri
 /// detached HEAD, no claim, no config to name a target, no target, no shared
 /// history — and the caller runs unarmed rather than guessing a base.
 fn claimed_fork_point(here: &Path, overrides: &Overrides) -> Option<String> {
-    let root = git::repo_root(here).ok()?.canonicalize().ok()?;
+    // THE AUTHORITY'S ROOT, not the shared repository's (CLOUD-2532): from a
+    // linked worktree carrying its own `batten.toml`, `repo_root` is the MAIN
+    // checkout, so this never matched and a claimed worktree branch ran unarmed.
+    let root = config::authority_root(here).ok()?.canonicalize().ok()?;
     if here.canonicalize().ok()? != root {
         return None;
     }
