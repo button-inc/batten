@@ -827,6 +827,10 @@ pub enum Fact {
     /// `$GIT_DIR`: the same reading `land` uses to refuse a second lap, so a
     /// call is judged by the fact the lap itself trusts.
     LandLive,
+    /// What the session's setup task is doing while this call runs, and which
+    /// of the call's command-position programs it may still be installing
+    /// (CLOUD-2840).
+    InstallPending,
     /// The current branch's red-head record: the head a lap's wait stopped red
     /// on, each failed check's newest run with whether its log was read, and
     /// each check the stop abandoned still running (CLOUD-2270).
@@ -1622,6 +1626,11 @@ pub const DISPATCH_CLEARED: Class = Class::new(Cost::Read, Surface::Hook);
 /// [`Fact::LandLive`]: one lock read and a pid probe under `$GIT_DIR`, asked
 /// of the mediated call it would refuse (CLOUD-2781).
 pub const LAND_LIVE: Class = Class::new(Cost::Read, Surface::Hook);
+/// [`Fact::InstallPending`]: the task registry's records and a `PATH` walk
+/// per command-position program, asked of the mediated call it would hold
+/// (CLOUD-2840). No spawn: a stat per `PATH` entry, and none at all once the
+/// setup task has said `ok`.
+pub const INSTALL_PENDING: Class = Class::new(Cost::Read, Surface::Hook);
 
 /// [`Fact::RedHead`] — one record read and a stat per failed run under
 /// `$GIT_DIR` (CLOUD-2270). A read, asked of the mediated call it gates.
@@ -1689,6 +1698,7 @@ impl Fact {
         Fact::Pinned,
         Fact::DispatchCleared,
         Fact::LandLive,
+        Fact::InstallPending,
         Fact::RedHead,
         Fact::PathspecStatus,
         Fact::Budgeted,
@@ -1747,6 +1757,7 @@ impl Fact {
             Fact::Pinned => "pinned-programs",
             Fact::DispatchCleared => "dispatch-cleared",
             Fact::LandLive => "land-live",
+            Fact::InstallPending => "install-pending",
             Fact::RedHead => "red-head",
             Fact::PathspecStatus => "pathspec-status",
             Fact::Budgeted => "budgeted",
@@ -1813,6 +1824,7 @@ impl Fact {
             Fact::Pinned => PINNED,
             Fact::DispatchCleared => DISPATCH_CLEARED,
             Fact::LandLive => LAND_LIVE,
+            Fact::InstallPending => INSTALL_PENDING,
             Fact::RedHead => RED_HEAD,
             Fact::PathspecStatus => PATHSPEC_STATUS,
             Fact::Budgeted => BUDGETED,
@@ -1909,6 +1921,7 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::DispatchCleared
             | Fact::LandLive
+            | Fact::InstallPending
             | Fact::RedHead
             | Fact::PathspecStatus
             | Fact::Budgeted
@@ -2091,6 +2104,7 @@ impl Fact {
             // CLOUD-2781. Hook-only: whether a lap is live is asked of the call
             // it would refuse, and a tree walk has none.
             | Fact::LandLive
+            | Fact::InstallPending
             // CLOUD-2270. Hook-only: what a push over this head owes is a
             // question about the call, and a tree walk has none.
             | Fact::RedHead
@@ -2167,6 +2181,7 @@ impl Fact {
             | Fact::Pinned
             | Fact::DispatchCleared
             | Fact::LandLive
+            | Fact::InstallPending
             | Fact::RedHead
             | Fact::PathspecStatus
             | Fact::Budgeted
@@ -2262,7 +2277,9 @@ impl Fact {
             // count, and it is the seam this function's own doc says to split
             // along. `Instant` arriving is what took it past its ceiling, exactly
             // as `Landing` did for the git family.
-            Fact::Instant | Fact::DispatchCleared | Fact::LandLive => self.scalar_schema_fragment(),
+            Fact::Instant | Fact::DispatchCleared | Fact::LandLive | Fact::InstallPending => {
+                self.scalar_schema_fragment()
+            }
             // The description-only family delegates, for the same reason and
             // along the same kind of seam as the git family below: every one of
             // these constrains nothing but its own prose, so a match arm each
@@ -2673,6 +2690,16 @@ impl Fact {
                 "type": ["string", "null"],
                 "description": "Fact::LandLive (CLOUD-2781, CLOUD-2789). The absolute root of a checkout this call WRITES in (a program's directory as its own options move it, an output redirection's target, a write tool's target) whose singleton lock a live `land` lap holds under the per-worktree git dir, by the same reading `land` uses to refuse a second lap (`task::singleton_holder`: the lock names a pid and that pid exists). NULL when no such lap is live or the lock could not be read. A path and nothing else: a module judges an absolute target by whether it lies under it.",
             }),
+            Fact::InstallPending => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::InstallPending (CLOUD-2840). The session's setup task, read from the task registry: `state` is `running`, `ok`, `failed` or `crashed` (the task's own last phase, or a pid gone without one), `task` its registry name and `pid` its pid. `pending` lists this call's command-position programs that resolve to nothing on PATH or resolve under the environment manager's install root -- what the task may still be installing -- and is empty once the task said `ok`, when nothing is resolved at all. NULL when no setup task is recorded or the registry could not be read.",
+                "properties": {
+                    "state": {"enum": ["running", "ok", "failed", "crashed"]},
+                    "task": {"type": "string"},
+                    "pid": {"type": "string"},
+                    "pending": {"type": "array", "items": {"type": "string"}},
+                },
+            }),
             Fact::Instant => serde_json::json!({
                 "type": ["integer", "null"],
                 "description": "Fact::Instant (CLOUD-1170). The epoch second the CALLER supplied, as data -- never a clock the engine read. A module compares a recorded stamp against it and a fixture pins both, so the same instant yields byte-identical output, which is what a clock READ can never do. NULL when the caller supplied none: that is could-not-look, NOT the epoch, and a predicate over it must not hold.",
@@ -2824,6 +2851,7 @@ impl Fact {
             | Fact::Captured
             | Fact::DispatchCleared
             | Fact::LandLive
+            | Fact::InstallPending
             | Fact::RedHead
             | Fact::PathspecStatus
             | Fact::Budgeted
@@ -3048,6 +3076,7 @@ impl Fact {
             | Fact::DispatchCleared
             | Fact::RedHead
             | Fact::LandLive
+            | Fact::InstallPending
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced
@@ -3313,6 +3342,7 @@ impl Fact {
             | Fact::DispatchCleared
             | Fact::RedHead
             | Fact::LandLive
+            | Fact::InstallPending
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced
@@ -3385,6 +3415,7 @@ impl Fact {
             | Fact::Instant
             | Fact::RedHead
             | Fact::LandLive
+            | Fact::InstallPending
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced
