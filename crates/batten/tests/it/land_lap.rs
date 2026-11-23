@@ -931,6 +931,52 @@ fn a_redirecting_read_is_not_held_while_a_lap_is_live() {
     batten::task::singleton_release(&git_dir, "land");
 }
 
+/// **ONE CALL, EVERY SURFACE** (CLOUD-2789): the same board and PR-body writes
+/// made through `batten mcp call` on a shell are held while a lap is live
+/// exactly as the raw connector tool's are, and a mediated read is not.
+#[test]
+fn mediated_filing_and_body_edits_are_held_as_the_direct_tool_is() {
+    let dir = lap_tree_bench("land-lap-mediated-writes");
+    let mediated = |server: &str, method: &str, arguments: &serde_json::Value| {
+        format!("batten mcp call {server} {method} '{arguments}'")
+    };
+    let file = serde_json::json!({"title": "t", "team": "CLOUD"});
+    let body =
+        serde_json::json!({"owner": "o", "repo": "r", "pullNumber": 1, "body": "Closes CLOUD-1"});
+    let read = serde_json::json!({"owner": "o", "repo": "r", "pullNumber": 1});
+    assert!(
+        !bash_held(&dir, &mediated("Linear", "save_issue", &file)),
+        "the premise: no lap, no hold"
+    );
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    assert!(
+        tool_held(&dir, "mcp__Linear__save_issue", &file),
+        "the direct filing is held"
+    );
+    assert!(
+        bash_held(&dir, &mediated("Linear", "save_issue", &file)),
+        "the mediated filing is held as the direct one is"
+    );
+    assert!(
+        tool_held(&dir, "mcp__github__update_pull_request", &body),
+        "the direct body edit is held"
+    );
+    assert!(
+        bash_held(&dir, &mediated("github", "update_pull_request", &body)),
+        "the mediated body edit is held as the direct one is"
+    );
+    assert!(
+        !bash_held(&dir, &mediated("github", "pull_request_read", &read)),
+        "a mediated read is not held"
+    );
+    batten::task::singleton_release(&git_dir, "land");
+}
+
 /// **THE LAP IS JUDGED IN THE REPOSITORY THE COMMAND TARGETS, NOT THE SHELL'S
 /// CWD** (CLOUD-2789, measured on #1276): with a lap live in A, a `git -C <B>
 /// commit` run from A was refused while the same commit after `cd <B>` passed.

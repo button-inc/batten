@@ -9358,6 +9358,16 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             projected_facts.insert(fact.as_str().to_owned(), value);
         }
     }
+    // A MEDIATED CALL IS THE CALL IT MEDIATES (CLOUD-2789): a shell running
+    // `batten mcp call <server> <method> <params>` reaches a module as the tool
+    // the host names the direct call, handed the params, so a gate over a
+    // connector write holds both routes alike. The shell's own reading stays in
+    // `operation`, `command`, `segments` and `programs`.
+    let mediated = mediated_mcp_call(&envelope.command);
+    let (tool, arguments) = match &mediated {
+        Some((tool, params)) => (Value::from(tool.as_str()), params.clone()),
+        None => (Value::from(envelope.raw_tool.as_str()), envelope.input.clone()),
+    };
     let mut document = serde_json::json!({
         "call": {
             "event": envelope.event.as_str(),
@@ -9366,8 +9376,8 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // `operation` is the classification; a module deciding over a
             // non-shell call (a spawn's `isolation`, a tool no arm classifies)
             // needs what was actually asked for, which no other key carries.
-            "tool": envelope.raw_tool,
-            "arguments": envelope.input,
+            "tool": tool,
+            "arguments": arguments,
             "command": envelope.command,
             "writes": envelope.writes,
             // THE TWO STOP PROJECTIONS (CLOUD-1051). Both are `null` on every
@@ -9802,6 +9812,11 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
 /// the verb would have dispatched, so they name none here either.
 #[must_use]
 pub fn mediated_mcp_call(command: &str) -> Option<(String, Value)> {
+    // The cheap question first: every shell call builds a policy document, and
+    // nearly none of them names the verb.
+    if !command.contains("mcp") {
+        return None;
+    }
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return None;
     };
