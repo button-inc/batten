@@ -3225,7 +3225,7 @@ fn run_rule(
     // is what decides, and returning here would switch those off by a value
     // nobody aimed at them.
     if rule.kind == RuleKind::Policy {
-        return Ok(policy_rule(rule, inputs, findings, classes));
+        return policy_rule(rule, inputs, findings, classes);
     }
     // Before the glob gate for `Policy`'s reason: a row citing another
     // register's column has no glob, and its registers are declared paths, not
@@ -5890,7 +5890,7 @@ fn policy_rule(
     // And the class, for the same reason: `Violation` carries the token, and by
     // the time a `Finding` exists it is gone (CLOUD-1120).
     classes: &mut BTreeMap<String, String>,
-) -> Option<NotObserved> {
+) -> anyhow::Result<Option<NotObserved>> {
     // Only the three this function itself reads. Everything else the tree surface
     // needs goes through `resolved_of`, which is what keeps this destructure from
     // growing a line every time the fact model does.
@@ -5907,18 +5907,18 @@ fn policy_rule(
         // The row enabled a bundle the caller did not load. Not a pass: this
         // surface has nothing to decide with, and reporting clean would be a
         // gate that never ran reading as one that found nothing.
-        return Some(NotObserved::RuleSkipped);
+        return Ok(Some(NotObserved::RuleSkipped));
     };
     // The row's declared set: literal `documents` plus everything `sources`
     // selects out of the run's one walk (CLOUD-850). A malformed glob was
     // refused at load, so this cannot fail late.
     let Ok(declared) = declared_documents(rule, tracked) else {
-        return Some(NotObserved::RuleSkipped);
+        return Ok(Some(NotObserved::RuleSkipped));
     };
-    // `ok()?` rather than `?`: this function returns `Option<NotObserved>`, and a
-    // malformed glob is refused by `validate` before any rule evaluates — so a
-    // failure here is a row this surface does not own, treated the same way
-    // `declared_documents` is treated a few lines up.
+    // `?`, and no longer `ok()?` (CLOUD-2789): that returned `None`, which is
+    // EVALUATED, so a selector failing here read as a pass. A malformed glob is
+    // refused by `validate` before any rule evaluates, so this is unreachable
+    // in a valid config; if it is ever reached, the row errors rather than passes.
     // LINES FOLLOW THE RUN'S SCOPE (CLOUD-2789). Under `check --staged` a module
     // reads the lines of the change-set's files only: the commit-time
     // cfg-gated-test step read every tracked `.rs` file (4.4 s p50) to judge the
@@ -5926,10 +5926,10 @@ fn policy_rule(
     // Unnarrowed, `scoped` IS `tracked`, so a tree run reads what it always did.
     // The other selectors stay on the full set, for the header's reason: a
     // declared document or unit is a property of the repository.
-    let declared_line_paths = declared_lines(rule, scoped).ok()?;
-    let declared_invocation_paths = declared_invocations(rule, tracked).ok()?;
-    let declared_use_paths = declared_uses(rule, tracked).ok()?;
-    let declared_unit_paths = declared_units(rule, tracked).ok()?;
+    let declared_line_paths = declared_lines(rule, scoped)?;
+    let declared_invocation_paths = declared_invocations(rule, tracked)?;
+    let declared_use_paths = declared_uses(rule, tracked)?;
+    let declared_unit_paths = declared_units(rule, tracked)?;
     // A row that declared a selector and matched nothing has not established
     // anything, and saying so is the point: a selector selecting nothing and a
     // tree satisfying the predicate are otherwise the same green.
@@ -5972,7 +5972,7 @@ fn policy_rule(
         && !delta_resolved
         && !external_declared;
     if selected_nothing && selectors_declared {
-        return Some(NotObserved::RuleSkipped);
+        return Ok(Some(NotObserved::RuleSkipped));
     }
     let mut resolved = resolved_of(inputs);
     if rule.preset.as_deref() == Some(SHELL_PRESET) {
@@ -6002,8 +6002,18 @@ fn policy_rule(
     } else {
         input
     };
-    let crate::facts::Look::Is(violations) = crate::policy::deny(bundle, &input) else {
-        return Some(NotObserved::RuleSkipped);
+    // A MODULE THAT COULD NOT LOOK IS A GATE THAT DID NOT DECIDE, AND THAT IS AN
+    // ERROR, NEVER A SKIP (CLOUD-2789). It returned `RuleSkipped`, which folds to
+    // no exit code and prints nothing, so a module faulting on every input — an
+    // undefined helper, a runtime error, a shape it stopped emitting — read as
+    // a clean tree: three gates were dead for weeks that way. As an error it
+    // reaches `isolate`, which records the row in `Scan::errored` with this
+    // reason, prints `errored <rule> — internal — <reason>` and exits 3. The one
+    // deliberate abstention, a module with no clause for an input it was not
+    // handed, stays a skip below, after the module has been asked.
+    let violations = match crate::policy::deny_why(bundle, &input) {
+        Ok(violations) => violations,
+        Err(why) => anyhow::bail!("could not look: {why}"),
     };
     // COULD NOT LOOK, and never an empty deny set (CLOUD-251) — BUT THE MODULE IS
     // ASKED FIRST (CLOUD-1049). This guard used to sit ABOVE `deny` and return on
@@ -6030,7 +6040,7 @@ fn policy_rule(
     // rather than reporting clean, and `RuleSkipped` remains the engine's own
     // record of the abstention.
     if !not_acquired.is_empty() && violations.is_empty() {
-        return Some(NotObserved::RuleSkipped);
+        return Ok(Some(NotObserved::RuleSkipped));
     }
     for violation in &violations {
         let id = bundle.attribute(violation);
@@ -6114,7 +6124,7 @@ fn policy_rule(
             carried: carried_subjects(&violation.subjects),
         });
     }
-    None
+    Ok(None)
 }
 
 /// The remedy a raised class declares, as a [`Remediation`] (CLOUD-1220).
@@ -16642,7 +16652,8 @@ violation contains {
                 };
                 let (mut findings, mut classes) = (Vec::new(), BTreeMap::new());
                 let skipped = matches!(
-                    policy_rule(&rule, &inputs, &mut findings, &mut classes),
+                    policy_rule(&rule, &inputs, &mut findings, &mut classes)
+                        .expect("no row here faults"),
                     Some(NotObserved::RuleSkipped)
                 );
                 let pointers: Vec<(String, Option<usize>, Option<String>)> = findings
