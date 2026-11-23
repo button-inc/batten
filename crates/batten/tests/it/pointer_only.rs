@@ -716,6 +716,25 @@ impl Corpus {
         let home = Fixture::at(root.join("home")).build();
         Corpus { repo, home }
     }
+
+    /// A private copy of the corpus [`Corpus::build`] makes, under `name`: built
+    /// once per process per `spawning`, then copied whole, `.git` included.
+    ///
+    /// ITS OWN COPY, NEVER A SHARED ONE: a writer still cannot leave state the
+    /// next verb reads. What is no longer paid per verb is the fixture's
+    /// `git add` and `git commit`, two forks for each of ~200 census verbs.
+    fn copied(name: &str, spawning: bool) -> Corpus {
+        static TEMPLATES: [std::sync::OnceLock<PathBuf>; 2] =
+            [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+        let template = TEMPLATES[usize::from(spawning)].get_or_init(|| {
+            Corpus::build(&format!("pointer-only-template-{spawning}"), spawning).repo
+        });
+        let root = scratch(name);
+        let repo = root.join("repo");
+        common::copy_tree(template, &repo);
+        let home = Fixture::at(root.join("home")).build();
+        Corpus { repo, home }
+    }
 }
 
 /// The mediated tool call `hook` adjudicates: a command whose operand is a
@@ -3486,7 +3505,7 @@ fn no_verb_emits_content_it_merely_read() {
         // mid-run. Measured: the sweep's `exec` corpus and the passthrough
         // case's shared a name, and the loser reported `. is not inside a git
         // repository`. Local timing hid it; CI did not.
-        let corpus = Corpus::build(
+        let corpus = Corpus::copied(
             &format!("pointer-only-sweep-{}", verb.path.replace(' ', "-")),
             spawning,
         );

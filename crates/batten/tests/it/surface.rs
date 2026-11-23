@@ -219,6 +219,9 @@ fn the_spec_carries_the_new_verbs_with_their_declared_effects() {
 /// `the_committed_artifacts_are_exactly_the_ones_the_surface_declares`'s.
 fn committed_pages() -> Vec<(PathBuf, String)> {
     let dir = at_root("man");
+    // ONCE, NOT PER PAGE: resolved inside the loop, it spawned `batten spec`
+    // for each of ~250 pages before the page's own render.
+    let declared = declared_commands();
     let mut pages: Vec<(PathBuf, String)> = fs::read_dir(&dir)
         .unwrap_or_else(|err| panic!("read {}: {err}", dir.display()))
         .map(|entry| {
@@ -244,7 +247,7 @@ fn committed_pages() -> Vec<(PathBuf, String)> {
             // nothing, and reddens — which is the direction
             // `the_committed_artifacts_are_exactly_the_ones_the_surface_declares`
             // owns, and this must not quietly pass it.
-            let command = declared_commands().get(&stem).cloned().unwrap_or_else(|| {
+            let command = declared.get(&stem).cloned().unwrap_or_else(|| {
                 stem.strip_prefix("batten-")
                     .map(|rest| rest.replace('-', " "))
                     .unwrap_or_default()
@@ -272,12 +275,7 @@ fn committed_pages() -> Vec<(PathBuf, String)> {
 /// under the program name. It is spelled here exactly once, which is what the
 /// retired `mise-tasks/man-pages.sh` was for.
 fn declared_pages() -> BTreeSet<String> {
-    let output = batten()
-        .arg("spec")
-        .streamed_output()
-        .expect("run batten spec");
-    assert_eq!(output.status.code(), Some(0), "batten spec did not emit");
-    let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the spec is JSON");
+    let spec = emitted_spec();
 
     let program = spec["path"]
         .as_str()
@@ -286,7 +284,7 @@ fn declared_pages() -> BTreeSet<String> {
     // The root page carries the program's own name and no command path, which is
     // the one row `man-pages.sh` emitted with an empty second field.
     let mut pages = BTreeSet::from([format!("man/{program}.1")]);
-    collect_pages(&spec, program, &mut pages);
+    collect_pages(spec, program, &mut pages);
     pages
 }
 
@@ -300,18 +298,27 @@ fn declared_pages() -> BTreeSet<String> {
 /// That collision is currently unreachable — no two declared paths collide, and
 /// `the_committed_artifacts_are_exactly_the_ones_the_surface_declares` compares
 /// the sets — but the ambiguity is in the scheme rather than in this test.
+/// The compiled binary's `batten spec`, spawned once per test process and
+/// shared by [`declared_pages`] and [`declared_commands`].
+fn emitted_spec() -> &'static serde_json::Value {
+    static SPEC: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    SPEC.get_or_init(|| {
+        let output = batten()
+            .arg("spec")
+            .streamed_output()
+            .expect("run batten spec");
+        assert_eq!(output.status.code(), Some(0), "batten spec did not emit");
+        serde_json::from_slice(&output.stdout).expect("the spec is JSON")
+    })
+}
+
 fn declared_commands() -> std::collections::BTreeMap<String, String> {
-    let output = batten()
-        .arg("spec")
-        .streamed_output()
-        .expect("run batten spec");
-    assert_eq!(output.status.code(), Some(0), "batten spec did not emit");
-    let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the spec is JSON");
+    let spec = emitted_spec();
     let program = spec["path"]
         .as_str()
         .expect("the spec's root carries the program name");
     let mut commands = std::collections::BTreeMap::new();
-    collect_commands(&spec, program, &mut commands);
+    collect_commands(spec, program, &mut commands);
     commands
 }
 
@@ -440,12 +447,39 @@ fn generate_man(command: &str) -> Output {
     batten.streamed_output().expect("run batten generate man")
 }
 
+/// Every committed page with what `generate man` emits for its command, in
+/// page order, rendered across the host's cores: one spawn per page is the
+/// cost of asserting over the shipped binary, and serial it was most of each
+/// case's ~28 s.
+fn rendered_pages() -> Vec<(PathBuf, String, Output)> {
+    let pages = committed_pages();
+    let lanes = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
+    let chunk = pages.len().div_ceil(lanes).max(1);
+    std::thread::scope(|scope| {
+        let lanes: Vec<_> = pages
+            .chunks(chunk)
+            .map(|lane| {
+                scope.spawn(move || {
+                    lane.iter()
+                        .map(|(path, command)| {
+                            (path.clone(), command.clone(), generate_man(command))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        lanes
+            .into_iter()
+            .flat_map(|lane| lane.join().expect("a render lane panicked"))
+            .collect()
+    })
+}
+
 #[test]
 fn a_page_is_emitted_for_every_command_and_none_is_empty() {
-    let pages = committed_pages();
+    let pages = rendered_pages();
     assert!(!pages.is_empty(), "the repository commits no man pages");
-    for (path, command) in pages {
-        let output = generate_man(&command);
+    for (path, _, output) in pages {
         assert_eq!(
             output.status.code(),
             Some(0),
@@ -464,11 +498,11 @@ fn a_page_is_emitted_for_every_command_and_none_is_empty() {
 fn the_committed_pages_are_the_ones_the_binary_emits() {
     // DoR §4 over the compiled binary, so a stale page fails the Rust suite too
     // and cannot land while only `hk` is skipped.
-    for (path, command) in committed_pages() {
+    for (path, _, output) in rendered_pages() {
         let bytes = fs::read(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
         assert_eq!(
             bytes,
-            generate_man(&command).stdout,
+            output.stdout,
             "{} differs from the surface; run `mise run man`",
             path.display()
         );
@@ -480,12 +514,12 @@ fn a_page_is_titled_by_the_filename_it_is_committed_as() {
     // man(1) resolves a page by its `.TH` title, so a page whose title and
     // filename disagree is unfindable — and both sides would still be
     // byte-stable and pass every diff above.
-    for (path, command) in committed_pages() {
+    for (path, _, output) in rendered_pages() {
         let stem = path
             .file_stem()
             .and_then(|stem| stem.to_str())
             .expect("UTF-8");
-        let page = String::from_utf8(generate_man(&command).stdout).expect("roff is UTF-8");
+        let page = String::from_utf8(output.stdout).expect("roff is UTF-8");
         assert!(
             page.contains(&format!(".TH {stem} 1")),
             "{} is not titled {stem}",
