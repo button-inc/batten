@@ -470,7 +470,6 @@ impl Bundle {
             .get_or_init(|| Ast::of(self.evaluator.engine()?).map(std::sync::Arc::new))
             .as_deref()
     }
-
     /// Seed this bundle, compiled from `full`'s sources through
     /// [`without_test_rules`], with `full`'s reading less its `test_` rules.
     ///
