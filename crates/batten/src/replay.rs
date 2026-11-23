@@ -656,15 +656,41 @@ pub fn run(
                 id: SmellId::TestRemoved,
             });
         }
-        if let Some(head_path) = head_path
+        if let Some(head_path) = head_path.clone()
             && !changed.modified.is_empty()
         {
+            // THE SPLICED BODY IS SPELLED AS HEAD SPELLS (CLOUD-2789): through
+            // each shim base had, at its target; then each moved file's path;
+            // then each crate cut. Only its spelling changes, so what it asserts
+            // is what base asserted.
+            let spans: BTreeMap<String, (usize, usize)> = tests_in(base_text)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|test| (test.inner, test.body))
+                .collect();
             let modified = changed
                 .modified
                 .into_iter()
-                .map(|test| Modified {
-                    base_body: respell_cut(&test.base_body, &base_crate, &head_crate, &cuts),
-                    ..test
+                .map(|test| {
+                    let body = spans.get(&test.inner).map_or_else(
+                        || test.base_body.clone(),
+                        |span| {
+                            translate(
+                                &crate::item_index::respell_span_through_shims(
+                                    &base_index,
+                                    path,
+                                    base_text,
+                                    *span,
+                                ),
+                                test_path,
+                                &moves,
+                            )
+                        },
+                    );
+                    Modified {
+                        base_body: respell_cut(&body, &base_crate, &head_crate, &cuts),
+                        ..test
+                    }
                 })
                 .collect();
             splices.insert(head_path, (head_text.to_owned(), modified));
@@ -697,6 +723,14 @@ pub fn run(
             out,
             "test replay: a union build failed; its compiler output is at {}",
             kept.display()
+        )?;
+    }
+    let ran = kept.with_file_name(RUN_LOG);
+    if !json && !structural && ran.is_file() {
+        writeln!(
+            out,
+            "test replay: a union test run failed; its output is at {}",
+            ran.display()
         )?;
     }
     let refused = admitted
@@ -809,16 +843,23 @@ fn replay(
     // build is appended here, and `run` names the file.
     let kept = state.join(BUILD_LOG);
     let _ = std::fs::remove_file(&kept);
+    // A RUN THAT FAILED KEEPS ITS OUTPUT TOO (CLOUD-2789). Measured on #1276:
+    // 663 base bodies read as failed in the union run while a sample of them
+    // passed alone in the same tree, and nothing said why.
+    let ran = state.join(RUN_LOG);
+    let _ = std::fs::remove_file(&ran);
     resume(
         &tree,
         splices,
         &journal,
         &|still| {
             let outcome = run_union(&tree, still, &published, wrapped.as_ref());
-            if let Some((code, output)) = outcome.as_ref()
-                && *code == BUILD_FAILED
-            {
-                let _ = crate::durable::append(&kept, output);
+            if let Some((code, output)) = outcome.as_ref() {
+                if *code == BUILD_FAILED {
+                    let _ = crate::durable::append(&kept, output);
+                } else if *code != 0 {
+                    let _ = crate::durable::append(&ran, output);
+                }
             }
             outcome
         },
@@ -832,6 +873,8 @@ fn replay(
 
 /// Where a run's failed union builds keep their output, under `replay/`.
 const BUILD_LOG: &str = "build-failed.log";
+/// Where a run's failed union test runs keep their output, under `replay/`.
+const RUN_LOG: &str = "run-failed.log";
 
 /// The file beside `replay/tree` naming the HEAD tree id it was materialised
 /// from; absent while no whole tree stands there.
