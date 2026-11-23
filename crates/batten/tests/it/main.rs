@@ -342,6 +342,7 @@ mod plan_complete;
 mod pointer_only;
 mod policy_cache;
 mod policy_engine_count;
+mod policy_execution;
 mod policy_input_narrowing;
 mod policy_input_schema;
 mod policy_parity;
