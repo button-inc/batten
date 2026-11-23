@@ -84,14 +84,18 @@ fn every_repository_policy_row_decides_on_bytecode_at_every_load() {
         records: &resolved.records,
     };
     let mut found = Vec::new();
-    // Twice per mode: the first load may compile, the second must read the
-    // entry the first wrote; neither may fall back.
-    for checks in [
+    let mut compiled = Vec::new();
+    // Twice per mode: the first load may compile, every later one must read
+    // the entry the first wrote; none may fall back.
+    for (load, checks) in [
         ModuleChecks::Run,
         ModuleChecks::RunOverSelection,
         ModuleChecks::SkipOnHotPath,
         ModuleChecks::Run,
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let bundles = policy::load(&repo, &resolved.rules, vocabulary, checks, None)
             .unwrap_or_else(|err| panic!("{checks:?}: this repository's policy loads: {err}"));
         assert!(
@@ -100,8 +104,22 @@ fn every_repository_policy_row_decides_on_bytecode_at_every_load() {
             bundles.len()
         );
         found.extend(interpreted(&format!("{checks:?}"), &bundles));
+        if load > 0 {
+            compiled.extend(
+                bundles
+                    .iter()
+                    .filter(|bundle| bundle.execution() == Execution::Bytecode { cached: false })
+                    .map(|bundle| format!("{checks:?} (load {load}): {}", bundle.id())),
+            );
+        }
     }
     hold(&found);
+    assert!(
+        compiled.is_empty(),
+        "a load after the first compiled its program rather than reading the cached \
+         entry:\n{}",
+        compiled.join("\n")
+    );
 }
 
 /// The case inputs a module's own cases rarely write: every path it reads set

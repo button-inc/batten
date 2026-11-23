@@ -1157,7 +1157,17 @@ pub fn load(
             // The provider comparison (CLOUD-1625), in its own function for
             // `clippy::too_many_lines`: a nameable step lifted out whole, which is
             // the remedy `lib.rs` takes for the same lint rather than raising a cap.
-            let sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
+            let mut sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
+            // THE HOT PATH STRIPS A PRESET'S CASES TOO, as `read_sources` does a
+            // module's (#1276). It did not, so its key was the full text's while
+            // every checked load keyed the stripped one: each mediated call
+            // recompiled every preset row and overwrote the entry, and the next
+            // `check` recompiled it back.
+            if checks == ModuleChecks::SkipOnHotPath {
+                for (_, text) in &mut sources {
+                    *text = without_test_rules(text);
+                }
+            }
             let bundle = compile_for(root, &rule.id, &sources, data, checks)?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
