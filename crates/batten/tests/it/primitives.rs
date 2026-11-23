@@ -1342,25 +1342,6 @@ fn line_of(source: &str, at: usize) -> usize {
     source[..at].lines().count().max(1)
 }
 
-/// Every `*.rs` under `dir`, recursively, in a stable order — a gate's failure
-/// message must not depend on `read_dir`'s filesystem-defined ordering.
-fn rust_sources(dir: &Path) -> Vec<PathBuf> {
-    let mut sources = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(next) = stack.pop() {
-        for entry in fs::read_dir(&next).expect("read a source directory") {
-            let path = entry.expect("read dir entry").path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-                sources.push(path);
-            }
-        }
-    }
-    sources.sort();
-    sources
-}
-
 /// The audit's own fixtures: one well-formed shape and the two failing ones that
 /// really shipped. `__DROP__` stands in for the needle so these are invisible to
 /// the scan over the real tree.
@@ -1419,28 +1400,27 @@ fn every_permission_drop_asserts_its_own_premise() {
     }
 
     // (b) The real sites.
-    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Every workspace crate's `src/` and `tests/` (CLOUD-2789): the split cut
+    // engine code out of `crates/batten`, and a drop there is still a drop.
     let mut files = 0;
     let mut sites = 0;
-    for dir in ["src", "tests"] {
-        for path in rust_sources(&crate_dir.join(dir)) {
-            let source = fs::read_to_string(&path).expect("read source");
-            files += 1;
-            let mut from = 0;
-            while let Some(rel) = source[from..].find(&needle) {
-                let at = from + rel;
-                sites += 1;
-                let (body, drop_at) = enclosing_fn(&source, at);
-                let verdict = premise_asserted(body, drop_at);
-                assert!(
-                    verdict.is_ok(),
-                    "{}:{}: {} (CLOUD-249)",
-                    path.display(),
-                    line_of(&source, at),
-                    verdict.unwrap_err()
-                );
-                from = at + needle.len();
-            }
+    for path in common::rust_sources() {
+        let source = fs::read_to_string(&path).expect("read source");
+        files += 1;
+        let mut from = 0;
+        while let Some(rel) = source[from..].find(&needle) {
+            let at = from + rel;
+            sites += 1;
+            let (body, drop_at) = enclosing_fn(&source, at);
+            let verdict = premise_asserted(body, drop_at);
+            assert!(
+                verdict.is_ok(),
+                "{}:{}: {} (CLOUD-249)",
+                path.display(),
+                line_of(&source, at),
+                verdict.unwrap_err()
+            );
+            from = at + needle.len();
         }
     }
     assert!(files > 0, "the audit must actually have read the crate");
@@ -1479,9 +1459,8 @@ fn no_suite_sets_the_state_dir_variables_itself() {
     // fail to notice a suite that isolates nothing at all. That second case is
     // exactly what the `windows` job is a required check for.
     let needle = xdg_needle();
-    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut offenders = Vec::new();
-    for path in rust_sources(&crate_dir.join("tests")) {
+    for path in common::test_sources() {
         // `common/` is where the one authority lives, so it is the one place the
         // variable is named — the carve-out IS the rule.
         if path.ends_with("common/mod.rs") {
@@ -1683,9 +1662,8 @@ fn every_path_override_is_composed_with_join_paths() {
     }
 
     // (b) The real sites.
-    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut sites = 0;
-    for path in rust_sources(&crate_dir.join("tests")) {
+    for path in common::test_sources() {
         let source = fs::read_to_string(&path).expect("read source");
         let mut from = 0;
         while let Some(rel) = source[from..].find(&needle) {
@@ -1741,12 +1719,11 @@ fn every_path_valued_toml_key_uses_a_literal_string() {
     // failed nine cases. Whether a value is a path is a judgement; which key it
     // sits under is a fact. Keys whose values are never paths are left alone
     // rather than swept in, so the rule stays about the thing that bites.
-    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // Collected rather than panicked on at the first hit: this class arrives in
     // batches — nine cases in one suite, four in another — and a gate that names
     // one offender per run turns one fix into one CI round trip each.
     let mut offenders = Vec::new();
-    for path in rust_sources(&crate_dir.join("tests")) {
+    for path in common::test_sources() {
         let source = fs::read_to_string(&path).expect("read source");
         for key in PATH_VALUED_KEYS {
             let needle = basic_string_interpolation(key);

@@ -10132,22 +10132,40 @@ mod tests {
 
     // --- one document acquisition (CLOUD-849) --------------------------------
 
-    /// Every `.rs` under `src/`, so the scan is over the crate rather than over
-    /// the file that happens to hold the assertion.
+    /// Every `.rs` under EVERY workspace crate's `src/`, so the scan is over the
+    /// product rather than over the file that happens to hold the assertion.
     ///
-    /// A near-copy of `git.rs`'s own `crate_sources`, which is `#[cfg(test)]`
-    /// and private to that module. Copied rather than hoisted deliberately:
-    /// making it shared would put a test helper on the crate's real surface to
-    /// save fifteen lines, and the two gates it serves are independent.
+    /// The crates are ENUMERATED from the workspace root (CLOUD-2789): this
+    /// walked `crates/batten/src` when that was the whole product, and a second
+    /// document acquisition cut into `batten-base` would have left it silently.
+    ///
+    /// A near-copy of `batten-core` `git.rs`'s own `workspace_sources`, which is
+    /// `#[cfg(test)]` and private to that module. Copied rather than hoisted
+    /// deliberately: making it shared would put a test helper on the crate's
+    /// real surface to save fifteen lines, and the two gates it serves are
+    /// independent.
     fn crate_sources() -> Vec<(std::path::PathBuf, String)> {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("a workspace member sits under `crates/`");
         let mut sources = Vec::new();
         // WALKS THE SUBTREE, not one directory. `read_dir` does not descend, so
         // a `.rs` file under a future `src/<module>/` would never be scanned and
         // the gate would stop holding SILENTLY — the failure mode of every
         // scanner gate. The crate is flat today, which is exactly when this is
         // cheap to get right.
-        let mut pending = vec![src];
+        let mut pending: Vec<std::path::PathBuf> = std::fs::read_dir(crates)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|member| member.join("Cargo.toml").is_file())
+            .map(|member| member.join("src"))
+            .filter(|src| src.is_dir())
+            .collect();
+        assert!(
+            pending.len() > 1,
+            "the workspace walk found {} crate(s); the product is more than one",
+            pending.len()
+        );
         while let Some(dir) = pending.pop() {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
