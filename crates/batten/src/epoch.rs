@@ -357,7 +357,11 @@ pub fn for_rule(dir: &Path, base_ref: Option<&str>, rule: &str, verdict: &str) -
     let mut module = None;
     for path in &tracked {
         let is_config = path == crate::config_model::CONFIG_FILE;
-        if narrowed && !is_config && !read_files.as_ref().is_some_and(|files| files.contains(path))
+        if narrowed
+            && !is_config
+            && !read_files
+                .as_ref()
+                .is_some_and(|files| files.contains(path))
         {
             continue;
         }
@@ -562,11 +566,13 @@ impl TreeReads {
         let Some(names) = self.records.as_ref() else {
             return true;
         };
-        row.get("record").and_then(toml::Value::as_str).is_none_or(|record| {
-            names
-                .iter()
-                .any(|sub| sub == record || sub.starts_with(&format!("{record}.")))
-        })
+        row.get("record")
+            .and_then(toml::Value::as_str)
+            .is_none_or(|record| {
+                names
+                    .iter()
+                    .any(|sub| sub == record || sub.starts_with(&format!("{record}.")))
+            })
     }
 }
 
@@ -1108,7 +1114,11 @@ mod rule_surface_tests {
         fs::write(dir.join("batten.toml"), config("", "copy it instead")).unwrap();
         assert_eq!(epoch(&dir), before, "the module reads no `[[verb]]` row");
         fs::write(dir.join("AGENTS.md"), "# guide, edited\n").unwrap();
-        assert_eq!(epoch(&dir), before, "the row hands it no `AGENTS.md` content");
+        assert_eq!(
+            epoch(&dir),
+            before,
+            "the row hands it no `AGENTS.md` content"
+        );
     }
 
     /// Fails by: the narrowing reaching past the unrelated, so the rule's own
@@ -1119,12 +1129,19 @@ mod rule_surface_tests {
         let before = epoch(&dir);
         fs::write(
             dir.join("batten.toml"),
-            config("base = \"origin/main\"\ndelta_sources = [\"**\"]\n", "restore it"),
+            config(
+                "base = \"origin/main\"\ndelta_sources = [\"**\"]\n",
+                "restore it",
+            ),
         )
         .unwrap();
         let moved = epoch(&dir);
         assert_ne!(moved, before, "its own row moved");
-        fs::write(dir.join("policy/held.rego"), format!("{MODULE}\n# edited\n")).unwrap();
+        fs::write(
+            dir.join("policy/held.rego"),
+            format!("{MODULE}\n# edited\n"),
+        )
+        .unwrap();
         assert_ne!(epoch(&dir), moved, "its module moved");
     }
 
