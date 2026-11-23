@@ -11,6 +11,13 @@
 // Activation is per-clone and manual — creating this file does nothing until:
 //   hk install
 // is run once (see CONTRIBUTING.md). hk stores the hooks in .git/hooks.
+//
+// A sweep route (this file's path is in `MUTANT_GATES`, CLOUD-2828): the
+// commit-time steps answer to the 100 ms hook ceiling and compile nothing, and
+// the row below proves the gate that holds that, by routing one commit-msg step
+// back through `cargo run` and naming the compiled case that must refuse it.
+//MUTANT-SUITE crates/batten/tests/it/hk_contract.rs
+//MUTANT commit-step-compiles|s@^        check = "batten commit check --message @        check = "cargo run -q -- commit check --message @|no_commit_time_hook_step_compiles
 amends "package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1#/Config.pkl"
 
 import "package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1#/Builtins.pkl"
