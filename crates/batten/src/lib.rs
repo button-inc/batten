@@ -18140,6 +18140,7 @@ fn run_registered_runner(
     let sweep = mutate::Sweep {
         findings: run.findings,
         declared: run.mutants,
+        recorded: 0,
         gates: run.sources,
     };
     let code = sweep.code();
@@ -18630,9 +18631,14 @@ fn run_declared_sweep(
     }
     let code = sweep.code();
     if code == ExitCode::Success {
+        // How much of it a record answered, so a replay never reads as a run.
+        let replayed = match sweep.recorded {
+            0 => String::new(),
+            recorded => format!(" ({recorded} recorded)"),
+        };
         writeln!(
             out,
-            "mutate sweep: {} declared mutation(s) across {} gate(s), every one caught",
+            "mutate sweep: {} declared mutation(s) across {} gate(s), every one caught{replayed}",
             sweep.declared, sweep.gates
         )?;
         return Ok(code);
