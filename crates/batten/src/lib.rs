@@ -21927,6 +21927,16 @@ fn admitted(
     Ok(decision)
 }
 
+/// Where the stat-to-digest map the last pre-call snapshot read lives, beside
+/// the snapshots. No call id reaches it: every snapshot is `<id>.json`.
+fn protected_digest_cache(root: &Path) -> Option<PathBuf> {
+    git::git_dir(root).ok().map(|dir| {
+        dir.join("batten-facts")
+            .join("protected-watch")
+            .join("digests")
+    })
+}
+
 /// Where a shell call's protected-path snapshot lives, keyed by its call id.
 fn protected_snapshot_path(root: &Path, call: &str) -> Option<PathBuf> {
     let safe: String = call
@@ -21962,7 +21972,17 @@ fn snapshot_protected(policy: &hook::Policy, envelope: &hook::Envelope, decision
     let Some(call) = envelope.call_id.as_deref() else {
         return;
     };
-    let Some((root, patterns, state)) = policy.protected_snapshot() else {
+    // THE LAST READING LENDS ITS DIGESTS (CLOUD-2789): entries carry a content
+    // digest, and hashing the whole protected set on every shell call was
+    // measured at up to 7 ms. A file whose stat has not moved since the last
+    // snapshot keeps its digest — the trust the stat fingerprint alone used to
+    // carry for every file — so the steady state reads this one small file.
+    let digests = protected_digest_cache(hook_authority_root());
+    let prior: Option<std::collections::BTreeMap<String, String>> = digests
+        .as_deref()
+        .and_then(|path| fsio::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok());
+    let Some((root, patterns, state)) = policy.protected_snapshot(prior.as_ref()) else {
         return;
     };
     // ABSOLUTE, BECAUSE THE POST-CALL HOOK RUNS WHERE THE CALL LEFT IT (#1276):
@@ -21972,6 +21992,13 @@ fn snapshot_protected(policy: &hook::Policy, envelope: &hook::Envelope, decision
     let Some(path) = protected_snapshot_path(&root, call) else {
         return;
     };
+    if prior.as_ref() != Some(&state)
+        && let Some(cache) = digests.as_deref()
+        && let Some(parent) = cache.parent()
+        && std::fs::create_dir_all(parent).is_ok()
+    {
+        let _cached = crate::durable::replace(cache, serde_json::json!(state).to_string());
+    }
     let body = serde_json::json!({"root": root, "patterns": patterns, "state": state});
     if let Some(parent) = path.parent()
         && std::fs::create_dir_all(parent).is_err()
