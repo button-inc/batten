@@ -1326,9 +1326,13 @@ fn the_defect_a_mutation_the_suite_does_not_catch_fails() {
         "survivor",
         &["#MUTANT unwatched|s/^exit 0$/exit 0 # unwatched/|over_the_limit_is_refused"],
     );
-    let (code, out, _) = sweep(&root, "toy");
+    let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("SURVIVED"), "{out}");
+    assert!(
+        err.contains("1 of 1 declared mutation(s) across 1 gate(s) survived"),
+        "a survivor is counted over the rows judged: {err}"
+    );
 }
 
 #[cfg(unix)]
@@ -1473,10 +1477,14 @@ fn a_row_that_mutates_its_own_declaration_is_refused_not_reported_as_a_survivor(
         "self-mutating",
         &["#MUTANT self|s/MUTANT self/MUTANT other/|over_the_limit_is_refused"],
     );
-    let (code, out, _) = sweep(&root, "toy");
+    let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("self-mutating-row"), "{out}");
     assert!(!out.contains("SURVIVED"), "{out}");
+    assert!(
+        err.contains("1 declared row(s) prove nothing as written") && !err.contains("survived"),
+        "a row defect is counted apart from survivors: {err}"
+    );
 }
 
 #[cfg(unix)]
@@ -1518,9 +1526,15 @@ fn the_copy_is_a_repository_so_a_suite_that_resolves_its_own_root_answers_about_
 #[test]
 fn anti_vacuity_a_listed_gate_with_no_declaration_fails_rather_than_being_skipped() {
     let root = toy_repo("no-declaration", &[]);
-    let (code, out, _) = sweep(&root, "toy");
+    let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("no-mutant-declared"), "{out}");
+    // #1276: this read `1 of 0 declared mutation(s) … were not caught`, a
+    // coverage verdict over a denominator of zero.
+    assert!(
+        err.contains("1 gate(s) declare no row this sweep judges") && !err.contains(" of 0 "),
+        "a gate-level finding is counted apart from the rows: {err}"
+    );
 }
 
 #[cfg(unix)]
@@ -1543,9 +1557,13 @@ fn anti_vacuity_a_mutation_that_changes_nothing_is_not_a_pass() {
         "inert",
         &["#MUTANT inert|s/^NOTHING_MATCHES_THIS$/x/|over_the_limit_is_refused"],
     );
-    let (code, out, _) = sweep(&root, "toy");
+    let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("inert-mutation"), "{out}");
+    assert!(
+        err.contains("1 declared row(s) prove nothing as written") && !err.contains("survived"),
+        "an inert row is a row defect, not a survivor: {err}"
+    );
 }
 
 #[cfg(unix)]

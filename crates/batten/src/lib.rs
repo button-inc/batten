@@ -18647,14 +18647,33 @@ fn run_declared_sweep(
     // suite that passed on broken code — it is a suite nothing could
     // ask — and adding them produced `124 of 0 declared mutation(s) …
     // were not caught`, a coverage verdict over a denominator of zero.
+    // And so are the rest (#1276): only a survivor is a verdict over the rows
+    // judged, so a row defect or a gate-level finding counted into it read
+    // `1 of 0 declared`.
     let unlooked = sweep.unlooked();
-    let uncaught = sweep.findings.len() - unlooked;
-    if uncaught > 0 {
+    let survived = sweep.survived();
+    if survived > 0 {
         writeln!(
             err,
-            "::error:: mutate sweep: {} of {} declared mutation(s) across {} gate(s) were \
-             not caught — a suite that passes on broken code is not coverage",
-            uncaught, sweep.declared, sweep.gates
+            "::error:: mutate sweep: {} of {} declared mutation(s) across {} gate(s) \
+             survived — a suite that passes on broken code is not coverage",
+            survived, sweep.declared, sweep.gates
+        )?;
+    }
+    let defects = sweep.row_defects();
+    if defects > 0 {
+        writeln!(
+            err,
+            "::error:: mutate sweep: {defects} declared row(s) prove nothing as written — \
+             inert, self-mutating, malformed or naming every case; fix the row"
+        )?;
+    }
+    let gate_level = sweep.gate_level();
+    if gate_level > 0 {
+        writeln!(
+            err,
+            "::error:: mutate sweep: {gate_level} gate(s) declare no row this sweep judges — \
+             no mutant declared, or a runner owns the source"
         )?;
     }
     if unlooked > 0 {
