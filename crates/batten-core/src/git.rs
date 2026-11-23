@@ -8935,7 +8935,6 @@ mod tests {
         //   resolver);
         // - the resolver is defined exactly once across src AND tests (a
         //   test-helper reimplementation is still a second implementation).
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         // Built by concatenation so this test's own source does not count as
         // a definition (the same trick state.rs plays with its baked literal).
         let needle = ["fn repo", "_root"].concat();
@@ -8960,23 +8959,15 @@ mod tests {
             "git2::",
             "gix::discover",
         ];
+        //
+        // EVERY WORKSPACE CRATE'S `src/` AND `tests/` (CLOUD-2789): "the crate"
+        // was the product until the split, and a resolver in `batten-base` or
+        // in `crates/batten/tests` is the second implementation this forbids.
         let mut definitions = 0;
         for (dir, scan_tokens) in [("src", true), ("tests", false)] {
-            // A crate with no integration tests has no `tests/`, and this one
-            // has none since the split: absent is an empty set there. `src/`
-            // absent is could-not-look and still panics.
-            let entries = match fs::read_dir(manifest.join(dir)) {
-                Err(e) if dir == "tests" && e.kind() == std::io::ErrorKind::NotFound => continue,
-                read => read.unwrap(),
-            };
-            for entry in entries {
-                let path = entry.unwrap().path();
-                if path.extension() != Some(OsStr::new("rs")) {
-                    continue;
-                }
-                let source = crate::fsio::read_to_string(&path).unwrap();
+            for (path, source) in workspace_sources(dir) {
                 definitions += source.matches(needle.as_str()).count();
-                if !scan_tokens || path.file_name() == Some(OsStr::new("git.rs")) {
+                if !scan_tokens || is_own_module(&path, "git.rs") {
                     continue;
                 }
                 for token in forbidden {
@@ -8995,25 +8986,59 @@ mod tests {
         );
     }
 
-    /// Read every `src/*.rs`, optionally skipping this module.
-    fn crate_sources(skip_self: bool) -> Vec<(PathBuf, String)> {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    /// Every `.rs` under `dir` (`src` or `tests`) of EVERY workspace crate,
+    /// recursively.
+    ///
+    /// THE PRODUCT, NOT THIS CRATE (CLOUD-2789). These gates were written over
+    /// `crates/batten/src`, which was the whole product; the split moved them
+    /// here and their `src/` walk silently narrowed to `batten-core`, so
+    /// `propose::diff3` reached gix from `batten-base` and nothing saw it. The
+    /// crates are ENUMERATED from the workspace root rather than listed, so the
+    /// next crate cut lands inside the census by construction.
+    fn workspace_sources(dir: &str) -> Vec<(PathBuf, String)> {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("a workspace member sits under `crates/`");
+        let mut pending: Vec<PathBuf> = fs::read_dir(crates)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|member| member.join("Cargo.toml").is_file())
+            .map(|member| member.join(dir))
+            .filter(|root| root.is_dir())
+            .collect();
         let mut sources = Vec::new();
-        for entry in fs::read_dir(src).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension() != Some(OsStr::new("rs")) {
-                continue;
+        while let Some(at) = pending.pop() {
+            for entry in fs::read_dir(&at).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension() == Some(OsStr::new("rs")) {
+                    let source = crate::fsio::read_to_string(&path).unwrap();
+                    sources.push((path, source));
+                }
             }
-            if skip_self && path.file_name() == Some(OsStr::new("git.rs")) {
-                continue;
-            }
-            let source = crate::fsio::read_to_string(&path).unwrap();
-            sources.push((path, source));
         }
         // `read_dir` order is filesystem-defined; a gate's failure message must
         // not depend on it.
         sources.sort_by(|a, b| a.0.cmp(&b.0));
+        // ANTI-VACUITY: the binary crate and this one are both in the census, so
+        // a walk rooted in the wrong place fails here rather than passing empty.
+        if dir == "src" {
+            for member in ["batten", "batten-core"] {
+                let root = crates.join(member).join("src");
+                assert!(
+                    sources.iter().any(|(path, _)| path.starts_with(&root)),
+                    "the workspace walk found nothing under {}",
+                    root.display()
+                );
+            }
+        }
         sources
+    }
+
+    /// Whether `path` is this crate's own `src/<name>`.
+    fn is_own_module(path: &Path, name: &str) -> bool {
+        path == Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name)
     }
 
     // `no_ancestry_decides_merged_ness` MOVED HERE (CLOUD-756), and the property
@@ -9250,9 +9275,12 @@ mod tests {
         // forbidden edges unspellable and hand every read-effect gate transitive
         // reach to a push. The gate that was refusing pointed at the safer of two
         // designs only by accident of its wording.
-        for (path, source) in crate_sources(true) {
-            let name = path.file_name().and_then(|name| name.to_str());
-            if name.is_some_and(|name| GIT_MODULES.contains(&name)) {
+        //
+        // EVERY WORKSPACE CRATE (CLOUD-2789): a module is a git module by its
+        // PATH in this crate, never by its file name, so a `git.rs` cut into
+        // another crate is a fourth module like any other.
+        for (path, source) in workspace_sources("src") {
+            if GIT_MODULES.iter().any(|name| is_own_module(&path, name)) {
                 continue;
             }
             assert!(
@@ -9376,12 +9404,17 @@ mod tests {
         // primitive is a production identifier or a spawn's string argument, so
         // that is all this reads: comments and `#[cfg(test)]` items are skipped
         // on the syntax tree, never by rewording.
+        //
+        // Every workspace crate's `src/`, which is what `src/` meant before the
+        // split (CLOUD-2789). The production-code narrowing above stays: it has
+        // a concrete reason (920ded1b), and it narrows WHAT is read in a file,
+        // never WHICH files.
         let forbidden = [
             ["sta", "sh"].concat(),
             ["prun", "able"].concat(),
             ["worktree", "_remove"].concat(),
         ];
-        for (path, source) in crate_sources(false) {
+        for (path, source) in workspace_sources("src") {
             let code = production_code(&source);
             for token in &forbidden {
                 let at = code.find(token.as_str());
@@ -9406,10 +9439,9 @@ mod tests {
         // such place to protect: nothing in the crate spawns `git` at all, and
         // the claim is strictly stronger and much simpler for it.
         //
-        // `crate_sources(false)` is the change that makes it terminal — the
-        // argument selects whether THIS module is exempt, and the whole point is
-        // that it no longer is. It was `true` while `git.rs` held the one
-        // invoker.
+        // Exempting nothing is the change that makes it terminal: THIS module
+        // was exempt while `git.rs` held the one invoker, and the whole point is
+        // that it no longer is.
         //
         // SHOWN ABLE TO FAIL (CLOUD-418) by reintroducing a spawn anywhere under
         // `src/`, including here.
@@ -9426,8 +9458,11 @@ mod tests {
         // saying so. The claim being made is about what the SHIPPED crate does,
         // and truncating here states that scope instead of quietly assembling the
         // needle to dodge a match, which would make the gate lie about its reach.
+        //
+        // Over every workspace crate's `src/` (CLOUD-2789): "nothing in the
+        // crate" meant the product while the product was one crate.
         let needle = ["Command::new(\"", "git\")"].concat();
-        for (path, source) in crate_sources(false) {
+        for (path, source) in workspace_sources("src") {
             let source = source
                 .split_once("\n#[cfg(test)]\n")
                 .map_or(source.as_str(), |(shipped, _)| shipped);
@@ -9534,7 +9569,12 @@ mod tests {
             ["::que", "ry_bytes("].concat(),
             ["::que", "ry_optional("].concat(),
         ];
-        for (path, source) in crate_sources(true) {
+        // Every workspace crate but this module (CLOUD-2789), for
+        // `workspace_sources`'s reason.
+        for (path, source) in workspace_sources("src") {
+            if is_own_module(&path, "git.rs") {
+                continue;
+            }
             for token in &forbidden {
                 assert!(
                     !source.contains(token.as_str()),
