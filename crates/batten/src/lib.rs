@@ -3278,7 +3278,12 @@ fn run_design_audit(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
 fn run_session_setup(overrides: &Overrides) -> Result<ExitCode> {
     let here = Path::new(".");
     let resolved = resolve::resolve(here, overrides)?;
-    let git_dir = git::git_dir(here)?;
+    // THE HOOK'S OWN RESOLUTION, so the task and every reader of it name one
+    // directory: the hook started this task where `git_dir_of` answered.
+    let git_dir = match session_setup::git_dir_of(here) {
+        Some(found) => found,
+        None => git::git_dir(here)?,
+    };
     let handlers = resolved
         .hook
         .as_ref()
@@ -20197,7 +20202,10 @@ fn install_pending_for(
     if envelope.event != crate::config_model::Event::PreTool || !rules.reads_pinned(envelope) {
         return None;
     }
-    let git_dir = git::git_dir(hook_authority_root()).ok()?;
+    let git_dir = session_setup::git_dir_of(hook_authority_root())?;
+    if !session_setup::started(&git_dir) {
+        return None;
+    }
     let (running, gone) = task::partition(&git_dir);
     let entry = running
         .into_iter()
@@ -23695,7 +23703,7 @@ fn start_session_setup(raw: &str) {
     if !here.join(crate::config_model::CONFIG_FILE).exists() {
         return;
     }
-    let Ok(git_dir) = git::git_dir(here) else {
+    let Some(git_dir) = session_setup::git_dir_of(here) else {
         return;
     };
     let _ = session_setup::start(here, &git_dir, raw, boundary_epoch());
@@ -23711,7 +23719,7 @@ fn surface_session_setup(envelope: &hook::Envelope, advice: &mut Vec<advisory::A
     ) {
         return;
     }
-    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+    let Some(git_dir) = session_setup::git_dir_of(hook_authority_root()) else {
         return;
     };
     for finding in session_setup::surface(&git_dir) {
