@@ -116,6 +116,38 @@ pub fn rust_tree(
     }
 }
 
+/// The 1-based line of any byte offset in one source text, answered by binary
+/// search over the line starts, which are found once per text.
+///
+/// THE ONE LINE TABLE the tree producers share. Each producer had its own
+/// `line_of(source, offset)` that counted the newlines before `offset`, so a
+/// file with N call sites paid N scans of its head: quadratic in file size.
+/// Measured on `policy test`, that count was 49% of the verb's samples and took
+/// it from 12 s to 143 s once the call-site facts moved onto this lossless
+/// tree, whose offsets carry no line the way a `syn` span did.
+#[derive(Debug)]
+pub struct LineIndex {
+    starts: Vec<usize>,
+}
+
+impl LineIndex {
+    /// Index `source`'s line starts.
+    #[must_use]
+    pub fn new(source: &str) -> Self {
+        Self {
+            starts: std::iter::once(0)
+                .chain(source.match_indices('\n').map(|(at, _)| at + 1))
+                .collect(),
+        }
+    }
+
+    /// The 1-based line `offset` falls on.
+    #[must_use]
+    pub fn line(&self, offset: usize) -> usize {
+        self.starts.partition_point(|start| *start <= offset)
+    }
+}
+
 /// [`rust`] in the shape the fact producers want: a parsed file, or the
 /// could-not-look arm.
 ///
@@ -137,6 +169,20 @@ pub fn rust_or_could_not_look(source: &str) -> crate::facts::Look<syn::File> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    /// Fails by: a line table that disagrees with counting the newlines before
+    /// the offset (the answer every producer gave before the table), at a line
+    /// start, mid-line, on a newline byte, past a blank line, or at the end.
+    #[test]
+    fn the_line_table_answers_as_counting_newlines_does() {
+        let source = "fn a() {}\n\nfn b() {\n    c();\n}\n";
+        let lines = LineIndex::new(source);
+        for offset in 0..=source.len() {
+            let counted = source[..offset].bytes().filter(|b| *b == b'\n').count() + 1;
+            assert_eq!(lines.line(offset), counted, "offset {offset}");
+        }
+        assert_eq!(LineIndex::new("").line(0), 1);
+    }
 
     #[test]
     fn a_parse_failure_is_could_not_look_and_an_empty_file_is_not() {
