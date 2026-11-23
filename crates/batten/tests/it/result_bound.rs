@@ -722,13 +722,15 @@ fn an_mcp_spill_is_read_under_its_own_pointer() {
     assert!(note_of(&posted.stdout).contains("/0/text:"));
 }
 
-/// A TARGETLESS RESULT IS BOUND BY ITS SESSION'S HOME, NOT THE DIRECTORY IT
-/// CROSSED (CLOUD-2705, by CLOUD-2672's design). An MCP answer names no path, so
-/// it is judged where its session started; a visit to a repository declaring a
-/// tighter bound does not move that. Fails by: the second repository's bound
-/// applying to a session homed in the first.
+/// A SECOND OVER-BOUND RESULT IN ONE SESSION IS REWRITTEN, WHICHEVER
+/// REPOSITORY IT CAME FROM (CLOUD-2705). The window is the session's, so the
+/// bound is the tighter of the home's and the judging repository's: a visit
+/// can tighten it, never leave a result the visited repository bounds whole.
+/// Fails by: the bound read from the session's home alone, which let the
+/// second response through unbounded while the same bytes in the visited
+/// repository's own session were rewritten.
 #[test]
-fn a_targetless_result_is_bound_by_its_sessions_home() {
+fn a_second_over_bound_result_in_one_session_is_rewritten() {
     let home = repo("result-bound-home-default");
     // The session homes in a repository with the default bound.
     let first = mcp_post_in(&home, &payload(2000), "homed");
@@ -738,16 +740,22 @@ fn a_targetless_result_is_bound_by_its_sessions_home() {
         .git()
         .base_commit()
         .build();
-    // Under the visited repository's own bound this would be rewritten, and its
-    // own session proves it; under the home's default it is not.
+    // The premise: under the visited repository's own bound this is rewritten.
     let own = mcp_post_in(&visited, &payload(150), "visited-own");
     assert!(note_of(&own.stdout).contains("/0/text:"));
     let homed = mcp_post_in(&visited, &payload(150), "homed");
     assert_eq!(homed.status.code(), Some(0), "{}", common::stderr(&homed));
+    let note = note_of(&homed.stdout);
     assert!(
-        homed.stdout.is_empty(),
-        "the visited repository's bound governed a session homed elsewhere: {}",
-        String::from_utf8_lossy(&homed.stdout)
+        note.contains("/0/text:"),
+        "the second result is bounded: {note}"
+    );
+    let view = view_named(&homed.stdout);
+    assert!(
+        std::fs::read_to_string(&view)
+            .expect("the view exists")
+            .contains("payload line 00149 of the log"),
+        "{view}"
     );
 }
 
@@ -856,3 +864,4 @@ fn a_spill_note_names_no_field_route() {
         assert!(said.contains("; read "), "{harness}: {said}");
     }
 }
+
