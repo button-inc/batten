@@ -851,13 +851,16 @@ jobs:
       # release-shaped, or for any head while the release guard's settings are
       # not green.
       #
-      # THE ONE EXCEPTION IS B1 ITSELF: its trunk has no `release path` verb, so
-      # nothing is posted and nothing is sealed. That is harmless while the
-      # status is not required, and B1 changes no pin.
+      # UNCONDITIONAL (CLOUD-2851). B1's trunk had no `release path` verb, so
+      # this step was guarded by a hash of the file the predicate lived in, and
+      # that guard named ONE path: a pull request moving the module made it name
+      # the head's path rather than the trunk's, and the step skipped on that
+      # pull request's own run, grading nothing, silently. Every trunk now
+      # carries the verb wherever the module sits, so a trunk without it fails
+      # here as a usage error rather than skipping as if graded.
       - name: Check out the trunk's predicate beside the head
         run: git worktree add trunk-predicate origin/main
       - name: Grade the head with the trunk's predicate, post release-path, and seal final
-        if: hashFiles('trunk-predicate/crates/batten-base/src/release_path.rs') != ''
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1184,10 +1187,13 @@ jobs:
   mutants:
     name: mutants (${{ matrix.shard }})
     # `!cancelled()`, NOT THE DEFAULT `success()`: `mutants-reach` is a saving,
-    # never a verdict, so a shard runs whether it passed or failed, and builds
-    # for itself after a failure. Both dependencies named, so the condition
-    # visibly answers for each (`job require unseen`).
-    if: ${{ !cancelled() && github.event.pull_request.draft == false && needs.ci.result == 'success' && (needs.mutants-reach.result == 'success' || needs.mutants-reach.result == 'failure') }}
+    # never a verdict, so a shard runs whatever it answered — success, failure,
+    # cancelled (its own timeout) or skipped — and builds for itself whenever
+    # the mirror is absent (CLOUD-2851: admitting only two let a reach timeout
+    # skip all four shards and turn `final` red on a non-verdict). Both
+    # dependencies named, so the condition visibly answers for each (`job
+    # require unseen`); `!cancelled()` still stops them when the RUN is.
+    if: ${{ !cancelled() && github.event.pull_request.draft == false && needs.ci.result == 'success' && (needs.mutants-reach.result == 'success' || needs.mutants-reach.result == 'failure' || needs.mutants-reach.result == 'cancelled' || needs.mutants-reach.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
