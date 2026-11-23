@@ -19134,7 +19134,18 @@ tools = [["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
 id = "cross-check"
-inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "policy", "bench"]
+# `.cargo` and `fuzz/properties.rs` for `lint:clippy`'s reason (CLOUD-2835):
+# with cargo's traces read whole, the lint refused both as undeclared reads.
+inputs = [
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  "batten.toml",
+  "policy",
+  "bench",
+  ".cargo",
+  "fuzz/properties.rs",
+]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
