@@ -55,13 +55,19 @@ const OUTCOME: &str = "outcome";
 /// The outcome once a call has carried it: renamed, so it is said once.
 const SURFACED: &str = "outcome.surfaced";
 
-/// How long the task waits for the hook to register it before it works anyway.
+/// Register `pid` as the setup task unless a record for it already exists.
 ///
-/// The hook registers the pid the spawn returned, so the record can lag the
-/// child's first instruction by the spawn's return. A push before the record
-/// exists is a no-op ([`task::push`]), and the terminal phase is the one push
-/// the gate reads, so the task waits for its own record rather than racing it.
-const REGISTRATION_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+/// BOTH SIDES CALL THIS, AND NEITHER WAITS (CLOUD-2840). The hook registers the
+/// pid its spawn returned, so the registry names the task before the hook
+/// returns; the task registers itself before its first push, because a push to
+/// a pid with no record is a no-op ([`task::push`]) and its last phase is the
+/// one the gate reads. Whichever runs second finds the record and leaves it, so
+/// a phase the task already pushed is never reset to `start`.
+fn register_once(git_dir: &Path, pid: &str, now: u64) {
+    if task::read_field(git_dir, pid, "task").is_none() {
+        task::register(git_dir, TASK, pid, "start", now);
+    }
+}
 
 fn dir(git_dir: &Path) -> PathBuf {
     git_dir.join(DIR)
@@ -101,7 +107,7 @@ pub fn start(root: &Path, git_dir: &Path, raw: &str, now: u64) -> Option<String>
         root,
     )?
     .to_string();
-    task::register(git_dir, TASK, &pid, "start", now);
+    register_once(git_dir, &pid, now);
     Some(pid)
 }
 
@@ -146,15 +152,7 @@ pub fn run(
     rows: &[crate::config_model::Startup],
 ) -> bool {
     let pid = std::process::id().to_string();
-    let waited = std::time::Instant::now();
-    while task::read_field(git_dir, &pid, "task").is_none() && waited.elapsed() < REGISTRATION_WAIT
-    {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "a poll bounded by a real terminal state: the record `start` writes, or `REGISTRATION_WAIT`"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    register_once(git_dir, &pid, crate::clock::now_unix());
     if !matches!(
         task::singleton_acquire(git_dir, TASK, &pid, std::time::Duration::ZERO),
         task::Claim::Taken | task::Claim::Reclaimed(_)

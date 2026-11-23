@@ -167,7 +167,10 @@ const DEEPEST_CLOSURE: usize = 89;
 /// does not judge it. It is ratcheted apart, on the same terms: the split moves
 /// modules out and this number down; a module added to the crate fails it until
 /// the number is re-recorded here, deliberately.
-const ROOT_CLOSURE: usize = 117;
+///
+/// 118 since CLOUD-2840: `session_setup`, the session's setup as one detached
+/// task, is a new module added on purpose, reached only from `lib`.
+const ROOT_CLOSURE: usize = 118;
 
 /// Every top-level module of the library, mapped to the modules it reaches.
 ///
