@@ -1812,18 +1812,30 @@ fn view_path_in(dir: &Path, digest: &str) -> PathBuf {
     dir.join("views").join(format!("{digest}.md"))
 }
 
-/// Whether `path` is a view in `repo_root`'s capture store (CLOUD-2228).
+/// Whether `path` is in `repo_root`'s capture store: a view, a stored capture
+/// (`response-<digest>`, a spilled leaf among them), or the store itself
+/// (CLOUD-2228).
 ///
-/// The bound's pointer names a view as the route back to the text, so a read of
-/// one is the route being followed: bounding it again handed back a second
-/// pointer, and the text was never reachable by the route printed.
+/// The bound's pointer names the store as the route back to the text, so a
+/// read there is the route being followed: bounding it again handed back a
+/// second pointer, and the text was never reachable by the route printed.
+/// **THE WHOLE STORE, NOT ONLY `views/`:** a read of a spilled leaf's own
+/// `response-<digest>` file was bounded into a pointer to a view of itself,
+/// measured on PR #1276's session. A relative `path` is taken against the
+/// process's directory, and both sides are compared canonical where they
+/// exist, so `/tmp` and its resolved spelling are one store.
 #[must_use]
 pub fn is_view(repo_root: &Path, path: &Path) -> bool {
     let Ok(dir) = captures_dir(repo_root) else {
         return false;
     };
-    path.parent() == Some(dir.join("views").as_path())
-        && path.extension().and_then(|ext| ext.to_str()) == Some("md")
+    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |here| here.join(path))
+    };
+    absolute.starts_with(&dir) || canonical(&absolute).starts_with(canonical(&dir))
 }
 
 // --- navigation (CLOUD-121) --------------------------------------------------
@@ -4297,15 +4309,20 @@ mod tests {
         assert!(pretty.lines().count() > 1);
     }
 
-    /// Fails by: a view recognised outside the store's `views`, or a non-view
-    /// file inside it.
+    /// Fails by: a stored capture or a view not recognised as the store, or a
+    /// file outside the store recognised as one.
     #[test]
-    fn only_a_markdown_file_in_the_views_directory_is_a_view() {
+    fn every_file_in_the_capture_store_is_a_pointer_target() {
         let repo = contained_repo("capture-is-view");
         let dir = captures_dir(&repo).unwrap();
         assert!(is_view(&repo, &dir.join("views").join("x.md")));
-        assert!(!is_view(&repo, &dir.join("views").join("x.txt")));
-        assert!(!is_view(&repo, &dir.join("other").join("x.md")));
+        assert!(is_view(&repo, &dir.join("response-abc123")));
+        assert!(is_view(&repo, &dir));
+        assert!(!is_view(&repo, &repo.join("x.md")));
+        assert!(!is_view(
+            &repo,
+            &dir.with_file_name("captures-not").join("x.md")
+        ));
     }
 
     /// Fails by: a listing that misses a stored capture, or a prune that
