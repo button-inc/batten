@@ -3056,6 +3056,16 @@ pub struct Envelope {
     /// A forge event's tokens (CLOUD-2689); `None` on every host event.
     /// Projected as `input.call.forge`.
     pub forge: Option<crate::forge_event::ForgeCall>,
+    /// The connector call this shell command MEDIATES, as the host names the
+    /// direct one: `batten mcp call <server> <method> <params>` is
+    /// `mcp__<server>__<method>` handed `<params>` (CLOUD-2789).
+    ///
+    /// RESOLVED ONCE, at decode, from [`mediated_mcp_call`], so every selector
+    /// reads one answer rather than re-parsing the command: a `[[rule]]`'s
+    /// `tool`, a `[[hook.handler]]`'s matcher, the call event and the call
+    /// document all go through [`Envelope::tools`] and
+    /// [`Envelope::arguments`]. `None` for every call that mediates nothing.
+    pub mediated: Option<(String, Value)>,
 }
 
 /// The mode a host names when the turn may propose but not perform.
@@ -3064,6 +3074,37 @@ pub struct Envelope {
 /// differently is unrecognised rather than mis-read — which fails toward
 /// speaking, the direction an advisory must fail in.
 const PLAN_MODE: &str = "plan";
+
+impl Envelope {
+    /// Every name this call answers to: the host's own word, then the connector
+    /// call it mediates, if any (CLOUD-2789).
+    ///
+    /// ONE CALL, EVERY SURFACE. A selector keyed on a connector tool selects the
+    /// mediated route exactly as it selects the direct one, and a selector keyed
+    /// on the shell still selects the shell call, which stays a shell call too.
+    pub fn tools(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.raw_tool.as_str())
+            .chain(self.mediated.as_ref().map(|(tool, _)| tool.as_str()))
+    }
+
+    /// The tool this call IS, for a reader that takes one name: the mediated
+    /// connector call where there is one, else the host's own word.
+    #[must_use]
+    pub fn tool(&self) -> &str {
+        self.mediated
+            .as_ref()
+            .map_or(self.raw_tool.as_str(), |(tool, _)| tool.as_str())
+    }
+
+    /// The arguments [`Envelope::tool`] was handed: the mediated call's params,
+    /// else the host's tool input.
+    #[must_use]
+    pub fn arguments(&self) -> &Value {
+        self.mediated
+            .as_ref()
+            .map_or(&self.input, |(_, params)| params)
+    }
+}
 
 impl Envelope {
     /// Whether a remedy that asks for a WRITE is lawful on this turn
@@ -3346,17 +3387,17 @@ impl FieldExt for Field {
             // as absent — `Field::Prompt`'s rule, and load-bearing for
             // `InputId`, whose whole job is to tell present from absent.
             Field::InputId => envelope
-                .input
+                .arguments()
                 .get("id")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             Field::InputState => envelope
-                .input
+                .arguments()
                 .get("state")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             Field::InputDraft => envelope
-                .input
+                .arguments()
                 .get("draft")
                 .and_then(draft_flag)
                 .map(|flag| flag.to_string()),
@@ -3578,11 +3619,13 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
         .or_else(|| NAMED_EVENT.get().map(String::as_str))
         .unwrap_or(ASSUMED_EVENT)
         .to_owned();
-    // The call id is set here rather than in the field list below, which sits
-    // at the function-length ceiling.
+    // The call id and the mediated call are set here rather than in the field
+    // list below, which sits at the function-length ceiling.
+    let fields = decode_fields(harness, value, raw_event);
     Some(Envelope {
         call_id: present_str(value, "tool_use_id"),
-        ..decode_fields(harness, value, raw_event)
+        mediated: mediated_mcp_call(&fields.command),
+        ..fields
     })
 }
 
@@ -3740,6 +3783,7 @@ fn decode_fields(harness: Harness, value: &Value, raw_event: String) -> Envelope
         call_id: None,
         background_ceiling: background_ceiling(harness),
         forge: None,
+        mediated: None,
     }
 }
 
@@ -4727,7 +4771,7 @@ impl Policy {
                 && rule.counts == Some(CeilingUnit::TrackedArtifacts)
                 && rule.max.is_some()
                 && blocks(rule.severity(), self.fail_on_warning)
-                && rule.selects_tool(&envelope.raw_tool)
+                && envelope.tools().any(|tool| rule.selects_tool(tool))
                 // The modifiers, for the COST rather than the verdict — and the
                 // distinction is worth stating, because review on #680 read this
                 // as a row that could deny a call its modifier excludes. It
@@ -6541,7 +6585,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
                 || rule.severity() == RuleSeverity::Allow
-                || !rule.selects_tool(&envelope.raw_tool)
+                || !envelope.tools().any(|tool| rule.selects_tool(tool))
                 || !modifier_admits(rule, envelope)
             {
                 continue;
@@ -6667,7 +6711,7 @@ fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts
     for rule in &policy.shapes {
         if rule.kind != RuleKind::Receipt
             || !blocks(rule.severity(), policy.fail_on_warning)
-            || !(rule.selects_tool(&envelope.raw_tool) || on_selects(rule, event))
+            || !(envelope.tools().any(|tool| rule.selects_tool(tool)) || on_selects(rule, event))
         {
             continue;
         }
@@ -8090,7 +8134,7 @@ fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         if rule.kind != RuleKind::Shape || !blocks(rule.severity(), policy.fail_on_warning) {
             continue;
         }
-        if !rule.selects_tool(&envelope.raw_tool) {
+        if !envelope.tools().any(|tool| rule.selects_tool(tool)) {
             continue;
         }
         // A ROW CARRYING A CEILING SELECTS HERE AND REFUSES ELSEWHERE, which is
@@ -8238,7 +8282,7 @@ fn ceiling_rules(policy: &Policy, envelope: &Envelope, measured: &mut usize) -> 
         // whether that selection refuses (the `requires_key` shape). A ceiling
         // row is tool-keyed by construction — `validate_ceiling` refuses any
         // other selector — so this is the whole of the selection.
-        if envelope.raw_tool.is_empty() || !rule.selects_tool(&envelope.raw_tool) {
+        if envelope.raw_tool.is_empty() || !envelope.tools().any(|tool| rule.selects_tool(tool)) {
             continue;
         }
         // The polarity modifiers narrow that selection here too (CLOUD-987). They
@@ -9363,14 +9407,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
     // the host names the direct call, handed the params, so a gate over a
     // connector write holds both routes alike. The shell's own reading stays in
     // `operation`, `command`, `segments` and `programs`.
-    let mediated = mediated_mcp_call(&envelope.command);
-    let (tool, arguments) = match &mediated {
-        Some((tool, params)) => (Value::from(tool.as_str()), params.clone()),
-        None => (
-            Value::from(envelope.raw_tool.as_str()),
-            envelope.input.clone(),
-        ),
-    };
+    let (tool, arguments) = (Value::from(envelope.tool()), envelope.arguments().clone());
     let mut document = serde_json::json!({
         "call": {
             "event": envelope.event.as_str(),
@@ -11425,16 +11462,17 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
 
 /// The event this call raises, on any route the engine knows (CLOUD-2662).
 pub(crate) fn call_event(envelope: &Envelope) -> Option<CallEvent> {
-    if envelope.command.is_empty() {
+    if envelope.command.is_empty() || envelope.mediated.is_some() {
         connector_event(envelope)
     } else {
         shell_event(envelope)
     }
 }
 
-/// [`call_event`] on the structured route only: `None` for any shell call.
+/// [`call_event`] on the structured route only: `None` for any shell call but
+/// one mediating a connector call, which is that call (CLOUD-2789).
 fn structured_event(envelope: &Envelope) -> Option<CallEvent> {
-    if envelope.command.is_empty() {
+    if envelope.command.is_empty() || envelope.mediated.is_some() {
         connector_event(envelope)
     } else {
         None
@@ -11458,7 +11496,9 @@ fn draft_flag(value: &Value) -> Option<bool> {
 /// The forge connector's routes: a create that is not a draft (absent counts
 /// as ready, the forge's default), and an update that undrafts or reopens.
 fn connector_event(envelope: &Envelope) -> Option<CallEvent> {
-    let raw = &envelope.raw_tool;
+    // The mediated call's name where there is one, and its params through the
+    // two `Field` reads below (CLOUD-2789).
+    let raw = envelope.tool();
     let draft = Field::InputDraft.read(envelope);
     if crate::facts::selects_tool_name("create_pull_request", raw) {
         let drafted = draft.as_deref() == Some("true");
@@ -14432,6 +14472,7 @@ mod tests {
             input: Value::Null,
             result: Value::Null,
             command: command.to_owned(),
+            mediated: mediated_mcp_call(command),
             writes: None,
             reads: None,
             cwd: None,
@@ -14493,6 +14534,7 @@ mod tests {
             transcript: None,
             mode: None,
             forge: None,
+            mediated: None,
         }
     }
 
@@ -20400,6 +20442,7 @@ deny contains "refused by themodule" if {
             transcript: None,
             mode: None,
             forge: None,
+            mediated: None,
         };
         assert!(
             policy.required_checks_for(&read).is_empty(),

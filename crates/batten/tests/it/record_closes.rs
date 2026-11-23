@@ -257,6 +257,68 @@ fn a_mediated_edit_records_its_body_as_the_direct_tool_does() {
     assert_eq!(recorded(&other), None);
 }
 
+/// A BACKGROUNDED MEDIATED EDIT IS RECORDED WHEN ITS TASK EXITS (CLOUD-2789), as
+/// a backgrounded shell fetch is (CLOUD-2214): deferral selects the mediated
+/// call's rows, so the body is the newest closing set once the output lands.
+///
+/// Fails by: `defer_backgrounded` selecting on the shell's name alone, so the
+/// placeholder result defers nothing and the replay has nothing to record.
+#[test]
+fn a_backgrounded_mediated_edit_records_its_body_when_the_task_exits() {
+    let root = body_recorder_repo("record-closes-mediated-background");
+    let transcript = root.join("transcript.jsonl");
+    std::fs::write(&transcript, "").expect("transcript");
+    let input = r#"{"owner":"o","repo":"r","pullNumber":7,"body":"Closes CLOUD-21\n"}"#;
+    let call = |event: &str, response: &serde_json::Value| {
+        let payload = serde_json::json!({
+            "hook_event_name": event,
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": format!("batten mcp call github update_pull_request '{input}'"),
+                "run_in_background": true,
+            },
+            "tool_response": response,
+            "transcript_path": transcript,
+        });
+        let out = common::run_with_stdin(
+            &root,
+            &["adjudicate", "--harness", "exit-code"],
+            &payload.to_string(),
+        );
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+    };
+    call(
+        "PostToolUse",
+        &serde_json::json!({
+            "stdout": "", "stderr": "", "interrupted": false, "isImage": false,
+            "noOutputExpected": false, "backgroundTaskId": "m1",
+        }),
+    );
+    assert_eq!(
+        recorded(&root),
+        None,
+        "nothing is recorded before the task exits"
+    );
+
+    let output = root.join("m1.output");
+    std::fs::write(
+        &output,
+        "{\"id\":\"4870062878\",\"url\":\"https://github.com/o/r/pull/7\"}\n",
+    )
+    .expect("output");
+    let notification = serde_json::json!({
+        "type": "user",
+        "origin": {"kind": "task-notification"},
+        "message": {"role": "user", "content": format!(
+            "<task-notification>\n<task-id>m1</task-id>\n<output-file>{}</output-file>\n<status>completed</status>\n</task-notification>",
+            output.display()
+        )},
+    });
+    std::fs::write(&transcript, format!("{notification}\n")).expect("notify");
+    call("PreToolUse", &serde_json::Value::Null);
+    assert_eq!(recorded(&root).as_deref(), Some("closes 1:CLOUD-21\n"));
+}
+
 #[test]
 fn naming_a_row_is_not_closing_it() {
     // CLOUD-674's distinction, which `claimed-keys` learned expensively: a body
