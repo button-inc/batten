@@ -207,6 +207,30 @@ pub struct PresetModule {
     pub source: &'static str,
 }
 
+/// How a preset's tool installs a consumer's chosen environments (CLOUD-2633).
+///
+/// The derived `[[startup]]` row is `env <selector>=<envs> <install_env…>
+/// <program> <check…>` decided by silence, and the same prefix before
+/// `<program> <repair…>`. The check and the repair run under ONE environment so
+/// the repair installs exactly the set the check found missing — an env the
+/// consumer did not list is in neither, so it is never installed.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct Install {
+    /// The program both argvs invoke.
+    pub program: &'static str,
+    /// The environment variable naming which environments the tool loads on top
+    /// of its base configuration.
+    pub selector: &'static str,
+    /// How the selector joins more than one environment.
+    pub separator: &'static str,
+    /// The operands that list what is outstanding and say nothing when nothing
+    /// is, so the row is decided by [`crate::config_model::Decided::SilentExit`].
+    pub check: &'static [&'static str],
+    /// The operands that install what is outstanding, non-interactively.
+    pub repair: &'static [&'static str],
+}
+
 /// One vendored preset, declared once.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -242,6 +266,15 @@ pub struct Manifest {
     /// `the_starter_config_names_every_shipped_preset` holds the starter to naming
     /// exactly the suggested ones.
     pub suggested: bool,
+    /// The toolchain install this preset contributes to `[[startup]]`, or `None`
+    /// where it installs nothing (CLOUD-2633).
+    ///
+    /// Only the TOOL's vocabulary lives here — which program, how it lists what
+    /// is missing, how it installs, and how it is told which environments to
+    /// load. Which environments, and the flags an install runs under, are the
+    /// consumer's facts and arrive on the enabling row (`environments`,
+    /// `install_env`), never as literals in this crate (non-negotiable rule 1).
+    pub install: Option<Install>,
     /// The modules, each declaring the surface IT decides.
     ///
     /// **The scope is per module rather than per manifest, and that is the whole
@@ -384,6 +417,7 @@ pub const MANIFESTS: &[Manifest] = &[
         name: "check-verdict",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
             // Reads a record, not a workflow document, so no provider's
@@ -446,6 +480,7 @@ writing the family, and re-mint the record from the query.",
         name: "ci-hygiene",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -646,6 +681,7 @@ value is what does the work, and it is a boolean rather than the string `true`."
         name: "ci-signal",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -885,6 +921,7 @@ than its producer, which writes whole or removes, and reads the same way.",
         name: "claude-code-cloud",
         version: semver::Version::new(0, 0, 3),
         suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -1045,6 +1082,7 @@ could-not-look arm exists to refuse.",
         // in its argv (CLOUD-2813).
         version: semver::Version::new(0, 0, 2),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -1067,6 +1105,7 @@ the pipeline.",
         name: "landing-loop",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -1255,6 +1294,20 @@ abandon the other unread.",
         name: "mise",
         version: semver::Version::new(0, 0, 2),
         suggested: true,
+        // THE TOOL'S VOCABULARY, NONE OF THE CONSUMER'S (CLOUD-2633). The base
+        // configuration always loads; `MISE_ENV` adds exactly the listed
+        // environments' files on top, so an env nobody listed is never read and
+        // never installed. `--missing` names what is outstanding and is silent
+        // otherwise, which is what makes it a gate rather than a reporter
+        // (CLOUD-1454). Dependencies a tool's backend needs install in the same
+        // run, because they are tools of the same set.
+        install: Some(Install {
+            program: "mise",
+            selector: "MISE_ENV",
+            separator: ",",
+            check: &["ls", "--current", "--missing"],
+            repair: &["install", "--yes"],
+        }),
         // TWO SURFACES, ONE CONCERN (CLOUD-1672). This is the manifest that made
         // the per-module scope necessary, and the reason is that "mise" is a
         // subject rather than a surface. Whether an agent reproduces a task's
@@ -1351,6 +1404,7 @@ could not, which is a gate reporting on a surface it never saw.",
         name: "pinned-toolchain",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::MediatedCall,
@@ -1420,6 +1474,7 @@ declares, and a probe inside the pin's environment is already correct",
         name: "release-hygiene",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
             // Reads a record `batten record release` writes; no CI provider's
@@ -1469,6 +1524,7 @@ the record rather than a verdict about the release. Record it again.",
         name: "engine-hygiene",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
             // Reads a record `batten engine outdated` writes; no CI provider's
@@ -1515,6 +1571,7 @@ step.",
         // enables it.
         version: semver::Version::new(0, 0, 3),
         suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -1728,6 +1785,7 @@ commit.",
         name: "tracker-hygiene",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -2036,6 +2094,7 @@ one. Fetch the cited issue and pipe the set again.",
         name: "supply-chain",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -2164,6 +2223,7 @@ dependencies. A recovered crate outside it means the binary was not built from t
         name: "lease-asserted",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -2203,6 +2263,7 @@ fetched it, so there is no expected value to name that a reader could check",
         name: "trunk-based",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -2238,6 +2299,7 @@ remote moved, which is the same operation with the one check that makes it safe.
         // a branch's merge commits as merge commits (CLOUD-2813).
         version: semver::Version::new(0, 0, 2),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -2274,6 +2336,7 @@ push --force-with-lease=<branch>:<the head you rebased onto>",
         name: "rust-quality",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
             provider: None,
@@ -2324,6 +2387,7 @@ and remove it, move the item down, or inject it",
         name: "rust",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
             provider: None,
@@ -2383,6 +2447,7 @@ workspace packages it may reach, `^$` for none",
         name: RED_HEAD,
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -2419,6 +2484,7 @@ look at again. Read each named failed job's log first; reading is what admits th
         name: "git",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -2446,6 +2512,7 @@ look at again. Read each named failed job's log first; reading is what admits th
         name: "claude-code-plan",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
