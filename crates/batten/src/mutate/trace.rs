@@ -241,6 +241,9 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
             && let Some(quote) = line[open..].find('"')
         {
             let (argument, after) = quoted_arg(&line[open + quote + 1..])?;
+            if library_lookup(&argument, line) {
+                continue;
+            }
             out.push((
                 resolve(&argument, &line[open + 1..open + quote], cwd)?,
                 access,
@@ -255,6 +258,49 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
         }
     }
     Some(out)
+}
+
+/// Whether `line` is a linker or loader looking a shared library up by its
+/// bare name (CLOUD-2870): a path argument with no `/` that is a soname
+/// (`libgcc_s.so.1`, `libz.so`), named by a read-only `open`/`openat`/`openat2`,
+/// or by a probe ([`PROBES`]) that found nothing (`= -1 ENOENT`).
+///
+/// MEASURED, a link through rustup's `gcc-ld/ld.lld` (`rust-lld`): asked for
+/// the input `libgcc_s.so.1`, it first tries the name against its working
+/// directory, `access("libgcc_s.so.1", F_OK) = -1 ENOENT`, and the walk read
+/// that as a path in the step's tree. A build script links only when it
+/// rebuilds, which is why the refusal was intermittent. The runtime loader
+/// searches the same way when a search-path entry is the working directory.
+///
+/// The ARGUMENT names a search, not a file, so it is dropped, and only where
+/// dropping it loses nothing: an open that found a file still yields the
+/// descriptor `-y` printed for it, so a library really loaded from the tree
+/// stays a read, and a probe is dropped only when it found nothing. Never an
+/// absolute or slashed path, never a write, never a name that is no soname. A
+/// probe strace split across two lines carries its result on the resumed half,
+/// so its first half stays a probe: the stated gap, and the loud direction.
+fn library_lookup(argument: &str, line: &str) -> bool {
+    let searched = match access_of(line) {
+        Access::Read => matches!(syscall(line), "open" | "openat" | "openat2"),
+        Access::Probe => {
+            PROBES.contains(&syscall(line))
+                && result_of(line).is_some_and(|result| result.starts_with("-1 ENOENT"))
+        }
+        Access::Write => false,
+    };
+    searched && !argument.contains('/') && soname(argument)
+}
+
+/// Whether `name` is a shared object's name: a nonempty stem, `.so`, then
+/// nothing or a dotted numeric version.
+fn soname(name: &str) -> bool {
+    name.split_once(".so").is_some_and(|(stem, version)| {
+        !stem.is_empty()
+            && (version.is_empty()
+                || version.strip_prefix('.').is_some_and(|digits| {
+                    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit() || c == '.')
+                }))
+    })
 }
 
 /// Each traced pid's working directory over the trace (CLOUD-2789), read from
@@ -612,7 +658,7 @@ mod tests {
     }
 
     // THE CARGO SHAPE (CLOUD-2789): the root forks a child that `chdir`s to its
-    // package before exec, and that child's loader probes a bare name. Read as
+    // package before exec, and that child probes a bare name. Read as
     // one `chdir` anywhere disabling every pid's start directory, this trace
     // was unreadable, so no cargo step ever recorded. Now the child's probe
     // resolves in its package, the root's after it in the start directory,
@@ -625,14 +671,14 @@ mod tests {
             // strace pads a short call's result column, as it printed these.
             "7     <... clone3 resumed>)             = 8",
             "8     <... chdir resumed>)              = 0",
-            "8     access(\"libgcc_s.so.1\", F_OK) = -1 ENOENT (No such file or directory)",
+            "8     access(\"build.rs\", F_OK) = -1 ENOENT (No such file or directory)",
             "8     clone(child_stack=NULL, flags=SIGCHLD) = 9",
             "9     stat(\"out\", 0x1) = -1 ENOENT (No such file or directory)",
             "7     stat(\"c\", 0x1) = -1 ENOENT (No such file or directory)",
             "8     +++ exited with 0 +++",
         ]);
         let touched = super::touched(&trace, Some(Path::new("/repo"))).expect("readable");
-        for path in ["/pkg/libgcc_s.so.1", "/pkg/out", "/repo/c"] {
+        for path in ["/pkg/build.rs", "/pkg/out", "/repo/c"] {
             assert!(
                 touched.contains(&PathBuf::from(path)),
                 "{path}: {touched:?}"
@@ -713,6 +759,75 @@ mod tests {
             vec![(PathBuf::from("/repo/c"), Read)],
             "a link's target is its bytes"
         );
+    }
+
+    /// A BARE-NAME LIBRARY LOOKUP IS NO TOUCH (CLOUD-2870): `rust-lld`, linking
+    /// a build script, tried the input `libgcc_s.so.1` against its working
+    /// directory (the first line below, as a link here traced it), and the walk
+    /// read it as a file in the tree.
+    ///
+    /// Fails by: dropping the `library_lookup` skip (the bare name resolves to
+    /// `/repo/libgcc_s.so.1`); dropping its no-`/`, soname, ENOENT or
+    /// not-a-write clause (the slashed, the non-library, the found or the
+    /// written path vanishes); or dropping the descriptor read (a library found
+    /// in the tree vanishes).
+    #[test]
+    fn a_bare_library_lookup_is_no_touch() {
+        use super::Access::{Probe, Read, Write};
+        let lookups = [
+            String::from("7     access(\"libgcc_s.so.1\", F_OK)     = -1 ENOENT (No such file or directory)"),
+            String::from("7     newfstatat(AT_FDCWD</repo>, \"libz.so\", 0x1, 0) = -1 ENOENT (No such file or directory)"),
+        ]
+        .into_iter()
+        .chain(["libgcc_s.so.1", "libz.so", "libstdc++.so.6.0.33"].map(|name| {
+            format!(
+                "7     openat(AT_FDCWD</repo>, \"{name}\", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No \
+                 such file or directory)"
+            )
+        }));
+        for line in lookups {
+            assert_eq!(accessed(&[&line]), vec![], "{line}");
+        }
+        assert_eq!(
+            accessed(&[
+                "7     openat(AT_FDCWD</repo>, \"libgcc_s.so.1\", O_RDONLY|O_CLOEXEC) = \
+                 3</repo/libgcc_s.so.1>"
+            ]),
+            vec![(PathBuf::from("/repo/libgcc_s.so.1"), Read)],
+            "a library found in the tree is still read, through its descriptor"
+        );
+        for (line, want) in [
+            (
+                "7     openat(AT_FDCWD</repo>, \"lib/libz.so\", O_RDONLY) = -1 ENOENT (No such \
+                 file or directory)",
+                (PathBuf::from("/repo/lib/libz.so"), Read),
+            ),
+            (
+                "7     openat(AT_FDCWD</repo>, \"notes.so.txt\", O_RDONLY) = -1 ENOENT (No such \
+                 file or directory)",
+                (PathBuf::from("/repo/notes.so.txt"), Read),
+            ),
+            (
+                "7     openat(AT_FDCWD</repo>, \".so\", O_RDONLY) = -1 ENOENT (No such file or \
+                 directory)",
+                (PathBuf::from("/repo/.so"), Read),
+            ),
+            (
+                "7     access(\"libgcc_s.so.1\", F_OK) = 0",
+                (PathBuf::from("/repo/libgcc_s.so.1"), Probe),
+            ),
+            (
+                "7     access(\"libgcc_s.so.1\", F_OK <unfinished ...>",
+                (PathBuf::from("/repo/libgcc_s.so.1"), Probe),
+            ),
+            (
+                "7     openat(AT_FDCWD</repo>, \"libz.so\", O_WRONLY|O_CREAT, 0644) = -1 EACCES \
+                 (Permission denied)",
+                (PathBuf::from("/repo/libz.so"), Write),
+            ),
+        ] {
+            assert_eq!(accessed(&[line]), vec![want], "{line}");
+        }
     }
 
     // STRACE'S C ESCAPES DECODE (CLOUD-2835): `darwin-link`'s trace never read
