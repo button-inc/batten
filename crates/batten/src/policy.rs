@@ -5819,6 +5819,7 @@ violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects
         name: "mixed",
         version: semver::Version::new(0, 0, 1),
         suggested: true,
+        install: None,
         modules: &[
             crate::preset_catalog::PresetModule {
                 scope: crate::preset_catalog::RuleScope::Tree,
