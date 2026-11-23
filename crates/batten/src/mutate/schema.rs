@@ -2174,7 +2174,7 @@ fn judge(
     mutant: &Listed,
     cases: &BTreeSet<Case>,
     hints: &std::sync::Mutex<std::collections::BTreeMap<Sibling, BTreeSet<Case>>>,
-    journal: &std::sync::Mutex<Option<std::path::PathBuf>>,
+    journal: &std::sync::Mutex<Journal>,
 ) -> (Verdict, usize) {
     if cases.is_empty() {
         return (Verdict::Uncovered, 0);
@@ -3190,7 +3190,7 @@ pub fn record_reach(
     let base = state.join("reach");
     // A RESTART OVER THE SAME TREE resumes from the record a finished run
     // sealed instead of re-running the suite (640 s on #1276).
-    let inputs = tree_digest(work);
+    let inputs = tree_digest(work)?;
     if sealed_over(&base, &inputs) {
         let mut reach = collect_reach(&base, identity)?;
         reach.tree = inputs;
@@ -3278,12 +3278,56 @@ pub fn resource_digest(live: &std::path::Path) -> anyhow::Result<String> {
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
     }) {
-        hasher.update(path.as_bytes());
-        hasher.update(&[0]);
-        hasher.update(&crate::fsio::read(live.join(path)).unwrap_or_default());
-        hasher.update(&[0]);
+        let file = live.join(path);
+        hash_file(
+            &mut hasher,
+            path.as_bytes(),
+            crate::fsio::read(&file),
+            &file,
+        )?;
     }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Hash one file into `hasher` under `name`: its bytes as read, or, when it
+/// does not exist, a mark no read can produce.
+///
+/// NEVER A FAILED READ AS EMPTY BYTES: a deleted fixture keyed as an empty one,
+/// and a path nobody could read keyed as one somebody read and found empty, so
+/// a verdict was reused over content no run had seen. A read that fails for any
+/// reason but absence is could-not-look. A readable file hashes exactly as it
+/// always did, so no key a journal already holds moves.
+///
+/// # Errors
+///
+/// `read` failed for any reason but the file's absence.
+fn hash_file(
+    hasher: &mut blake3::Hasher,
+    name: &[u8],
+    read: std::io::Result<Vec<u8>>,
+    path: &std::path::Path,
+) -> anyhow::Result<()> {
+    match read {
+        Ok(bytes) => {
+            hasher.update(name);
+            hasher.update(&[0]);
+            hasher.update(&bytes);
+            hasher.update(&[0]);
+        }
+        // `\x01` WHERE A READ FILE HAS ITS `\x00`: no file's bytes can stand in.
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => {
+            hasher.update(name);
+            hasher.update(&[1]);
+        }
+        Err(why) => {
+            return Err(anyhow::Error::new(why).context(format!(
+                "read {}; a digest over a file nobody could read would reuse a verdict over \
+                 content no run saw",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Each path of the checkout at `live` by its content id: git's own blob id
@@ -3350,8 +3394,11 @@ fn resource_id(resources: &std::collections::BTreeMap<String, String>, path: &st
 
 /// A digest of every source and manifest in the schema tree: what the test
 /// binaries a reach record ran were built from. The build output is not.
-#[must_use]
-pub fn tree_digest(work: &std::path::Path) -> String {
+///
+/// # Errors
+///
+/// A file the walk found cannot be read ([`hash_file`]).
+pub fn tree_digest(work: &std::path::Path) -> anyhow::Result<String> {
     let mut files: Vec<std::path::PathBuf> = ignore::WalkBuilder::new(work)
         .standard_filters(false)
         .filter_entry(|entry| !matches!(entry.file_name().to_str(), Some("target" | ".git")))
@@ -3363,17 +3410,14 @@ pub fn tree_digest(work: &std::path::Path) -> String {
     files.sort();
     let mut hasher = blake3::Hasher::new();
     for file in files {
-        hasher.update(
-            file.strip_prefix(work)
-                .unwrap_or(&file)
-                .as_os_str()
-                .as_encoded_bytes(),
-        );
-        hasher.update(&[0]);
-        hasher.update(&std::fs::read(&file).unwrap_or_default());
-        hasher.update(&[0]);
+        let name = file
+            .strip_prefix(work)
+            .unwrap_or(&file)
+            .as_os_str()
+            .as_encoded_bytes();
+        hash_file(&mut hasher, name, std::fs::read(&file), &file)?;
     }
-    hasher.finalize().to_hex().to_string()
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -3482,12 +3526,34 @@ pub fn pair_key(
 /// The journal's verdict for one case that ran a mutant and passed.
 const PASSED: &str = "passed";
 
+/// The verdict journal the judging workers share: where its lines go, and
+/// every write that failed, which [`judge_all`] says once the workers join.
+#[derive(Debug, Default)]
+struct Journal {
+    /// The journal file; none journals nothing.
+    path: Option<std::path::PathBuf>,
+    /// How many lines could not be written.
+    failed: usize,
+    /// The first failure's words.
+    first: Option<String>,
+}
+
 /// Append `line` to the journal, one write so a crash tears at most it.
-fn append(journal: &std::sync::Mutex<Option<std::path::PathBuf>>, line: &str) {
-    if let Ok(held) = journal.lock()
-        && let Some(path) = held.as_ref()
-    {
-        let _ = crate::durable::append(path, line);
+///
+/// A WRITE THAT FAILS IS KEPT, NEVER DROPPED: the verdict still stands in this
+/// sweep, but the next one would judge it again believing it journaled, so the
+/// failure reaches the sweep's output ([`judge_all`]). Kept rather than
+/// returned because the caller is a worker thread with nowhere to return it.
+fn append(journal: &std::sync::Mutex<Journal>, line: &str) {
+    let mut held = journal
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(path) = held.path.clone() else {
+        return;
+    };
+    if let Err(why) = crate::durable::append(&path, line) {
+        held.failed += 1;
+        held.first.get_or_insert_with(|| format!("{why:#}"));
     }
 }
 
@@ -4033,7 +4099,10 @@ fn judge_all(
     let started = std::time::Instant::now();
     let nobody = BTreeSet::new();
     let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
-    let journal = std::sync::Mutex::new(Some(judging.store.to_path_buf()));
+    let journal = std::sync::Mutex::new(Journal {
+        path: Some(judging.store.to_path_buf()),
+        ..Journal::default()
+    });
     let next = std::sync::atomic::AtomicUsize::new(0);
     let reused_count = std::sync::atomic::AtomicUsize::new(0);
     let skipped_runs = std::sync::atomic::AtomicUsize::new(0);
@@ -4125,6 +4194,19 @@ fn judge_all(
         todo.len(),
         skipped_runs.into_inner()
     );
+    let journal = journal
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if journal.failed > 0 {
+        let _ = writeln!(
+            out,
+            "mutate schema: {} journal line(s) could not be written to {}, so the next sweep \
+             judges them again: {}",
+            journal.failed,
+            judging.store.display(),
+            journal.first.unwrap_or_default()
+        );
+    }
     verdicts
 }
 
@@ -7000,11 +7082,11 @@ mod tests {
         std::fs::create_dir_all(work.join("src")).unwrap();
         std::fs::create_dir_all(work.join("target")).unwrap();
         std::fs::write(work.join("src/lib.rs"), "fn a() {}").unwrap();
-        let before = tree_digest(&work);
+        let before = tree_digest(&work).unwrap();
         std::fs::write(work.join("target/out"), "built").unwrap();
-        assert_eq!(tree_digest(&work), before);
+        assert_eq!(tree_digest(&work).unwrap(), before);
         std::fs::write(work.join("src/lib.rs"), "fn b() {}").unwrap();
-        assert_ne!(tree_digest(&work), before);
+        assert_ne!(tree_digest(&work).unwrap(), before);
         let _ = std::fs::remove_dir_all(&work);
     }
 
@@ -9032,6 +9114,89 @@ mod tests {
         );
     }
 
+    /// A deleted resource keys apart from an emptied one, and one that cannot
+    /// be read is could-not-look, never hashed as empty bytes.
+    ///
+    /// Fails by: a deleted fixture and an emptied one keying alike (a verdict
+    /// reused across the difference), or an unreadable path digested as empty
+    /// (a verdict reused over content nobody read).
+    #[test]
+    fn an_unreadable_resource_is_could_not_look_and_a_deleted_one_is_not_empty() {
+        let base = crate::scratch::scratch("schema-resource-unreadable");
+        crate::gitwrite::init_on_main(&base).unwrap();
+        std::fs::write(base.join("notes.md"), "one\n").unwrap();
+        crate::gitwrite::commit_paths(&base, &[String::from("notes.md")], "base").unwrap();
+        std::fs::write(base.join("notes.md"), "").unwrap();
+        let emptied = resource_digest(&base).unwrap();
+        std::fs::remove_file(base.join("notes.md")).unwrap();
+        let deleted = resource_digest(&base).unwrap();
+        assert_ne!(deleted, emptied, "absent is not empty");
+        std::fs::create_dir(base.join("notes.md")).unwrap();
+        std::fs::write(base.join("notes.md").join("inner"), "x").unwrap();
+        let refused = resource_digest(&base).expect_err("a path that cannot be read");
+        assert!(format!("{refused:#}").contains("notes.md"), "{refused:#}");
+    }
+
+    /// A file's bytes are hashed when read, an absent one as absent, and any
+    /// other read failure refuses the digest.
+    ///
+    /// Fails by: a failed read hashed as empty bytes, or an absent file keyed
+    /// as an empty one.
+    #[test]
+    fn a_file_that_cannot_be_read_refuses_its_digest() {
+        let hashed = |read: std::io::Result<Vec<u8>>| {
+            let mut hasher = blake3::Hasher::new();
+            hash_file(&mut hasher, b"f", read, std::path::Path::new("f"))
+                .map(|()| hasher.finalize().to_hex().to_string())
+        };
+        let empty = hashed(Ok(Vec::new())).unwrap();
+        let absent = hashed(Err(std::io::ErrorKind::NotFound.into())).unwrap();
+        assert_ne!(absent, empty);
+        assert!(hashed(Err(std::io::ErrorKind::PermissionDenied.into())).is_err());
+    }
+
+    /// A journal line that cannot be written is said, with how many failed,
+    /// and the verdict it held still stands.
+    ///
+    /// Fails by: a failed write dropped silently (the next sweep re-judges
+    /// work this one believed journaled), or the verdict lost with it.
+    #[test]
+    fn a_journal_line_that_cannot_be_written_is_said() {
+        let base = crate::scratch::scratch("schema-journal-unwritable");
+        let store = base.join("verdicts");
+        std::fs::create_dir_all(&store).unwrap();
+        let mutants = [listed("BinaryOperator", "!=", (2, 7), (2, 9))];
+        let (reach, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let red = Red::new();
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &store,
+            red: &red,
+            reuse: None,
+        };
+        let mut out = Vec::new();
+        let verdicts = judge_all(&judging, &[0], 1, &mut out);
+        assert_eq!(verdicts, [(0, Verdict::Uncovered)], "the verdict stands");
+        let said = String::from_utf8(out).unwrap();
+        assert!(
+            said.contains("1 journal line(s) could not be written"),
+            "{said}"
+        );
+    }
+
     /// A run is bounded by five times its cases' measured time, never under
     /// the floor, plus its startup; an unmeasured case counts its default.
     ///
@@ -9218,7 +9383,7 @@ mod tests {
                 reuse: None,
             };
             let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
-            let journal = std::sync::Mutex::new(None);
+            let journal = std::sync::Mutex::new(Journal::default());
             judge(&judging, ERRING, &mutant, &cases, &hints, &journal)
         };
         let caught = String::from("caught");
