@@ -215,6 +215,30 @@ fn a_task_body_grown_by_one_line_is_refused() {
     );
 }
 
+/// THE DECLARATION IS WHAT THE MODULE READS, and this is the case that says so
+/// in the admitting direction. The stranger's `[census.shell]` carries `exempt`,
+/// which reads as `mode = "migrate"`, so shell that stood at the base and that no
+/// change grows is admitted: a script outside every line source and a manifest
+/// task the census declares. A module that stopped reading `doc.census.shell`
+/// would see no declaration, fall to presence, and refuse both
+/// (`#MUTANT declaration-unread`); the growth cases above cannot tell, since
+/// presence refuses them too.
+#[test]
+fn shell_standing_at_the_base_is_admitted_by_the_declared_migration() {
+    let dir = repo(
+        "shell-ban-declared-migration",
+        &[
+            ("README.md", "x\n"),
+            ("scripts/old.sh", "#!/usr/bin/env bash\necho old\n"),
+            ("mise.toml", &manifest(&[("a", &["echo one", "echo two"])])),
+        ],
+    );
+    change(&dir, "README.md", "y\n");
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(0), "{found:?}");
+    assert!(found.is_empty(), "{found:?}");
+}
+
 #[test]
 fn a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls() {
     let dir = repo(

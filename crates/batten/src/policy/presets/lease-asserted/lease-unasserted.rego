@@ -1,6 +1,6 @@
 #MUTANT-SUITE crates/batten/tests/it/forced_push.rs
 #MUTANT bare-lease-unread|s@^\tunasserted(word)$@\tfalse@|a_bare_leased_push_is_refused_by_the_preset
-#MUTANT program-anchor-unread|s@^\tprogram.name == "git"$@\ttrue@|a_lease_with_force_if_includes_is_allowed
+#MUTANT program-anchor-unread|s@^\tprogram.name == "git"$@\ttrue@|another_programs_push_subcommand_is_not_gits
 #MUTANT includes-unread|s@^\tnot "--force-if-includes" in program.arguments$@\ttrue@|a_lease_with_force_if_includes_is_allowed
 # Trunk-based development: a leased push that names no expected value is a force.
 #
