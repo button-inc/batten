@@ -26,8 +26,12 @@ use batten::rules;
 const RAW: &str = "path write unsafe";
 
 fn repo(name: &str, source: &[&str]) -> PathBuf {
+    repo_at(name, "crates/batten/src/subject.rs", source)
+}
+
+fn repo_at(name: &str, path: &str, source: &[&str]) -> PathBuf {
     let root = common::scratch(name);
-    let subject = root.join("crates/batten/src/subject.rs");
+    let subject = root.join(path);
     fs::create_dir_all(subject.parent().expect("a parent")).expect("scratch parent");
     let mut text = source.join("\n");
     text.push('\n');
@@ -41,13 +45,15 @@ fn repo(name: &str, source: &[&str]) -> PathBuf {
 }
 
 /// The committed row's shape, including the `line_sources` glob without which
-/// the module reads no lines and refuses nothing.
+/// the module reads no lines and refuses nothing — READ from `batten.toml`, not
+/// restated: the hard-coded `crates/batten/src` copy outlived the row's widening
+/// to every crate (CLOUD-2789).
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
         "id": "path write unsafe",
         "kind": "policy",
         "scope": "tree",
-        "line_sources": ["crates/batten/src/**/*.rs"],
+        "line_sources": crate::source_scope::committed_rule_sources(RAW, "line_sources"),
         "module": "policy/durable-write.rego",
         "severity": "deny",
     }))
@@ -133,4 +139,19 @@ fn a_line_marked_as_a_stream_is_not_refused() {
         &["fn f(p: &str) { let _ = std::fs::File::create(p); } // stream: a child's stdout sink"],
     );
     assert!(findings(&root).is_empty());
+}
+
+/// CLOUD-2789: the crate split moved production code into `batten-base`,
+/// `batten-core` and the rest, and a raw write there is the same torn file. The
+/// fixture row is the committed one, so a row narrowed back to
+/// `crates/batten/src` — or a module whose `production` reads one crate — goes
+/// red here.
+#[test]
+fn a_raw_write_in_another_crate_is_refused() {
+    let root = repo_at(
+        "durable-other-crate",
+        "crates/batten-base/src/subject.rs",
+        &["fn f(p: &str) { let _ = std::fs::write(p, \"x\"); }"],
+    );
+    assert_eq!(findings(&root), [RAW]);
 }
