@@ -703,13 +703,17 @@ fn a_measurement_times_every_path_off_its_release_build() {
         .lines()
         .filter(|line| line.starts_with("hyperfine "))
         .collect();
-    assert_eq!(timed.len(), 17, "{argv}");
+    assert_eq!(timed.len(), 15, "{argv}");
     // A multi-word argument reaches hyperfine quoted, or it splits the rule
     // name into three words and the arm measures a usage error.
     assert!(
-        argv.contains("check --staged --rule 'test cover missing'"),
+        argv.contains("enforce --rule 'source carry broken'"),
         "{argv}"
     );
+    // The steps that moved to `slow` are no commit-time arm (CLOUD-2852).
+    for retired in ["config lint", "test cover missing"] {
+        assert!(!argv.contains(retired), "{argv}");
+    }
     // The formatter arms run rustfmt over ONE file each, children skipped: the
     // median staged file, and the largest as the unbudgeted worst case.
     for file in ["crates/batten/src/hookcost.rs", "crates/batten/src/lib.rs"] {
