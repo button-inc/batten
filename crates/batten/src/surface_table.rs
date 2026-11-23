@@ -3081,6 +3081,12 @@ pub(crate) const STEP_ENV_PATTERNS: FlagDecl = FlagDecl::trailing(
     "The names or PREFIX* patterns, after `--`: an `env NAME=value` line per keyed variable, `env PATTERN none` where none matches",
 );
 
+/// The pathspecs `step exists` prints the presence of, after the mandatory `--`.
+pub(crate) const STEP_EXISTS_SPECS: FlagDecl = FlagDecl::trailing(
+    "specs",
+    "The pathspecs, after `--`: an `exists <path>` line per index path they select, `exists none` where none",
+);
+
 /// The step's own command on `step run`, after the mandatory `--`.
 pub(crate) const STEP_COMMAND: FlagDecl = FlagDecl::trailing(
     "command",
@@ -7536,6 +7542,19 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[STEP_ENV_EXCLUDE, STEP_ENV_PATTERNS],
+    },
+    // `step exists` (CLOUD-2835): reads the index and the worktree's agreement
+    // with it and writes nothing: `read`. A malformed declaration is usage,
+    // never a verdict, so its exits are the standard set.
+    // unreached: "step exists" CLOUD-2835 a [[step]] tools line the step cache answers in-process; nothing spawns it.
+    CommandDecl {
+        path: "step exists",
+        id: "step.exists",
+        about: "Print the presence lines a step's probed pathspecs select, the step cache's answer to the tool line",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[STEP_EXISTS_SPECS],
     },
     // The module-graph noun (CLOUD-2789). `cycle` reads the crate's source and
     // writes nothing: `read`. Its refusal over `--max` is a statement about the
