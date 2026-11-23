@@ -165,14 +165,20 @@ test_a_clean_restore_is_not if {
 }
 
 test_a_compound_line_is_the_hosts_by_its_git_program if {
-	call_decided({"command": "cd /x && git reset --hard", "programs": [
-		{"name": "cd", "arguments": ["/x"]},
-		git("reset", ["--hard"]),
-	]}, null)
-	not call_decided({"command": "cd /x && git status", "programs": [
-		{"name": "cd", "arguments": ["/x"]},
-		git("status", []),
-	]}, null)
+	call_decided(
+		{"command": "cd /x && git reset --hard", "programs": [
+			{"name": "cd", "arguments": ["/x"]},
+			git("reset", ["--hard"]),
+		]},
+		null,
+	)
+	not call_decided(
+		{"command": "cd /x && git status", "programs": [
+			{"name": "cd", "arguments": ["/x"]},
+			git("status", []),
+		]},
+		null,
+	)
 }
 
 test_another_program_is_never_the_hosts_here if {
