@@ -890,7 +890,6 @@ fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
             // Step 14 deletes these two lines with the entries.
             "completions/batten.fish",
             "completions/batten.zsh",
-            "setup.sh",
         ])
     );
 }
