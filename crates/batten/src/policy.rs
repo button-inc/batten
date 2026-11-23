@@ -3446,17 +3446,30 @@ fn relative_package(package: &str) -> Option<Vec<String>> {
 /// could not exercise.
 #[must_use]
 pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
+    deny_why(bundle, input).map_or(Look::CouldNotLook, Look::Is)
+}
+
+/// [`deny`], with the reason a could-not-look carries (CLOUD-2789): the tree
+/// surface reports a module that could not look by rule AND reason, so the
+/// reason has to survive the evaluation rather than fold into one variant.
+///
+/// # Errors
+///
+/// The could-not-look arms of [`deny`], each as a fixed phrase naming which.
+pub fn deny_why(bundle: &Bundle, input: &str) -> Result<Vec<Violation>, String> {
     // ONE EVALUATION for both shapes, because the engine is the unit now: the
     // answer comes back once and is walked twice, rather than paying an
     // evaluation per rule name.
     denials(bundle, answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]))
 }
 
-/// The violations an answer carries, or could-not-look where it carries none
-/// readable or names an id the bundle never declared.
-fn denials(bundle: &Bundle, answered: Option<Answer>) -> Look<Vec<Violation>> {
+/// The violations an answer carries, or why it could not look: it carries none
+/// readable, or names an id the bundle never declared.
+fn denials(bundle: &Bundle, answered: Option<Answer>) -> Result<Vec<Violation>, String> {
     let Some(answered) = answered else {
-        return Look::CouldNotLook;
+        return Err(String::from(
+            "the module faulted evaluating its input (an undefined reference or a runtime error)",
+        ));
     };
 
     let mut violations = Vec::new();
@@ -3467,7 +3480,7 @@ fn denials(bundle: &Bundle, answered: Option<Answer>) -> Look<Vec<Violation>> {
             subjects: Vec::new(),
             counted: false,
         })),
-        None => return Look::CouldNotLook,
+        None => return Err(String::from("its `deny` set is not a set of strings")),
     }
     match collect_violations(&answered, &bundle.packages) {
         Some(entries) => {
@@ -3475,15 +3488,17 @@ fn denials(bundle: &Bundle, answered: Option<Answer>) -> Look<Vec<Violation>> {
                 if let Some(named) = entry.rule.as_deref()
                     && !bundle.declared.contains(named)
                 {
-                    return Look::CouldNotLook;
+                    return Err(format!(
+                        "a violation names `{named}`, which the bundle never declared"
+                    ));
                 }
                 violations.push(entry);
             }
         }
-        None => return Look::CouldNotLook,
+        None => return Err(String::from("its `violation` set has an unreadable entry")),
     }
 
-    Look::Is(violations)
+    Ok(violations)
 }
 
 /// The ids of this bundle's rules that pre-approve the call (CLOUD-1949).
