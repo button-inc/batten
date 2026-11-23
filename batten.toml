@@ -5619,12 +5619,18 @@ fields = [
 # it. Denying the raw write while the reduced write cannot complete would leave
 # no route at all. Recorded on CLOUD-1122 and CLOUD-1261; the deny lands when a
 # write succeeds through the verb.
+#
+# THE DIRECT ROUTE ONLY (CLOUD-2789): every selector reads `batten mcp call
+# <server> get_issue` as the `get_issue` it mediates, so this row, which steers
+# the raw read ONTO that route, selects only a call carrying no shell command.
+# Without it the row refused its own remedy, plan-mode reads included.
 [[rule]]
 id = "issue read loose"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
 tool = "get_issue"
+when_absent = "command"
 reason = "Read the row through the reduction: `batten mcp call Linear get_issue '{\"id\":\"<KEY>\"}'`. It stores the whole response for the gates and hands back the declared projection; a first read is no exception."
 
 # THE TRANSPORT THRESHOLD, DECLARED RATHER THAN DEFAULTED (CLOUD-1367).
