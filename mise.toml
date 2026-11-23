@@ -1737,6 +1737,16 @@ description = "Gate: the issue you are about to pull is actually unclaimed (read
 # bypass leaves reachable.
 run = "{{vars.batten}} claim check"
 
+[tasks."session-watch"]
+description = "Wait, backgrounded, until a dispatched child session is done (0), dead or never started (2), or unreadable (3)"
+# CLOUD-2826: the parent's wake with no timer. Run it backgrounded; its exit is
+# the wake-up `AGENTS.md` mandates, and its output is one pointer line per child
+# plus the inventory file. `Claude_Code_Remote` is this consumer's
+# `[mcp.source.endpoint_contains]` name for the session toolbox, which is why
+# it is spelled here and not in the engine. Extra arguments (`--session <id>`)
+# narrow the watch to named sessions.
+run = "{{vars.batten}} session watch --server Claude_Code_Remote"
+
 [tasks."perf-pair"]
 description = "Measure this branch and its merge base back to back on one machine, and print both arms as paired records"
 # CLOUD-172's driver, ported off `mise-tasks/perf-pair.sh` under CLOUD-1059.

@@ -78,6 +78,9 @@ declared_modules := {
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal", "rego_units",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
+	# `session_watch` (CLOUD-2826): a parent's dispatched children, read through
+	# the declared session toolbox.
+	"session_watch",
 	"register", "spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "trust_pin", "uses",
 	"verbs", "verdict", "waiver", "worktree",
 	# `brief`, `main` and `selfwrite` were absent from the first draft of this

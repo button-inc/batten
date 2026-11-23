@@ -78,9 +78,9 @@
      "internal_anthropic_catchall": {
       "data": {
        "category": "init",
-       "content": "Fetching repository button-inc/batten",
+       "content": "Fetching repository <repository>",
        "extra": {
-        "step_detail": "github",
+        "step_detail": "<forge>",
         "step_id": "clone",
         "step_status": "started"
        },
@@ -97,9 +97,9 @@
      "internal_anthropic_catchall": {
       "data": {
        "category": "init",
-       "content": "Fetching repository button-inc/batten",
+       "content": "Fetching repository <repository>",
        "extra": {
-        "step_detail": "github",
+        "step_detail": "<forge>",
         "step_id": "clone",
         "step_status": "completed"
        },
