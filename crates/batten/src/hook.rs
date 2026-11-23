@@ -23817,11 +23817,12 @@ deny contains "refused by themodule" if {
         std::fs::write(root.join("guarded.rego"), "package x\n").unwrap();
         let patterns = [String::from("guarded.rego")];
         let before = protected_state_of(&root, &patterns, None).unwrap();
-        let file = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .write(true)
             .open(root.join("guarded.rego"))
             .unwrap();
-        std::os::unix::fs::FileExt::write_at(&file, b"y", 8).unwrap();
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(8)).unwrap();
+        std::io::Write::write_all(&mut file, b"y").unwrap();
         file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
             .unwrap();
         drop(file);
