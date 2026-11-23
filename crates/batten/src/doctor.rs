@@ -1282,7 +1282,7 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     // Asking the manifest rather than looking for the artifact keeps "a consumer
     // checkout" and "batten's own checkout before its first build" distinct: the
     // second is a could-not-look and the first is not a question at all.
-    if !dir.join("crates/batten/Cargo.toml").is_file() {
+    if !crate::engine::builds_itself(dir) {
         return Mediator::NotApplicable;
     }
     // AND IT IS ASKED ONLY UNDER A SOURCE PIN (CLOUD-2840). A tree pinning a

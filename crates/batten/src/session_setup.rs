@@ -12,8 +12,9 @@
 //! **The task runs what the hook used to, in the order it used to**, with one
 //! step moved ahead: the environment manager's install (a `[[startup]]` row
 //! naming a `preset`), then the declared handlers (each under its own
-//! `timeout_ms`), the pin record, the other `[[startup]]` repairs, then the
-//! health report re-decided after them. What any
+//! `timeout_ms`), the pin record, the other `[[startup]]` repairs, the
+//! checkout's engine put under the hooks where they run a release download
+//! (CLOUD-2871), then the health report re-decided after them. What any
 //! of them would have said is RECORDED here as JSON lines, and the next
 //! `PreToolUse` or `UserPromptSubmit` surfaces it once ([`surface`]), through the
 //! same constructors the inline path used, so a finding reads the same whichever
@@ -39,6 +40,17 @@ pub fn detaches(event: crate::config_model::Event) -> bool {
 
 /// The registry name the task registers under and holds its singleton by.
 pub const TASK: &str = "session-setup";
+
+/// The phase the task is in while it builds the checkout's engine
+/// (CLOUD-2871): the gate holds [`BUILD_PROGRAM`] for exactly this phase.
+pub const ENGINE: &str = "engine";
+
+/// The program the engine phase builds with, and the one a call is held on
+/// while it does: a second build in the same target directory would race it.
+pub const BUILD_PROGRAM: &str = "cargo";
+
+/// The name a failed engine phase is reported under.
+const ENGINE_ROW: &str = "hook-engine-is-the-checkout-build";
 
 /// Where the task's inputs and outputs live, under the git dir.
 const DIR: &str = "batten-session-setup";
@@ -231,6 +243,23 @@ pub fn run(
     let _ = crate::pinned::refresh(root);
     let _ = crate::startup::repair(root, &rest);
 
+    // THE CHECKOUT'S ENGINE UNDER THE HOOKS (CLOUD-2871), after every repair,
+    // so the toolchain it builds with is already installed.
+    task::push(
+        git_dir,
+        &pid,
+        task::Signal::Phase,
+        ENGINE,
+        crate::clock::now_unix(),
+    );
+    let engine_passed = match adopt_checkout_build(root, &installs) {
+        Some(finding) => {
+            findings.push(finding);
+            false
+        }
+        None => true,
+    };
+
     task::push(
         git_dir,
         &pid,
@@ -246,7 +275,7 @@ pub fn run(
         .map(|line| line + "\n")
         .collect();
     let _ = crate::durable::replace(dir(git_dir).join(OUTCOME), body);
-    let passed = handlers_passed && rows_passed;
+    let passed = handlers_passed && engine_passed && rows_passed;
     let last = if passed { task::OK } else { task::FAILED };
     task::push(
         git_dir,
@@ -257,6 +286,78 @@ pub fn run(
     );
     task::singleton_release(git_dir, TASK);
     passed
+}
+
+/// Put this checkout's engine under the hooks, where they run a release
+/// download (CLOUD-2871). `None` where that holds or was made to hold.
+///
+/// **A RELEASE PIN NEVER BRINGS THE BRANCH'S ENGINE.** Every hook names a bare
+/// `batten`, which in a fresh container is the release `install.sh` placed, and
+/// a release pin is satisfied by any engine of its version. So a session on a
+/// branch was judged by the last release: the gates the branch adds judged
+/// nothing for it, its dispatched children included. In a tree carrying the
+/// engine's own source, this phase builds it and installs it, stamped, over the
+/// `batten` the hooks resolve. The branch's build carries the version the pin
+/// names, so the pin accepts it and no follow is added to the hook path.
+///
+/// **NEVER ON THE HOOK PATH, NEVER TWICE.** It runs only in this detached task,
+/// and only over an UNSTAMPED hook engine ([`crate::engine::unbuilt_hook_engine`]):
+/// a resume or a compaction finds the stamp and builds nothing, so the 714 s
+/// mid-lap rebuild CLOUD-2840 removed cannot come back through here. Whether a
+/// stamped build is current is `doctor mediator`'s question.
+///
+/// The build runs on the toolchain the environment manager pins, through its
+/// declared `exec`, where a `[[startup]]` row names one; else on the host's.
+fn adopt_checkout_build(root: &Path, installs: &[crate::config_model::Startup]) -> Option<Finding> {
+    if !crate::engine::builds_itself(root) {
+        return None;
+    }
+    let target = crate::engine::unbuilt_hook_engine(std::env::var_os("PATH").as_deref(), root)?;
+    let failed = |reason: &str| Finding::Workspace {
+        name: ENGINE_ROW.to_owned(),
+        reason: reason.to_owned(),
+        subjects: vec![target.display().to_string()],
+    };
+    let mut argv: Vec<String> = installs
+        .iter()
+        .filter_map(|row| row.preset.as_deref())
+        .find_map(crate::config_model::install_of)
+        .map(|install| {
+            std::iter::once(install.program)
+                .chain(install.exec.iter().copied())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    argv.extend(
+        [
+            BUILD_PROGRAM,
+            "build",
+            "--release",
+            "-p",
+            crate::surface::BINARY,
+        ]
+        .iter()
+        .map(|word| (*word).to_owned()),
+    );
+    if crate::exec::run_in(root, &argv).is_err() {
+        return Some(failed("build-failed"));
+    }
+    let Ok(digest) = crate::engine::digest(root) else {
+        return Some(failed("digest-unreadable"));
+    };
+    let Ok(bytes) = crate::fsio::read(crate::engine::release_build(root)) else {
+        return Some(failed("build-missing"));
+    };
+    // `replace` keeps the target's own permission bits and renames into place,
+    // so a hook starting mid-install runs the old engine or the new one, never
+    // a torn or unexecutable file.
+    if crate::durable::replace(&target, &bytes).is_err()
+        || crate::engine::stamp(&target, &digest).is_err()
+    {
+        return Some(failed("install-failed"));
+    }
+    None
 }
 
 /// What the handlers said, as the findings the inline dispatch reported.

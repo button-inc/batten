@@ -292,6 +292,132 @@ fn no_compile_runs_without_a_source_pin() {
     assert!(!repo.join("target").exists(), "nothing built into target/");
 }
 
+/// Fails by: a session in the engine's own checkout left hooking on a release
+/// download (CLOUD-2871), the build run on the hook path, or a second session
+/// rebuilding an engine the first already installed.
+///
+/// The `batten` first on `PATH` is a placeholder outside the checkout and
+/// outside cargo's output, carrying no stamp: a release download, as
+/// `install.sh` leaves one. The stub `cargo` blocks on a FIFO before it writes
+/// the build, so the door returning at all proves the build is not on the hook
+/// path (`wall_clock.rs`: the pipe is the bound, never a clock).
+#[test]
+fn a_session_in_the_engine_checkout_installs_its_build_under_the_hooks() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let repo = common::Fixture::new("session-start-engine-build").build();
+    std::fs::create_dir_all(repo.join("crates/batten")).expect("the fixture repo");
+    write(
+        &repo,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/batten\"]\n",
+    );
+    write(
+        &repo,
+        "crates/batten/Cargo.toml",
+        "[package]\nname = \"batten\"\nversion = \"0.0.0\"\n",
+    );
+    write(&repo, "batten.toml", "version = 1\n");
+    let _ = common::git_in(&repo, &["add", "-A"]);
+
+    let host = common::scratch_outside_tree("session-start", "engine-build-host");
+    let hook_engine = host.join("batten");
+    std::fs::write(&hook_engine, "a release download\n").expect("the placeholder");
+    std::fs::set_permissions(&hook_engine, std::fs::Permissions::from_mode(0o755))
+        .expect("the placeholder is runnable");
+    let gate = repo.join("gate");
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, test-only: a FIFO is made by `mkfifo`, and no door in `common` makes one"
+    )]
+    let made = std::process::Command::new("mkfifo")
+        .arg(&gate)
+        .streamed_output()
+        .expect("mkfifo runs");
+    assert!(made.status.success(), "{}", stderr(&made));
+    let log = repo.join("cargo.log");
+    let cargo = host.join("cargo");
+    std::fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nprintf 'cargo %s\\n' \"$*\" >> '{}'\nread line < '{}'\n\
+             mkdir -p target/release\nprintf 'built from the checkout\\n' > target/release/batten\n",
+            log.display(),
+            gate.display()
+        ),
+    )
+    .expect("the cargo stub");
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755))
+        .expect("the cargo stub is runnable");
+    let path = std::env::join_paths(
+        std::iter::once(host.clone()).chain(std::env::split_paths(&common::ambient_path())),
+    )
+    .expect("a joinable PATH");
+    let session = |name: &str| {
+        let payload = serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "session_id": name,
+            "source": "startup",
+            "cwd": repo,
+        })
+        .to_string();
+        let mut command = common::batten();
+        command.env("PATH", &path).env_remove("CARGO_TARGET_DIR");
+        let _ = common::stdin_run(
+            &mut command,
+            &repo,
+            &["adjudicate", "--harness", "claude-code"],
+            &payload,
+        );
+    };
+
+    session("engine-build-first");
+    assert_eq!(
+        std::fs::read_to_string(&hook_engine).expect("the hook engine"),
+        "a release download\n",
+        "nothing is installed while the build is held"
+    );
+    // OPENED READ-WRITE, which never blocks on a FIFO: a build that never
+    // started (the phase skipped) leaves no reader, and a write-only open
+    // would hold this case until the runner's timeout instead of failing it.
+    // The handle lives until the task settles, so the line stays in the pipe
+    // for a reader that opens late.
+    let mut release = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&gate)
+        .expect("the gate opens");
+    {
+        use std::io::Write as _;
+        release.write_all(b"released\n").expect("release the build");
+    }
+    assert_eq!(settle(&repo), "ok", "the build and the install pass");
+    drop(release);
+    assert_eq!(
+        std::fs::read_to_string(&hook_engine).expect("the hook engine"),
+        "built from the checkout\n",
+        "the hooks now run the checkout's build"
+    );
+    assert!(
+        batten::engine::stamp_of(&hook_engine).is_some(),
+        "the installed build carries its stamp"
+    );
+
+    // A SECOND SESSION, with nothing left to block on: the gate becomes a
+    // plain file, and the first task's record goes, so `settle` reads the
+    // second task's terminal phase rather than the first's.
+    std::fs::remove_file(&gate).expect("the FIFO goes");
+    std::fs::write(&gate, "released\n").expect("a gate that never blocks");
+    std::fs::remove_dir_all(repo.join(".git/batten-tasks")).expect("the first record goes");
+    session("engine-build-second");
+    assert_eq!(settle(&repo), "ok", "the second session's setup passes");
+    let calls = std::fs::read_to_string(&log).unwrap_or_default();
+    assert_eq!(
+        calls.lines().count(),
+        1,
+        "a stamped hook engine is never rebuilt: {calls}"
+    );
+}
+
 /// Fails by: the environment manager's install running after the declared
 /// handlers, or not at all (CLOUD-2840). Every later step runs a pinned tool,
 /// so the preset's install is the setup task's first step. A `mise` stub that

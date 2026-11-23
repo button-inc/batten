@@ -182,6 +182,53 @@ pub fn install_targets(
     targets
 }
 
+/// Whether the tree at `dir` carries the engine's own source: the crate that
+/// builds the mediator. The one predicate `doctor mediator` and the session's
+/// engine phase share (CLOUD-2871), so "batten's own checkout" means one thing.
+#[must_use]
+pub fn builds_itself(dir: &Path) -> bool {
+    dir.join("crates")
+        .join(crate::surface::BINARY)
+        .join("Cargo.toml")
+        .is_file()
+}
+
+/// Whether `path` lies inside a cargo target directory, which cargo marks with
+/// a `CACHEDIR.TAG` at its root. Cargo's output is never an installed engine
+/// (CLOUD-2063): replacing it overwrote the very build a test or a `cargo run`
+/// was executing.
+fn is_cargo_output(path: &Path) -> bool {
+    path.ancestors()
+        .skip(1)
+        .any(|dir| dir.join("CACHEDIR.TAG").is_file())
+}
+
+/// The engine a hook registered as a bare `batten` runs, when it is a release
+/// download rather than a build of any checkout (CLOUD-2871); `None` otherwise.
+///
+/// THE FIRST `batten` ON `path` AND NO OTHER, because that is what the hook
+/// runs: a shadowed one further down is nothing any hook executes, and walking
+/// past a first hit inside the checkout reached the caller's own engine
+/// (`install_targets`' measured case). It is `None` when that first hit lies
+/// inside the checkout at `root` or in cargo's output, both builds already, and
+/// when it carries a stamp: [`stamp`] is written only beside a build, so a
+/// stamped engine is some checkout's build and whether it is current is
+/// `doctor mediator`'s question, never a reason to build again.
+#[must_use]
+pub fn unbuilt_hook_engine(path: Option<&std::ffi::OsStr>, root: &Path) -> Option<PathBuf> {
+    let first = path
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .map(|dir| dir.join(crate::surface::BINARY))
+        .find(|candidate| candidate.is_file())?;
+    let first = crate::git::canonical(&first);
+    let built = first.starts_with(crate::git::canonical(root))
+        || is_cargo_output(&first)
+        || stamp_of(&first).is_some();
+    (!built).then_some(first)
+}
+
 /// Whether `running` is an installed engine rather than the bootstrap's
 /// download (CLOUD-2287): it is the first `batten` on `path`, or it lies under
 /// the worktree at `root`, where `mise exec` puts the checkout's build first.

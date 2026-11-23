@@ -229,6 +229,11 @@ pub struct Install {
     pub check: &'static [&'static str],
     /// The operands that install what is outstanding, non-interactively.
     pub repair: &'static [&'static str],
+    /// The operands that run a command on the toolchain the tool pins
+    /// (CLOUD-2871): what precedes the command's own argv, so a build the
+    /// session's setup runs compiles on the project's toolchain, never on
+    /// whatever the host happens to carry.
+    pub exec: &'static [&'static str],
     /// Where the tool keeps what it installs (CLOUD-2840): the environment
     /// variable naming its data directory, and the path under `$HOME` it
     /// defaults to. A program resolving under it is one the install puts there,
@@ -1351,6 +1356,7 @@ abandon the other unread.",
             separator: ",",
             check: &["ls", "--current", "--missing"],
             repair: &["install", "--yes"],
+            exec: &["exec", "--"],
             // `installs/` and `shims/` both live here: a shim on PATH resolves
             // before the tool behind it is installed.
             data_dir: ("MISE_DATA_DIR", ".local/share/mise"),

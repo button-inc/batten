@@ -20186,15 +20186,24 @@ fn install_pending_for(
         task::State::Failed => "failed",
         task::State::Crashed => "crashed",
     };
+    // WHILE THE TASK BUILDS THE CHECKOUT'S ENGINE (CLOUD-2871), its build
+    // program is held too, wherever it resolves: a second build in the same
+    // target directory races the one about to be installed under the hooks.
+    let building = state == "running" && entry.phase == session_setup::ENGINE;
     let pending: Vec<String> = if state == "ok" {
         Vec::new()
     } else {
         let roots = install_roots();
         hook::command_programs(&envelope.command)
             .into_iter()
-            .filter(|program| match resolve_on_path(program) {
-                None => true,
-                Some(found) => roots.iter().any(|root| found.starts_with(root)),
+            .filter(|program| {
+                (building
+                    && Path::new(program).file_name()
+                        == Some(std::ffi::OsStr::new(session_setup::BUILD_PROGRAM)))
+                    || match resolve_on_path(program) {
+                        None => true,
+                        Some(found) => roots.iter().any(|root| found.starts_with(root)),
+                    }
             })
             .collect()
     };
