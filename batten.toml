@@ -5429,7 +5429,11 @@ Linear = "mcp.linear.app"
 # `mcp::endpoint_carries` substring, where the path segment is what keeps it
 # from also matching every other server behind the same proxy host, which would
 # be `Ambiguous`.
-Claude_Code_Remote = "api.anthropic.com/v1/code/mcp/meta"
+# MOVED UPSTREAM (CLOUD-2789): measured 2026-11-23, the launcher's wrapper now
+# carries `https://api.anthropic.com/v2/ccr-sessions/-/meta/mcp`. The old
+# `/v1/code/mcp/meta` resolved nothing, so the guard answered silence on every
+# session-toolbox call and the host prompted the owner for each one.
+Claude_Code_Remote = "api.anthropic.com/v2/ccr-sessions/-/meta/mcp"
 # THE SESSION'S GITHUB MCP (CLOUD-2693), by the path that does not move when the
 # launcher rotates the server's key (CLOUD-1264): `forge poll`'s `mcp` source
 # resolves it here. A dispatch address only, never a grant.
