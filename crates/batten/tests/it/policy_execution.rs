@@ -440,3 +440,131 @@ fn a_verdict_evaluation_is_counted_against_its_evaluator() {
         "one interpreted evaluation, with its reason"
     );
 }
+
+/// The probe, carrying its own cases: each writes a `with`, the construct the
+/// bytecode compiler refuses and `policy test` desugars (#1276).
+const SUITE_PROBE: &str = r#"package batten.probe
+
+import rego.v1
+
+rules contains "probe run never"
+
+violation contains {"rule": "probe run never", "verdict": "probe run never"} if {
+	input.tree["git-head"] == "a head no repository has"
+}
+
+test_the_probe_fires_on_the_head_it_names if {
+	some v in violation with input as {"tree": {"git-head": "a head no repository has"}}
+	v.verdict == "probe run never"
+}
+
+test_the_probe_is_silent_on_any_other_head if {
+	count(violation) == 0 with input as {"tree": {"git-head": "a head"}}
+}
+"#;
+
+/// `policy test` decides every case on bytecode, and its `-vv` census says so:
+/// zero interpreted evaluations, the cases' own counted on bytecode (#1276).
+///
+/// Fails by: a case run on the tree-walking interpreter, which every case was
+/// until the suite program existed — `policy test` evaluated each `test_` rule
+/// on the coverage interpreter and printed no census at all.
+#[test]
+fn policy_test_reports_no_interpreted_case() {
+    let dir = common::Fixture::new("policy-execution-suite")
+        .config(&format!("version = 1\n{PROBE_ROWS}"))
+        .file("probe.rego", SUITE_PROBE)
+        .git()
+        .base_commit()
+        .build();
+    // Twice: the first run compiles the suite program, the second reads it.
+    for _ in 0..2 {
+        let output = common::run(&dir, &["policy", "test", "-vv"]);
+        let said = common::stderr(&output);
+        assert!(
+            output.status.success(),
+            "the probe's two cases pass: {}{said}",
+            common::stdout(&output)
+        );
+        let total = said
+            .lines()
+            .find(|line| line.contains("policy evaluator:") && line.contains("bytecode"))
+            .unwrap_or_else(|| panic!("`policy test -vv` prints the evaluator census: {said}"));
+        assert!(
+            total.contains(" 0 interpreted evaluation(s)"),
+            "a case ran on the interpreter: {said}"
+        );
+        assert!(
+            total.contains(" 2 bytecode evaluation(s)"),
+            "both cases decided on bytecode: {said}"
+        );
+    }
+}
+
+/// Every case of every repository policy row and shipped preset decides alike
+/// on the suite program and on the interpreter, and none is left off bytecode
+/// (#1276).
+///
+/// Fails by: a desugared `with` that reads a rule under the wrong context, or
+/// a case the desugaring cannot express, which would decide on the
+/// interpreter.
+#[test]
+fn every_policy_case_decides_alike_on_bytecode_and_the_interpreter() {
+    let (repo, resolved) = resolved();
+    let vocabulary = policy::Vocabulary {
+        patterns: &resolved.patterns,
+        verdicts: &resolved.verdicts,
+        words: (!resolved.vocabulary.is_empty()).then_some(&resolved.vocabulary),
+        recorders: &resolved.recorders,
+        registers: &resolved.registers,
+        traversals: &resolved.traversals,
+        records: &resolved.records,
+    };
+    let mut bundles = policy::load(&repo, &resolved.rules, vocabulary, ModuleChecks::Run, None)
+        .expect("this repository's policy loads");
+    let root = common::scratch("policy-execution-preset-cases");
+    for preset in batten::preset_catalog::MANIFESTS {
+        for (scope, provider) in selections(preset) {
+            let row: Rule = serde_json::from_value(serde_json::json!({
+                "id": format!("preset {} {} {}", preset.name, scope.as_str(), provider.unwrap_or("none")),
+                "kind": "policy",
+                "scope": scope.as_str(),
+                "preset": preset.name,
+                "provider": provider,
+                "severity": "deny",
+            }))
+            .expect("a preset row the loader accepts");
+            if let Ok(loaded) = policy::load(
+                &root,
+                &[row],
+                policy::Vocabulary::EMPTY,
+                ModuleChecks::Run,
+                None,
+            ) {
+                bundles.extend(loaded);
+            }
+        }
+    }
+    let (off, splits): (Vec<String>, Vec<String>) = bundles
+        .iter()
+        .flat_map(|bundle| policy::suite_splits(bundle, "{}"))
+        .partition(|line| !line.contains(": bytecode "));
+    assert!(
+        splits.is_empty(),
+        "these cases decide differently on bytecode and on the interpreter:\n{}",
+        splits.join("\n")
+    );
+    // THE RESIDUE STILL ON THE INTERPRETER, AND IT ONLY SHRINKS (#1276). 216
+    // measured when the suite program landed: a helper writing its own `with`
+    // (109), a `with` in a nested query (37), a case defined twice (26), a
+    // `with` term reading a variable bound under `with` (24), a function reading
+    // the input under `with` (15), three bundles with no expressible case. Each
+    // is a desugaring still to write, or a case to respell; lower the ceiling
+    // with the count.
+    assert!(
+        off.len() <= 216,
+        "a case left bytecode for the interpreter ({} > 216):\n{}",
+        off.len(),
+        off.join("\n")
+    );
+}
