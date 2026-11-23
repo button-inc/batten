@@ -233,8 +233,6 @@ dependencies = [
  "anyhow",
  "batten-facts",
  "batten-fsio",
- "gix",
- "gix-diff",
  "http-body-util",
  "hyper",
  "hyper-rustls",

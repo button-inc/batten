@@ -259,115 +259,14 @@ fn union(ours: &[String], base: &[String], theirs: &[String]) -> Vec<String> {
     merged
 }
 
-/// The conflict-marker width, as the merge driver takes it.
-const MARKER_SIZE: std::num::NonZeroU8 = match std::num::NonZeroU8::new(MARKER) {
-    Some(size) => size,
-    None => unreachable!(),
-};
-
-/// The three-way text merge with every conflict kept as diff3 markers, or
-/// `None` for a merge with no conflict or bytes that are not UTF-8 (CLOUD-1956).
-///
-/// Here, beside the shapes that read its markers, since CLOUD-2789: it is a
-/// pure text merge over gix's driver, not a read or write of a repository, and
-/// `gitwrite` re-exports it for the replay that runs it.
-#[must_use]
-pub fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
-    use gix::merge::blob::builtin_driver::text;
-    let mut out = Vec::new();
-    let mut input = gix_diff::blob::InternedInput::default();
-    let options = text::Options {
-        conflict: text::Conflict::Keep {
-            style: text::ConflictStyle::Diff3,
-            marker_size: MARKER_SIZE,
-        },
-        ..Default::default()
-    };
-    let resolution = gix::merge::blob::builtin_driver::text(
-        &mut out,
-        &mut input,
-        text::Labels::default(),
-        ours,
-        ancestor,
-        theirs,
-        options,
-    );
-    if resolution != gix::merge::blob::Resolution::Conflict {
-        return None;
-    }
-    String::from_utf8(out).ok()
-}
+// `diff3`, the three-way merge over gix's driver that produces the marked text
+// these shapes read, is `gitwrite::diff3` in `batten-core`: it reaches the git
+// backend, which only the git modules may (CLOUD-2789). The cases that drive the
+// replay's whole path — `diff3`, then the shapes — live beside it there.
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
 mod tests {
-    /// The replay's own path: `diff3`, then the shapes.
-    fn propose(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<super::Proposal> {
-        super::propose(&super::diff3(ancestor, ours, theirs)?)
-    }
-
     use super::*;
-
-    fn text(proposal: &Proposal) -> &str {
-        std::str::from_utf8(&proposal.bytes).expect("utf-8")
-    }
-
-    #[test]
-    fn a_list_both_sides_grew_keeps_trunks_order_and_appends_the_branchs_addition() {
-        let base = b"GATES = \"b,a,c\"\n";
-        let ours = b"GATES = \"b,a,c,trunk\"\n";
-        let theirs = b"GATES = \"b,a,branch,c\"\n";
-        let proposal = propose(base, ours, theirs).expect("a list-union region");
-        assert_eq!(text(&proposal), "GATES = \"b,a,c,trunk,branch\"\n");
-        assert_eq!(proposal.shapes, vec![Shape::ListUnion]);
-    }
-
-    #[test]
-    fn a_branch_removal_from_the_list_is_kept() {
-        let base = b"GATES = \"a,old,c\"\n";
-        let ours = b"GATES = \"a,old,c,trunk\"\n";
-        let theirs = b"GATES = \"a,c\"\n";
-        let proposal = propose(base, ours, theirs).expect("a list-union region");
-        assert_eq!(text(&proposal), "GATES = \"a,c,trunk\"\n");
-    }
-
-    #[test]
-    fn a_json_allow_list_both_sides_grew_is_unioned() {
-        let base = b"[\n  \"a\",\n  \"z\"\n]\n";
-        let ours = b"[\n  \"a\",\n  \"trunk\",\n  \"z\"\n]\n";
-        let theirs = b"[\n  \"a\",\n  \"branch\",\n  \"z\"\n]\n";
-        let proposal = propose(base, ours, theirs).expect("a json-array-union region");
-        assert_eq!(
-            text(&proposal),
-            "[\n  \"a\",\n  \"trunk\",\n  \"branch\",\n  \"z\"\n]\n"
-        );
-        assert_eq!(proposal.shapes, vec![Shape::JsonArrayUnion]);
-    }
-
-    #[test]
-    fn a_comment_both_sides_reworded_takes_trunks_text() {
-        let base = b"# old\nx = 1\n";
-        let ours = b"# trunk wording\nx = 1\n";
-        let theirs = b"# branch wording\nx = 1\n";
-        let proposal = propose(base, ours, theirs).expect("a comment-only region");
-        assert_eq!(text(&proposal), "# trunk wording\nx = 1\n");
-        assert_eq!(proposal.shapes, vec![Shape::CommentOnly]);
-    }
-
-    /// ALL OR NOTHING: a code change both sides made matches no shape, so the
-    /// path gets no candidate at all — even though another region would.
-    #[test]
-    fn one_unshaped_region_withholds_the_whole_candidate() {
-        let base = b"# old\nx = 1\n\n\n\ny = 1\n";
-        let ours = b"# trunk\nx = 1\n\n\n\ny = 2\n";
-        let theirs = b"# branch\nx = 1\n\n\n\ny = 3\n";
-        assert_eq!(propose(base, ours, theirs), None);
-    }
-
-    #[test]
-    fn a_clean_merge_is_not_a_proposal() {
-        assert_eq!(propose(b"a\n", b"a\nb\n", b"a\n"), None);
-    }
 
     #[test]
     fn each_shape_prints_its_own_token() {
