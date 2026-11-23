@@ -4,13 +4,16 @@
 .SH NAME
 batten\-step\-run \- Run a step\*(Aqs command only when its receipt misses, and record the receipt when it passes
 .SH SYNOPSIS
-\fBbatten step run\fR [\fB\-\-arg\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIstep\fR> <\fIcommand\fR> 
+\fBbatten step run\fR [\fB\-\-arg\fR] [\fB\-\-shards\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIstep\fR> <\fIcommand\fR> 
 .SH DESCRIPTION
 Run a step\*(Aqs command only when its receipt misses, and record the receipt when it passes
 .SH OPTIONS
 .TP
 \fB\-\-arg\fR \fI<arg>\fR
 A value the step\*(Aqs verdict depends on beyond its inputs, keyed in order (repeatable)
+.TP
+\fB\-\-shards\fR \fI<shards>\fR
+Run a journaled nextest miss as this many partitions of one archive (a positive integer; default: 1)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

@@ -17459,13 +17459,17 @@ _batten() {
             return 0
             ;;
         batten__subcmd__step__subcmd__run)
-            opts="-q -v -y -h --arg --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --arg --shards --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
                 --arg)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --shards)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
