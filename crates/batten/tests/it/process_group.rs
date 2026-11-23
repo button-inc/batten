@@ -883,3 +883,47 @@ fn a_group_its_leader_and_registrant_left_is_an_orphan() {
     );
     assert!(!predated, "no member began before second 0");
 }
+
+/// A lap that takes the land singleton ends a running reach seed's whole
+/// process group, frees its lock and leaves it owed, so the lap's gates never
+/// queue behind a reach run and the seed starts over once the lap ends
+/// (CLOUD-2842).
+///
+/// Fails by: the seed left running, its lock left held, or nothing owed.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: ending a seed's group is a property of a process this one is not, so only a real spawn can stand in for it"
+)]
+fn a_lap_taking_the_land_singleton_ends_a_running_reach_seed() {
+    use std::os::unix::process::CommandExt as _;
+
+    let repo = common::scratch_repo("pgroup-seed-preempt");
+    let _ = common::scratch_state_root();
+    let mut seed = Command::new("cat")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("spawn a stand-in seed");
+    let lock = repo
+        .join(".git")
+        .join("batten-singleton")
+        .join(batten::mutate::resume::SEED_TASK);
+    common::write(&lock, "pid", &format!("{}\n", seed.id()));
+    assert!(
+        batten::mutate::resume::preempt(&repo),
+        "a live seed is ended"
+    );
+    let status = seed.wait().expect("the seed is reaped");
+    assert!(
+        status.signal().is_some(),
+        "ended by a signal, not by its input: {status}"
+    );
+    assert!(!lock.exists(), "its lock is freed");
+    let owed = batten::state::repo_state_dir(&repo)
+        .expect("the state dir")
+        .join("test-run")
+        .join("seed-pending");
+    assert!(owed.is_file(), "it is owed to the lap's end");
+}
