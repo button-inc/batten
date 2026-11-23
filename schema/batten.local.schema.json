@@ -1617,7 +1617,8 @@
             "rust",
             "red-head",
             "git",
-            "claude-code-plan"
+            "claude-code-plan",
+            "claude-code-dispatch"
           ]
         },
         "produces": {
