@@ -58,7 +58,22 @@ fn payload(event: &str, call: &str, command: &str) -> String {
 
 /// Run one call through both hooks with `write` between them, returning the
 /// post-call exit code and what it printed.
+///
+/// The bytes written are distinct per call: the comparison is by content
+/// (CLOUD-2789), so rewriting the bytes a previous row already left is no write.
 fn around(dir: &Path, call: &str, command: &str, write: &str) -> (Option<i32>, String) {
+    around_with(dir, call, command, |dir| {
+        std::fs::write(dir.join(write), format!("changed by {call}\n")).expect("the write lands");
+    })
+}
+
+/// [`around`] with the between-hooks effect supplied by the caller.
+fn around_with(
+    dir: &Path,
+    call: &str,
+    command: &str,
+    effect: impl FnOnce(&Path),
+) -> (Option<i32>, String) {
     let pre = run_with_stdin(
         dir,
         &["adjudicate", "--harness", "claude-code"],
@@ -69,7 +84,7 @@ fn around(dir: &Path, call: &str, command: &str, write: &str) -> (Option<i32>, S
         "the command names no protected path, so the pre-call gate allows it: {command}\n{}",
         stdout(&pre)
     );
-    std::fs::write(dir.join(write), "changed\n").expect("the write lands");
+    effect(dir);
     let post = run_with_stdin(
         dir,
         &["adjudicate", "--harness", "claude-code"],
@@ -249,4 +264,67 @@ fn only_an_executed_calls_post_hook_compares() {
         said.contains("path write refused at guarded.txt"),
         "the shell call's own post-call hook still judges it: {said}"
     );
+}
+
+/// Replace the guarded file with `body` through a new inode, the way hk's
+/// pre-commit stash/restore rewrites an unstaged change.
+fn rewrite_via_rename(dir: &Path, body: &str) {
+    let staging = dir.join("guarded.staging");
+    std::fs::write(&staging, body).expect("the staging write lands");
+    std::fs::rename(&staging, dir.join(GUARDED)).expect("the rename lands");
+}
+
+/// THE INCIDENT (CLOUD-2789). A backgrounded `git commit` is live; its hk
+/// pre-commit hook stashes and restores the unstaged protected file while an
+/// unrelated foreground call runs. The file's bytes after equal its bytes
+/// before, so the foreground call wrote nothing protected.
+///
+/// Fails by: the comparison reading stat (mtime, inode) rather than content.
+#[test]
+fn a_protected_file_restored_to_its_own_bytes_is_no_write() {
+    let dir = fixture("protected-escape-restored");
+    std::fs::write(dir.join(GUARDED), "an admitted, unstaged edit\n").expect("the edit lands");
+    let background = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload("PreToolUse", "call-background", "git commit -m wip"),
+    );
+    assert!(
+        !stdout(&background).contains("\"deny\""),
+        "{}",
+        stdout(&background)
+    );
+    let (code, said) = around_with(&dir, "call-foreground", "rm -rf scratch", |dir| {
+        rewrite_via_rename(dir, "");
+        rewrite_via_rename(dir, "an admitted, unstaged edit\n");
+    });
+    assert_eq!(code, Some(0), "same bytes before and after: {said}");
+    assert!(!said.contains("path write refused"), "{said}");
+}
+
+/// NO HOLE FOR A LIVE BACKGROUND TASK. A foreground call that really changes a
+/// protected file's bytes is refused whether or not a backgrounded call of the
+/// same session is still running: nothing the hook can observe says which
+/// process wrote, so a live background task is never a reason to look away.
+///
+/// Fails by: any rule that excuses a change while another call's snapshot is
+/// outstanding.
+#[test]
+fn a_real_write_while_a_background_call_is_live_is_refused() {
+    let dir = fixture("protected-escape-background-live");
+    let background = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload("PreToolUse", "call-background", "git commit -m wip"),
+    );
+    assert!(
+        !stdout(&background).contains("\"deny\""),
+        "{}",
+        stdout(&background)
+    );
+    let (code, said) = around_with(&dir, "call-foreground", "python3 tool.py", |dir| {
+        rewrite_via_rename(dir, "really changed\n");
+    });
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
 }
