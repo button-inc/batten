@@ -24,7 +24,12 @@ fn the_ca_selection_matches_vars_pkl_ca() {
         dir.join("missing.pem"),
     );
     let set = |path: &Path| Some(path.as_os_str().to_owned());
-    let flag = |path: &Path| vec![OsString::from("--ca-certificates"), path.as_os_str().to_owned()];
+    let flag = |path: &Path| {
+        vec![
+            OsString::from("--ca-certificates"),
+            path.as_os_str().to_owned(),
+        ]
+    };
 
     assert_eq!(
         common::pkl_ca_selection(set(&batten), set(&ssl)),
@@ -92,7 +97,9 @@ fn every_pkl_spawn_carries_the_ca_selection() {
         .filter(|path| *path != helper)
         .filter_map(|path| {
             let text = std::fs::read_to_string(&path).ok()?;
-            let hit = spellings.iter().find(|spelling| text.contains(spelling.as_str()))?;
+            let hit = spellings
+                .iter()
+                .find(|spelling| text.contains(spelling.as_str()))?;
             Some(format!("{} ({hit})", path.display()))
         })
         .collect();
