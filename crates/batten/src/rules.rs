@@ -5843,6 +5843,17 @@ fn stale_severity(recorded: &semver::Version, shipped: &semver::Version) -> Rule
     }
 }
 
+/// Whether `rule` declares any glob column or a delta, the selectors whose
+/// matching nothing means the row established nothing (CLOUD-359, CLOUD-1059).
+fn declares_a_selector(rule: &Rule) -> bool {
+    !rule.sources.is_empty()
+        || !rule.line_sources.is_empty()
+        || !rule.invocation_sources.is_empty()
+        || !rule.use_sources.is_empty()
+        || !rule.unit_sources.is_empty()
+        || !rule.delta_sources.is_empty()
+}
+
 fn policy_rule(
     rule: &Rule,
     inputs: &RunInputs<'_>,
@@ -5908,12 +5919,7 @@ fn policy_rule(
     // A resolved delta is what counts, not a non-empty one: an empty delta is
     // the row having looked and found nothing changed, which IS establishing
     // something. `None` is could-not-look and still skips.
-    let selectors_declared = !rule.sources.is_empty()
-        || !rule.line_sources.is_empty()
-        || !rule.invocation_sources.is_empty()
-        || !rule.use_sources.is_empty()
-        || !rule.unit_sources.is_empty()
-        || !rule.delta_sources.is_empty();
+    let selectors_declared = declares_a_selector(rule);
     let delta_resolved = !rule.delta_sources.is_empty() && git.base_delta.is_some();
     // An `[[rule.external]]` row is a declaration like the rest, so a row whose
     // only input is an out-of-root file has established something the moment that
