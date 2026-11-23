@@ -174,6 +174,7 @@ row here, so a new module lands with its line.
 - `release_guard.rs` — G4 (CLOUD-2033): `release settings [--last-run <workflow>]`, whether the rulesets and release settings the release path rests on hold. No `release-path` ruleset is owed and nothing probes for one (CLOUD-2319, CLOUD-2508).
 - `stream_input.rs` (crate `batten-core`) — the hook's stdin read streaming (CLOUD-2224): teed to a spool, a result string leaf counted in `o200k` tokens as it arrives and spilled to a file past the bound.
 - `startup.rs` — the `[[startup]]` table (CLOUD-1324): what a container must be and how it is repaired.
+- `session_setup.rs` — the session's setup as one detached task (CLOUD-2840): `SessionStart` starts `batten startup --session` and registers it, the task runs the preset install, the session-start handlers, the repairs and the health report, and the next call surfaces what it recorded, once.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched and cached out of tree; `provision status` (read) is freshness, `provision apply [-n]` (write) is the fix.
 - `race.rs` — which OTHER open pull request already claims this branch's key (CLOUD-446's duplicate-claim half, ported off `mise-tasks/claim-race-check.sh` by CLOUD-1422).
 - `landed.rs` (crate `batten-base`) — whether a board column is honest about what git and the forge already did (CLOUD-186, CLOUD-1127, ported off `mise-tasks/landed-check.sh`).
