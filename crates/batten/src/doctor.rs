@@ -1255,6 +1255,22 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     if !dir.join("crates/batten/Cargo.toml").is_file() {
         return Mediator::NotApplicable;
     }
+    // AND IT IS ASKED ONLY UNDER A SOURCE PIN (CLOUD-2840). A tree pinning a
+    // release, or pinning nothing, is served by the released engine exactly as
+    // CI is: its own `target/` is not the engine, so an unbuilt or older one is
+    // no fault, and the repair this verdict names — the local build — would be a
+    // cold `cargo build --release` on every session start for nothing. Only a
+    // source pin makes the checkout's build the engine to compare against.
+    let source_pinned = crate::fsio::read_to_string(dir.join(crate::config_model::CONFIG_FILE))
+        .ok()
+        .and_then(|text| crate::engine::declared(&text))
+        .is_some_and(|pin| {
+            use crate::engine::PinExt as _;
+            matches!(pin.kind(), crate::engine::PinKind::Source(_))
+        });
+    if !source_pinned {
+        return Mediator::NotApplicable;
+    }
     let Some(resolved) = crate::rules::on_path_verbatim("batten") else {
         return Mediator::Unresolvable;
     };
@@ -4832,6 +4848,45 @@ mod probe_tests {
     fn a_tree_that_builds_no_mediator_is_not_asked() {
         let dir = crate::scratch::scratch("doctor-mediator-na");
         assert_eq!(diagnose_mediator(&dir), Mediator::NotApplicable);
+    }
+
+    /// NO SOURCE PIN, NO BUILD TO COMPARE AGAINST (CLOUD-2840). A tree that
+    /// builds the engine but pins a release, or pins nothing, is served by the
+    /// released engine exactly as CI is, so its own unbuilt `target/` is not a
+    /// mediator fault and must not ask for the build. Only a source pin makes
+    /// the checkout's build the engine, and only then is the comparison asked.
+    /// Fails by: `Unbuilt` over a release-pinned tree with an empty `target/`,
+    /// whose repair is a cold release build on every session start.
+    #[test]
+    fn only_a_source_pinned_tree_is_asked_for_its_build() {
+        let tree = |name: &str, config: Option<&str>| {
+            let dir = crate::scratch::scratch(name);
+            std::fs::create_dir_all(dir.join("crates/batten")).expect("a crate");
+            std::fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").expect("a manifest");
+            if let Some(config) = config {
+                std::fs::write(dir.join(crate::config_model::CONFIG_FILE), config)
+                    .expect("a config");
+            }
+            dir
+        };
+        let released = tree(
+            "doctor-mediator-release-pin",
+            Some("version = 1\nengine = { release = \"v0.0.220\" }\n"),
+        );
+        assert_eq!(diagnose_mediator(&released), Mediator::NotApplicable);
+        let unpinned = tree("doctor-mediator-no-pin", Some("version = 1\n"));
+        assert_eq!(diagnose_mediator(&unpinned), Mediator::NotApplicable);
+        let unconfigured = tree("doctor-mediator-no-config", None);
+        assert_eq!(diagnose_mediator(&unconfigured), Mediator::NotApplicable);
+        let sourced = tree(
+            "doctor-mediator-source-pin",
+            Some("version = 1\nengine = { source = \"ab\" }\n"),
+        );
+        assert_ne!(
+            diagnose_mediator(&sourced),
+            Mediator::NotApplicable,
+            "a source pin is the one tree whose build is the engine"
+        );
     }
 
     /// `path` exists, holding nothing, last modified `seconds` past a fixed base.
