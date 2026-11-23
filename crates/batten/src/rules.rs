@@ -12283,6 +12283,104 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// **A POOLED RUN IS THE SERIAL RUN, IN DECLARATION ORDER** (CLOUD-2329).
+    ///
+    /// Fails by: a fold in completion order. The first rule sleeps, so under four
+    /// workers it finishes last, and a merge that took evaluations as they
+    /// finished would place its cost and findings last. Nothing here reads the
+    /// clock: only the order, the findings, the classes and the counts compare.
+    #[test]
+    fn a_pooled_run_merges_in_declaration_order() {
+        // `sleep` as argv is a unix program; elsewhere the slow rule has no
+        // spelling, and the fold is the same code on every target.
+        if !cfg!(unix) {
+            return;
+        }
+        let root = crate::scratch::scratch("pooled-declaration-order");
+        fs::write(root.join("f.rs"), "TODO one\nTODO two\n").expect("write the scanned file");
+        let mut sleeps = blank("sleeps-first", RuleKind::Command);
+        sleeps.glob = Some("f.rs".to_owned());
+        sleeps.check = Some("sleep 0.3".to_owned());
+        let mut rules = vec![sleeps];
+        for index in 0..7 {
+            let mut forbid = blank(&format!("forbids-{index}"), RuleKind::Forbid);
+            forbid.glob = Some("f.rs".to_owned());
+            forbid.pattern = Some("TODO".to_owned());
+            rules.push(forbid);
+        }
+        let files = vec!["f.rs".to_owned()];
+        let facts = BareFacts::new();
+        let inputs = facts.inputs(&files);
+        let due: Vec<&Rule> = rules.iter().collect();
+        let run = |workers: usize| {
+            evaluate_due(&due, &root, &inputs, workers)
+                .into_iter()
+                .map(|done| {
+                    (
+                        done.cost.rule,
+                        done.cost.files_read,
+                        done.cost.bytes_read,
+                        done.findings,
+                        done.classes,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let serial = run(1);
+        let pooled = run(4);
+        assert!(
+            serial
+                .iter()
+                .any(|(_, _, _, findings, _)| !findings.is_empty()),
+            "the fixture must fire"
+        );
+        assert_eq!(
+            serial[0].0, "sleeps-first",
+            "the premise: the slow rule is first"
+        );
+        assert_eq!(
+            pooled, serial,
+            "a pooled run is the serial run, in declaration order"
+        );
+    }
+
+    /// **A RULE'S CENSUS COUNTS ONLY ITS OWN THREAD'S READS** (CLOUD-2329).
+    ///
+    /// Fails by: a census read as a delta over the process-global counters. The
+    /// barrier puts every one of B's reads inside A's window, so a global delta
+    /// would credit A with `(8, 65)`.
+    #[test]
+    fn a_task_census_counts_only_reads_on_its_own_thread() {
+        let barrier = std::sync::Barrier::new(2);
+        let delta = |before: (usize, usize)| {
+            let after = thread_reads();
+            (after.0 - before.0, after.1 - before.1)
+        };
+        let (a, b) = std::thread::scope(|scope| {
+            let a = scope.spawn(|| {
+                let before = thread_reads();
+                for _ in 0..3 {
+                    count_read(10);
+                }
+                barrier.wait();
+                barrier.wait();
+                delta(before)
+            });
+            let b = scope.spawn(|| {
+                let before = thread_reads();
+                barrier.wait();
+                for _ in 0..5 {
+                    count_read(7);
+                }
+                barrier.wait();
+                delta(before)
+            });
+            (a.join().expect("a"), b.join().expect("b"))
+        });
+        assert_eq!(a, (3, 30));
+        assert_eq!(b, (5, 35));
+    }
+
     #[test]
     fn a_declared_precondition_skips_before_the_body_and_names_what_it_wanted() {
         // CLOUD-125 at the loop. The rule's glob matches a file that WOULD fire,
