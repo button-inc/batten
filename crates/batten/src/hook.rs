@@ -9366,7 +9366,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
     let mediated = mediated_mcp_call(&envelope.command);
     let (tool, arguments) = match &mediated {
         Some((tool, params)) => (Value::from(tool.as_str()), params.clone()),
-        None => (Value::from(envelope.raw_tool.as_str()), envelope.input.clone()),
+        None => (
+            Value::from(envelope.raw_tool.as_str()),
+            envelope.input.clone(),
+        ),
     };
     let mut document = serde_json::json!({
         "call": {
