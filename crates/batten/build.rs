@@ -123,11 +123,16 @@ fn refuse_hand_rolled_mutation(manifest: &Path) -> Built {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
+        // `/`-joined on every host: `display()` renders `src\mutate.rs` on
+        // Windows, which never equals `CARGO_MUTANTS_SITE` and failed the
+        // one-site check on the file it names (x86_64-pc-windows-gnu dist).
         let relative = path
             .strip_prefix(manifest)
             .unwrap_or(path)
-            .display()
-            .to_string();
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
         markers.extend(
             mutation_markers::marker_lines(&text)
                 .into_iter()
