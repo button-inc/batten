@@ -2594,7 +2594,9 @@ look at again. Read each named failed job's log first; reading is what admits th
     // the engine already allowed. Destructive calls are left to the host.
     Manifest {
         name: "git",
-        version: semver::Version::new(0, 0, 2),
+        // 0.0.3, a patch: the destructive-call predicate moved into the shared
+        // `host-decided.rego` (e0675d432) and decides the same calls.
+        version: semver::Version::new(0, 0, 3),
         suggested: true,
         install: None,
         modules: &[
