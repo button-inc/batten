@@ -271,7 +271,10 @@ pub const FAILED: &str = "failed";
 /// FOUR answers, because a gate on a backgrounded install needs all four apart:
 /// still running holds the gate, `ok` opens it, and `failed` and a crash each
 /// refuse naming what happened. A terminal phase is the task's own last word,
-/// written before it exits, so a gone pid under one is a finish, never a crash.
+/// written once its outcome is complete, so it is a finish whether or not the
+/// pid has exited yet: what the task does after it is housekeeping (releasing
+/// its singleton), and a reader that waited for the exit would hold a gate on a
+/// task that has already answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
     /// The keyed process is still the task.
@@ -288,8 +291,8 @@ pub enum State {
 #[must_use]
 pub fn state(entry: &Entry) -> State {
     match entry.phase.as_str() {
-        OK if !task_alive(entry) => State::Ok,
-        FAILED if !task_alive(entry) => State::Failed,
+        OK => State::Ok,
+        FAILED => State::Failed,
         _ if task_alive(entry) => State::Running,
         _ => State::Crashed,
     }
@@ -1590,8 +1593,8 @@ mod tests {
         ));
         assert_eq!(
             state(&stamped),
-            State::Running,
-            "a live task's last word is not yet a finish"
+            State::Ok,
+            "a last word is a finish before the exit"
         );
     }
 

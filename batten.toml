@@ -11930,6 +11930,7 @@ fast_forward_branches = ["renovate/", "sbom-actions/", "release-plz-"]
 scope = ["**", "!crates/*/tests/**"]
 gates = [
   ".config/nextest.toml",
+  "crates/batten/src/session_setup.rs",
   "action.yml",
   "connector-not-granted",
   "agentic-experiment-record",

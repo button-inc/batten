@@ -394,6 +394,8 @@ pub enum Command {
     Startup {
         /// Run each failing row's declared repair, then re-decide its check.
         repair: bool,
+        /// Run the session's setup task (CLOUD-2840).
+        session: bool,
         /// Whether the data channel was asked for.
         json: bool,
     },
@@ -4048,6 +4050,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "preset" => preset_of(matches).map(|command| Command::Preset { command }),
         "startup" => Some(Command::Startup {
             repair: flag(matches, "repair"),
+            session: flag(matches, "session"),
             json: flag(matches, "json"),
         }),
         "provision" => provision_of(matches).map(|command| Command::Provision { command }),

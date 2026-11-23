@@ -64,6 +64,7 @@
 #MUTANT absent-budgeted-path-passes|s@not id in object.keys(judged)@false@|a_budgeted_path_absent_from_a_present_record_is_refused
 #MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
 #MUTANT stop-budget-unenforced|s@"stop": 100,@@|a_stop_over_its_budget_is_refused
+#MUTANT session-start-budget-unenforced|s@"session-start": 100,@@|a_session_start_over_its_budget_is_refused
 
 # METADATA
 # description: |
@@ -103,6 +104,9 @@ budgets := {
 	# CLOUD-1480: an end of turn waits on the mediated verb exactly as a tool
 	# call does, and it cost ~110 s while no arm measured it.
 	"stop": 100,
+	# CLOUD-2840: a session's first response waits on `SessionStart`, which
+	# starts the setup task and returns; the setup itself is never on this path.
+	"session-start": 100,
 	"hook": 100,
 	"wired": 100,
 	"check": 100,
@@ -280,6 +284,7 @@ agreeing_readme := [
 	"| `passthrough` | a call no rule selects | — | — | ≤ 100 ms |",
 	"| `posttool` | a PostToolUse call | — | — | ≤ 100 ms |",
 	"| `stop` | an end of turn | — | — | ≤ 100 ms |",
+	"| `session-start` | a session's first moment | — | — | ≤ 100 ms |",
 	"| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |",
 	"| `cargo-fmt` | a commit-time hook step | — | — | ≤ 100 ms |",
 	"| `taplo` | a commit-time hook step | — | — | ≤ 100 ms |",

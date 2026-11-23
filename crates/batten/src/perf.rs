@@ -1393,6 +1393,23 @@ fn stage(repo: &Path, out: &Path) -> Result<(PathBuf, PathBuf)> {
     Ok((check_repo, hooks))
 }
 
+/// The `session-start` arm's fixture (CLOUD-2840): a git repository declaring
+/// one session-start row, so the hook does its real work there — writes the
+/// payload, spawns the setup task detached and registers it — and the arm
+/// prices that, not an early return. `check-repo` is no repository, and making
+/// it one would move what every other arm measures.
+fn stage_session(out: &Path) -> Result<PathBuf> {
+    let session = out.join("session-repo");
+    std::fs::create_dir_all(&session).context("perf: could not stage the session fixture")?;
+    std::fs::write(
+        session.join("batten.toml"),
+        "version = 1\n\n[[hook.handler]]\nid = \"perf\"\non = \"session-start\"\nrun = [\"true\"]\ntimeout_ms = 1000\n",
+    )
+    .context("perf: could not stage the session fixture's config")?;
+    crate::gitwrite::init_on_main(&session)?;
+    Ok(session)
+}
+
 /// The Rust source the commit fixture changes: a TYPICAL one, because the
 /// formatter and the cfg-gated-test step now cost what the staged file costs.
 ///
@@ -1721,6 +1738,7 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
     // waits on, which is the failure this path exists to prevent.
     let wired = wired_command(repo, &head_bin)?;
 
+    let session_repo = stage_session(&out)?;
     let mut plan: Vec<(&str, Option<PathBuf>, Vec<String>, &Path)> = vec![
         (
             "noop",
@@ -1766,6 +1784,14 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
             Some(hooks.join("claude-code.json")),
             wired,
             repo.as_path(),
+        ),
+        // THE SESSION'S FIRST MOMENT (CLOUD-2840): the hook starts the setup
+        // task and returns, so the first response waits on this and no more.
+        (
+            "session-start",
+            Some(hooks.join("claude-code-session-start.json")),
+            hook_argv(),
+            session_repo.as_path(),
         ),
     ];
     // THE COMMIT-TIME HOOK STEPS (CLOUD-2789), in the commit fixture, each with
@@ -1985,6 +2011,19 @@ fn arms(
             &state_text,
         )?);
     }
+    // THE SESSION'S FIRST MOMENT (CLOUD-2840), in its own repository fixture:
+    // the base binary runs every declared row inline there, the head starts
+    // the setup task, and the pair is that difference.
+    let session_repo = stage_session(out)?;
+    records.extend(hyperfine(
+        &session_repo,
+        out,
+        "session-start",
+        Some(&hooks.join("claude-code-session-start.json")),
+        &hook_argv(&base, &base_verb),
+        &hook_argv(&head, &head_verb),
+        &state_text,
+    )?);
     Ok(records)
 }
 

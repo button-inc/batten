@@ -1860,6 +1860,24 @@ pub(crate) const REPAIR: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `--session` on `startup` (CLOUD-2840): the session's setup task, which the
+/// `SessionStart` hook starts detached and registers rather than running the
+/// setup inside its 100 ms budget. Listed rather than hidden: hidden is for the
+/// diagnostic rungs, and a person may run the same task by hand to watch it.
+pub(crate) const STARTUP_SESSION: FlagDecl = FlagDecl {
+    id: "session",
+    long: Some("session"),
+    short: None,
+    help: "Run this session's setup task: its declared session-start handlers, repairs and health report, recorded for the next call",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 pub(crate) const DRY_RUN: FlagDecl = FlagDecl {
     id: "dry_run",
     long: Some("dry-run"),
@@ -6064,7 +6082,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         exits: EXITS_STANDARD,
         effect: Effect::Unclassified,
-        flags: &[REPAIR, JSON],
+        flags: &[REPAIR, STARTUP_SESSION, JSON],
     },
     // `hook` adjudicates another tool's call: its own execution only reads
     // stdin and config, but its *decision* mediates writes, so it is listed

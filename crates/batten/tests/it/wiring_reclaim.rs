@@ -407,6 +407,9 @@ fn a_declared_repair_takes_the_siblings_at_session_start() {
     );
     let outcome = session_start(&bench);
     assert!(outcome.status.success(), "{}", stderr(&outcome));
+    // THE REPAIR IS THE SETUP TASK'S (CLOUD-2840): the door starts it and
+    // returns, so the surface is read once the task has finished.
+    let _ = crate::session_start::settle(&bench.repo);
 
     let surface = bench.surface_text();
     // The same load-bearing positive the verb's own case carries: a `retain` at
@@ -446,6 +449,9 @@ fn a_declared_repair_takes_nothing_on_an_undeclared_machine() {
     );
     let outcome = session_start_in(&bench, "");
     assert!(outcome.status.success(), "{}", stderr(&outcome));
+    // Read only once the setup task finished, or this mirror passes before the
+    // repair could have run at all.
+    let _ = crate::session_start::settle(&bench.repo);
 
     let surface = bench.surface_text();
     assert!(

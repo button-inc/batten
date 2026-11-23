@@ -1,0 +1,358 @@
+//! The session's setup, run as ONE detached task rather than inside the hook
+//! (CLOUD-2840).
+//!
+//! **The hook budget is 10 ms with a 100 ms ceiling, and setup is minutes.** A
+//! `SessionStart` that ran every declared `session-start` handler and every
+//! `[[startup]]` repair in-process held the agent's first response for as long
+//! as the slowest of them, bounded only by the host's 600 s kill. So the hook
+//! starts this task and returns: it writes the host's payload where the task can
+//! read it, spawns `batten startup --session` in its own process group, and
+//! registers that pid in the task registry before the dispatch returns.
+//!
+//! **The task runs what the hook used to, in the order it used to**: the
+//! declared handlers (each under its own `timeout_ms`), the pin record, the
+//! `[[startup]]` repairs, then the health report re-decided after them. What any
+//! of them would have said is RECORDED here as JSON lines, and the next
+//! `PreToolUse` or `UserPromptSubmit` surfaces it once ([`surface`]), through the
+//! same constructors the inline path used, so a finding reads the same whichever
+//! call carries it.
+//!
+//! **The task's last phase is its verdict** ([`crate::task::OK`] or
+//! [`crate::task::FAILED`]): a gate that holds a tool while it installs reads the
+//! registry, never this record, so it can answer without parsing findings.
+
+use std::path::{Path, PathBuf};
+
+use crate::refusal::Refusal;
+use crate::task;
+
+// THE DECLARED MUTATION (CLOUD-2840): a `SessionStart` that dispatches its rows
+// inline again registers no task, so the door returns with nothing to name.
+// #MUTANT-SUITE crates/batten/tests/it/session_start.rs
+// #MUTANT session-start-inline|s@event == crate::config_model::Event::SessionStart@false@|a_session_start_registers_its_task_before_it_returns
+
+/// Whether `event`'s declared rows run in the setup task rather than inline:
+/// `SessionStart`'s, and no other event's. The hook asks this ONE predicate.
+#[must_use]
+pub fn detaches(event: crate::config_model::Event) -> bool {
+    event == crate::config_model::Event::SessionStart
+}
+
+/// The registry name the task registers under and holds its singleton by.
+pub const TASK: &str = "session-setup";
+
+/// Where the task's inputs and outputs live, under the git dir.
+const DIR: &str = "batten-session-setup";
+
+/// The host's `SessionStart` payload, as the handlers read it on stdin.
+const PAYLOAD: &str = "payload";
+
+/// What the task found, one JSON object per finding.
+const OUTCOME: &str = "outcome";
+
+/// The outcome once a call has carried it: renamed, so it is said once.
+const SURFACED: &str = "outcome.surfaced";
+
+/// How long the task waits for the hook to register it before it works anyway.
+///
+/// The hook registers the pid the spawn returned, so the record can lag the
+/// child's first instruction by the spawn's return. A push before the record
+/// exists is a no-op ([`task::push`]), and the terminal phase is the one push
+/// the gate reads, so the task waits for its own record rather than racing it.
+const REGISTRATION_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn dir(git_dir: &Path) -> PathBuf {
+    git_dir.join(DIR)
+}
+
+/// The spooled payload the task's handlers read.
+#[must_use]
+pub fn payload_path(git_dir: &Path) -> PathBuf {
+    dir(git_dir).join(PAYLOAD)
+}
+
+/// Start the task for this session, unless one is already running.
+///
+/// Returns the registered pid, or `None` where nothing was started: one is
+/// already running (a resume or a second `SessionStart` must not start a
+/// second install over the first), or the spawn failed — which is silent, as
+/// every side effect at this boundary is, and leaves the gates with no record
+/// to hold on.
+#[must_use]
+pub fn start(root: &Path, git_dir: &Path, raw: &str, now: u64) -> Option<String> {
+    let (running, _) = task::partition(git_dir);
+    if running.iter().any(|entry| entry.task == TASK) {
+        return None;
+    }
+    let here = dir(git_dir);
+    std::fs::create_dir_all(&here).ok()?;
+    crate::durable::replace(here.join(PAYLOAD), raw).ok()?;
+    // A NEW SESSION'S OUTCOME REPLACES THE LAST ONE'S, surfaced or not: what a
+    // previous container found is not this one's state.
+    let _ = std::fs::remove_file(here.join(OUTCOME));
+    let _ = std::fs::remove_file(here.join(SURFACED));
+    let exe = std::env::current_exe().ok()?;
+    let pid = crate::exec::detached_in(
+        &exe,
+        &["startup".to_owned(), "--session".to_owned()],
+        &[],
+        root,
+    )?
+    .to_string();
+    task::register(git_dir, TASK, &pid, "start", now);
+    Some(pid)
+}
+
+/// What one finding is, recorded as the inputs its refusal is built from.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Finding {
+    /// A handler spoke: `hook report now` over its row and its words.
+    Report { id: String, text: String },
+    /// A handler broke the contract: `hook answer broken` over its token.
+    Broken { id: String, token: String },
+    /// A doctor check or `[[startup]]` row failed: `workspace state broken`.
+    Workspace {
+        name: String,
+        reason: String,
+        subjects: Vec<String>,
+    },
+}
+
+impl Finding {
+    fn refusal(&self) -> Refusal {
+        match self {
+            Finding::Report { id, text } => crate::handler::report_refusal(id, text),
+            Finding::Broken { id, token } => crate::handler::broken_refusal(id, token),
+            Finding::Workspace {
+                name,
+                reason,
+                subjects,
+            } => crate::doctor::workspace_finding(name, reason, subjects),
+        }
+    }
+}
+
+/// Run the session's setup: what `SessionStart` used to run inline.
+///
+/// Returns whether every step passed — the phase the task leaves behind.
+#[must_use]
+pub fn run(
+    root: &Path,
+    git_dir: &Path,
+    handlers: &[crate::config_model::Handler],
+    rows: &[crate::config_model::Startup],
+) -> bool {
+    let pid = std::process::id().to_string();
+    let waited = std::time::Instant::now();
+    while task::read_field(git_dir, &pid, "task").is_none() && waited.elapsed() < REGISTRATION_WAIT
+    {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a poll bounded by a real terminal state: the record `start` writes, or `REGISTRATION_WAIT`"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    if !matches!(
+        task::singleton_acquire(git_dir, TASK, &pid, std::time::Duration::ZERO),
+        task::Claim::Taken | task::Claim::Reclaimed(_)
+    ) {
+        return true;
+    }
+    let mut findings = Vec::new();
+
+    task::push(
+        git_dir,
+        &pid,
+        task::Signal::Phase,
+        "handlers",
+        crate::clock::now_unix(),
+    );
+    let payload = crate::handler::Payload::Spooled(payload_path(git_dir));
+    let dispatched = crate::handler::dispatch(
+        root,
+        handlers,
+        crate::config_model::Event::SessionStart,
+        "",
+        None,
+        &payload,
+    );
+    findings.extend(handler_findings(&dispatched));
+    let handlers_passed = findings.is_empty();
+
+    task::push(
+        git_dir,
+        &pid,
+        task::Signal::Phase,
+        "repair",
+        crate::clock::now_unix(),
+    );
+    let _ = crate::pinned::refresh(root);
+    let _ = crate::startup::repair(root, rows);
+
+    task::push(
+        git_dir,
+        &pid,
+        task::Signal::Phase,
+        "health",
+        crate::clock::now_unix(),
+    );
+    let rows_passed = health_findings(root, rows, &mut findings);
+
+    let body: String = findings
+        .iter()
+        .filter_map(|finding| serde_json::to_string(finding).ok())
+        .map(|line| line + "\n")
+        .collect();
+    let _ = crate::durable::replace(dir(git_dir).join(OUTCOME), body);
+    let passed = handlers_passed && rows_passed;
+    let last = if passed { task::OK } else { task::FAILED };
+    task::push(
+        git_dir,
+        &pid,
+        task::Signal::Phase,
+        last,
+        crate::clock::now_unix(),
+    );
+    task::singleton_release(git_dir, TASK);
+    passed
+}
+
+/// What the handlers said, as the findings the inline dispatch reported.
+fn handler_findings(dispatched: &crate::handler::Dispatched) -> Vec<Finding> {
+    dispatched
+        .ran
+        .iter()
+        .filter_map(|ran| match &ran.outcome {
+            // A REFUSAL AT `SessionStart` WAS ALWAYS ADVICE (`dispatch_handlers`):
+            // the moment carries no verdict, so a deny is recorded as a report.
+            crate::handler::Outcome::Advise(text)
+            | crate::handler::Outcome::Reported(text)
+            | crate::handler::Outcome::Deny(text) => Some(Finding::Report {
+                id: ran.id.clone(),
+                text: text.trim_end().to_owned(),
+            }),
+            crate::handler::Outcome::Broke(violation) => Some(Finding::Broken {
+                id: ran.id.clone(),
+                token: violation.token(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The health report re-decided after the repairs: every failing doctor check
+/// and `[[startup]]` row, pushed onto `findings`. Returns whether every row
+/// passed, which is what the task's phase answers for.
+fn health_findings(
+    root: &Path,
+    rows: &[crate::config_model::Startup],
+    findings: &mut Vec<Finding>,
+) -> bool {
+    let report = crate::doctor::diagnose(root);
+    for check in report.checks.iter().filter(|check| !check.ok) {
+        findings.push(Finding::Workspace {
+            name: check.name.to_owned(),
+            reason: check.reason.unwrap_or("failed").to_owned(),
+            subjects: check.subjects.clone(),
+        });
+    }
+    let mut rows_passed = true;
+    for outcome in crate::startup::evaluate(root, rows) {
+        if !outcome.ok {
+            rows_passed = false;
+            findings.push(Finding::Workspace {
+                name: outcome.id,
+                reason: outcome.reason.unwrap_or("failed").to_owned(),
+                subjects: Vec::new(),
+            });
+        }
+    }
+    rows_passed
+}
+
+/// The task's findings, ONCE, for the call that carries them.
+///
+/// Empty while the task runs (its findings are not yet a state), once they have
+/// been surfaced, and where nothing was recorded. A task that died without
+/// recording is itself a finding, said once too.
+#[must_use]
+pub fn surface(git_dir: &Path) -> Vec<Refusal> {
+    let here = dir(git_dir);
+    let outcome = here.join(OUTCOME);
+    let surfaced = here.join(SURFACED);
+    // THE STEADY STATE, AND IT IS EVERY CALL OF A SESSION BUT ONE: already said,
+    // or never started. Two stats, before the registry is read at all.
+    if !outcome.exists() && (surfaced.exists() || !here.exists()) {
+        return Vec::new();
+    }
+    let (running, gone) = task::partition(git_dir);
+    let state = running
+        .into_iter()
+        .chain(gone)
+        .find(|entry| entry.task == TASK)
+        .map(|entry| task::state(&entry));
+    let Some(state @ (task::State::Ok | task::State::Failed | task::State::Crashed)) = state else {
+        // Running, or never started: nothing is a state yet.
+        return Vec::new();
+    };
+    if state == task::State::Crashed && !outcome.exists() {
+        // A CRASH IS A STATE (task.rs's header): a task gone with no outcome and
+        // no terminal phase is said once, keyed by the surfaced marker.
+        if !surfaced.exists() && crate::durable::replace(&surfaced, "").is_ok() {
+            return vec![crate::doctor::workspace_finding(TASK, "crashed", &[])];
+        }
+        return Vec::new();
+    }
+    // THE RENAME IS THE ONCE: two calls racing here, one wins it.
+    if std::fs::rename(&outcome, &surfaced).is_err() {
+        return Vec::new();
+    }
+    crate::fsio::read_to_string(&surfaced)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Finding>(line).ok())
+        .map(|finding| finding.refusal())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fails by: a recorded finding that does not come back as the refusal the
+    /// inline path built from the same inputs.
+    #[test]
+    fn a_recorded_finding_rebuilds_the_inline_refusal() {
+        let report = Finding::Report {
+            id: "step".to_owned(),
+            text: "said".to_owned(),
+        };
+        let line = serde_json::to_string(&report).unwrap_or_default();
+        let back: Option<Finding> = serde_json::from_str(&line).ok();
+        assert_eq!(back.as_ref(), Some(&report));
+        assert_eq!(
+            report.refusal(),
+            crate::handler::report_refusal("step", "said")
+        );
+        let broken = Finding::Broken {
+            id: "step".to_owned(),
+            token: crate::handler::Violation::Signalled.token(),
+        };
+        assert_eq!(
+            broken.refusal(),
+            crate::handler::violation_refusal("step", &crate::handler::Violation::Signalled)
+        );
+        let workspace = Finding::Workspace {
+            name: "row".to_owned(),
+            reason: "repair-failed".to_owned(),
+            subjects: Vec::new(),
+        };
+        let inline = crate::startup::Outcome {
+            id: "row".to_owned(),
+            ok: false,
+            reason: Some(crate::startup::REPAIR_FAILED),
+        };
+        assert_eq!(Some(workspace.refusal()), inline.finding());
+    }
+}
