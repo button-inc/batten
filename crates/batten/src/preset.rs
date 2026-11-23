@@ -623,14 +623,17 @@ fn copy_row(row: &Rule, id: &str, folder: &str) -> Vec<(String, crate::config_ed
 /// Selected out of the preset by name rather than re-included, so a session with
 /// no authority judges a call by the same bytes a consumer enabling the preset
 /// does. `unwatch-is-preapproved` rides along because the plan rule reads its
-/// `unwatch_method`.
+/// `unwatch_method`, and `host-decided` because the mode grant imports its
+/// `git_host.call_decided` (e0675d43): left out, every call with no authority
+/// faulted and was answered `engine-cannot-adjudicate`.
 #[must_use]
 pub fn mode_sources() -> Vec<(String, String)> {
-    const MODE: [&str; 4] = [
+    const MODE: [&str; 5] = [
         "read-only-is-preapproved.rego",
         "unwatch-is-preapproved.rego",
         "plan-mode-refuses-writes.rego",
         "auto-mode-is-preapproved.rego",
+        "host-decided.rego",
     ];
     find("claude-code-cloud")
         .map(|manifest| {
@@ -884,7 +887,37 @@ mod tests {
             .map(|manifest| manifest.verdicts.len())
             .sum();
         assert_eq!(verdict_rows().len(), declared);
-        assert_eq!(mode_sources().len(), 4);
+        assert_eq!(mode_sources().len(), 5);
+    }
+
+    /// THE NO-AUTHORITY BUNDLE CARRIES EVERY PACKAGE ITS MODULES IMPORT. It is
+    /// selected by name, so a module that starts importing a sibling's package
+    /// (e0675d43: the mode grant reads `data.batten.git_host`) compiles alone
+    /// there and faults on every call outside a repository, which the hook
+    /// answers `engine-cannot-adjudicate`. Fails by: a name list that misses
+    /// the module an import names.
+    #[test]
+    fn every_package_the_mode_sources_import_is_among_them() {
+        let sources = mode_sources();
+        let declared: BTreeSet<String> = sources
+            .iter()
+            .filter_map(|(_, text)| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix("package "))
+                    .map(|package| package.trim().to_owned())
+            })
+            .collect();
+        for (pointer, text) in &sources {
+            for line in text.lines() {
+                let Some(package) = line.trim().strip_prefix("import data.") else {
+                    continue;
+                };
+                assert!(
+                    declared.contains(package.trim()),
+                    "{pointer} imports `data.{package}`, which no module in the set declares"
+                );
+            }
+        }
     }
 
     fn rule(text: &str) -> Rule {
@@ -940,9 +973,14 @@ mod tests {
             target,
         )
         .unwrap();
+        // THE CALL CLOSURE COMES TOO: the grant reads `git_host.call_decided`
+        // since e0675d43, so the copy carries `host-decided` beside it.
         assert_eq!(
             done.written,
-            vec!["policy/git/git-call-is-preapproved.rego"]
+            vec![
+                "policy/git/git-call-is-preapproved.rego",
+                "policy/git/host-decided.rego"
+            ]
         );
         assert_eq!(
             (done.row.as_str(), done.copies.as_str(), done.added),
@@ -952,7 +990,7 @@ mod tests {
         assert!(copy.starts_with("# batten-ejected: git/git-call-is-preapproved version "));
         let edited = crate::fsio::read_to_string(&config).unwrap();
         assert!(
-            edited.contains("except = [\"git-call-is-preapproved\"]"),
+            edited.contains("except = [\"git-call-is-preapproved\", \"host-decided\"]"),
             "{edited}"
         );
         assert!(edited.contains("bundle = \"policy/git\""), "{edited}");
