@@ -2532,12 +2532,13 @@ pub trait EventExt: Sized {
     /// on `stop` refused every turn, which is the runaway CLOUD-889 removed,
     /// re-entering through the door CLOUD-898 added.
     ///
-    /// **Two native Stop refusals stand outside it, and only two.** Neither is a
-    /// module or a handler, and both are engine predicates bounded by a receipt
-    /// rather than by `stop_hook_active`: CLOUD-2441's unlanded refusal and
-    /// CLOUD-2370's watchdog over a crashed declared task. Both ride
-    /// `stop_nudges`, never this answer, so a module or handler still cannot
-    /// refuse at `Stop`.
+    /// **Three native Stop refusals stand outside it, and only three.** None is
+    /// a module or a handler, and each is an engine predicate bounded by a
+    /// receipt rather than by `stop_hook_active`: CLOUD-2441's unlanded refusal,
+    /// CLOUD-2370's watchdog over a crashed declared task, and CLOUD-2861's
+    /// refusal of a turn that answered an operator message with tool calls
+    /// alone. All three ride `stop_nudges`, never this answer, so a module or
+    /// handler still cannot refuse at `Stop`.
     ///
     /// `dispatch_handlers` consults this rather than re-listing the events,
     /// because a second list is a copy that can disagree — and
