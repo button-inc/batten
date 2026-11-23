@@ -1319,6 +1319,162 @@ fn stage(repo: &Path, out: &Path) -> Result<(PathBuf, PathBuf)> {
     Ok((check_repo, hooks))
 }
 
+/// The Rust source the commit fixture changes. Any tracked `.rs` file fires the
+/// same steps; this one is in every checkout `perf` measures.
+const COMMIT_SOURCE: &str = "crates/batten/src/lib.rs";
+
+/// Where git leaves the message `commit-msg` is handed, relative to the clone.
+const COMMIT_MESSAGE: &str = ".git/COMMIT_EDITMSG";
+
+/// The fixture's own committer. Left to the host, the identity is whatever the
+/// machine configures, and the attribution step refuses a denied one, so the
+/// arm would measure a refusal on one machine and an admission on another.
+const COMMIT_EMAIL: &str = "perf@example.invalid";
+
+/// The fixture every commit-time hook arm runs against, staged once
+/// (CLOUD-2789): a shared clone of `repo` carrying one staged one-line change
+/// to a Rust source and to `batten.toml` — the commit that fires every default
+/// `pre-commit` step — and a conventional message for `commit-msg`.
+///
+/// **A CLONE OF THE CHECKOUT, NOT A ONE-RULE FIXTURE**, because a hook step
+/// runs against the repository being committed to: its whole config, its whole
+/// workspace for `cargo fmt`, its whole index. A smaller tree would price a
+/// commit nobody makes. In-process, as `git clone --shared` (objects borrowed
+/// through alternates), because this module spawns no `git`.
+fn stage_commit(repo: &Path, out: &Path) -> Result<PathBuf> {
+    let commit = out.join("commit-repo");
+    crate::gitwrite::clone_shared(repo, &commit)
+        .context("perf: could not clone the commit fixture")?;
+    let line = [
+        (COMMIT_SOURCE, "// perf: one staged line\n"),
+        ("batten.toml", "# perf: one staged line\n"),
+    ];
+    for (path, added) in line {
+        let at = commit.join(path);
+        let mut body = crate::fsio::read_to_string(&at)
+            .with_context(|| format!("perf: the commit fixture has no {path}"))?;
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(added);
+        crate::durable::replace(&at, body)
+            .with_context(|| format!("perf: could not edit {path}"))?;
+    }
+    crate::gitwrite::stage_paths(&commit, &line.map(|(path, _)| path.to_owned()))
+        .context("perf: could not stage the commit fixture's change")?;
+    let config = commit.join(".git/config");
+    let mut text = crate::fsio::read_to_string(&config).unwrap_or_default();
+    text.push_str("[user]\n\tname = perf\n\temail = ");
+    text.push_str(COMMIT_EMAIL);
+    text.push('\n');
+    crate::durable::replace(&config, text).context("perf: could not set the fixture identity")?;
+    crate::durable::replace(
+        commit.join(COMMIT_MESSAGE),
+        "fix(perf): one staged line\n\nThe commit every commit-time hook arm judges.\n",
+    )
+    .context("perf: could not write the commit message")?;
+    Ok(commit)
+}
+
+/// The default commit-time hk steps a `.rs` plus `batten.toml` commit fires
+/// (CLOUD-2789), each as hk runs it, with `batten` the binary under measurement.
+///
+/// **READ OFF `hk run pre-commit --plan`, NOT GUESSED**: on that commit the plan
+/// includes exactly `cargo-fmt`, `taplo`, `taplo-format`, `config-lint-pinned`,
+/// `cfg-gated-test-pinned` and `merge-conflict-markers`; `commit-msg` runs both
+/// of its steps on every commit. `taplo`'s two are hk builtins whose argv is
+/// `taplo lint {{files}}` / `taplo format --check --diff {{files}}` under
+/// `RUST_LOG=warn`. A commit hook is a batten hook and answers to the same
+/// 100 ms ceiling, which `perf-assert` holds each of these to.
+fn commit_arms(bin: &str) -> Vec<(&'static str, Vec<String>)> {
+    let words = |words: &[&str]| {
+        words
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect::<Vec<_>>()
+    };
+    let batten = |args: &[&str]| {
+        std::iter::once(bin.to_owned())
+            .chain(args.iter().map(|word| (*word).to_owned()))
+            .collect::<Vec<_>>()
+    };
+    vec![
+        ("cargo-fmt", words(&["mise", "run", "lint:fmt"])),
+        (
+            "taplo",
+            words(&["env", "RUST_LOG=warn", "taplo", "lint", "batten.toml"]),
+        ),
+        (
+            "taplo-format",
+            words(&[
+                "env",
+                "RUST_LOG=warn",
+                "taplo",
+                "format",
+                "--check",
+                "--diff",
+                "batten.toml",
+            ]),
+        ),
+        ("config-lint-pinned", batten(&["config", "lint"])),
+        (
+            "cfg-gated-test-pinned",
+            batten(&["check", "--rule", "test cover missing"]),
+        ),
+        (
+            "merge-conflict-markers",
+            batten(&["enforce", "--rule", "source carry broken"]),
+        ),
+        (
+            "conventional-commit",
+            batten(&["commit", "check", "--message", COMMIT_MESSAGE]),
+        ),
+        (
+            "commit-attribution",
+            batten(&["attribution", "check", "--message", COMMIT_MESSAGE]),
+        ),
+    ]
+}
+
+/// The data directory mise reads its installs from before [`bench`] relocates
+/// the data home: `MISE_DATA_DIR`, else the XDG (or Windows) data home's
+/// `mise`, else `~/.local/share/mise`.
+fn mise_data_dir() -> Option<String> {
+    if let Some(dir) = std::env::var_os("MISE_DATA_DIR") {
+        return Some(dir.to_string_lossy().into_owned());
+    }
+    let home = ["XDG_DATA_HOME", "LOCALAPPDATA"]
+        .into_iter()
+        .find_map(std::env::var_os)
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+        })?;
+    Some(home.join("mise").to_string_lossy().into_owned())
+}
+
+/// One argv as the single command line hyperfine splits back into words under
+/// `--shell=none`: a word carrying whitespace or a quote is single-quoted, so
+/// `--rule 'test cover missing'` reaches the binary as two words, not four.
+/// Every other word is passed as it was, so an arm with no such word renders
+/// the line it always did.
+fn command_line(argv: &[String]) -> String {
+    argv.iter()
+        .map(|word| {
+            if !word.is_empty()
+                && !word
+                    .chars()
+                    .any(|c| c.is_whitespace() || matches!(c, '\'' | '"'))
+            {
+                word.clone()
+            } else {
+                format!("'{}'", word.replace('\'', r"'\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// One absolute measurement per invocation path (CLOUD-207), ported off
 /// `mise-tasks/perf.sh` under CLOUD-1753.
 ///
@@ -1340,6 +1496,13 @@ fn stage(repo: &Path, out: &Path) -> Result<(PathBuf, PathBuf)> {
 /// more. `posttool` prices the per-call capture write. `stop` is the end of
 /// turn, which a turn cannot close until it returns. `wired` is what the
 /// settings file actually invokes, launcher and all.
+///
+/// # THE COMMIT-TIME STEPS, one arm each
+///
+/// A commit hook is a batten hook (CLOUD-2789): every default `pre-commit` and
+/// `commit-msg` step a Rust-plus-config commit fires is an arm, run as hk runs
+/// it in [`stage_commit`]'s clone — see [`commit_arms`] for the list and where
+/// it was read from.
 ///
 /// # Errors
 ///
@@ -1374,6 +1537,7 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).context("perf: could not create the output directory")?;
     let (check_repo, hooks) = stage(repo, &out)?;
+    let commit_repo = stage_commit(repo, &out)?;
     let state = out.join("state");
     let state_text = state.to_string_lossy().into_owned();
 
@@ -1395,7 +1559,7 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
     // waits on, which is the failure this path exists to prevent.
     let wired = wired_command(repo, &head_bin)?;
 
-    let plan: Vec<(&str, Option<PathBuf>, Vec<String>, &Path)> = vec![
+    let mut plan: Vec<(&str, Option<PathBuf>, Vec<String>, &Path)> = vec![
         (
             "noop",
             None,
@@ -1442,6 +1606,13 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
             repo.as_path(),
         ),
     ];
+    // THE COMMIT-TIME HOOK STEPS (CLOUD-2789), in the commit fixture, each with
+    // no stdin: hk hands a step its files on the command line.
+    plan.extend(
+        commit_arms(&head)
+            .into_iter()
+            .map(|(id, cmd)| (id, None, cmd, commit_repo.as_path())),
+    );
 
     let mut records = Vec::new();
     for (id, input, cmd, dir) in plan {
@@ -1769,14 +1940,21 @@ fn bench(
     };
 
     for (_, cmd) in &arms {
-        args.push(cmd.join(" "));
+        args.push(command_line(cmd));
     }
 
-    let env = vec![
+    let mut env = vec![
         (String::from("XDG_DATA_HOME"), state.to_owned()),
         (String::from("APPDATA"), state.to_owned()),
         (String::from("LOCALAPPDATA"), state.to_owned()),
     ];
+    // MISE'S INSTALLS STAY WHERE THEY ARE (CLOUD-2789). mise keeps them under
+    // the data home relocated above, so a commit arm running `mise run` would
+    // find none and install the whole toolchain into the scratch root inside its
+    // first timed run — measured: it began downloading every pinned tool.
+    if let Some(data) = mise_data_dir() {
+        env.push((String::from("MISE_DATA_DIR"), data));
+    }
     if !run(dir, Tool::Hyperfine, &args, &env)? {
         bail!("perf-pair: measuring the {id} pair failed. No measurement.");
     }
@@ -4280,6 +4458,70 @@ mod tests {
         );
         assert_eq!(crate::fsio::read_to_string(check.join("lib.rs"))?, "source");
         Ok(())
+    }
+
+    /// The commit fixture is a shared clone of the checkout carrying exactly one
+    /// staged one-line change to a Rust source and to the config, a commit
+    /// message where `commit-msg` reads it, and an identity of its own.
+    ///
+    /// Fails by: the clone skipped, a subject left unstaged or unchanged, a
+    /// third path staged, the message absent, or the identity left to the host
+    /// (whose own may be one the attribution gate refuses).
+    #[test]
+    fn the_commit_fixture_is_a_clone_with_one_staged_line_per_subject() -> Result<()> {
+        let repo = perf_scratch("commit-source");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::create_dir_all(repo.join("crates/batten/src"))?;
+        std::fs::write(repo.join(COMMIT_SOURCE), "fn main() {}\n")?;
+        std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
+        std::fs::write(repo.join("other.txt"), "untouched\n")?;
+        crate::gitwrite::commit_paths(
+            &repo,
+            &[
+                COMMIT_SOURCE.to_owned(),
+                String::from("batten.toml"),
+                String::from("other.txt"),
+            ],
+            "base\n",
+        )?;
+        let out = perf_scratch("commit-out");
+        let commit = stage_commit(&repo, &out)?;
+        assert_eq!(commit, out.join("commit-repo"));
+        let staged: Vec<String> = crate::git::staged_paths(&commit)?.into_iter().collect();
+        assert_eq!(staged, ["batten.toml", COMMIT_SOURCE]);
+        for (path, before) in [
+            (COMMIT_SOURCE, "fn main() {}\n"),
+            ("batten.toml", "version = 1\n"),
+        ] {
+            let after = crate::fsio::read_to_string(commit.join(path))?;
+            let added = after.strip_prefix(before).unwrap_or_default();
+            assert_eq!(added.lines().count(), 1, "{path}: {after:?}");
+        }
+        assert!(crate::fsio::read_to_string(commit.join(COMMIT_MESSAGE))?.contains(':'));
+        let config = crate::fsio::read_to_string(commit.join(".git/config"))?;
+        assert!(config.contains(COMMIT_EMAIL), "{config}");
+        Ok(())
+    }
+
+    /// hyperfine splits a command line into words itself (`--shell=none`), so a
+    /// word carrying a space or a quote is quoted and every other word is not.
+    ///
+    /// Fails by: `--rule 'test cover missing'` reaching the binary as three
+    /// words, or a quote inside a word ending its quoting.
+    #[test]
+    fn a_word_with_a_space_or_quote_is_quoted_for_the_runner() {
+        let argv = [
+            "/bin/batten",
+            "check",
+            "--rule",
+            "test cover missing",
+            "it's",
+        ]
+        .map(String::from);
+        assert_eq!(
+            command_line(&argv),
+            r"/bin/batten check --rule 'test cover missing' 'it'\''s'"
+        );
     }
 
     /// The trunk is the declared one, and only a record line enters the series.
