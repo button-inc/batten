@@ -62,9 +62,16 @@ inside(target) if {
 # Or absolute and under the live lap's checkout root (CLOUD-2789): a redirect or
 # a write tool naming `<root>/f` writes the lap's tree from wherever it runs,
 # while `/dev/null` or another checkout's path lies under no live root.
+#
+# THE ROOT IS CHECKED BEFORE `concat` READS IT: with no live lap the fact is
+# `null`, and `concat` over a non-string is a type error that the interpreter
+# reads as undefined but bytecode raises, so the bundle answered could-not-look
+# on the hook path (`policy_cache::the_repositorys_bundles_answer_alike_*`).
 inside(target) if {
 	is_string(target)
-	startswith(target, concat("", [input.facts["land-live"], "/"]))
+	root := input.facts["land-live"]
+	is_string(root)
+	startswith(target, concat("", [root, "/"]))
 }
 
 held contains path if {
