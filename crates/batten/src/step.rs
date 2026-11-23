@@ -392,6 +392,93 @@ fn material(
     Some(lines.join("\n"))
 }
 
+/// The tool line prefix the cache answers in-process for what a step only
+/// PROBES (CLOUD-2835): `batten step exists -- <pathspec>...`, by the same
+/// function [`run_exists`] prints with ([`exists_said`]).
+///
+/// A TOOL LINE, NOT A FIELD, for `step env`'s reason (CLOUD-2786): the
+/// declaration is the row's own `tools` entry, so an engine that predates it
+/// still loads the row and keys nothing from the line it cannot answer, which
+/// runs the step rather than dropping its row.
+pub const EXISTS: [&str; 3] = ["batten", "step", "exists"];
+
+/// The pathspecs a `step exists` line's words after [`EXISTS`] declare: every
+/// word after the leading `--`, or `None` for any other shape, an empty list
+/// or a pathspec this build does not read — which keys nothing.
+fn exists_ask(words: &[String]) -> Option<&[String]> {
+    let (first, specs) = words.split_first()?;
+    (first == "--"
+        && !specs.is_empty()
+        && specs
+            .iter()
+            .all(|spec| crate::git::pathspec_is_supported(spec)))
+    .then_some(specs)
+}
+
+/// The pathspecs `row` declares only probed: those of its `step exists` lines.
+fn exists_specs(row: &Step) -> Vec<String> {
+    row.tools()
+        .iter()
+        .filter_map(|tool| after(tool, &EXISTS).and_then(exists_ask))
+        .flatten()
+        .cloned()
+        .collect()
+}
+
+/// PRESENCE, NEVER BYTES (CLOUD-2835): one `exists <path>` line per index
+/// path `specs` select, without its mode or object id, so an edit to one keeps
+/// the answer and adding or removing one moves it; `exists none` where they
+/// select nothing. The worktree must agree over the set, as for `inputs`: a
+/// diverged or untracked path under a spec is `None`, no key.
+fn exists_said(root: &Path, specs: &[String]) -> Option<String> {
+    let facts = crate::git::index_facts(root, specs).ok()?;
+    let mut present = std::collections::BTreeSet::new();
+    for fact in facts.values() {
+        if !(fact.diverged.is_empty() && fact.untracked.is_empty()) {
+            return None;
+        }
+        present.extend(
+            fact.entries
+                .iter()
+                .map(|entry| format!("exists {}", quoted(&entry.path))),
+        );
+    }
+    if present.is_empty() {
+        return Some(String::from("exists none"));
+    }
+    Some(present.into_iter().collect::<Vec<_>>().join("\n"))
+}
+
+/// `step exists` (CLOUD-2835): print the presence lines `specs` select in this
+/// checkout, the step cache's answer to the tool line; exit 0. 1 for no
+/// pathspec or one this build does not read, 3 where the worktree disagrees
+/// with the index over the set or the index cannot be read.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_exists(specs: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let mut words = vec![String::from("--")];
+    words.extend_from_slice(specs);
+    let Some(specs) = exists_ask(&words) else {
+        writeln!(
+            err,
+            "step exists: at least one pathspec is required, and none may be empty or `:` magic"
+        )?;
+        return Ok(ExitCode::Usage);
+    };
+    let Some(lines) = exists_said(Path::new("."), specs) else {
+        writeln!(
+            err,
+            "step exists: the worktree disagrees with the index over these paths, or the index \
+             cannot be read"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    writeln!(out, "{lines}")?;
+    Ok(ExitCode::Success)
+}
+
 /// The tool line the cache answers in-process rather than spawning: the
 /// digest `enforce --half tree --inputs-digest` prints, by the same function
 /// ([`tree_inputs_digest_in`]).
@@ -411,6 +498,9 @@ fn tool_said(root: &Path, tool: &[String]) -> Option<(i32, String)> {
     if let Some(words) = after(tool, &BASE) {
         let var = |name: &str| std::env::var(name).ok();
         return answered(base_ask(words).and_then(|ask| base_said(root, &ask, &var)));
+    }
+    if let Some(words) = after(tool, &EXISTS) {
+        return answered(exists_ask(words).and_then(|specs| exists_said(root, specs)));
     }
     if let Some(words) = after(tool, &crate::mutate::resume::ENV) {
         return answered(
@@ -1564,8 +1654,13 @@ fn lint_trace(step: &str, file: &Path) -> Linted {
         }
         return Linted::Wrote(wrote.len(), listing);
     }
-    let touched: Vec<std::path::PathBuf> = accessed.into_iter().map(|(path, _)| path).collect();
-    let found = undeclared(&root, row.inputs(), &touched, &mut ignored);
+    let found = undeclared(
+        &root,
+        row.inputs(),
+        &exists_specs(&row),
+        &accessed,
+        &mut ignored,
+    );
     if found.is_empty() {
         return Linted::Declared;
     }
@@ -1659,14 +1754,26 @@ fn env_lines(
 /// selects ([`crate::git::pathspec_matches`], git's own reading), and anything
 /// `ignored` answers for, judged ancestor first, so `target/` is asked once and
 /// never per file beneath it. Sorted, each once.
+///
+/// AN `exists` SPEC DECLARES PROBES ONLY (CLOUD-2835): a path it selects, or an
+/// ancestor of one, is declared for an [`Access::Probe`] and undeclared for any
+/// access that reads bytes, since the key holds its presence and not its bytes.
+///
+/// [`Access::Probe`]: crate::mutate::trace::Access::Probe
 fn undeclared(
     root: &Path,
     inputs: &[String],
-    touched: &[std::path::PathBuf],
+    exists: &[String],
+    touched: &[(std::path::PathBuf, crate::mutate::trace::Access)],
     ignored: &mut dyn FnMut(&str) -> bool,
 ) -> Vec<String> {
+    let selects = |specs: &[String], relative: &str| {
+        specs
+            .iter()
+            .any(|spec| crate::git::pathspec_matches(spec, relative) || ancestor_of(relative, spec))
+    };
     let mut out = std::collections::BTreeSet::new();
-    for path in touched {
+    for (path, access) in touched {
         let Ok(relative) = path.strip_prefix(root) else {
             continue;
         };
@@ -1674,9 +1781,9 @@ fn undeclared(
         if relative.is_empty() || relative == ".git" || relative.starts_with(".git/") {
             continue;
         }
-        if inputs.iter().any(|spec| {
-            crate::git::pathspec_matches(spec, &relative) || ancestor_of(&relative, spec)
-        }) {
+        if selects(inputs, &relative)
+            || (*access == crate::mutate::trace::Access::Probe && selects(exists, &relative))
+        {
             continue;
         }
         out.insert(relative);
@@ -2232,13 +2339,17 @@ mod tests {
         ]
         .map(std::path::PathBuf::from)
         .to_vec();
+        let touched: Vec<(std::path::PathBuf, crate::mutate::trace::Access)> = touched
+            .into_iter()
+            .map(|path| (path, crate::mutate::trace::Access::Read))
+            .collect();
         let inputs = vec!["a".to_owned(), "deep/er/file".to_owned()];
         let mut asked = Vec::new();
         let mut ignored = |path: &str| {
             asked.push(path.to_owned());
             path == "target"
         };
-        let found = super::undeclared(root, &inputs, &touched, &mut ignored);
+        let found = super::undeclared(root, &inputs, &[], &touched, &mut ignored);
         assert_eq!(found, vec!["b".to_owned(), "c/missing".to_owned()]);
         assert!(
             !asked.iter().any(|path| path == "target/debug/t"),
@@ -2246,12 +2357,143 @@ mod tests {
         );
     }
 
+    // AN EXISTENCE INPUT ADMITS A PROBE AND NEVER A BYTE READ (CLOUD-2835):
+    // cargo asks whether a sibling's `src/lib.rs` is there and reads none of
+    // it, so a probe is declared, and a read of the same path is not.
+    #[test]
+    fn an_existence_input_admits_a_probe_and_never_a_byte_read() {
+        use crate::mutate::trace::Access::{Probe, Read};
+        let root = std::path::Path::new("/repo");
+        let touched: Vec<(std::path::PathBuf, crate::mutate::trace::Access)> = [
+            ("/repo/sib/src/lib.rs", Probe),  // probed: declared
+            ("/repo/sib/build.rs", Probe),    // probed, absent: declared
+            ("/repo/sib/src/main.rs", Probe), // probed, then read below
+            ("/repo/sib/src/main.rs", Read),  // a byte read of it
+            ("/repo/sib/README.md", Read),    // read, never probed
+            ("/repo/input", Read),            // a content input: any access
+            ("/repo/other/build.rs", Probe),  // a probe nothing declares
+        ]
+        .map(|(path, access)| (std::path::PathBuf::from(path), access))
+        .to_vec();
+        let inputs = vec!["input".to_owned()];
+        let exists = [
+            "sib/src/lib.rs",
+            "sib/src/main.rs",
+            "sib/build.rs",
+            "sib/README.md",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let found = super::undeclared(root, &inputs, &exists, &touched, &mut |_| false);
+        assert_eq!(
+            found,
+            ["other/build.rs", "sib/README.md", "sib/src/main.rs"].map(str::to_owned)
+        );
+    }
+
+    /// Fails by: an edit to an existence path's bytes moving the key (every
+    /// sibling-crate edit re-running the row), or adding or removing one
+    /// leaving it unmoved (a receipt over a target cargo no longer builds).
+    #[test]
+    fn an_existence_input_keys_on_presence_and_never_on_bytes() {
+        let tree = |name: &str, lib: &str, build: Option<&str>| {
+            let root = crate::scratch::scratch(name);
+            crate::gitwrite::init_on_main(&root).unwrap();
+            std::fs::create_dir_all(root.join("sib/src")).unwrap();
+            std::fs::write(root.join("input"), "x\n").unwrap();
+            std::fs::write(root.join("sib/src/lib.rs"), lib).unwrap();
+            let mut paths = vec![String::from("input"), String::from("sib/src/lib.rs")];
+            if let Some(build) = build {
+                std::fs::write(root.join("sib/build.rs"), build).unwrap();
+                paths.push(String::from("sib/build.rs"));
+            }
+            crate::gitwrite::commit_paths(&root, &paths, "tree").unwrap();
+            root
+        };
+        let row: Step = toml::from_str(
+            "id = \"s\"\ninputs = [\"input\"]\ntools = [[\"echo\", \"v1\"], \
+             [\"batten\", \"step\", \"exists\", \"--\", \"sib/src/lib.rs\", \"sib/build.rs\"]]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            super::exists_specs(&row),
+            ["sib/src/lib.rs", "sib/build.rs"].map(str::to_owned),
+            "the lint reads the line's pathspecs"
+        );
+        let key = |root: &Path| material(root, &row, &[], None).expect("the row keys");
+        let held = key(&tree("step-exists-one", "pub fn a() {}\n", None));
+        assert_eq!(
+            key(&tree("step-exists-edited", "pub fn b() {}\n", None)),
+            held,
+            "an edit to an existence path's bytes keeps the key"
+        );
+        let built = tree(
+            "step-exists-added",
+            "pub fn a() {}\n",
+            Some("fn main() {}\n"),
+        );
+        assert_ne!(key(&built), held, "adding a target file moves the key");
+        assert_eq!(
+            key(&tree("step-exists-again", "pub fn a() {}\n", None)),
+            held,
+            "and without it the key is the one it was"
+        );
+        // THE WORKTREE MUST AGREE: an untracked target cargo would probe is
+        // no key at all, never a receipt that cannot see it.
+        let untracked = tree("step-exists-untracked", "pub fn a() {}\n", None);
+        std::fs::write(untracked.join("sib/build.rs"), "fn main() {}\n").unwrap();
+        assert_eq!(material(&untracked, &row, &[], None), None);
+        // A LINE THAT DECLARES NOTHING KEYS NOTHING: no pathspec, or a magic
+        // one this build reads as selecting nothing.
+        for words in [&["--"][..], &["--", ":(exclude)sib"], &["sib/src/lib.rs"]] {
+            let words: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
+            assert_eq!(super::exists_ask(&words), None, "{words:?}");
+        }
+    }
+
+    /// Fails by: the verb and the cache answering the line differently, which
+    /// would make the printed answer a second, unchecked authority.
+    #[test]
+    fn the_exists_line_is_answered_in_process_as_the_verb_prints_it() {
+        let root = crate::scratch::scratch("step-exists-line");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::create_dir_all(root.join("sib/src")).unwrap();
+        std::fs::write(root.join("sib/src/lib.rs"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("sib/src/lib.rs")], "lib").unwrap();
+        let line: Vec<String> = [
+            "batten",
+            "step",
+            "exists",
+            "--",
+            "sib/src/lib.rs",
+            "sib/build.rs",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        assert_eq!(
+            tool_said(&root, &line),
+            Some((0, String::from("exists \"sib/src/lib.rs\"")))
+        );
+        let absent: Vec<String> = ["batten", "step", "exists", "--", "sib/build.rs"]
+            .map(str::to_owned)
+            .to_vec();
+        assert_eq!(
+            tool_said(&root, &absent),
+            Some((0, String::from("exists none"))),
+            "nothing present still says something, so the step keys"
+        );
+    }
+
     #[test]
     fn the_whole_tree_declared_leaves_nothing_undeclared() {
-        let touched = vec![std::path::PathBuf::from("/repo/anything")];
+        let touched = vec![(
+            std::path::PathBuf::from("/repo/anything"),
+            crate::mutate::trace::Access::Read,
+        )];
         let found = super::undeclared(
             std::path::Path::new("/repo"),
             &[".".to_owned()],
+            &[],
             &touched,
             &mut |_| false,
         );
