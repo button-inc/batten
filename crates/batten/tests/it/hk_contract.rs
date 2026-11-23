@@ -450,7 +450,8 @@ fn schema_bound_toml_is_linted_at_landing_and_the_rest_at_the_commit() {
 /// ignoring it (the unformatted child then fails the staged root's check).
 #[test]
 fn a_staged_crate_root_is_formatted_without_its_children() {
-    let rustfmt = common::require_tool("rustfmt");
+    // `rustfmt` is a component of the `rust` pin, not a `[tools]` entry of its own.
+    let rustfmt = common::require_bin("rust", "rustfmt");
     let dir = common::scratch("staged-rustfmt");
     fs::write(dir.join("lib.rs"), "mod child;\n\nfn root() {}\n").expect("write lib.rs");
     fs::write(dir.join("child.rs"), "fn   child( ) {}\n").expect("write child.rs");
