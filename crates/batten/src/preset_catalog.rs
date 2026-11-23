@@ -324,7 +324,9 @@ impl Manifest {
     /// The digest of everything this preset decides: each module's pointer, scope
     /// and source, every verdict and route it ships, and its pattern rows. Its
     /// name, version and whether the starter suggests it are not decisions, so
-    /// they are not hashed.
+    /// they are not hashed, and neither are a module's `#MUTANT` rows: they name
+    /// this crate's own mutation suite and an eject strips them
+    /// ([`decided_lines`]), so they decide nothing a consumer runs.
     ///
     /// `Debug` over static data is a stable rendering within one source tree,
     /// which is all the lock needs: it compares this tree's manifests with the
@@ -335,7 +337,20 @@ impl Manifest {
         use std::fmt::Write as _;
 
         let mut hasher = Sha256::new();
-        hasher.update(format!("{:?}", self.modules).as_bytes());
+        for module in self.modules {
+            hasher.update(
+                format!(
+                    "{:?}|{:?}|{:?}|",
+                    module.scope, module.provider, module.pointer
+                )
+                .as_bytes(),
+            );
+            for line in decided_lines(module.source) {
+                hasher.update(line.as_bytes());
+                hasher.update(b"\n");
+            }
+            hasher.update([1]);
+        }
         hasher.update([0]);
         hasher.update(format!("{:?}", self.verdicts).as_bytes());
         hasher.update([0]);
@@ -348,6 +363,13 @@ impl Manifest {
                 hex
             })
     }
+}
+
+/// A module's lines without its `#MUTANT`/`#MUTANT-SUITE` rows: the text an
+/// eject writes and the digest hashes, so the two cannot disagree on what a
+/// preset decides.
+pub(crate) fn decided_lines(source: &str) -> impl Iterator<Item = &str> {
+    source.lines().filter(|line| !line.starts_with("#MUTANT"))
 }
 
 /// The committed table pinning each preset version to its digest (CLOUD-2822).
@@ -2692,5 +2714,25 @@ mod tests {
         let recorded = format!("{lock}fixture 2.0.0 {digest}\n");
         let bumped = fixture(semver::Version::new(2, 0, 0), AFTER);
         assert!(version_drift(&recorded, &[bumped]).is_empty());
+    }
+
+    const MUTANT_ROW: &[PresetModule] = &[PresetModule {
+        scope: RuleScope::Tree,
+        provider: None,
+        pointer: "<preset:fixture>/a.rego",
+        source: "#MUTANT-SUITE fixture\n#MUTANT a.rego true false\npackage a\n",
+    }];
+
+    /// Fails by: a `#MUTANT`/`#MUTANT-SUITE` row moving the digest. Those rows
+    /// name this crate's own mutation suite and an eject strips them, so they
+    /// decide nothing a consumer runs and must not demand a version bump. The
+    /// module text itself still does: `AFTER` keeps its own digest.
+    #[test]
+    fn a_mutant_row_is_not_part_of_the_digest() {
+        let plain = fixture(semver::Version::new(1, 0, 0), BEFORE).digest();
+        let with_rows = fixture(semver::Version::new(1, 0, 0), MUTANT_ROW).digest();
+        assert_eq!(plain, with_rows);
+        let decided = fixture(semver::Version::new(1, 0, 0), AFTER).digest();
+        assert_ne!(plain, decided);
     }
 }

@@ -378,10 +378,7 @@ fn ejected_source(manifest: &Manifest, module: &PresetModule) -> String {
         module.name(),
         manifest.version,
     );
-    for line in module.source.lines() {
-        if line.starts_with("#MUTANT") {
-            continue;
-        }
+    for line in crate::preset_catalog::decided_lines(module.source) {
         text.push_str(line);
         text.push('\n');
     }
