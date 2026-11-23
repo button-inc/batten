@@ -2136,6 +2136,18 @@ fn guarded_sources(engine: &regorus::Engine) -> Option<Vec<(String, String)>> {
             if !text.is_char_boundary(at) {
                 return None;
             }
+            // A STRING LITERAL'S SPAN STOPS BEFORE ITS CLOSING DELIMITER (#1276):
+            // regorus's span of `"x"` ends before the closing quote, so a
+            // statement ending `p := "x"` ended one byte early and the guard
+            // landed INSIDE the string — `p` bound `"x; p == p"`, so every
+            // comparison against `"x"` failed on bytecode while the interpreter,
+            // which never sees the guard, held. `rules-drift.rego`'s
+            // `authority_needed` answered `[".claude/settings.json; path ==
+            // path"]`, measured.
+            let at = match text.as_bytes().get(at) {
+                Some(b'"' | b'`') => at + 1,
+                _ => at,
+            };
             text.insert_str(at, &guard);
         }
         out.push((path, text));
@@ -5628,6 +5640,47 @@ violation contains {"rule": "commit name refused", "verdict": "commit name refus
             );
             assert_eq!(verdicts(bundle, wrong), refused, "{evaluator}");
             assert_eq!(verdicts(bundle, right), Some(Vec::new()), "{evaluator}");
+        }
+    }
+
+    /// A `:=` whose right side is a string literal, the last token of its
+    /// statement (#1276). Fails by: the guard spliced inside the literal, so the
+    /// bytecode binds `"x; p == p"` and refuses nothing where the interpreter
+    /// refuses — `rules-drift.rego`'s `authority_needed`, measured.
+    const LITERAL_BINDING: &str = "package batten.lit\nimport rego.v1\n\n\
+        named contains p if {\n\tinput.go\n\tp := \"x\"\n}\n\n\
+        deny contains \"tok\" if {\n\t\"x\" in named\n}\n\n\
+        raw contains q if {\n\tinput.go\n\tq := `y`\n}\n\n\
+        deny contains \"raw\" if {\n\t\"y\" in raw\n}\n";
+
+    #[test]
+    fn a_binding_ending_in_a_string_literal_decides_alike_in_both_evaluators() {
+        let guarded = guarded_sources(
+            bundle_of("row", &[("policy/l.rego", LITERAL_BINDING)])
+                .evaluator
+                .engine()
+                .expect("interpreted"),
+        )
+        .expect("the guard splices");
+        assert!(
+            guarded[0].1.contains("p := \"x\"; p == p"),
+            "the guard follows the closing quote: {}",
+            guarded[0].1
+        );
+        assert!(
+            guarded[0].1.contains("q := `y`; q == q"),
+            "and a raw string's backtick: {}",
+            guarded[0].1
+        );
+        let interpreted = bundle_of("row", &[("policy/l.rego", LITERAL_BINDING)]);
+        let compiled = bytecode(bundle_of("row", &[("policy/l.rego", LITERAL_BINDING)]));
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(
+                verdicts(bundle, GO),
+                Some(vec!["raw".to_owned(), "tok".to_owned()]),
+                "{evaluator}"
+            );
+            assert_eq!(verdicts(bundle, STOP), Some(Vec::new()), "{evaluator}");
         }
     }
 
