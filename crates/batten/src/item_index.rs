@@ -535,6 +535,47 @@ pub fn moved_with_files(
     moves
 }
 
+/// Items that LEFT their base file, each paired with the item HEAD's own code
+/// binds the old path to (CLOUD-2789).
+///
+/// [`moved_items`] needs the declaration's text equal on both sides, so an item
+/// edited as it moved pairs with nothing: `token_enum!`'s `Native` gained
+/// variants on its way from `verdict.rs` to `batten-facts`. But the old home
+/// kept a `use` of it, so the old path still resolves at HEAD — aliases
+/// followed, privacy aside — to exactly one item: the one rustc binds there.
+/// That binding, not a name match, is the pairing, so an unrelated item of the
+/// same name elsewhere is never taken for it. Measured on #1276: 82 of 179
+/// residual replay refusals.
+#[must_use]
+pub fn moved_through_uses(before: &Index, after: &Index) -> BTreeMap<Key, Key> {
+    let mut moves = BTreeMap::new();
+    for (file, (krate, module)) in &before.files {
+        let at_head = after.declared_in(file);
+        for (inside, names) in before.declared_in(file) {
+            for name in names {
+                if at_head
+                    .get(&inside)
+                    .is_some_and(|held| held.contains(&name))
+                {
+                    continue;
+                }
+                let path: Vec<String> = std::iter::once(krate.clone())
+                    .chain(module.iter().cloned())
+                    .chain(inside.iter().cloned())
+                    .chain(std::iter::once(name.clone()))
+                    .collect();
+                if let Some((site, used)) = after.resolve_from(&path, 8)
+                    && used == path.len()
+                    && site.0 != *file
+                {
+                    moves.insert((file.clone(), name.clone()), site);
+                }
+            }
+        }
+    }
+    moves
+}
+
 impl Index {
     /// Every name `file` declares, by the module path below the file's own
     /// (empty for the file's module, one segment per inline module in it).
@@ -1552,6 +1593,25 @@ mod tests {
         ]);
         let moves = moved_items(&base, &head);
         let span = (text.find('{').unwrap(), text.rfind('}').unwrap() + 1);
+        assert_eq!(
+            respell_span_at_moves(&base, &head, &moves, "one/src/other.rs", text, span, "one"),
+            "{ two::error::Native::A; }"
+        );
+        // The declaration edited in the move pairs by text with nothing, but
+        // the old home's `use` still binds the old path to it at HEAD.
+        let edited = call.replace("A => \"a\"", "A => \"a\", B => \"b\"");
+        let head = index(&[
+            ("Cargo.toml", "[workspace]\n"),
+            ("one/Cargo.toml", "[package]\nname = \"one\"\n"),
+            ("two/Cargo.toml", "[package]\nname = \"two\"\n"),
+            ("one/src/lib.rs", "pub mod verdict;\npub mod other;\n"),
+            ("one/src/verdict.rs", "use two::error::Native;\n"),
+            ("one/src/other.rs", text),
+            ("two/src/lib.rs", "pub mod error;\n"),
+            ("two/src/error.rs", &edited),
+        ]);
+        assert!(moved_items(&base, &head).is_empty());
+        let moves = moved_through_uses(&base, &head);
         assert_eq!(
             respell_span_at_moves(&base, &head, &moves, "one/src/other.rs", text, span, "one"),
             "{ two::error::Native::A; }"
