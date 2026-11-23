@@ -8120,12 +8120,10 @@ id = "patch judge wrong"
 no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
-invocation_sources = [
-  "crates/batten/src/*.rs",
-  "crates/batten-facts/src/*.rs",
-  "crates/batten-base/src/*.rs",
-  "crates/batten-core/src/*.rs",
-]
+# Every package's source, recursive (#1276): the per-crate list missed
+# `batten-fsio`, `batten-stream` and `batten-codemods`, and one level deep
+# missed `config_check/` -- the hole `spawn add other` records.
+invocation_sources = ["crates/*/src/**/*.rs"]
 module = "policy/ancestry-decides-nothing.rego"
 severity = "deny"
 
