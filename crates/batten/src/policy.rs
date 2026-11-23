@@ -5953,7 +5953,8 @@ pub fn case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
         return Ok(None);
     };
     let tracked = crate::git::tree_files(root)?;
-    let documents = crate::rules::acquire_declared(std::slice::from_ref(rule), root, &tracked)?;
+    let documents =
+        crate::rules::acquire_declared(std::slice::from_ref(rule), root, &tracked, &tracked)?;
     let (input, _) = suite_input(rule, &documents, &tracked)?;
     let crate::facts::Look::Is(suite) = test(
         bundle,

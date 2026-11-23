@@ -38,6 +38,7 @@
             "shfmt",
             "shellcheck",
             "taplo",
+            "taplo-schema",
             "taplo-format",
             "pkl",
             "pkl-format",
@@ -214,93 +215,99 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "taplo-format",
+          "name": "taplo-schema",
           "status": "included",
           "orderIndex": 26,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl",
+          "name": "taplo-format",
           "status": "included",
           "orderIndex": 27,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl-format",
+          "name": "pkl",
           "status": "included",
           "orderIndex": 28,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "prettier",
+          "name": "pkl-format",
           "status": "included",
           "orderIndex": 29,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "deno-fmt",
+          "name": "prettier",
           "status": "included",
           "orderIndex": 30,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "engine-pin",
+          "name": "deno-fmt",
           "status": "included",
           "orderIndex": 31,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "rego",
+          "name": "engine-pin",
           "status": "included",
           "orderIndex": 32,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "actionlint",
+          "name": "rego",
           "status": "included",
           "orderIndex": 33,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-fmt",
+          "name": "actionlint",
           "status": "included",
           "orderIndex": 34,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-clippy",
+          "name": "cargo-fmt",
           "status": "included",
           "orderIndex": 35,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test",
+          "name": "cargo-clippy",
           "status": "included",
           "orderIndex": 36,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "signing-posture-record",
+          "name": "test",
           "status": "included",
           "orderIndex": 37,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-check",
+          "name": "signing-posture-record",
           "status": "included",
           "orderIndex": 38,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "policy-test",
+          "name": "batten-check",
           "status": "included",
           "orderIndex": 39,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "memories-check",
+          "name": "policy-test",
           "status": "included",
           "orderIndex": 40,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "memories-check",
+          "status": "included",
+          "orderIndex": 41,
           "parallelGroupId": "group_0"
         }
       ]
@@ -413,6 +420,7 @@
             "shfmt",
             "shellcheck",
             "taplo",
+            "taplo-schema",
             "taplo-format",
             "pkl",
             "pkl-format",
@@ -592,111 +600,117 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "taplo-format",
+          "name": "taplo-schema",
           "status": "included",
           "orderIndex": 26,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl",
+          "name": "taplo-format",
           "status": "included",
           "orderIndex": 27,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl-format",
+          "name": "pkl",
           "status": "included",
           "orderIndex": 28,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "prettier",
+          "name": "pkl-format",
           "status": "included",
           "orderIndex": 29,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "deno-fmt",
+          "name": "prettier",
           "status": "included",
           "orderIndex": 30,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "engine-pin",
+          "name": "deno-fmt",
           "status": "included",
           "orderIndex": 31,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "rego",
+          "name": "engine-pin",
           "status": "included",
           "orderIndex": 32,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "actionlint",
+          "name": "rego",
           "status": "included",
           "orderIndex": 33,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-fmt",
+          "name": "actionlint",
           "status": "included",
           "orderIndex": 34,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-clippy",
+          "name": "cargo-fmt",
           "status": "included",
           "orderIndex": 35,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test",
+          "name": "cargo-clippy",
           "status": "included",
           "orderIndex": 36,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "signing-posture-record",
+          "name": "test",
           "status": "included",
           "orderIndex": 37,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-check",
+          "name": "signing-posture-record",
           "status": "included",
           "orderIndex": 38,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "policy-test",
+          "name": "batten-check",
           "status": "included",
           "orderIndex": 39,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "config-lint-pinned",
+          "name": "policy-test",
           "status": "included",
           "orderIndex": 40,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cfg-gated-test-pinned",
+          "name": "config-lint-pinned",
           "status": "included",
           "orderIndex": 41,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "module-census-pinned",
+          "name": "cfg-gated-test-pinned",
           "status": "included",
           "orderIndex": 42,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "merge-conflict-markers",
+          "name": "module-census-pinned",
           "status": "included",
           "orderIndex": 43,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "merge-conflict-markers",
+          "status": "included",
+          "orderIndex": 44,
           "parallelGroupId": "group_0"
         }
       ]

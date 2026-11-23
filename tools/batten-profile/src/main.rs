@@ -154,7 +154,7 @@ const ARMS: [Arm; 15] = [
     (
         "cfg-gated-test-pinned",
         None,
-        &["check", "--rule", "test cover missing"],
+        &["check", "--staged", "--rule", "test cover missing"],
         Fixture::Commit,
         SLOW_RATE,
     ),
