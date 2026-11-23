@@ -2847,7 +2847,8 @@ fn run_suite(
     }
     // The recorded binaries, unless they embed this row's subject outside the
     // overlay — then only a rebuild sees the mutation ([`Prebuilt`]).
-    let overlaid = Overlay::declared(root).is_some_and(|o| o.path_of(&row.source).is_some());
+    let overlaid =
+        row_overlay(root, row, prebuilt).is_some_and(|o| o.path_of(&row.source).is_some());
     let reuse = prebuilt.filter(|built| cargo && (overlaid || !built.embeds(&row.source)));
     let env = nextest_env(root, dir);
     // Where a `JUnit` report lands for the one arm whose verdict is a file
@@ -3677,10 +3678,12 @@ fn judge_row(
     staged.stage_subject(root, &row.source)?;
     // The previous row's mutated copy goes with its subject: a clean run must
     // read the embedded module.
-    let overlay = Overlay::declared(root);
-    if let Some(overlay) = &overlay {
+    if let Some(overlay) = Overlay::declared(root) {
         let _ = fs::remove_dir_all(&overlay.dir);
     }
+    // The overlay this row is mutated in, or none where a test target embeds
+    // its source past the overlay ([`row_overlay`]).
+    let overlay = row_overlay(root, row, prebuilt);
     if declares_own_case(root, row)
         && let Some(verdict) = judge_by_module(root, staged, row)?
     {
@@ -4175,6 +4178,9 @@ struct Prebuilt {
     metadata: PathBuf,
     /// Staged-tree paths the build read, and directories a build script watches.
     embedded: Vec<String>,
+    /// The paths an INTEGRATION TEST target's own dep-info lists: a source a
+    /// test `include_str!`s directly, past the overlay the library reads.
+    test_embedded: Vec<String>,
     /// Whether a row since the last clean build rebuilt the suite. A rebuild
     /// writes the binaries at the SAME uplifted paths the record names, so after
     /// an embedded row's mutated run they hold that row's mutant, and a later row
@@ -4186,12 +4192,14 @@ struct Prebuilt {
 impl Prebuilt {
     /// Whether a mutation of `source` is invisible to the recorded binaries.
     fn embeds(&self, source: &str) -> bool {
-        self.embedded.iter().any(|path| {
-            source == path
-                || source
-                    .strip_prefix(path.as_str())
-                    .is_some_and(|rest| rest.starts_with('/'))
-        })
+        covers(&self.embedded, source)
+    }
+
+    /// Whether a test target embeds `source` itself, so a mutated copy in the
+    /// overlay is invisible to it and only an in-place mutation and a rebuild
+    /// reach it.
+    fn tests_embed(&self, source: &str) -> bool {
+        covers(&self.test_embedded, source)
     }
 
     /// The arguments that make a nextest run use the recorded binaries.
@@ -4270,6 +4278,27 @@ fn suite_binary(metadata: &Path, staged: &Path, suite: &str) -> Option<String> {
     best.map(|(_, id)| id)
 }
 
+/// Whether `source` is one of `paths`, or under a directory among them.
+fn covers(paths: &[String], source: &str) -> bool {
+    paths.iter().any(|path| {
+        source == path
+            || source
+                .strip_prefix(path.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+/// The overlay a row's mutation is written to: [`Overlay::declared`], except
+/// where an integration test target embeds the row's source itself (#1276's
+/// mutation-tier audit). The overlay reaches only the readers built to consult
+/// it; a test that `include_str!`s the source holds the unmutated bytes, so the
+/// row would read SURVIVED over a mutation its case never saw. Such a row is
+/// mutated in place, and the embeds check then rebuilds.
+fn row_overlay(root: &Path, row: &Row, prebuilt: Option<&Prebuilt>) -> Option<Overlay> {
+    Overlay::declared(root)
+        .filter(|_| !prebuilt.is_some_and(|built| built.tests_embed(&row.source)))
+}
+
 /// Where [`Prebuilt`]'s documents live: beside the binaries they describe.
 fn prebuilt_dir(root: &Path) -> PathBuf {
     root.join(SUITE_TARGET).join("mutate-reuse")
@@ -4283,7 +4312,15 @@ fn prebuilt_dir(root: &Path) -> PathBuf {
 /// `rerun-if-changed` is in its `output`. Both are read wholesale: a stale file
 /// left by an older build can only name MORE paths, which rebuilds a row that
 /// did not need it — never the other way round.
-fn embedded_paths(target: &Path, staged: &Path) -> Vec<String> {
+///
+/// `crates` narrows the read to the dep-info of those crate names (a `.d`
+/// file is `<crate>-<hash>.d`) and skips build scripts: the test targets'
+/// own inputs, for [`Prebuilt::tests_embed`]. `None` reads everything.
+fn embedded_paths(
+    target: &Path,
+    staged: &Path,
+    crates: Option<&std::collections::BTreeSet<String>>,
+) -> Vec<String> {
     let mut found = std::collections::BTreeSet::new();
     // Cargo writes absolute paths canonically.
     let staged = crate::git::canonical(staged);
@@ -4314,6 +4351,16 @@ fn embedded_paths(target: &Path, staged: &Path) -> Vec<String> {
         if path.extension().is_none_or(|ext| ext != "d") {
             continue;
         }
+        let stem = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned());
+        let name = stem
+            .as_deref()
+            .and_then(|stem| stem.rsplit_once('-'))
+            .map(|(name, _)| name);
+        if crates.is_some_and(|crates| !name.is_some_and(|name| crates.contains(name))) {
+            continue;
+        }
         let text = crate::fsio::read_to_string(&path).unwrap_or_default();
         for line in text.lines() {
             if let Some(input) = line.strip_suffix(':') {
@@ -4322,7 +4369,16 @@ fn embedded_paths(target: &Path, staged: &Path) -> Vec<String> {
         }
     }
     let build = target.join("debug").join("build");
-    for entry in fs::read_dir(&build).into_iter().flatten().flatten() {
+    let scripts = if crates.is_none() {
+        fs::read_dir(&build)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for entry in scripts {
         let text = crate::fsio::read_to_string(entry.path().join("output")).unwrap_or_default();
         for line in text.lines() {
             let watched = line
@@ -4332,6 +4388,28 @@ fn embedded_paths(target: &Path, staged: &Path) -> Vec<String> {
         }
     }
     found.into_iter().collect()
+}
+
+/// The crate names of every integration test target the recorded `cargo
+/// metadata` lists, as rustc names their dep-info (`-` read as `_`).
+fn test_crates(metadata: &Path) -> std::collections::BTreeSet<String> {
+    let doc: serde_json::Value = crate::fsio::read_to_string(metadata)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    doc["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|package| package["targets"].as_array().into_iter().flatten())
+        .filter(|target| {
+            target["kind"]
+                .as_array()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("test")))
+        })
+        .filter_map(|target| target["name"].as_str())
+        .map(|name| name.replace('-', "_"))
+        .collect()
 }
 
 /// Run `args` in `staged` and keep its standard output at `into`.
@@ -4395,6 +4473,7 @@ fn build_if_owed(
         binaries: dir.join("binaries.json"),
         metadata: dir.join("cargo-metadata.json"),
         embedded: Vec::new(),
+        test_embedded: Vec::new(),
         dirty: std::cell::Cell::new(false),
     };
     let mut list = [
@@ -4417,7 +4496,12 @@ fn build_if_owed(
         // `target`, and only uplifts in `SUITE_TARGET`. Read from the uplift
         // directory, no `.d` was found, every subject read as unembedded, and
         // an embedded subject's mutation survived on reused binaries.
-        embedded: embedded_paths(&root.join("target"), staged.dir()),
+        embedded: embedded_paths(&root.join("target"), staged.dir(), None),
+        test_embedded: embedded_paths(
+            &root.join("target"),
+            staged.dir(),
+            Some(&test_crates(&prebuilt.metadata)),
+        ),
         ..prebuilt
     })
 }
