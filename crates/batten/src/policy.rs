@@ -433,6 +433,11 @@ pub struct Bundle {
     /// `Option` keeps could-not-look distinct from not-yet-read, and `Arc` keeps
     /// the live-path clone a refcount rather than a copy.
     described: std::sync::OnceLock<Option<std::sync::Arc<Vec<Described>>>>,
+    /// The interpreter's [`Ast`], rendered once on first use (CLOUD-2830):
+    /// `described`'s rationale for every other reader of the same engine's AST
+    /// — the load's `:=` check, the verdict compile's refusals and guard, and
+    /// the suite plan, each of which rendered it again.
+    ast: std::sync::OnceLock<Option<std::sync::Arc<Ast>>>,
     /// An interpreted bundle's [`Bundle::tree_reads`], taken once: seeded from
     /// the cache entry under the bundle's key where one holds it
     /// ([`remember_reads`]), so the two halves of a split `enforce` do not both
@@ -453,9 +458,17 @@ impl Bundle {
     /// This bundle's [`describe`] reading, computed on first use.
     fn described(&self) -> Option<&[Described]> {
         self.described
-            .get_or_init(|| describe(self.evaluator.engine()?).map(std::sync::Arc::new))
+            .get_or_init(|| describe_of(self.ast()?).map(std::sync::Arc::new))
             .as_deref()
             .map(Vec::as_slice)
+    }
+
+    /// This bundle's interpreter's [`Ast`], rendered on first use; `None`
+    /// without an interpreter or where the AST will not serialise.
+    fn ast(&self) -> Option<&Ast> {
+        self.ast
+            .get_or_init(|| Ast::of(self.evaluator.engine()?).map(std::sync::Arc::new))
+            .as_deref()
     }
 
     /// Seed this bundle, compiled from `full`'s sources through
@@ -785,6 +798,7 @@ impl Clone for Bundle {
             predicate_severity: self.predicate_severity.clone(),
             evaluator: self.evaluator.clone(),
             described: self.described.clone(),
+            ast: self.ast.clone(),
             reads: self.reads.clone(),
         }
     }
@@ -1312,7 +1326,7 @@ fn check_loaded(
     check_tree_paths_are_emittable(rule, bundle, source)?;
     // A `:=` the bytecode guard cannot cover would decide differently on the
     // hook path than under `policy test` (#1276), so it is a config fault here.
-    if let Some(at) = bundle.evaluator.engine().and_then(unguardable_assignment) {
+    if let Some(at) = bundle.ast().and_then(unguardable_assignment) {
         return Err(UsageError::raise(format!(
             "rule `{}`: `{at}` binds `:=` to a pattern naming no variable, which the bytecode \
              cannot guard against an undefined right side; bind a named variable, or test \
@@ -1714,6 +1728,7 @@ pub fn compile(
             detail: None,
         },
         described: std::sync::OnceLock::new(),
+        ast: std::sync::OnceLock::new(),
         reads: std::sync::OnceLock::new(),
     })
 }
@@ -2356,10 +2371,33 @@ pub(crate) struct Compiled {
 /// `None` is could-not-look: the AST would not serialize, or an offset is not a
 /// boundary of its module's text. The bundle then stays interpreted.
 fn guarded_sources(engine: &regorus::Engine) -> Option<Vec<(String, String)>> {
-    let json = engine.get_ast_as_json().ok()?;
-    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
+    guarded_sources_of(&Ast::of(engine)?)
+}
+
+/// One engine's modules as `Engine::get_ast_as_json` renders them, parsed once
+/// (CLOUD-2830).
+///
+/// SHARED BY EVERY READING OF ONE ENGINE. The refusals of regorus's known
+/// miscompiles and the `:=` guard each read the same AST, and each once
+/// rendered it to pretty JSON and parsed it back: four renders per verdict
+/// program and five per suite program, measured at 26% of `policy test`'s
+/// samples against main's one. Built once per engine and handed to each, the
+/// answers are the same and the render is paid once.
+struct Ast(Vec<serde_json::Value>);
+
+impl Ast {
+    /// `engine`'s modules, or `None` where the AST will not serialise.
+    fn of(engine: &regorus::Engine) -> Option<Self> {
+        let json = engine.get_ast_as_json().ok()?;
+        serde_json::from_str(&json).ok().map(Self)
+    }
+}
+
+/// [`guarded_sources`] over an [`Ast`] already in hand.
+fn guarded_sources_of(ast: &Ast) -> Option<Vec<(String, String)>> {
+    let policies = &ast.0;
     let mut out = Vec::with_capacity(policies.len());
-    for policy in &policies {
+    for policy in policies {
         let source = policy.get("source")?;
         let path = source.get("file")?.as_str()?.to_owned();
         let mut text = source.get("contents")?.as_str()?.to_owned();
@@ -2842,8 +2880,8 @@ pub fn rule_splits(bundle: &Bundle, data: &serde_json::Value, input: &str) -> Ve
 /// miscompile it does not refuse, so batten refuses it: the bundle stays on
 /// the interpreter with [`Fallback::KeyedPartialSet`]. Also `None` where the AST
 /// will not serialise, which [`guarded_sources`] then reports.
-fn keyed_partial_set(engine: &regorus::Engine) -> Option<String> {
-    first_construct(engine, &|map| {
+fn keyed_partial_set(ast: &Ast) -> Option<String> {
+    first_construct(ast, &|map| {
         let head = map.get("Set")?;
         head.get("refr")?.get("RefBrack")?;
         head.get("span")?.get("line")?.as_u64()
@@ -2861,7 +2899,7 @@ fn keyed_partial_set(engine: &regorus::Engine) -> Option<String> {
 /// So an `else` is refused when a body before it holds a `some`, an `every`,
 /// or a bracket index by a variable — every spelling of iteration, and some
 /// that only look up, which costs the interpreter's speed and never a verdict.
-fn rule_else(engine: &regorus::Engine) -> Option<String> {
+fn rule_else(ast: &Ast) -> Option<String> {
     fn iterates(node: &serde_json::Value) -> bool {
         match node {
             serde_json::Value::Object(map) => {
@@ -2878,7 +2916,7 @@ fn rule_else(engine: &regorus::Engine) -> Option<String> {
             _ => false,
         }
     }
-    first_construct(engine, &|map| {
+    first_construct(ast, &|map| {
         let bodies = map.get("bodies")?.as_array()?;
         let is_else =
             |body: &serde_json::Value| body.get("is_else").and_then(serde_json::Value::as_bool);
@@ -2899,8 +2937,8 @@ fn rule_else(engine: &regorus::Engine) -> Option<String> {
 /// (CLOUD-2696). This shape would bind `Undefined` unguarded, so a module using
 /// it is refused at load ([`check_loaded`]) rather than decided differently on
 /// the hook path, and never compiled to bytecode.
-fn unguardable_assignment(engine: &regorus::Engine) -> Option<String> {
-    first_construct(engine, &|map| {
+fn unguardable_assignment(ast: &Ast) -> Option<String> {
+    first_construct(ast, &|map| {
         let assign = map
             .get("literal")?
             .get("Expr")?
@@ -2930,7 +2968,7 @@ fn unguardable_assignment(engine: &regorus::Engine) -> Option<String> {
 
 /// The first AST object `matches` answers a line for, as `path:line`.
 fn first_construct(
-    engine: &regorus::Engine,
+    ast: &Ast,
     matches: &dyn Fn(&serde_json::Map<String, serde_json::Value>) -> Option<u64>,
 ) -> Option<String> {
     fn found(
@@ -2945,9 +2983,7 @@ fn first_construct(
             _ => None,
         }
     }
-    let json = engine.get_ast_as_json().ok()?;
-    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
-    policies.iter().find_map(|policy| {
+    ast.0.iter().find_map(|policy| {
         let line = found(policy.get("ast")?, matches)?;
         let path = policy.get("source")?.get("file")?.as_str()?;
         Some(format!("{path}:{line}"))
@@ -3159,6 +3195,7 @@ fn read_cached(
         predicate_severity: BTreeMap::new(),
         evaluator: Evaluator::Compiled(std::sync::Arc::new(compiled), None),
         described: std::sync::OnceLock::new(),
+        ast: std::sync::OnceLock::new(),
         reads: std::sync::OnceLock::new(),
     })
 }
@@ -3253,24 +3290,38 @@ impl Compiled {
         // The constructs regorus 0.15 compiles WRONGLY rather than refusing:
         // batten refuses them, so a bundle using one decides on the
         // interpreter, which answers as OPA does (#1276).
-        if let Some(source) = bundle.evaluator.engine() {
-            if let Some(at) = unguardable_assignment(source) {
+        // ONE RENDER OF THE AST for the refusals and the guard (CLOUD-2830).
+        let ast = bundle.ast();
+        if let Some(ast) = ast {
+            if let Some(at) = unguardable_assignment(ast) {
                 return Err((Fallback::GuardUnavailable, at));
             }
-            if let Some(at) = keyed_partial_set(source) {
+            if let Some(at) = keyed_partial_set(ast) {
                 return Err((Fallback::KeyedPartialSet, at));
             }
-            if let Some(at) = rule_else(source) {
+            if let Some(at) = rule_else(ast) {
                 return Err((Fallback::RuleElse, at));
             }
         }
-        Self::compile_unchecked(bundle, data)
+        Self::compile_guarded(bundle, data, ast)
     }
 
-    /// [`Self::from_bundle`] without batten's refusals of known miscompiles.
+    /// [`Self::from_bundle`] without batten's refusals of known miscompiles:
+    /// the cases that pin each refusal compile around it.
+    #[cfg(test)]
     fn compile_unchecked(
         bundle: &Bundle,
         data: &serde_json::Value,
+    ) -> std::result::Result<Self, (Fallback, String)> {
+        Self::compile_guarded(bundle, data, bundle.ast())
+    }
+
+    /// The program compiled from `ast`'s guarded text, `ast` being `bundle`'s
+    /// interpreter's, or `None` where it would not serialise.
+    fn compile_guarded(
+        bundle: &Bundle,
+        data: &serde_json::Value,
+        ast: Option<&Ast>,
     ) -> std::result::Result<Self, (Fallback, String)> {
         use regorus::languages::rego::compiler::Compiler;
         // `Debug`, not `Display`: the compiler's errors can render empty.
@@ -3281,10 +3332,10 @@ impl Compiled {
         let value = regorus::Value::from_json_str(&data.to_string()).map_err(|e| refused(&e))?;
         let mut engine = new_engine();
         engine.add_data(value.clone()).map_err(|e| refused(&e))?;
-        let Some(source) = bundle.evaluator.engine() else {
+        if bundle.evaluator.engine().is_none() {
             return Err((Fallback::GuardUnavailable, String::from("no interpreter")));
-        };
-        let Some(guarded) = guarded_sources(source) else {
+        }
+        let Some(guarded) = ast.and_then(guarded_sources_of) else {
             return Err((
                 Fallback::GuardUnavailable,
                 String::from("the AST would not serialise, or an offset is not a boundary"),
@@ -3361,6 +3412,11 @@ impl Compiled {
             evaluator: Evaluator::Compiled(std::sync::Arc::new(self), ast),
             described: if keep_ast {
                 bundle.described
+            } else {
+                std::sync::OnceLock::new()
+            },
+            ast: if keep_ast {
+                bundle.ast
             } else {
                 std::sync::OnceLock::new()
             },
@@ -4776,11 +4832,18 @@ struct DescribedRule {
 /// the one this reads. Never an empty description, which would report a module
 /// with no rules at all.
 fn describe(engine: &regorus::Engine) -> Option<Vec<Described>> {
+    let Some(ast) = Ast::of(engine) else {
+        AST_DESCRIPTIONS.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+    describe_of(&ast)
+}
+
+/// [`describe`] over an [`Ast`] already in hand.
+fn describe_of(ast: &Ast) -> Option<Vec<Described>> {
     AST_DESCRIPTIONS.fetch_add(1, Ordering::Relaxed);
-    let json = engine.get_ast_as_json().ok()?;
-    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
     let mut described = Vec::new();
-    for policy in &policies {
+    for policy in &ast.0 {
         // `source.file` and nothing else. The sibling `source.contents` carries
         // the whole policy body, and this function never touches it — rule 4.
         let path = policy.get("source")?.get("file")?.as_str()?.to_owned();
@@ -6119,14 +6182,13 @@ type Planned = (Vec<(String, String)>, Vec<PlannedTest>);
 
 /// Every module's text with its cases desugared, and each case's plan
 /// ([`SuiteProgram`]). `None` where the AST will not serialise.
-fn plan_suite(engine: &regorus::Engine) -> Option<Planned> {
-    let json = engine.get_ast_as_json().ok()?;
-    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
-    let packages = package_facts(&policies);
+fn plan_suite(ast: &Ast) -> Option<Planned> {
+    let policies = &ast.0;
+    let packages = package_facts(policies);
     // A case NAME DEFINED TWICE in a package is one rule with two bodies,
     // which a desugared single body cannot stand for.
     let mut seen: BTreeMap<(String, String), usize> = BTreeMap::new();
-    for policy in &policies {
+    for policy in policies {
         let package = reference_path(policy.get("ast")?.get("package")?.get("refr")?)?;
         for rule in policy.get("ast")?.get("rules")?.as_array()? {
             if let Some((name, _)) = rule
@@ -6141,7 +6203,7 @@ fn plan_suite(engine: &regorus::Engine) -> Option<Planned> {
     }
     let mut sources = Vec::new();
     let mut tests = Vec::new();
-    for policy in &policies {
+    for policy in policies {
         let source = policy.get("source")?;
         let path = source.get("file")?.as_str()?.to_owned();
         let text = source.get("contents")?.as_str()?;
@@ -6216,7 +6278,7 @@ impl SuiteProgram {
     /// no case can decide on bytecode.
     fn load(
         id: &str,
-        engine: &regorus::Engine,
+        (engine, ast): (&regorus::Engine, Option<&Ast>),
         root: Option<&Path>,
     ) -> std::result::Result<Self, (Fallback, String)> {
         let key = suite_key(id, engine);
@@ -6226,7 +6288,7 @@ impl SuiteProgram {
         {
             return Ok(program);
         }
-        let program = Self::compile(engine)?;
+        let program = Self::compile_with(engine, ast)?;
         if let (Some(path), Some(key)) = (path.as_deref(), key.as_deref()) {
             program.write(path, key);
         }
@@ -6267,6 +6329,15 @@ impl SuiteProgram {
     /// miscompiles and the `:=` guard, exactly as a verdict program
     /// ([`Compiled::compile_unchecked`]).
     fn compile(engine: &regorus::Engine) -> std::result::Result<Self, (Fallback, String)> {
+        Self::compile_with(engine, Ast::of(engine).as_ref())
+    }
+
+    /// [`Self::compile`] over `engine`'s [`Ast`] already in hand, or `None`
+    /// where it would not serialise.
+    fn compile_with(
+        engine: &regorus::Engine,
+        ast: Option<&Ast>,
+    ) -> std::result::Result<Self, (Fallback, String)> {
         use regorus::languages::rego::compiler::Compiler;
         let refused = |err: &dyn std::fmt::Debug| (Fallback::CompileRefused, format!("{err:?}"));
         let unserialisable = || {
@@ -6275,7 +6346,7 @@ impl SuiteProgram {
                 String::from("the AST would not serialise, or an offset is not a boundary"),
             )
         };
-        let (sources, tests) = plan_suite(engine).ok_or_else(unserialisable)?;
+        let (sources, tests) = ast.and_then(plan_suite).ok_or_else(unserialisable)?;
         let data = engine.get_data();
         let mut desugared = new_engine();
         desugared.add_data(data.clone()).map_err(|e| refused(&e))?;
@@ -6284,16 +6355,19 @@ impl SuiteProgram {
                 .add_policy(path.clone(), text.clone())
                 .map_err(|e| (Fallback::GuardedSourceRefused, format!("{path}: {e}")))?;
         }
-        if let Some(at) = unguardable_assignment(&desugared) {
+        // ONE RENDER OF THE DESUGARED AST for the refusals and the guard
+        // (CLOUD-2830).
+        let ast = Ast::of(&desugared).ok_or_else(unserialisable)?;
+        if let Some(at) = unguardable_assignment(&ast) {
             return Err((Fallback::GuardUnavailable, at));
         }
-        if let Some(at) = keyed_partial_set(&desugared) {
+        if let Some(at) = keyed_partial_set(&ast) {
             return Err((Fallback::KeyedPartialSet, at));
         }
-        if let Some(at) = rule_else(&desugared) {
+        if let Some(at) = rule_else(&ast) {
             return Err((Fallback::RuleElse, at));
         }
-        let guarded = guarded_sources(&desugared).ok_or_else(unserialisable)?;
+        let guarded = guarded_sources_of(&ast).ok_or_else(unserialisable)?;
         let mut compiling = new_engine();
         compiling.add_data(data.clone()).map_err(|e| refused(&e))?;
         for (path, text) in guarded {
@@ -6532,6 +6606,29 @@ pub fn coverage_cases() -> usize {
     COVERAGE_CASES.load(Ordering::Relaxed)
 }
 
+/// `input` as a document, parsed once per process per distinct text
+/// (CLOUD-2830).
+///
+/// `policy test` hands every bundle the input its row declares, and rows that
+/// declare the same facts are handed the same text. Parsing it into regorus's
+/// value, and dropping that value after each bundle, measured 20% of the run's
+/// samples. A value is shared by reference count, so a clone handed out here is
+/// the same document, never a copy; keyed by the whole text's digest, so two
+/// texts never share one.
+fn parsed_input(input: &str) -> anyhow::Result<regorus::Value> {
+    type Parsed = std::collections::HashMap<[u8; 32], regorus::Value>;
+    thread_local! {
+        static PARSED: std::cell::RefCell<Parsed> = std::cell::RefCell::default();
+    }
+    let key = *blake3::hash(input.as_bytes()).as_bytes();
+    if let Some(found) = PARSED.with(|parsed| parsed.borrow().get(&key).cloned()) {
+        return Ok(found);
+    }
+    let value = regorus::Value::from_json_str(input)?;
+    PARSED.with(|parsed| parsed.borrow_mut().insert(key, value.clone()));
+    Ok(value)
+}
+
 /// Run a bundle's own `test_` rules and report what they left unexercised
 /// (CLOUD-835).
 ///
@@ -6620,7 +6717,7 @@ pub fn test(
             bundle.pointer()
         ))
     };
-    let document = regorus::Value::from_json_str(input).map_err(|err| unparsable(&err))?;
+    let document = parsed_input(input).map_err(|err| unparsable(&err))?;
 
     // A TEST THAT ANSWERS ANYTHING BUT `true` HAS FAILED. `false` and undefined
     // are one answer here, and an evaluation that errors is a third spelling of
@@ -6633,7 +6730,7 @@ pub fn test(
     let program = if discovered.is_empty() {
         Err((Fallback::TestWith, String::from("no case")))
     } else {
-        SuiteProgram::load(&bundle.id, engine, cache)
+        SuiteProgram::load(&bundle.id, (engine, bundle.ast()), cache)
     };
     let (decided, cached, why) = match &program {
         Ok(program) => {
@@ -6659,9 +6756,8 @@ pub fn test(
                 record_as(&bundle.id, Execution::Interpreted(why));
                 if interpreter.is_none() {
                     let mut fresh = engine.clone();
-                    fresh
-                        .set_input_json(input)
-                        .map_err(|err| unparsable(&err))?;
+                    // The document already parsed above, not the text again.
+                    fresh.set_input(document.clone());
                     interpreter = Some(fresh);
                 }
                 matches!(
@@ -6925,19 +7021,66 @@ pub(crate) fn suite_input(
     rule: &crate::config_model::Rule,
     documents: &std::collections::BTreeMap<(String, crate::rules::Wanted), crate::rules::Acquired>,
     tracked: &[String],
-) -> Result<(String, Vec<(String, crate::rules::NotAcquired)>)> {
+) -> Result<SuiteInput> {
+    Ok(suite_input_of(
+        &SuiteDeclared::of(rule, tracked)?,
+        documents,
+        tracked,
+    ))
+}
+
+/// A suite input and the declared paths it could not acquire.
+pub(crate) type SuiteInput = (String, Vec<(String, crate::rules::NotAcquired)>);
+
+/// Everything of a row [`suite_input`] reads: the paths it declares in each
+/// form, matched against the tracked list, and its base (CLOUD-2830).
+///
+/// THE KEY A RUN PROJECTS BY. Rows declaring the same paths are handed the same
+/// input, and projecting the acquired facts into it again for each measured
+/// 12% of `policy test`'s samples; `policy test` projects once per distinct
+/// value of this.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SuiteDeclared {
+    documents: Vec<String>,
+    lines: Vec<String>,
+    invocations: Vec<String>,
+    uses: Vec<String>,
+    units: Vec<String>,
+    base: Option<String>,
+}
+
+impl SuiteDeclared {
+    /// What `rule` declares over `tracked`.
+    pub(crate) fn of(rule: &crate::config_model::Rule, tracked: &[String]) -> Result<Self> {
+        Ok(Self {
+            documents: crate::rules::declared_documents(rule, tracked)?,
+            lines: crate::rules::declared_lines(rule, tracked)?,
+            invocations: crate::rules::declared_invocations(rule, tracked)?,
+            uses: crate::rules::declared_uses(rule, tracked)?,
+            units: crate::rules::declared_units(rule, tracked)?,
+            base: rule.base.clone(),
+        })
+    }
+}
+
+/// [`suite_input`] for a declaration already matched.
+pub(crate) fn suite_input_of(
+    declared: &SuiteDeclared,
+    documents: &std::collections::BTreeMap<(String, crate::rules::Wanted), crate::rules::Acquired>,
+    tracked: &[String],
+) -> SuiteInput {
     // A mediated-call row declares no documents, so its tests run against `{}`
     // and supply their own input with `with input as` — OPA and Conftest's own
     // shape, and the reason neither surface needs a fixture key.
-    Ok(crate::rules::tree_document(
+    crate::rules::tree_document(
         documents,
         &crate::config_check::rules::Declared {
-            documents: &crate::rules::declared_documents(rule, tracked)?,
-            lines: &crate::rules::declared_lines(rule, tracked)?,
-            invocations: &crate::rules::declared_invocations(rule, tracked)?,
-            uses: &crate::rules::declared_uses(rule, tracked)?,
-            units: &crate::rules::declared_units(rule, tracked)?,
-            base: rule.base.as_deref(),
+            documents: &declared.documents,
+            lines: &declared.lines,
+            invocations: &declared.invocations,
+            uses: &declared.uses,
+            units: &declared.units,
+            base: declared.base.as_deref(),
             // EMPTY, unlike its neighbours above, and the asymmetry is the
             // point (CLOUD-1167). `documents` and the three beside it name paths
             // INSIDE the repository, so a declared one that is missing is a
@@ -6983,7 +7126,7 @@ pub(crate) fn suite_input(
             captured: None,
             shell: None,
         },
-    ))
+    )
 }
 
 /// Whether one policy module's own `test_<case>` rule passes under `root`'s
@@ -7483,11 +7626,7 @@ violation contains {"rule": "commit name refused", "verdict": "commit name refus
         assert_eq!(refused.1, "policy/u.rego:5", "names the statement");
         let named = bundle_of("row", &[("policy/n.rego", LITERAL_BINDING)]);
         assert!(
-            named
-                .evaluator
-                .engine()
-                .and_then(unguardable_assignment)
-                .is_none(),
+            named.ast().and_then(unguardable_assignment).is_none(),
             "a named binding is guardable"
         );
     }
