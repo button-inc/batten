@@ -711,7 +711,9 @@ fn a_plan_mode_write_is_refused() {
 }
 
 /// CLOUD-2289: `issue read loose` routes a Linear read to `batten mcp call`, so
-/// that route must be reachable in plan mode. A write method stays refused.
+/// that route must be reachable in plan mode. A write method stays refused,
+/// and by the verdict the direct write earns (CLOUD-2789): the mediated call
+/// is the call it mediates, so the first row to refuse one refuses the other.
 #[test]
 fn a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not() {
     let read = shell(
@@ -720,10 +722,21 @@ fn a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not() {
     );
     assert_not_plan_refused(&read);
     assert_granted_by(&read, "call read now");
-    assert_plan_refused(&shell(
+    let mediated = verdict(&shell(
         "plan",
         r#"batten mcp call Linear save_issue '{"id":"CLOUD-1"}'"#,
     ));
+    let direct = verdict(&envelope(
+        "plan",
+        "mcp__Linear__save_issue",
+        &serde_json::json!({"id": "CLOUD-1"}),
+    ));
+    assert_eq!(
+        mediated.as_ref().map(|(decision, _)| decision.as_str()),
+        Some("deny"),
+        "a plan-mode write is refused: {mediated:?}"
+    );
+    assert_eq!(mediated, direct, "and refused as the direct write is");
 }
 
 /// CLOUD-2289: reading the session's own notification queue is a read.
