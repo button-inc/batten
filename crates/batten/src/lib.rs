@@ -4917,11 +4917,9 @@ fn run_session(
     let cache = session_watch::Cache::new(dir.join("cache"));
     let mut source = session_watch::Mcp::new(wiring);
     let mut watch = session_watch::Watch::new(sessions.clone());
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "a poll bounded by a real terminal state (CLOUD-1177): each child's `done`, `dead` or `unstarted` across `UNSTARTED_POLLS`, and could-not-look ends it; the delay backs off to `MAX_DELAY`"
-    )]
-    let mut wait = |delay| std::thread::sleep(delay);
+    // THE CRATE'S ONE CLOCK (`pr_watch::clock`), not a waived sleep: the poll is
+    // bounded by each child's terminal state, and could-not-look ends it.
+    let mut wait = |delay| pr_watch::clock::hold(delay, None);
     let Some((reports, ending)) = session_watch::run(&mut watch, &mut source, &cache, &mut wait)
     else {
         writeln!(
