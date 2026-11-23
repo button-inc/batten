@@ -117,6 +117,8 @@ fn session_report(dir: &Path) -> Option<String> {
         advisory(&started).is_none_or(|text| !text.contains(CHECK)),
         "the health report is the task's, never the door's"
     );
+    // `session_start` is unix-only, as is the detached setup task it waits on.
+    #[cfg(unix)]
     let _ = crate::session_start::settle(dir);
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",

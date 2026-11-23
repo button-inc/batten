@@ -409,6 +409,8 @@ fn a_declared_repair_takes_the_siblings_at_session_start() {
     assert!(outcome.status.success(), "{}", stderr(&outcome));
     // THE REPAIR IS THE SETUP TASK'S (CLOUD-2840): the door starts it and
     // returns, so the surface is read once the task has finished.
+    // `session_start` is unix-only, as is the detached setup task it waits on.
+    #[cfg(unix)]
     let _ = crate::session_start::settle(&bench.repo);
 
     let surface = bench.surface_text();
@@ -451,6 +453,8 @@ fn a_declared_repair_takes_nothing_on_an_undeclared_machine() {
     assert!(outcome.status.success(), "{}", stderr(&outcome));
     // Read only once the setup task finished, or this mirror passes before the
     // repair could have run at all.
+    // `session_start` is unix-only, as is the detached setup task it waits on.
+    #[cfg(unix)]
     let _ = crate::session_start::settle(&bench.repo);
 
     let surface = bench.surface_text();

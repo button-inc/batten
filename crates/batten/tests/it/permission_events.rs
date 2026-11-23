@@ -326,6 +326,8 @@ fn no_argument_reaches_the_gap_list() {
 /// THE BRANCH RETURNS BEFORE THE HANDLERS: a permission event is answered with
 /// the grant the call already had, and is not adjudicated again. Fails by: the
 /// branch moved below `dispatch_handlers` (`permission-event-readjudicates`).
+/// Unix-only: the handler is a `#!/bin/sh` script, which only a unix host runs.
+#[cfg(unix)]
 #[test]
 fn no_handler_runs_at_a_permission_event() {
     let root = root("no-handler");
