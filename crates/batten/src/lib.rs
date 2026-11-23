@@ -20026,6 +20026,80 @@ fn live_lap_outside_its_gate(holder: Option<String>, ours: Option<&str>) -> Opti
     holder.filter(|pid| ours != Some(pid.as_str()))
 }
 
+/// What the session's setup task is doing, and which of this call's
+/// command-position programs it may still be installing (CLOUD-2840):
+/// [`facts::Fact::InstallPending`].
+///
+/// NO MODULE, NO READ, and NO RECORD, NO WALK: the common call opens nothing,
+/// and once the task said `ok` no program is resolved at all. Only while it
+/// runs, or after it failed, is each program resolved against `PATH`.
+fn install_pending_for(
+    rules: &hook::Policy,
+    envelope: &hook::Envelope,
+) -> Option<serde_json::Value> {
+    if envelope.event != crate::config_model::Event::PreTool || !rules.reads_pinned(envelope) {
+        return None;
+    }
+    let git_dir = git::git_dir(hook_authority_root()).ok()?;
+    let (running, gone) = task::partition(&git_dir);
+    let entry = running
+        .into_iter()
+        .chain(gone)
+        .find(|entry| entry.task == session_setup::TASK)?;
+    let state = match task::state(&entry) {
+        task::State::Running => "running",
+        task::State::Ok => "ok",
+        task::State::Failed => "failed",
+        task::State::Crashed => "crashed",
+    };
+    let pending: Vec<String> = if state == "ok" {
+        Vec::new()
+    } else {
+        let roots = install_roots();
+        hook::command_programs(&envelope.command)
+            .into_iter()
+            .filter(|program| match resolve_on_path(program) {
+                None => true,
+                Some(found) => roots.iter().any(|root| found.starts_with(root)),
+            })
+            .collect()
+    };
+    Some(serde_json::json!({
+        "state": state,
+        "task": session_setup::TASK,
+        "pid": entry.pid,
+        "pending": pending,
+    }))
+}
+
+/// Every vendored environment manager's data directory (CLOUD-2840), as its
+/// preset declares it: the variable where set, else the default under `$HOME`.
+fn install_roots() -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    preset_catalog::MANIFESTS
+        .iter()
+        .filter_map(|manifest| manifest.install.as_ref())
+        .filter_map(|install| {
+            let (variable, default) = install.data_dir;
+            std::env::var_os(variable)
+                .map(PathBuf::from)
+                .or_else(|| home.as_ref().map(|home| home.join(default)))
+        })
+        .collect()
+}
+
+/// Where `program` resolves as a command word: itself where it names a path,
+/// else the first file of that name on `PATH`, or `None`.
+fn resolve_on_path(program: &str) -> Option<PathBuf> {
+    if program.contains('/') {
+        let path = PathBuf::from(program);
+        return path.is_file().then_some(path);
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+}
+
 /// The per-call facts [`run_hook`] resolves beyond the policy's own: the
 /// destructive pair, the unread history a config write touches, and the
 /// dispatch receipt, the pinned programs and the red-head record (CLOUD-2270).
@@ -20035,6 +20109,7 @@ struct CallFacts {
     discards: facts::Look<Vec<String>>,
     singleton: Option<(String, String)>,
     land_live: Option<String>,
+    install_pending: Option<serde_json::Value>,
     lap_held: Option<Vec<serde_json::Value>>,
     unread_history: facts::Look<Vec<String>>,
     dispatch: facts::Look<()>,
@@ -20043,6 +20118,9 @@ struct CallFacts {
     commit_subject: facts::Look<String>,
     pathspec_status: facts::Look<serde_json::Value>,
     shell_introduced: hook::ShellIntroducedFacts,
+    prospective: hook::ProspectiveFacts,
+    budgeted: hook::BudgetFacts,
+    ratcheted: hook::RatchetFacts,
 }
 
 fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
@@ -20055,6 +20133,7 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         discards,
         singleton,
         land_live,
+        install_pending: install_pending_for(policy, envelope),
         lap_held,
         unread_history: unread_history(envelope),
         dispatch: dispatch_facts(envelope),
@@ -20063,6 +20142,9 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         commit_subject: commit_subject_for(policy, envelope),
         pathspec_status: pathspec_status_for(policy, envelope),
         shell_introduced: shell_introduced_for(policy, envelope),
+        prospective: prospective_for(policy, envelope),
+        budgeted: budgeted_for(policy, envelope),
+        ratcheted: ratcheted_for(policy, envelope),
     }
 }
 
@@ -20641,9 +20723,6 @@ fn dispatch_envelope(
     // consumer; it resolves what it reads, where it reads it. `stop_facts` and
     // its module stay — this drops the call, not the capability.
     let stop = stop::StopFacts::default();
-    let prospective = prospective_for(&policy, &envelope);
-    let budgeted = budgeted_for(&policy, &envelope);
-    let ratcheted = ratcheted_for(&policy, &envelope);
     // The reading manifest (CLOUD-925), resolved here because the tracked set is
     // a property of a checkout and `adjudicate` is contractually pure.
     //
@@ -20657,6 +20736,7 @@ fn dispatch_envelope(
     let facts = hook::Facts {
         singleton: &call.singleton,
         land_live: &call.land_live,
+        install_pending: &call.install_pending,
         lap_held: &call.lap_held,
         discards: &call.discards,
         unread_history: &call.unread_history,
@@ -20667,9 +20747,9 @@ fn dispatch_envelope(
         stop: &stop,
         waived: &waived,
         sourced: &agent_sourced,
-        prospective: &prospective,
-        budgeted: &budgeted,
-        ratcheted: &ratcheted,
+        prospective: &call.prospective,
+        budgeted: &call.budgeted,
+        ratcheted: &call.ratcheted,
         manifest,
         pinned: &call.pinned,
         tasks: &tasks,

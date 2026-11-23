@@ -6280,6 +6280,10 @@ pub struct Facts<'a> {
     /// [`crate::facts::Fact::LandLive`]. Resolved at the boundary for the same
     /// reason [`Self::singleton`] is: a lock is a file and a pid is a process.
     pub land_live: &'a Option<String>,
+    /// The session setup task's state and this call's programs it may still be
+    /// installing, or `None` where no setup task is recorded or no module on
+    /// the call reads it (CLOUD-2840): [`crate::facts::Fact::InstallPending`].
+    pub install_pending: &'a Option<Value>,
     /// Each of this call's writes that lands in the live lap's checkout
     /// ([`write_sites`] whose checkout root is [`Self::land_live`]), or `None`
     /// where no lap is live or the call's writes could not be placed
@@ -6410,6 +6414,7 @@ impl<'a> Facts<'a> {
             // caller that looked and found a free lock would give.
             singleton: &None,
             land_live: &None,
+            install_pending: &None,
             lap_held: &None,
             // Could-not-look, never an empty list: "this reset discards nothing"
             // is a claim about a repository's remotes, and a caller that resolved
@@ -9275,6 +9280,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                     .as_ref()
                     .map_or(serde_json::Value::Null, |root| serde_json::Value::from(root.as_str())),
             ),
+            crate::facts::Fact::InstallPending => Some(
+                facts
+                    .install_pending
+                    .clone()
+                    .unwrap_or(serde_json::Value::Null),
+            ),
             crate::facts::Fact::RedHead => Some(match facts.red_head {
                 crate::facts::Look::Is(record) => record.clone(),
                 crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
@@ -10123,6 +10134,16 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
 /// member and no consumer.
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
     reach_into(command, false, None, REACH_DEPTH, Stage::call())
+}
+
+/// The command words of `command`'s programs, as `input.call.programs[]`
+/// carries them (CLOUD-2840): what a host resolves on `PATH` to run each.
+#[must_use]
+pub(crate) fn command_programs(command: &str) -> Vec<String> {
+    program_reach(command)
+        .iter()
+        .filter_map(|program| program["program"].as_str().map(str::to_owned))
+        .collect()
 }
 
 /// Where `operand` is, for a stage running in `dir` (CLOUD-2775): an absolute
@@ -14469,6 +14490,7 @@ mod tests {
                 sourced: &None,
                 singleton: &None,
                 land_live: &None,
+                install_pending: &None,
                 lap_held: &None,
                 unread_history: &crate::facts::Look::CouldNotLook,
                 commit_subject: &crate::facts::Look::CouldNotLook,
