@@ -734,3 +734,42 @@ fn no_ci_step_carries_the_mutant_verdict_journal() {
         .collect();
     assert!(carried.is_empty(), "{carried:?}");
 }
+
+/// CLOUD-2851, over the committed `ci.yml`: `mutants (reach)` is a saving, never
+/// a verdict, so the shards run whatever it answered — a cancelled (timed-out)
+/// or skipped reach no longer skips all four and turns `final` red — and the
+/// release-path step grades unconditionally, with no path guard that a module
+/// move can turn into a silent skip.
+#[test]
+fn the_shards_survive_any_reach_result_and_the_release_path_step_always_grades() {
+    use yaml_rust2::YamlLoader;
+    let text = std::fs::read_to_string(common::at_root(".github/workflows/ci.yml"))
+        .expect("the ci workflow");
+    let docs = YamlLoader::load_from_str(&text).expect("the workflow parses as YAML");
+    let jobs = &docs[0]["jobs"];
+    let shards = jobs["mutants"]["if"]
+        .as_str()
+        .expect("the shards carry an `if:`");
+    for result in ["success", "failure", "cancelled", "skipped"] {
+        assert!(
+            shards.contains(&format!("needs.mutants-reach.result == '{result}'")),
+            "the shards must run on a `{result}` reach: {shards}"
+        );
+    }
+    let grade = jobs["batten-check"]["steps"]
+        .as_vec()
+        .expect("batten-check has steps")
+        .iter()
+        .find(|step| {
+            step["name"].as_str()
+                == Some(
+                    "Grade the head with the trunk's predicate, post release-path, and seal final",
+                )
+        })
+        .expect("the release-path grading step");
+    assert!(
+        grade["if"].is_badvalue(),
+        "the release-path step must carry no `if:`: {:?}",
+        grade["if"]
+    );
+}
