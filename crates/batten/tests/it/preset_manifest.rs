@@ -9,8 +9,6 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::fmt::Write as _;
-
 use crate::common;
 use batten::preset::ManifestExt as _;
 
@@ -276,20 +274,11 @@ fn said_by(dir: &std::path::Path, args: &[&str]) -> String {
 #[test]
 fn the_rust_preset_suite_passes() {
     let dir = common::scratch("rust-preset-suite");
-    let mut config = String::from(
-        "version = 1\n\n[[rule]]\nid = \"crate reach unknown\"\nkind = \"policy\"\n\
-         scope = \"tree\"\nmodule = \"policy/crate-reach.rego\"\nseverity = \"deny\"\n",
-    );
-    for class in ["crate reach unknown", "crate declare missing"] {
-        let _ = write!(
-            config,
-            "\n[[verdict]]\nid = \"{class}\"\ngloss = \"fixture\"\nclass = \"\"\"\n\
-             A fixture verdict for the vendored module's own cases.\n\"\"\"\n\
-             [[verdict.route]]\nid = \"module read first\"\nkind = \"document\"\n\
-             target = \"policy/crate-reach.rego\"\n"
-        );
-    }
-    common::write(&dir, "batten.toml", &config);
+    // The two verdicts the module emits ship in the binary (202e0ee5), so the
+    // fixture declares none: a consumer row re-declaring one is refused as dead.
+    let config = "version = 1\n\n[[rule]]\nid = \"crate reach wrong\"\nkind = \"policy\"\n\
+         scope = \"tree\"\nmodule = \"policy/crate-reach.rego\"\nseverity = \"deny\"\n";
+    common::write(&dir, "batten.toml", config);
     common::write(&dir, "policy/crate-reach.rego", MODULE);
     common::init_repo(&dir);
     let out = said_by(&dir, &["policy", "test"]);
