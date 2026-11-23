@@ -619,6 +619,43 @@ pub fn moved_with_files(
     moves
 }
 
+/// Items that LEFT their base file, by NAME ALONE: declared exactly once on
+/// each side, in different files (CLOUD-2789). FOR SPLICING, NEVER FOR
+/// COMPARISON.
+///
+/// [`moved_items`] refuses an edited declaration, rightly: a test naming an
+/// edited item must be judged modified and replayed. But the replay then
+/// splices the base body in, and `crate::preset::MANIFESTS` no longer compiles
+/// once `MANIFESTS` lives in `preset_catalog.rs` — so the base assertion was
+/// never run against HEAD's data at all, and the compile error read as an
+/// expectation change. Spelled at its one HEAD home, the base body runs; an
+/// item that is truly different fails the base assertion there, and stays
+/// refused. Measured on #1276: `preset::{MANIFESTS, find, verdict_rows}` and
+/// `policy::preset_names`, 13 rows.
+#[must_use]
+pub fn relocated_items(before: &Index, after: &Index) -> BTreeMap<Key, Key> {
+    let names: std::collections::BTreeSet<&String> = before
+        .modules
+        .values()
+        .flat_map(|module| module.declared.keys())
+        .collect();
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let (base, head) = (before.sites(name), after.sites(name));
+            let ([(base_file, _)], [(head_file, _)]) = (base.as_slice(), head.as_slice()) else {
+                return None;
+            };
+            (base_file != head_file).then(|| {
+                (
+                    (base_file.clone(), name.clone()),
+                    (head_file.clone(), name.clone()),
+                )
+            })
+        })
+        .collect()
+}
+
 /// Items that LEFT their base file, each paired with the item HEAD's own code
 /// binds the old path to (CLOUD-2789).
 ///
@@ -1729,6 +1766,47 @@ mod tests {
             "{ two::error::Native::A; }"
         );
         Ok(())
+    }
+
+    /// Fails by: an item edited as it moved, with nothing left at its old home,
+    /// spliced as written and failing to compile, so its base assertion never
+    /// ran against HEAD's item (#1276: `crate::preset::MANIFESTS`). Paired by a
+    /// name declared once on each side, for the splice; still not a move for
+    /// the comparison, and a name declared twice pairs with nothing.
+    #[test]
+    fn an_edited_item_that_left_its_file_is_relocated_for_the_splice() {
+        let lib = (
+            "src/lib.rs",
+            "pub mod preset;\npub mod catalog;\npub mod other;\n",
+        );
+        let base = index(&[
+            ROOT,
+            lib,
+            ("src/preset.rs", "pub const MANIFESTS: &[u8] = &[1];\n"),
+            ("src/catalog.rs", ""),
+            ("src/other.rs", ""),
+        ]);
+        let head = index(&[
+            ROOT,
+            lib,
+            ("src/preset.rs", ""),
+            ("src/catalog.rs", "pub const MANIFESTS: &[u8] = &[1, 2];\n"),
+            ("src/other.rs", ""),
+        ]);
+        assert!(moved_items(&base, &head).is_empty());
+        let relocated = relocated_items(&base, &head);
+        assert_eq!(
+            relocated.get(&("src/preset.rs".to_owned(), "MANIFESTS".to_owned())),
+            Some(&("src/catalog.rs".to_owned(), "MANIFESTS".to_owned()))
+        );
+        let twice = index(&[
+            ROOT,
+            lib,
+            ("src/preset.rs", ""),
+            ("src/catalog.rs", "pub const MANIFESTS: &[u8] = &[1, 2];\n"),
+            ("src/other.rs", "pub const MANIFESTS: &[u8] = &[3];\n"),
+        ]);
+        assert!(relocated_items(&base, &twice).is_empty());
     }
 
     /// Fails by: an old home that keeps the moved item only through a
