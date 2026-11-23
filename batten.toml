@@ -7708,6 +7708,9 @@ kind = "policy"
 scope = "tree"
 base = "origin/main"
 delta_sources = ["**"]
+# The enforced set, parsed (#1276): a row binds an obligation only in a file an
+# enforced `[mutate]` gate owns, because no sweep applies a row anywhere else.
+documents = ["batten.toml"]
 # `mise.toml` and `crates/batten/src` since CLOUD-1909: an inline task declares
 # its mutation in the manifest and an engine module in its own source, because a
 # row mutates the file it is written in. Without them an obligation naming either
