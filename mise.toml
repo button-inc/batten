@@ -1917,7 +1917,18 @@ depends = ["pkl-package"]
 run = "{{vars.batten}} mutate sweep"
 
 [tasks."mutant:rust"]
+#MUTANT-SUITE crates/batten/tests/it/mutate_schema.rs
+#MUTANT rust-base-undeclared|s@, MUTANT_CHANGED_SINCE = "[^"]*"@@|mutant_rust_runs_on_its_own_against_a_declared_base
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change since origin/main is caught"
+# THE TASK OWNS ITS BASE (CLOUD-2855): its description promises the change since
+# `origin/main`, so a standalone `mise run mutant:rust` judges that rather than
+# exiting usage on a missing base. A caller's own base is kept: `mutant:changed`
+# hands `origin/main` down, and an operator's `MUTANT_CHANGED_SINCE` wins. THE
+# DEFAULT YIELDS TO THE WHOLE TREE: under `mutant`'s `MUTANT_WHOLE_TREE` only a
+# caller's explicit base is passed, so the schedule lists `--workspace` and a
+# base set beside it is still the verb's usage error (CLOUD-2849). Here and
+# never in `mutate::changed_since`, which `mutant:declared` reads as "every
+# gate" when unset.
 # THE PER-JOB COST IS THE TREE'S, THE MACHINE IS MEASURED: for the mutants the
 # schema hands back, `batten mutate cargo` divides cores, temp-volume headroom
 # above the collector's floor, and memory by one copy's cold mutants-profile
@@ -1926,7 +1937,7 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 # filled the disk mid-build and a mutant whose build hit ENOSPC was recorded
 # unviable. The schema itself judges on every core but one, since its workers
 # share its one build.
-env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "6200", MUTANT_JOB_MEMORY_MB = "4000" }
+env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "6200", MUTANT_JOB_MEMORY_MB = "4000", MUTANT_CHANGED_SINCE = "{% if get_env(name='MUTANT_WHOLE_TREE', default='') == '' %}{{ get_env(name='MUTANT_CHANGED_SINCE', default='origin/main') }}{% else %}{{ get_env(name='MUTANT_CHANGED_SINCE', default='') }}{% endif %}" }
 # The package cache, for `mutant:declared`'s reason above.
 depends = ["pkl-package"]
 # The verb applies the pin and runs the cached binary, so nothing is linked onto
