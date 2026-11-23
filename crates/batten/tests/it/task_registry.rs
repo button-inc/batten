@@ -107,25 +107,29 @@ fn entries(repo: &Path) -> PathBuf {
 ///
 /// The unread fields are written too — `pgid`, `tick`, `tick_at`, `sig`,
 /// `sig_at` — because a fixture that omitted them would be a narrower record
-/// than any real one, and the reader's job includes stepping past them.
+/// than any real one, and the reader's job includes stepping past them. The
+/// start tick is the pid's own (CLOUD-2840): a record keyed on another reads as
+/// abandoned, so a fixture meaning "this live process" must carry it.
 fn seed(repo: &Path, task: &str, pid: &str, phase: &str, started: u64) {
     let dir = entries(repo);
     std::fs::create_dir_all(&dir).expect("a registry");
+    let tick = batten::task::process_start(pid).unwrap_or_default();
     std::fs::write(
         dir.join(pid),
         format!(
             "task: {task}\npid: {pid}\npgid: {pid}\nphase: {phase}\n\
              started_at: {started}\nphase_since: {started}\n\
-             tick: \ntick_at: \nsig: \nsig_at: \n"
+             tick: \ntick_at: \nsig: \nsig_at: \ncmdline_sha256: \nproc_start: {tick}\n"
         ),
     )
     .expect("a record");
 }
 
-/// Seed one record in the CURRENT writer's eleven fields (CLOUD-1560), each
+/// Seed one record in the CURRENT writer's twelve fields (CLOUD-1560, 2840), each
 /// defaulted the way [`seed`] writes it and `overrides` replacing by name.
 fn seed_fields(repo: &Path, pid: &str, overrides: &[(&str, &str)]) {
     use std::fmt::Write as _;
+    let tick = batten::task::process_start(pid).unwrap_or_default();
     let defaults = [
         ("task", "land"),
         ("pid", pid),
@@ -138,6 +142,7 @@ fn seed_fields(repo: &Path, pid: &str, overrides: &[(&str, &str)]) {
         ("sig", ""),
         ("sig_at", ""),
         ("cmdline_sha256", ""),
+        ("proc_start", tick.as_str()),
     ];
     let mut body = String::new();
     for (name, value) in defaults {

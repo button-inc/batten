@@ -110,7 +110,7 @@ const fn default_min_lifetime_secs() -> u64 {
 /// list `task read` checks a field name against, so an unknown name is refused
 /// rather than answered with an empty line. `Entry::render` is held to it by
 /// `the_field_list_is_the_records_own`.
-pub const FIELDS: [&str; 11] = [
+pub const FIELDS: [&str; 12] = [
     "task",
     "pid",
     "pgid",
@@ -122,6 +122,7 @@ pub const FIELDS: [&str; 11] = [
     "sig",
     "sig_at",
     "cmdline_sha256",
+    "proc_start",
 ];
 
 /// One registered task, as the writer left it.
@@ -160,6 +161,12 @@ pub struct Entry {
     /// task whose program was retired into a verb is still recognised. Empty
     /// where there was no cmdline to read, or the entry predates the field.
     pub cmdline_sha256: String,
+    /// The registrant's start time, field 22 of `/proc/<pid>/stat` in clock
+    /// ticks since boot, taken at register (CLOUD-2840). With the pid it is the
+    /// record's KEY: a recycled pid starts at another tick, so a pid alone never
+    /// names a process. Empty off Linux, or on an entry that predates the field,
+    /// which [`task_alive`] reads as abandoned wherever the live tick is readable.
+    pub proc_start: String,
 }
 
 impl Entry {
@@ -213,6 +220,7 @@ impl Entry {
             sig: Self::field(body, "sig"),
             sig_at: Self::field(body, "sig_at"),
             cmdline_sha256: Self::field(body, "cmdline_sha256"),
+            proc_start: Self::field(body, "proc_start"),
         }
     }
 
@@ -226,7 +234,7 @@ impl Entry {
     #[must_use]
     pub fn render(&self) -> String {
         format!(
-            "task: {}\npid: {}\npgid: {}\nphase: {}\nstarted_at: {}\nphase_since: {}\ntick: {}\ntick_at: {}\nsig: {}\nsig_at: {}\ncmdline_sha256: {}\n",
+            "task: {}\npid: {}\npgid: {}\nphase: {}\nstarted_at: {}\nphase_since: {}\ntick: {}\ntick_at: {}\nsig: {}\nsig_at: {}\ncmdline_sha256: {}\nproc_start: {}\n",
             self.task,
             self.pid,
             self.pgid,
@@ -238,6 +246,7 @@ impl Entry {
             self.sig,
             self.sig_at,
             self.cmdline_sha256,
+            self.proc_start,
         )
     }
 
@@ -248,6 +257,41 @@ impl Entry {
     #[must_use]
     pub fn is_complete(&self) -> bool {
         !self.task.is_empty() && !self.pid.is_empty()
+    }
+}
+
+/// The phase a task that SUCCEEDED leaves on its record before it exits.
+pub const OK: &str = "ok";
+
+/// The phase a task that FAILED leaves on its record before it exits.
+pub const FAILED: &str = "failed";
+
+/// What a record says about its task, the key decided once (CLOUD-2840).
+///
+/// FOUR answers, because a gate on a backgrounded install needs all four apart:
+/// still running holds the gate, `ok` opens it, and `failed` and a crash each
+/// refuse naming what happened. A terminal phase is the task's own last word,
+/// written before it exits, so a gone pid under one is a finish, never a crash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    /// The keyed process is still the task.
+    Running,
+    /// It exited after recording [`OK`].
+    Ok,
+    /// It exited after recording [`FAILED`].
+    Failed,
+    /// It is gone, or the pid is another process, with no terminal phase.
+    Crashed,
+}
+
+/// Read one record's state.
+#[must_use]
+pub fn state(entry: &Entry) -> State {
+    match entry.phase.as_str() {
+        OK if !task_alive(entry) => State::Ok,
+        FAILED if !task_alive(entry) => State::Failed,
+        _ if task_alive(entry) => State::Running,
+        _ => State::Crashed,
     }
 }
 
@@ -354,6 +398,7 @@ pub fn register(git_dir: &Path, task: &str, pid: &str, phase: &str, now: u64) {
             phase_since: started.clone(),
             started_at: started,
             cmdline_sha256: cmdline_digest(pid).unwrap_or_default(),
+            proc_start: process_start(pid).unwrap_or_default(),
             ..Entry::default()
         },
     );
@@ -372,7 +417,7 @@ pub fn register(git_dir: &Path, task: &str, pid: &str, phase: &str, now: u64) {
 fn supersede(git_dir: &Path, task: &str, pid: &str) {
     for entry in records(git_dir) {
         let sibling = entry.task == task && entry.pid != pid;
-        let dead = !task_alive(&entry.pid, &entry.cmdline_sha256);
+        let dead = !task_alive(&entry);
         if sibling && dead && !group_exists(&entry.pgid) {
             unregister(git_dir, &entry.pid);
         }
@@ -504,14 +549,42 @@ pub struct Alive {
 /// comparison reads as ALIVE: off Linux, where there is no cmdline to read, and
 /// for an entry an older binary wrote with no digest, which is reaped only once
 /// its pid is gone.
-fn task_alive(pid: &str, recorded: &str) -> bool {
-    if !pid_exists(pid) {
+///
+/// **THE KEY IS THE PID AND ITS START TICK (CLOUD-2840), AND IT OUTRANKS THE
+/// ASYMMETRY ABOVE.** A start tick is the kernel's own, so unlike a cmdline it
+/// cannot coincide across a recycle: wherever the live tick is readable a record
+/// whose tick differs, or that carries none, is not that process and reads as
+/// abandoned. A session's detached setup task is read by the next call to learn
+/// whether a tool it installs may run yet; a stale record read as live would
+/// hold that gate shut on a process that is not the task. Where no tick reads
+/// (off Linux) the digest decides, as before.
+fn task_alive(entry: &Entry) -> bool {
+    if !pid_exists(&entry.pid) {
         return false;
     }
-    let Some(live) = cmdline_digest(pid) else {
+    if let Some(live) = process_start(&entry.pid)
+        && entry.proc_start != live
+    {
+        return false;
+    }
+    let Some(live) = cmdline_digest(&entry.pid) else {
         return true;
     };
-    recorded.is_empty() || recorded == live
+    entry.cmdline_sha256.is_empty() || entry.cmdline_sha256 == live
+}
+
+/// A process's start time, field 22 of `/proc/<pid>/stat`, in clock ticks since
+/// boot; `None` where the file is unreadable (off Linux, or the pid is gone).
+///
+/// Fields are counted after the LAST `)`: field 2 is the command name in
+/// parentheses and may itself hold spaces and parentheses, so splitting the
+/// whole line would miscount for a program named `a) b`.
+#[must_use]
+pub fn process_start(pid: &str) -> Option<String> {
+    let stat = crate::fsio::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let (_, rest) = stat.rsplit_once(')')?;
+    // `rest` starts at field 3 (state), so field 22 is the twentieth word.
+    rest.split_whitespace().nth(19).map(str::to_owned)
 }
 
 /// The SHA-256 of `/proc/<pid>/cmdline`'s raw bytes, NULs included, in
@@ -644,7 +717,8 @@ fn render_line(entry: &Entry, running: bool, now: u64) -> String {
     } else {
         entry.phase.as_str()
     };
-    if running {
+    let finished = !running && matches!(entry.phase.as_str(), OK | FAILED);
+    if running || finished {
         format!("{} {phase} {} {age}s{in_phase}", entry.task, entry.pid)
     } else {
         format!(
@@ -738,7 +812,7 @@ fn alive_reading(
         if !entry.is_complete() {
             continue;
         }
-        let running = task_alive(&entry.pid, &entry.cmdline_sha256);
+        let running = task_alive(&entry);
         lines.push(render_line(&entry, running, options.now));
     }
     if lines.is_empty() {
@@ -788,9 +862,7 @@ pub fn abandoned(git_dir: &Path) -> Vec<Entry> {
 /// watchdog reads the first half as a relaunch already under way (CLOUD-2370).
 #[must_use]
 pub fn partition(git_dir: &Path) -> (Vec<Entry>, Vec<Entry>) {
-    records(git_dir)
-        .into_iter()
-        .partition(|entry| task_alive(&entry.pid, &entry.cmdline_sha256))
+    records(git_dir).into_iter().partition(task_alive)
 }
 
 /// Every complete record in the registry, in path order.
@@ -1454,6 +1526,72 @@ mod tests {
         assert_eq!(
             render_line(&entry, false, 160),
             "land crashed(unknown) 42 60s"
+        );
+    }
+
+    /// Fails by: a task that recorded its own outcome before exiting rendered
+    /// as a crash, or an unrecorded exit rendered as a finish.
+    #[test]
+    fn a_terminal_phase_is_a_finish_and_never_a_crash() {
+        for outcome in [OK, FAILED] {
+            let entry = Entry::parse(&format!(
+                "task: install\npid: {NO_SUCH_PID}\nphase: {outcome}\nstarted_at: 100\n"
+            ));
+            assert_eq!(
+                render_line(&entry, false, 160),
+                format!("install {outcome} {NO_SUCH_PID} 60s")
+            );
+        }
+        let ok = Entry::parse(&format!("task: t\npid: {NO_SUCH_PID}\nphase: ok\n"));
+        let failed = Entry::parse(&format!("task: t\npid: {NO_SUCH_PID}\nphase: failed\n"));
+        let died = Entry::parse(&format!("task: t\npid: {NO_SUCH_PID}\nphase: install\n"));
+        if cfg!(unix) {
+            assert_eq!(state(&ok), State::Ok);
+            assert_eq!(state(&failed), State::Failed);
+            assert_eq!(state(&died), State::Crashed);
+        }
+    }
+
+    /// Fails by: a record read as its process without the pid's start tick
+    /// matching — one with no tick, or another tick, under a LIVE pid — or a
+    /// registration that does not record the tick it is keyed on.
+    #[test]
+    fn a_record_is_keyed_on_its_pid_and_start_tick() {
+        let own = std::process::id().to_string();
+        let tick = process_start(&own);
+        if !cfg!(target_os = "linux") {
+            assert_eq!(tick, None);
+            return;
+        }
+        let Some(tick) = tick else {
+            panic!("a Linux process reads its own start tick");
+        };
+        assert!(tick.parse::<u64>().is_ok(), "{tick}");
+        assert_eq!(process_start(NO_SUCH_PID), None);
+        let dir = registry("start-tick");
+        register(&dir, "t", &own, "run", 100);
+        assert_eq!(read_field(&dir, &own, "proc_start"), Some(tick.clone()));
+        let keyed = Entry::parse(&format!("task: t\npid: {own}\nproc_start: {tick}\n"));
+        assert_eq!(state(&keyed), State::Running);
+        let unkeyed = Entry::parse(&format!("task: t\npid: {own}\n"));
+        assert_eq!(
+            state(&unkeyed),
+            State::Crashed,
+            "no tick reads as abandoned"
+        );
+        let recycled = Entry::parse(&format!("task: t\npid: {own}\nproc_start: 1{tick}\n"));
+        assert_eq!(
+            state(&recycled),
+            State::Crashed,
+            "another tick is another process"
+        );
+        let stamped = Entry::parse(&format!(
+            "task: t\npid: {own}\nphase: ok\nproc_start: {tick}\n"
+        ));
+        assert_eq!(
+            state(&stamped),
+            State::Running,
+            "a live task's last word is not yet a finish"
         );
     }
 
