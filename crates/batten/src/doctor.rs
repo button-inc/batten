@@ -793,6 +793,26 @@ pub fn record_gap(root: &Path, refusal: &crate::refusal::Refusal) {
     let _ = crate::journal::append_line(&store, &crate::journal::shard_id(root), &line);
 }
 
+/// Record one permission event the host sent about a call (CLOUD-2768): the
+/// event's token as the rule, `subject` (the tool's name, or for a shell call
+/// its first program's), and the day. [`record_gap`]'s journal family, so `doctor
+/// gaps` folds these with the refusals. POINTER-ONLY (rule 4): the caller hands
+/// in a name, never an argument or the host's `reason`. Silent on every
+/// failure, as [`record_gap`] is.
+pub fn record_permission_event(root: &Path, event: &str, subject: &str) {
+    let (Ok(git_dir), Ok(today)) = (git::git_dir(root), crate::waiver::today()) else {
+        return;
+    };
+    let line = serde_json::json!({
+        "rule": event,
+        "subject": subject,
+        "date": today.text(),
+    })
+    .to_string();
+    let store = crate::record::journal_store(&git_dir, GAP_FAMILY);
+    let _ = crate::journal::append_line(&store, &crate::journal::shard_id(root), &line);
+}
+
 /// One counted record, as [`record_gap`] writes it. `Cow`, because a string
 /// holding an escape cannot borrow from the line.
 #[derive(serde::Deserialize)]
@@ -807,7 +827,10 @@ struct GapRecord<'a> {
 
 /// `batten doctor gaps`: one line per (rule, subject) a counting rule refused,
 /// with its count and the last day it happened, most-refused first
-/// (CLOUD-2292).
+/// (CLOUD-2292). A line whose rule is `permission-request` or
+/// `permission-denied` is not a refusal: it counts a prompt or a classifier
+/// denial the host sent for a call batten allowed ([`record_permission_event`],
+/// CLOUD-2768).
 ///
 /// Plan mode's refusal counts, so a program that is really a read and keeps
 /// appearing here is a reader the preset lacks, which `batten preset eject`

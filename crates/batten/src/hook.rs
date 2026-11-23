@@ -5170,6 +5170,9 @@ fn event_decides(event: Event) -> Option<Decision> {
         | Event::PostCompact
         | Event::PreModelSwitch
         | Event::PostModelSwitch
+        // The two permission events are answered before this table is read,
+        // by the grant the call already had (`answer_permission_event` in
+        // `lib.rs`, CLOUD-2768); named here so neither falls through.
         | Event::PermissionRequest
         | Event::PermissionDenied
         | Event::Setup
@@ -9093,6 +9096,84 @@ pub fn policy_rewrite(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -
         }
     }
     changed.then_some(Value::Object(updated))
+}
+
+/// The grant a module gives a call at a PERMISSION event, `PermissionRequest`
+/// or `PermissionDenied`, as the granting rule's id (CLOUD-2768).
+///
+/// [`policy_preapproval`]'s sibling, which is pre-tool only by construction.
+/// The host sends these events after pre-tool, and only for a call batten
+/// allowed there, so the grant is the one the call already had. No deny module
+/// runs again, and no fact is consulted: the document is built over
+/// [`Facts::none`]. `None` at every other event, where no bundle is loaded, and
+/// where no module grants, which leaves the prompt to the host and the person.
+#[must_use]
+pub fn permission_grant(policy: &Policy, envelope: &Envelope) -> Option<String> {
+    if !is_permission_event(envelope.event) || policy.bundles.is_empty() {
+        return None;
+    }
+    let stop = crate::stop::StopFacts::default();
+    let waived = crate::waiver::Live::new();
+    let input = call_document(envelope, &Facts::none(&stop, &waived)).ok()?;
+    policy
+        .bundles
+        .iter()
+        .find_map(|bundle| match crate::policy::preapprove(bundle, &input) {
+            crate::facts::Look::Is(ids) => ids.into_iter().next(),
+            _ => None,
+        })
+}
+
+/// Whether `event` is one of the two the host sends about a call's permission
+/// after pre-tool (CLOUD-2768).
+#[must_use]
+pub const fn is_permission_event(event: Event) -> bool {
+    matches!(event, Event::PermissionRequest | Event::PermissionDenied)
+}
+
+/// The document answering a permission event with a grant (CLOUD-2768):
+/// `decision.behavior = "allow"` for `PermissionRequest`, `retry: true` for
+/// `PermissionDenied`. `None` for any other event, which has no such answer.
+#[must_use]
+pub fn permission_answer(event: Event) -> Option<Value> {
+    match event {
+        Event::PermissionRequest => Some(serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": { "behavior": "allow" },
+            }
+        })),
+        Event::PermissionDenied => Some(serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionDenied",
+                "retry": true,
+            }
+        })),
+        _ => None,
+    }
+}
+
+/// Whether a permission event is counted into `doctor gaps` (CLOUD-2768): the
+/// grant's own scope. Every mode but plan, whatever the answer, an envelope
+/// with no mode field included (the host sends a denial only in auto mode);
+/// and in plan, only an event the read-only grant answered. A write prompt in
+/// plan mode is neither answered nor counted.
+#[must_use]
+pub fn permission_counted(envelope: &Envelope, granted: bool) -> bool {
+    is_permission_event(envelope.event) && (granted || envelope.mode.as_deref() != Some("plan"))
+}
+
+/// The subject a permission event is counted under (CLOUD-2768): for a shell
+/// call, the `name` of the first program [`program_reach`] derives; otherwise,
+/// or where it derives none, the tool's name. POINTER-ONLY (rule 4): never an
+/// argument and never the host's `reason`, which is the classifier's text.
+#[must_use]
+pub fn permission_subject(envelope: &Envelope) -> String {
+    program_reach(&envelope.command)
+        .first()
+        .and_then(|program| program.get("name"))
+        .and_then(Value::as_str)
+        .map_or_else(|| envelope.raw_tool.clone(), str::to_owned)
 }
 
 /// The input document a policy module decides over.
