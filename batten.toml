@@ -19189,7 +19189,8 @@ tools = [["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
 id = "perf-gate"
-inputs = ["crates", "Cargo.toml", "Cargo.lock", ".config/nextest.toml", "bench", "batten.toml"]
+# `.cargo`: cargo probes `.cargo/config{,.toml}` on every run (CLOUD-2835).
+inputs = ["crates", "Cargo.toml", "Cargo.lock", ".config/nextest.toml", "bench", "batten.toml", ".cargo"]
 tools = [
   [
     "rustc",
@@ -19226,12 +19227,16 @@ tools = [
 
 [[step]]
 id = "commit-check"
-inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock"]
+# `.cargo` for `cross-check`'s reason (CLOUD-2835): cargo probes
+# `.cargo/config{,.toml}` on every run, and the whole-trace read refused both.
+inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock", ".cargo"]
 tools = [["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
 id = "commit-attribution"
-inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock"]
+# `.cargo` for `cross-check`'s reason (CLOUD-2835): cargo probes
+# `.cargo/config{,.toml}` on every run, and the whole-trace read refused both.
+inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock", ".cargo"]
 tools = [["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
@@ -19763,7 +19768,8 @@ tools = [
 # the step rather than minting a false hit.
 [[step]]
 id = "test:reference-coverage"
-inputs = ["crates", "Cargo.toml", "Cargo.lock", ".config/nextest.toml"]
+# `.cargo`: cargo probes `.cargo/config{,.toml}` on every run (CLOUD-2835).
+inputs = ["crates", "Cargo.toml", "Cargo.lock", ".config/nextest.toml", ".cargo"]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -19780,6 +19786,8 @@ inputs = [
   "batten.toml",
   "hk.pkl",
   "skills",
+  # cargo probes `.cargo/config{,.toml}` on every run (CLOUD-2835).
+  ".cargo",
 ]
 tools = [
   ["rustc", "--version"],
@@ -19798,6 +19806,8 @@ inputs = [
   "batten.example.toml",
   "hk.pkl",
   "schema",
+  # cargo probes `.cargo/config{,.toml}` on every run (CLOUD-2835).
+  ".cargo",
 ]
 tools = [
   ["rustc", "--version"],
