@@ -133,6 +133,10 @@ fn doctor(dir: &Path, extra: &[&str]) -> Output {
 
 // --- doctor mediator: WHICH engine the registrations reach (CLOUD-1349) -------
 
+/// A config pinning the engine to source: the one tree whose own build is the
+/// engine, so the only one whose mediator is compared with it (CLOUD-2840).
+const SOURCE_PINNED: &str = "version = 1\nengine = { source = \"ab\" }\n";
+
 /// A checkout that builds a mediator, with `batten` on `PATH` resolving to
 /// `planted`.
 ///
@@ -141,7 +145,7 @@ fn doctor(dir: &Path, extra: &[&str]) -> Output {
 /// hold. Nothing is executed, so neither needs to be a real program — which is
 /// also what keeps these cases fast and portable.
 fn mediator_fixture(name: &str, planted: &[u8], built: &[u8]) -> PathBuf {
-    let dir = scratch(name, true, Some("version = 1\n"));
+    let dir = scratch(name, true, Some(SOURCE_PINNED));
     // The manifest is what says "this tree builds a mediator". Its contents are
     // never parsed — only its existence decides the question is askable — so the
     // marker is deliberately minimal.
@@ -254,7 +258,7 @@ fn the_mediator_is_compared_against_the_build_this_tree_actually_writes() {
     // So the redirect points where the build IS, and the conventional path is
     // left EMPTY. A reader of the literal finds nothing and fails; only a reader
     // of the variable finds the build and matches it.
-    let dir = scratch("mediator-redirected-target", true, Some("version = 1\n"));
+    let dir = scratch("mediator-redirected-target", true, Some(SOURCE_PINNED));
     fs::create_dir_all(dir.join("crates/batten")).unwrap();
     fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").unwrap();
     let elsewhere = dir.join("written-elsewhere");
@@ -428,7 +432,7 @@ fn a_tree_that_builds_one_but_has_not_is_could_not_look_never_clean() {
     // have an artifact to compare and does not, which is a different claim from
     // a consumer checkout that never had one. Reading it as clean is the exact
     // shape — an unanswerable question passing — this verb is against.
-    let dir = scratch("mediator-unbuilt", true, Some("version = 1\n"));
+    let dir = scratch("mediator-unbuilt", true, Some(SOURCE_PINNED));
     fs::create_dir_all(dir.join("crates/batten")).unwrap();
     fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").unwrap();
     let bin = dir.join("planted-bin");
