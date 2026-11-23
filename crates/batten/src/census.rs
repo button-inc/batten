@@ -211,9 +211,9 @@ impl ShellCensusExt for ShellCensus {
 fn holds_test(file: &str, text: &str, name: &str) -> bool {
     use ra_ap_syntax::AstNode as _;
     use ra_ap_syntax::ast::HasName as _;
-    if !std::path::Path::new(file)
+    if std::path::Path::new(file)
         .extension()
-        .is_some_and(|extension| extension == "rs")
+        .is_none_or(|extension| extension != "rs")
     {
         return false;
     }
@@ -820,9 +820,7 @@ fn walk_macro(
     };
     let mut inner_found = BTreeMap::new();
     walk_spawns(tree.syntax(), &wrapped, 0, &mut inner_found);
-    let is_vec = mac
-        .path()
-        .is_some_and(|path| path.syntax().text().to_string() == "vec");
+    let is_vec = mac.path().is_some_and(|path| path.syntax().text() == "vec");
     if !is_vec {
         // Only `vec!` makes its list an argv; drop the wrapper array's own site.
         if let Some(array) = tree
@@ -852,7 +850,7 @@ fn test_code(node: &ra_ap_syntax::SyntaxNode) -> bool {
             || ra_ap_syntax::ast::Fn::cast(ancestor).is_some_and(|function| {
                 function.attrs().any(|attr| {
                     attr.path()
-                        .is_some_and(|path| path.syntax().text().to_string() == "test")
+                        .is_some_and(|path| path.syntax().text() == "test")
                 })
             })
     })
