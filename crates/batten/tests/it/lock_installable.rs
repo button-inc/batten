@@ -142,6 +142,8 @@ fn the_lock_installs_without_an_attestation_read() {
         "MISE_LOCKFILE=true",
         "MISE_LOCKED=1",
         "MISE_AQUA_GITHUB_ATTESTATIONS=false",
+        // `github:` tools verify under their own setting (CLOUD-2845).
+        "MISE_GITHUB_GITHUB_ATTESTATIONS=false",
     ] {
         assert!(
             argv.iter().any(|arg| arg == setting),

@@ -6885,10 +6885,16 @@ environments = ["agent"]
 # a `names-no-case` nobody runs, so this header is the row's own.
 #MUTANT-SUITE crates/batten/tests/it/lock_installable.rs
 #MUTANT repair-verifies-attestations|s@^  "MISE_AQUA_GITHUB_ATTESTATIONS=false",$@@|the_lock_installs_without_an_attestation_read
+#MUTANT repair-verifies-github-attestations|s@^  "MISE_GITHUB_GITHUB_ATTESTATIONS=false",$@@|the_lock_installs_without_an_attestation_read
+#
+# EACH BACKEND HAS ITS OWN SETTING (CLOUD-2845): the `aqua:` one alone left
+# `github:` tools (`cargo-semver-checks`, `cargo-auditable`) verifying, and both
+# 403'd after their checksums passed.
 install_env = [
   "MISE_LOCKFILE=true",
   "MISE_LOCKED=1",
   "MISE_AQUA_GITHUB_ATTESTATIONS=false",
+  "MISE_GITHUB_GITHUB_ATTESTATIONS=false",
 ]
 
 # THE SAME PRESET AT THE OTHER SURFACE (CLOUD-1672), and two rows rather than one
