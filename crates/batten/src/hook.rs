@@ -6382,10 +6382,10 @@ pub struct Facts<'a> {
     /// is the COMMON case (CLOUD-388) and allows: a session with no transcript
     /// has not established that nothing was stranded.
     pub extracted: &'a crate::facts::Look<std::collections::BTreeMap<String, usize>>,
-    /// Whether this call's session-management prompt carries both dispatch
-    /// receipts (CLOUD-1978). Could-not-look allows nothing extra: the grant
-    /// reads only `true`.
-    pub dispatch: &'a crate::facts::Look<()>,
+    /// The brief lint's report on this call's session-management message
+    /// (CLOUD-2858): `IsNot` for any other call, and could-not-look, like
+    /// `IsNot`, raises nothing.
+    pub dispatch: &'a crate::facts::Look<crate::brief::Report>,
     /// The current branch's red-head record, already projected to its policy
     /// shape (CLOUD-2270). Anything but `Is` projects `null`, which a module
     /// reads as "no push over this head owes a read".
@@ -9323,13 +9323,18 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                 }
                 crate::facts::Look::Is(programs) => serde_json::json!(programs),
             }),
-            // A BOOLEAN AND NOTHING ELSE (CLOUD-1978): `false` for a call that is
-            // not a session-management method or whose prompt lacks a receipt,
-            // `null` only when the store could not be located.
-            crate::facts::Fact::DispatchCleared => Some(match facts.dispatch {
-                crate::facts::Look::Is(()) => serde_json::Value::Bool(true),
-                crate::facts::Look::IsNot => serde_json::Value::Bool(false),
-                crate::facts::Look::CouldNotLook => serde_json::Value::Null,
+            // THE LINT'S IDS AND NOTHING ELSE (CLOUD-2858): never a byte of the
+            // message. `null` for a call that is not a session-management
+            // method, which the module reads as nothing to refuse.
+            crate::facts::Fact::DispatchBrief => Some(match facts.dispatch {
+                crate::facts::Look::Is(report) => serde_json::json!({
+                    "clean": report.is_clean(),
+                    "missing": report.missing,
+                    "unrunnable": report.unrunnable,
+                }),
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
             }),
             // THE RECORD OR `null` (CLOUD-2270): no record and a record nobody
             // could read both owe a push nothing a module can act on.

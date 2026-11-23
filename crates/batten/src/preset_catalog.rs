@@ -972,14 +972,6 @@ than its producer, which writes whole or removes, and reads the same way.",
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
-                pointer: "<preset:claude-code-cloud>/dispatch-is-preapproved.rego",
-                embedded_source: include_str!(
-                    "policy/presets/claude-code-cloud/dispatch-is-preapproved.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
                 pointer: "<preset:claude-code-cloud>/subagent-is-preapproved.rego",
                 embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/subagent-is-preapproved.rego"
@@ -2634,6 +2626,39 @@ session, by a count of presentations in its transcript; the next is admitted.",
                 "plan read first",
                 "re-read every pointer the plan cites, reproduce its numbers, have an isolated \
 reader check it, then present the corrected plan",
+            )],
+            applicability: Applicability::Advice,
+        }],
+        patterns: &[],
+    },
+    // A sibling-session dispatch whose message fails the brief lint is refused
+    // (CLOUD-2858). Its own preset for `claude-code-plan`'s reason: a deny class
+    // added to `claude-code-cloud` would rename the consumer's existing row.
+    Manifest {
+        name: "claude-code-dispatch",
+        version: semver::Version::new(0, 0, 1),
+        suggested: true,
+        install: None,
+        modules: &[PresetModule {
+            scope: RuleScope::MediatedCall,
+            provider: None,
+            pointer: "<preset:claude-code-dispatch>/dispatch-brief-is-linted.rego",
+            embedded_source: include_str!(
+                "policy/presets/claude-code-dispatch/dispatch-brief-is-linted.rego"
+            ),
+        }],
+        verdicts: &[VendoredVerdict {
+            id: "dispatch brief refused",
+            gloss: "a session dispatch whose message fails the brief lint",
+            class: "A message that starts or steers another session is the whole of what \
+that session knows. `batten lint brief` checks it carries every required section and a runnable \
+check; a message that fails is refused here, by the gate and never by a human, and the refusal \
+names each section that is missing or carries no command. A message that passes is granted like \
+any call the engine allows (CLOUD-2858).",
+            routes: &[run(
+                "brief fix first",
+                "add each section the refusal names, with a fenced command under `check`, and \
+confirm with `batten lint brief`",
             )],
             applicability: Applicability::Advice,
         }],

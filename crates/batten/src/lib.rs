@@ -20161,7 +20161,7 @@ struct CallFacts {
     install_pending: Option<serde_json::Value>,
     lap_held: Option<Vec<serde_json::Value>>,
     unread_history: facts::Look<Vec<String>>,
-    dispatch: facts::Look<()>,
+    dispatch: facts::Look<brief::Report>,
     pinned: facts::Look<std::collections::BTreeSet<String>>,
     red_head: facts::Look<serde_json::Value>,
     commit_subject: facts::Look<String>,
@@ -24917,27 +24917,20 @@ fn record_one_agent_fact(
     );
 }
 
-/// Whether this call's session-management prompt is cleared for dispatch
-/// (CLOUD-1978).
+/// The brief lint's report on this call's session-management message
+/// (CLOUD-2858).
 ///
 /// Asked only of a pre-tool call to a method `dispatch::prompt_of` names, so
-/// every other call pays nothing. The store is found from the repository's
-/// anchor, never the cwd, for `record_mints`' measured reason.
-fn dispatch_facts(envelope: &hook::Envelope) -> facts::Look<()> {
+/// every other call pays nothing, and linted in process: no receipt is read
+/// and no file is stat'ed. The gate decides, never a human: a clean report is
+/// no finding, and the mode grant answers the call like any it allows.
+fn dispatch_facts(envelope: &hook::Envelope) -> facts::Look<brief::Report> {
     if envelope.event != crate::config_model::Event::PreTool {
         return facts::Look::IsNot;
     }
-    let Some(prompt) = dispatch::prompt_of(&envelope.raw_tool, &envelope.input) else {
-        return facts::Look::IsNot;
-    };
-    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
-        return facts::Look::CouldNotLook;
-    };
-    if dispatch::cleared(&git_dir, prompt) {
-        facts::Look::Is(())
-    } else {
-        facts::Look::IsNot
-    }
+    dispatch::prompt_of(&envelope.raw_tool, &envelope.input).map_or(facts::Look::IsNot, |message| {
+        facts::Look::Is(brief::problems(message))
+    })
 }
 
 /// Everything the post-tool event records, in the order it must happen.
@@ -25009,17 +25002,6 @@ fn record_post_tool(
     // so it is keyed to a HOST fact rather than to a row a branch could edit.
     record_asked(envelope, harness);
     record_history_reads(envelope);
-    // THE APPROVAL RECEIPT (CLOUD-1978): the owner's answer to a question naming
-    // drafted dispatch prompts by digest. Read from the result — what the host
-    // recorded from the human — never from the input the caller filled.
-    // Best-effort for `record_mints`' reason: a store that cannot be written
-    // leaves the dispatch prompting, never granted.
-    if envelope.raw_tool == dispatch::QUESTION_TOOL
-        && let Ok(git_dir) = git::git_dir(hook_authority_root())
-    {
-        let result = facts::payload_in(&envelope.result).unwrap_or_else(|| envelope.result.clone());
-        let _ = dispatch::record_approvals(&git_dir, &envelope.input, &result);
-    }
     // CLOUD-1051's, on the same selector and after it. A mint renders a closed
     // template; a recorder may additionally run a declared program and record
     // what it decided, which is what a board write's refinement column IS.
@@ -31540,17 +31522,9 @@ fn run_lint_brief(path: Option<&str>, json: bool, out: &mut dyn Write) -> Result
         })?,
     };
 
+    // No receipt (CLOUD-2858): the hook lints a dispatch's message in process,
+    // so this verb's output and exit are its whole answer.
     let report = brief::problems(&text);
-    // THE PROMPT RECEIPT (CLOUD-1978): a brief that passes is recorded under its
-    // own digest, so a dispatch the owner approves can later be matched to the
-    // exact bytes that passed. Best-effort and silent: a store that cannot be
-    // written leaves the dispatch prompting, which is the safe direction, and
-    // must not turn a clean lint into a failed one.
-    if report.is_clean()
-        && let Ok(git_dir) = git::git_dir(std::path::Path::new("."))
-    {
-        let _ = dispatch::record_brief(&git_dir, &text);
-    }
     if json {
         // Emitted unconditionally, including the clean run: JSON that is
         // sometimes absent is unparseable, the same reasoning `config lint -J`

@@ -35,8 +35,8 @@ fn a_content_block_envelope_unwraps_to_the_payload_a_bare_one_carries() {
 
 use batten::facts::{
     AGENT_SOURCED, BASE, BASE_DELTA, BUDGETED, CAPTURED, COMMIT_META, COUPLING, Class, Cost,
-    DISPATCH_CLEARED, DOCUMENT, EXTERNAL, EXTRACTED, FORGE, Fact, GIT_CONFIG, GIT_HEAD,
-    GIT_HISTORY, GIT_INDEX, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_TAGS, GIT_WORKTREES,
+    DISPATCH_BRIEF, DOCUMENT, EXTERNAL, EXTRACTED, FORGE, Fact, GIT_CONFIG, GIT_HEAD, GIT_HISTORY,
+    GIT_INDEX, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_TAGS, GIT_WORKTREES,
     INSTALL_PENDING, INSTANT, INVOCATIONS, KEYS, LAND_LIVE, LANDING, LINES, Look, MINTED,
     PATHSPEC_STATUS, PINNED, PLAN, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED,
     RED_HEAD, REVIEW, SHELL, SHELL_INTRODUCED, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS,
@@ -167,7 +167,7 @@ fn every_fact_returns_its_stated_const() {
             Fact::Instant => INSTANT,
             Fact::Pinned => PINNED,
             // CLOUD-1978. Two file stats for this call's own prompt digest.
-            Fact::DispatchCleared => DISPATCH_CLEARED,
+            Fact::DispatchBrief => DISPATCH_BRIEF,
             Fact::LandLive => LAND_LIVE,
             Fact::InstallPending => INSTALL_PENDING,
             // CLOUD-2270. One record read and a stat per failed run.

@@ -246,6 +246,27 @@ fn a_tool_with_no_command_is_answered_too() {
     );
 }
 
+/// A DISPATCH PROMPT IN PLAN MODE IS NOT GRANTED, a passing brief included
+/// (CLOUD-2858): plan mode is read-only and a dispatch is no read. A prompt
+/// case, not a pre-tool one, because at pre-tool `plan write refused` denies
+/// first and would hide the grant. Fails by: the grant ignoring plan
+/// (`dispatch-granted-in-plan`).
+#[test]
+fn a_dispatch_prompt_in_plan_mode_is_not_granted() {
+    let root = root("dispatch-plan");
+    let message = "## identifiers\nx\n\n## period\nx\n\n## instructions\nx\n\n## read\nx\n\n\
+                   ## check\n\n```\nmise run lint:clippy\n```\n";
+    let payload = envelope(
+        "PermissionRequest",
+        Some("plan"),
+        "mcp__Claude_Code_Remote__create_session",
+        &serde_json::json!({ "prompt": message }),
+    );
+    let (code, documents) = adjudicate(&root, &payload);
+    assert_eq!(code, Some(0), "{documents:?}");
+    assert!(!allowed(&documents), "{documents:?}");
+}
+
 /// POINTER-ONLY (rule 4): neither the call's argument nor the host's `reason`
 /// reaches the gap list or the answer. Fails by: a subject built from the whole
 /// command (`gap-subject-carries-arguments`).

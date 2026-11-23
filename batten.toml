@@ -11946,6 +11946,7 @@ gates = [
   "answer-the-operator",
   "claude-code-cloud",
   "claude-code-plan",
+  "claude-code-dispatch",
   "awk-regex",
   "cap-drift",
   "cfg-gated-test",

@@ -174,6 +174,7 @@ const PRESET_SCOPES: &[(&str, &[bool])] = &[
     ("landing-loop", &[true]),
     ("claude-code-cloud", &[false]),
     ("claude-code-plan", &[false]),
+    ("claude-code-dispatch", &[false]),
     ("ci-signal", &[true]),
     ("supply-chain", &[true]),
     ("tracker-hygiene", &[true]),
@@ -1452,7 +1453,7 @@ const PLAN_MODE_EDIT: &str = r#"{"call":{"event":"pre-tool","permission-mode":"p
 fn an_excepted_module_lets_a_local_copy_load_without_collision() {
     let manifest = batten::preset_catalog::find("claude-code-cloud").expect("the preset ships");
     let dispatch = manifest
-        .module("dispatch-is-preapproved")
+        .module("subagent-is-preapproved")
         .expect("the module ships");
     assert_eq!(
         manifest.closure(dispatch).len(),
@@ -1463,7 +1464,7 @@ fn an_excepted_module_lets_a_local_copy_load_without_collision() {
     // The header an eject writes, which is what lets the copy keep the preset's
     // own inline patterns.
     let copied = format!(
-        "# batten-ejected: claude-code-cloud/dispatch-is-preapproved version {}\n{}",
+        "# batten-ejected: claude-code-cloud/subagent-is-preapproved version {}\n{}",
         manifest.version,
         dispatch.text()
     );
@@ -1492,7 +1493,7 @@ fn an_excepted_module_lets_a_local_copy_load_without_collision() {
 
     let bundles = policy::load(
         &root,
-        &[cloud_row(&["dispatch-is-preapproved"]), copy.clone()],
+        &[cloud_row(&["subagent-is-preapproved"]), copy.clone()],
         policy::Vocabulary::EMPTY,
         policy::ModuleChecks::Run,
         None,
@@ -1508,7 +1509,7 @@ fn an_excepted_module_lets_a_local_copy_load_without_collision() {
     .expect("extend the copy");
     let added = policy::load(
         &root,
-        &[cloud_row(&["dispatch-is-preapproved"]), copy],
+        &[cloud_row(&["subagent-is-preapproved"]), copy],
         policy::Vocabulary::EMPTY,
         policy::ModuleChecks::Run,
         None,
