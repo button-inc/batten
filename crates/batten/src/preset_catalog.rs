@@ -2663,6 +2663,7 @@ mod tests {
             name: "fixture",
             version,
             suggested: false,
+            install: None,
             modules,
             verdicts: &[],
             patterns: &[],
