@@ -885,12 +885,21 @@ reason = "Name the issue this work serves: in the branch, in a commit on it, or 
 # because a shape row's `pattern` is one command line, and `create` and `ready`
 # are two — the alternative would be a `patterns` list whose only user is this
 # pair.
+#
+# THE EVENT, NOT THE SPELLING (CLOUD-2662). `on = "pull-request-ready"` is due on
+# every route the engine mediates that can leave a PR open and not draft: `gh pr
+# ready` without `--undo`, `gh pr create` without `--draft`, `gh pr reopen`, a
+# `gh api` ready mutation, and the forge connector's create or undraft. `gh pr
+# ready --undo` and a draft PR's body edit owe nothing. The six ready rows below
+# take the same column.
+#MUTANT-SUITE crates/batten/tests/it/ready_routes.rs
+#MUTANT repo-ready-shape-on-pattern|s@^on = "pull-request-ready"[[:space:]]*# review open unnamed$@pattern = "gh pr ready"@|the_repos_own_config_admits_ready_undo
 [[rule]]
 id = "review open unnamed"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
-pattern = "gh pr ready"
+on = "pull-request-ready" # review open unnamed
 requires_key = '(?i)\bCLOUD-[0-9]+\b'
 base = "origin/main"
 reason = """
@@ -921,7 +930,7 @@ id = "check read unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
-pattern = "gh pr ready"
+on = "pull-request-ready"
 checks = ["verify", "linear-check"]
 key = "head"
 reason = "Run `mise run land` (backgrounded): each lap runs `verify` and `linear-check`, reusing a `verify` receipt already on this head, and readies the head itself. Readying is what starts CI, so it waits for a green head."
@@ -1176,7 +1185,7 @@ id = "review answer unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
-pattern = "gh pr ready"
+on = "pull-request-ready"
 checks = ["review-answered"]
 key = "head"
 reason = "Read the review before buying a matrix: run the declared command, answer each line it prints, then retry. If no review exists yet, request one with `@coderabbitai full review` and answer it."
@@ -1196,7 +1205,7 @@ id = "review answer partial"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
-pattern = "gh pr ready"
+on = "pull-request-ready"
 checks = ["review-threads-clear"]
 key = "head"
 reason = "Read the review threads before buying a matrix: `pull_request_read` with method `get_review_comments` and `perPage` 100 mints the record. Answer and resolve them, read again, then retry; a push needs another read."
@@ -1218,7 +1227,7 @@ id = "review list unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
-pattern = "gh pr ready"
+on = "pull-request-ready"
 checks = ["review-happened"]
 key = "head"
 reason = "Read the reviews on this head: `pull_request_read` with method `get_reviews` mints the record. If there are none, request one with `@coderabbitai full review`. A push needs another read."
@@ -8674,7 +8683,7 @@ id = "review ask missing"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
-pattern = "gh pr ready"
+on = "pull-request-ready"
 checks = ["simplify", "security-review", "code-review"]
 key = "delta"
 key_base = "origin/main"
