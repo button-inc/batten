@@ -943,13 +943,78 @@ fn place_tree(
         std::fs::remove_file(&marker)
             .with_context(|| format!("test replay: clear {}", marker.display()))?;
     }
-    if tree.exists() {
-        std::fs::remove_dir_all(tree)
-            .with_context(|| format!("test replay: clear {}", tree.display()))?;
+    if tree.is_dir() {
+        // A KEPT TREE IS SYNCED TO THE NEW HEAD, NEVER CLEARED (CLOUD-2789).
+        // Cleared, every file took a fresh mtime and cargo's fingerprints in
+        // the persistent `target/replay` rebuilt the whole workspace for a
+        // HEAD that moved one file. Synced, a file whose bytes are HEAD's keeps
+        // its mtime, so the union rebuilds exactly the crates that changed and
+        // nothing when none did. The borrowed repository names the old HEAD,
+        // so it goes, and the caller borrows it afresh.
+        let fresh = state.join("tree.next");
+        if fresh.exists() {
+            std::fs::remove_dir_all(&fresh)
+                .with_context(|| format!("test replay: clear {}", fresh.display()))?;
+        }
+        crate::git::materialize_rev(root, "HEAD", &fresh)?;
+        sync_tree(&fresh, tree)?;
+        std::fs::remove_dir_all(&fresh)
+            .with_context(|| format!("test replay: clear {}", fresh.display()))?;
+        let borrowed = tree.join(".git");
+        if borrowed.exists() {
+            std::fs::remove_dir_all(&borrowed)
+                .with_context(|| format!("test replay: clear {}", borrowed.display()))?;
+        }
+    } else {
+        crate::git::materialize_rev(root, "HEAD", tree)?;
     }
-    crate::git::materialize_rev(root, "HEAD", tree)?;
     crate::durable::replace(&marker, head)
         .with_context(|| format!("test replay: record {}", marker.display()))
+}
+
+/// Make `to` hold exactly `from`'s files, touching only what differs: a file
+/// whose bytes match is left with its mtime, a differing or new one is copied
+/// over, and a file `from` lacks is removed. `to`'s own `.git` is never read
+/// as part of the tree.
+fn sync_tree(from: &Path, to: &Path) -> Result<()> {
+    let files = |root: &Path| -> Result<BTreeSet<std::path::PathBuf>> {
+        let mut found = BTreeSet::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir)
+                .with_context(|| format!("test replay: read {}", dir.display()))?
+            {
+                let path = entry?.path();
+                let relative = path.strip_prefix(root)?.to_path_buf();
+                if relative == Path::new(".git") {
+                    continue;
+                }
+                if std::fs::symlink_metadata(&path)?.is_dir() {
+                    pending.push(path);
+                } else {
+                    found.insert(relative);
+                }
+            }
+        }
+        Ok(found)
+    };
+    let (wanted, held) = (files(from)?, files(to)?);
+    for relative in &wanted {
+        let (source, target) = (from.join(relative), to.join(relative));
+        if std::fs::read(&source).ok() == std::fs::read(&target).ok() {
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&source, &target)
+            .with_context(|| format!("test replay: sync {}", relative.display()))?;
+    }
+    for relative in held.difference(&wanted) {
+        std::fs::remove_file(to.join(relative))
+            .with_context(|| format!("test replay: drop {}", relative.display()))?;
+    }
+    Ok(())
 }
 
 /// Rewrite every Rust file of a kept `tree` whose text is not HEAD's (`after`):
@@ -1922,6 +1987,39 @@ mod tests {
         assert!(passes(said(101, "error: no such command: `nextest`").as_ref(), "t").is_err());
         assert!(passes(said(4, "").as_ref(), "t").is_err());
         assert!(passes(None, "t").is_err());
+    }
+
+    /// Fails by: a kept tree cleared for a new HEAD, so every file took a new
+    /// mtime and the union rebuilt the workspace for a one-file move (#1276).
+    /// An unchanged file keeps its mtime; a changed one is rewritten; a new
+    /// one appears; a gone one goes; the tree's `.git` is left to its owner.
+    #[test]
+    fn a_kept_tree_is_synced_touching_only_what_differs() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("sync-tree-{}", std::process::id()));
+        let (from, to) = (dir.join("from"), dir.join("to"));
+        for root in [&from, &to] {
+            std::fs::create_dir_all(root.join("src"))?;
+            std::fs::write(root.join("src/same.rs"), "same")?;
+        }
+        std::fs::write(from.join("src/changed.rs"), "new")?;
+        std::fs::write(to.join("src/changed.rs"), "old")?;
+        std::fs::write(from.join("src/added.rs"), "added")?;
+        std::fs::write(to.join("src/gone.rs"), "gone")?;
+        std::fs::create_dir_all(to.join(".git"))?;
+        std::fs::write(to.join(".git/HEAD"), "ref")?;
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(to.join("src/same.rs"))?
+            .set_modified(old)?;
+        sync_tree(&from, &to)?;
+        assert_eq!(std::fs::metadata(to.join("src/same.rs"))?.modified()?, old);
+        assert_eq!(std::fs::read_to_string(to.join("src/changed.rs"))?, "new");
+        assert_eq!(std::fs::read_to_string(to.join("src/added.rs"))?, "added");
+        assert!(!to.join("src/gone.rs").exists());
+        assert!(to.join(".git/HEAD").exists());
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
     }
 
     /// Fails by: a failing case's captured output holding an inner nextest
