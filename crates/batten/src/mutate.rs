@@ -185,6 +185,23 @@ pub fn changed_since() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// The variable that asks `mutate cargo` for the whole workspace's mutants
+/// rather than a change's (CLOUD-2849): the scheduled sweep's scope, declared
+/// in the environment beside [`changed_since`]'s base for that function's
+/// reason.
+pub const WHOLE_TREE: &str = "MUTANT_WHOLE_TREE";
+
+/// Whether [`WHOLE_TREE`] is set to anything but blank.
+///
+/// THE SCHEDULE'S PROOF OVER EVERY RUST SOURCE (CLOUD-2849): with the
+/// hand-written Rust rows retired onto cargo-mutants, a sweep that only ever
+/// listed a diff left code no change touches with no mutation judged against
+/// its suite at all. A whole-tree run lists `--workspace` and carries no base.
+#[must_use]
+pub fn whole_tree() -> bool {
+    std::env::var(WHOLE_TREE).is_ok_and(|value| !value.trim().is_empty())
+}
+
 /// The lines of one inline task's table, header included, or `None` where the
 /// manifest declares no such task (CLOUD-1909).
 ///
@@ -5670,13 +5687,18 @@ pub fn write_change(
     Ok(Some(sources.len()))
 }
 
-/// Every mutant cargo-mutants makes of `diff`, as `--list --json` names them:
-/// its own generator, so the schema judges exactly the set it would.
+/// Every mutant cargo-mutants makes of `diff`, or of the whole workspace where
+/// there is none, as `--list --json` names them: its own generator, so the
+/// schema judges exactly the set it would.
 ///
 /// # Errors
 ///
 /// `runner` cannot be spawned, refuses, or prints no listing.
-pub fn list_mutants(root: &Path, runner: &Path, diff: &Path) -> Result<Vec<schema::Listed>> {
+pub fn list_mutants(
+    root: &Path,
+    runner: &Path,
+    diff: Option<&Path>,
+) -> Result<Vec<schema::Listed>> {
     let args = cargo_mutants_argv(diff, ["--list", "--json"].map(String::from));
     let runner = runner.to_string_lossy();
     let ran = spawn(root, Program::Command(&runner), &args, &[], runner_bound())?;
@@ -5689,15 +5711,19 @@ pub fn list_mutants(root: &Path, runner: &Path, diff: &Path) -> Result<Vec<schem
     schema::listing(&ran.stdout)
 }
 
-/// cargo-mutants' argv over the change in `diff`, then `rest`: BUILT HERE AND
+/// cargo-mutants' argv over the change in `diff`, or over every package of the
+/// workspace where there is none (CLOUD-2849), then `rest`: BUILT HERE AND
 /// NOWHERE ELSE (`mutation_markers`), so the listing the schema judges and the
-/// run that judges what it hands back read one change the one way.
-fn cargo_mutants_argv(diff: &Path, rest: impl IntoIterator<Item = String>) -> Vec<String> {
-    let mut args = vec![
-        String::from("mutants"),
-        String::from("--in-diff"),
-        diff.to_string_lossy().into_owned(),
-    ];
+/// run that judges what it hands back read one scope the one way.
+fn cargo_mutants_argv(diff: Option<&Path>, rest: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut args = vec![String::from("mutants")];
+    match diff {
+        Some(diff) => args.extend([
+            String::from("--in-diff"),
+            diff.to_string_lossy().into_owned(),
+        ]),
+        None => args.push(String::from("--workspace")),
+    }
     args.extend(rest);
     args
 }
@@ -5729,7 +5755,7 @@ pub fn exactly(name: &str) -> String {
 ///
 /// A `runner` that cannot be spawned.
 pub fn cargo_mutant_in_place(
-    (tree, runner, diff): (&Path, &Path, &Path),
+    (tree, runner, diff): (&Path, &Path, Option<&Path>),
     name: &str,
     filter: Option<&str>,
     timeout: std::time::Duration,
@@ -6261,14 +6287,21 @@ mod tests {
             path
         };
         let diff = root.join("change.diff");
-        let got = list_mutants(&root, &runner("lists", 0), &diff).expect("listed");
+        let got = list_mutants(&root, &runner("lists", 0), Some(&diff)).expect("listed");
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].name, "m");
         assert_eq!(
             crate::fsio::read_to_string(root.join("args")).expect("args"),
             format!("mutants\n--in-diff\n{}\n--list\n--json\n", diff.display())
         );
-        assert!(list_mutants(&root, &runner("refuses", 1), &diff).is_err());
+        assert!(list_mutants(&root, &runner("refuses", 1), Some(&diff)).is_err());
+        // THE WHOLE WORKSPACE (CLOUD-2849): no diff is `--workspace`, never an
+        // `--in-diff` with nothing after it.
+        list_mutants(&root, &runner("whole", 0), None).expect("listed");
+        assert_eq!(
+            crate::fsio::read_to_string(root.join("args")).expect("args"),
+            "mutants\n--workspace\n--list\n--json\n"
+        );
     }
 
     /// The overlay the environment declares reaches every sweep's cargo
