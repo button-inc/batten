@@ -337,6 +337,7 @@ mod perf_compare;
 mod perf_latency;
 mod perf_pair;
 mod perf_series;
+mod permission_events;
 mod pinned_programs;
 mod pipefail_grep;
 mod pipeline_shapes;
