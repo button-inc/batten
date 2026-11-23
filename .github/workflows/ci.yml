@@ -1187,8 +1187,10 @@ jobs:
   mutants:
     name: mutants (${{ matrix.shard }})
     # `!cancelled()`, NOT THE DEFAULT `success()`: `mutants-reach` is a saving,
-    # never a verdict, so a shard runs when it failed and builds for itself.
-    if: ${{ !cancelled() && github.event.pull_request.draft == false && needs.ci.result == 'success' }}
+    # never a verdict, so a shard runs whether it passed or failed, and builds
+    # for itself after a failure. Both dependencies named, so the condition
+    # visibly answers for each (`job require unseen`).
+    if: ${{ !cancelled() && github.event.pull_request.draft == false && needs.ci.result == 'success' && (needs.mutants-reach.result == 'success' || needs.mutants-reach.result == 'failure') }}
     strategy:
       fail-fast: false
       matrix:
