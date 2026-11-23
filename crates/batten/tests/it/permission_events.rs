@@ -326,12 +326,16 @@ fn no_argument_reaches_the_gap_list() {
 /// THE BRANCH RETURNS BEFORE THE HANDLERS: a permission event is answered with
 /// the grant the call already had, and is not adjudicated again. Fails by: the
 /// branch moved below `dispatch_handlers` (`permission-event-readjudicates`).
-/// Unix-only: the handler is a `#!/bin/sh` script, which only a unix host runs.
-#[cfg(unix)]
 #[test]
 fn no_handler_runs_at_a_permission_event() {
+    // The handler is a `#!/bin/sh` script, which only a unix host executes; the
+    // case compiles everywhere and asserts there (CLOUD-1148's `cfg!` shape).
+    if !cfg!(unix) {
+        return;
+    }
     let root = root("no-handler");
     common::write(&root, "mark.sh", "#!/bin/sh\ntouch handler-ran\n");
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(root.join("mark.sh"), std::fs::Permissions::from_mode(0o755))
