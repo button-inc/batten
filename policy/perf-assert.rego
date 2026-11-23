@@ -379,22 +379,41 @@ test_a_sibling_rows_record_is_not_read if {
 	}}
 }
 
+# EACH README CASE CHANGES ONE ROW, KEEPS EVERY OTHER, AND NAMES THE ID IT EXPECTS
+# TO DISAGREE. A fixed slice of `agreeing_readme` went vacuous when the commit-step
+# rows were appended (CLOUD-2789): it dropped them, so the absent-row clause alone
+# satisfied `count(violation) == 1`, and `published[id] != budgets[id]` could be
+# deleted with every case green. `disagreeing == {id}` is what fails then.
+readme_with_row(index, row) := array.concat(
+	array.slice(agreeing_readme, 0, index),
+	array.concat([row], array.slice(agreeing_readme, index + 1, count(agreeing_readme))),
+)
+
+readme_without_row(index) := array.concat(
+	array.slice(agreeing_readme, 0, index),
+	array.slice(agreeing_readme, index + 1, count(agreeing_readme)),
+)
+
 test_a_readme_publishing_a_different_budget_is_refused if {
+	readme := readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 50 ms |")
 	count(violation) == 1 with input as {"tree": {
-		"lines": {"README.md": array.concat(
-			array.slice(agreeing_readme, 0, 2),
-			array.concat(
-				["| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 50 ms |"],
-				array.slice(agreeing_readme, 3, 9),
-			),
-		)},
+		"lines": {"README.md": readme},
+		"tool-verdict": {"perf-p95": clean_record},
+	}}
+	disagreeing == {"noop"} with input as {"tree": {
+		"lines": {"README.md": readme},
 		"tool-verdict": {"perf-p95": clean_record},
 	}}
 }
 
 test_a_readme_with_no_row_for_a_budgeted_path_is_refused if {
+	readme := readme_without_row(8)
 	count(violation) == 1 with input as {"tree": {
-		"lines": {"README.md": array.slice(agreeing_readme, 0, 8)},
+		"lines": {"README.md": readme},
+		"tool-verdict": {"perf-p95": clean_record},
+	}}
+	disagreeing == {"wired"} with input as {"tree": {
+		"lines": {"README.md": readme},
 		"tool-verdict": {"perf-p95": clean_record},
 	}}
 }
@@ -404,14 +423,13 @@ test_a_readme_with_no_row_for_a_budgeted_path_is_refused if {
 # published column and the enforced table drift apart in the direction nobody
 # notices.
 test_a_readme_publishing_no_budget_for_a_gated_path_is_refused if {
+	readme := readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | — |")
 	count(violation) == 1 with input as {"tree": {
-		"lines": {"README.md": array.concat(
-			array.slice(agreeing_readme, 0, 2),
-			array.concat(
-				["| `noop` | process start | 2.1 ms | 2.4 ms | — |"],
-				array.slice(agreeing_readme, 3, 9),
-			),
-		)},
+		"lines": {"README.md": readme},
+		"tool-verdict": {"perf-p95": clean_record},
+	}}
+	disagreeing == {"noop"} with input as {"tree": {
+		"lines": {"README.md": readme},
 		"tool-verdict": {"perf-p95": clean_record},
 	}}
 }
