@@ -73,7 +73,8 @@ const FAIL: &str = "#!/bin/sh\necho 'stub failure detail' >&2\nexit \"${STUB_COD
 
 /// A step command that leaves a mark each time it RUNS and exits with the code
 /// the case chooses, so a failure answered from its receipt is observable.
-const RED: &str = "#!/bin/sh\necho ran >>bin/red.log\necho 'red detail' >&2\nexit \"${STUB_CODE:-0}\"\n";
+const RED: &str =
+    "#!/bin/sh\necho ran >>bin/red.log\necho 'red detail' >&2\nexit \"${STUB_CODE:-0}\"\n";
 
 /// A step command that PASSES after leaving the committed authority unloadable,
 /// so the record after it cannot recompute the key.
@@ -654,7 +655,11 @@ fn a_failing_command_passes_its_code_through_and_records_no_pass() {
         );
     }
     let receipts = repo.receipts();
-    assert_eq!(receipts.len(), 2, "one failure receipt per key: {receipts:?}");
+    assert_eq!(
+        receipts.len(),
+        2,
+        "one failure receipt per key: {receipts:?}"
+    );
     for receipt in &receipts {
         assert!(read(receipt).contains(" exit "), "{}", read(receipt));
     }
@@ -1281,7 +1286,11 @@ fn a_failed_run_is_not_re_run_on_unchanged_inputs_and_returns_its_code() {
     let again = red_run(&repo, "0", &[]);
     let err = common::stderr(&again);
     assert_eq!(again.status.code(), Some(7), "the recorded code: {err}");
-    assert_eq!(red_runs(&repo), 1, "answered from the failure receipt: {err}");
+    assert_eq!(
+        red_runs(&repo),
+        1,
+        "answered from the failure receipt: {err}"
+    );
     assert_eq!(
         err.split_whitespace().next(),
         Some("red"),
@@ -1292,7 +1301,10 @@ fn a_failed_run_is_not_re_run_on_unchanged_inputs_and_returns_its_code() {
         .find_map(|line| line.strip_prefix("step run: mystep failed with exit 7; read "))
         .unwrap_or_else(|| panic!("the answer points at the failed run's log: {err}"));
     assert!(pointer.contains("stderr:"), "a capture handle: {pointer}");
-    assert!(!err.contains("red detail"), "a pointer, never the log: {err}");
+    assert!(
+        !err.contains("red detail"),
+        "a pointer, never the log: {err}"
+    );
 }
 
 /// Fails by: a failure receipt answering for inputs it never judged.
@@ -1313,10 +1325,19 @@ fn the_bypass_re_runs_a_failed_step() {
     let repo = Repo::new("red-bypass");
     assert_eq!(red_run(&repo, "7", &[]).status.code(), Some(7));
     let bypassed = red_run(&repo, "0", &[("BATTEN_STEP_RECEIPT_BYPASS", "1")]);
-    assert_eq!(bypassed.status.code(), Some(0), "{}", common::stderr(&bypassed));
+    assert_eq!(
+        bypassed.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&bypassed)
+    );
     assert_eq!(red_runs(&repo), 2, "the bypass forces a run");
     let after = red_run(&repo, "0", &[]);
-    assert_eq!(after.status.code(), Some(7), "a bypassed pass records nothing");
+    assert_eq!(
+        after.status.code(),
+        Some(7),
+        "a bypassed pass records nothing"
+    );
     assert_eq!(red_runs(&repo), 2);
 }
 

@@ -502,14 +502,16 @@ fn a_failing_suite_names_its_cases_and_a_focused_command() {
     assert!(!passed, "{again}");
     assert_eq!(again.split_whitespace().next(), Some("red"), "{again}");
     assert!(again.lines().any(|line| line == expected), "{again}");
-    assert_eq!(counts(&log), [1, 1, 1, 1], "answered from the receipt\n{again}");
+    assert_eq!(
+        counts(&log),
+        [1, 1, 1, 1],
+        "answered from the receipt\n{again}"
+    );
     let command = expected.split_once("confirm a fix with: ").unwrap().1;
-    let confirmed = std::process::Command::new("sh")
-        .args(["-c", command])
-        .current_dir(&repo)
+    let confirmed = common::task_bash(&repo, command)
         .env("FIXTURE_LOG", &log)
         .env("FIXTURE_FAIL", "1")
-        .output()
+        .streamed_output()
         .expect("run the focused command");
     let said = String::from_utf8_lossy(&confirmed.stderr);
     assert!(!confirmed.status.success(), "it still fails\n{said}");
