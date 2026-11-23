@@ -4416,12 +4416,10 @@ id = "path write unsafe"
 no_fix_reason = "class 2 (a fix verb over codemod): the rewrite is mechanical, but codemod carries method renames only and no verb exposes it as a command"
 kind = "policy"
 scope = "tree"
-line_sources = [
-  "crates/batten/src/**/*.rs",
-  "crates/batten-facts/src/**/*.rs",
-  "crates/batten-base/src/**/*.rs",
-  "crates/batten-core/src/**/*.rs",
-]
+# Every package's source, not a list of them (#1276): a list named per crate
+# missed `batten-fsio`, `batten-stream` and `batten-codemods`, and the next cut
+# would add another home it does not read.
+line_sources = ["crates/*/src/**/*.rs"]
 module = "policy/durable-write.rego"
 severity = "deny"
 
