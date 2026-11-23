@@ -367,7 +367,9 @@ over an arbitrary timestamp, that is its own row with its own argument to make.
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
 reads `input.call.command`, `input.call.segments`, `input.call.programs`,
 `input.call.event`, `input.call.operation`, `input.call.tool`,
-`input.call.arguments`, `input.call.writes`,
+`input.call.arguments`, `input.call.writes`, `input.call["lap-held"]` (each of
+the call's writes that lands in a live `land` lap's checkout, as `{path}` or
+`{git}`, `null` while no lap is live — CLOUD-2832),
 `input.call["run-in-background"]`, `input.call["background-max"]` (the host's
 background ceiling in milliseconds, `null` where the host reports none —
 CLOUD-2365), `input.call["final-message"]`,
