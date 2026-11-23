@@ -111,6 +111,43 @@ fn declared_name(item: &ast::Item) -> Option<String> {
     Some(name.text().to_string())
 }
 
+/// The names an item-position macro call declares, read as each item keyword
+/// followed by an identifier at the call's own token level (CLOUD-2789):
+/// `token_enum! { pub enum Native by id { … } }` declares `Native`. A nested
+/// tree (a body, a field list) is not read, so a `fn` inside an `impl` the
+/// macro writes is not taken for a module item. Without it an item a macro
+/// declares was unknown to the index, and a test naming one could follow no
+/// move: measured on #1276, `crate::verdict::Native` spliced as written.
+fn macro_declared_names(call: &ast::MacroCall) -> Vec<String> {
+    use ra_ap_syntax::SyntaxKind;
+    let Some(tree) = call.token_tree() else {
+        return Vec::new();
+    };
+    let tokens: Vec<ra_ap_syntax::SyntaxToken> = tree
+        .syntax()
+        .children_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+        .filter(|token| !token.kind().is_trivia())
+        .collect();
+    tokens
+        .windows(2)
+        .filter(|pair| {
+            matches!(
+                pair[0].kind(),
+                SyntaxKind::ENUM_KW
+                    | SyntaxKind::STRUCT_KW
+                    | SyntaxKind::FN_KW
+                    | SyntaxKind::CONST_KW
+                    | SyntaxKind::STATIC_KW
+                    | SyntaxKind::TYPE_KW
+                    | SyntaxKind::TRAIT_KW
+                    | SyntaxKind::UNION_KW
+            ) && pair[1].kind() == SyntaxKind::IDENT
+        })
+        .map(|pair| pair[1].text().to_owned())
+        .collect()
+}
+
 /// Whitespace removed, so a reformat is not a difference.
 fn shape(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).collect()
@@ -165,6 +202,14 @@ impl Index {
                     entry
                         .declared
                         .insert(name, item.syntax().text().to_string());
+                }
+                if let ast::Item::MacroCall(call) = item {
+                    for name in macro_declared_names(call) {
+                        entry
+                            .declared
+                            .entry(name)
+                            .or_insert_with(|| item.syntax().text().to_string());
+                    }
                 }
                 match item {
                     ast::Item::Use(declaration) => {
@@ -1470,6 +1515,46 @@ mod tests {
                 "app"
             ),
             "{ crate::error::Native::A; }"
+        );
+    }
+
+    /// Fails by: an item a macro declares is unknown to the index, so a path
+    /// naming it follows no move (#1276: `token_enum! { pub enum Native … }`).
+    /// A `fn` inside a nested tree the macro writes is not a module item.
+    #[test]
+    fn an_item_a_macro_declares_is_indexed_and_follows_its_move() {
+        let call = "token_enum! {\n    pub enum Native by id { A => \"a\" }\n}\nimpl_it! { impl X { fn inner() {} } }\n";
+        let text = "fn t() { crate::verdict::Native::A; }\n";
+        let base = index(&[
+            ("Cargo.toml", "[workspace]\n"),
+            ("one/Cargo.toml", "[package]\nname = \"one\"\n"),
+            ("one/src/lib.rs", "pub mod verdict;\npub mod other;\n"),
+            ("one/src/verdict.rs", call),
+            ("one/src/other.rs", text),
+        ]);
+        assert!(
+            base.resolve("one", &["crate".into(), "verdict".into(), "Native".into()])
+                .is_some()
+        );
+        assert!(
+            base.resolve("one", &["crate".into(), "verdict".into(), "inner".into()])
+                .is_none()
+        );
+        let head = index(&[
+            ("Cargo.toml", "[workspace]\n"),
+            ("one/Cargo.toml", "[package]\nname = \"one\"\n"),
+            ("two/Cargo.toml", "[package]\nname = \"two\"\n"),
+            ("one/src/lib.rs", "pub mod verdict;\npub mod other;\n"),
+            ("one/src/verdict.rs", "use two::error::Native;\n"),
+            ("one/src/other.rs", text),
+            ("two/src/lib.rs", "pub mod error;\n"),
+            ("two/src/error.rs", call),
+        ]);
+        let moves = moved_items(&base, &head);
+        let span = (text.find('{').unwrap(), text.rfind('}').unwrap() + 1);
+        assert_eq!(
+            respell_span_at_moves(&base, &head, &moves, "one/src/other.rs", text, span, "one"),
+            "{ two::error::Native::A; }"
         );
     }
 
