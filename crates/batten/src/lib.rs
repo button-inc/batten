@@ -22911,8 +22911,7 @@ fn point_at_spills(
 /// bytes alone prove it over (an `o200k` token is at most 128 bytes) is never
 /// read. At or under the default, nothing spilled can be within it.
 fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spilled]) -> bool {
-    let configured = capture::result_max_tokens(capture_budget().as_ref());
-    spills_admitted(result, spilled, configured)
+    spills_admitted(result, spilled, result_bound())
 }
 
 /// [`spills_within_bound`] under an explicit `configured` bound: only a bound
@@ -23103,7 +23102,7 @@ fn bound_result(
     if bytes <= capture::DEFAULT_INLINE_MAX_BYTES {
         return None;
     }
-    let bound = capture::result_max_tokens(capture_budget().as_ref());
+    let bound = result_bound();
     if bytes <= bound {
         return None;
     }
@@ -26851,11 +26850,37 @@ fn collect_before_admitting(
 /// capture must not fail because config did not parse, so an unreadable
 /// authority means the engine defaults rather than an error.
 fn capture_budget() -> Option<crate::config_model::CaptureConfig> {
-    let text =
-        crate::fsio::read_to_string(hook_session_home().join(crate::config_model::CONFIG_FILE))
-            .ok()?;
+    capture_budget_at(hook_session_home())
+}
+
+/// The `[capture]` table the authority at `root` declares, read as
+/// [`capture_budget`] reads the home's.
+fn capture_budget_at(root: &Path) -> Option<crate::config_model::CaptureConfig> {
+    let text = crate::fsio::read_to_string(root.join(crate::config_model::CONFIG_FILE)).ok()?;
     let parsed: crate::config_model::Config = toml::from_str(&text).ok()?;
     parsed.capture
+}
+
+/// The result bound one call is held to: the TIGHTER of its session home's and
+/// the root that judges it (CLOUD-2705).
+///
+/// The window being protected is the session's, whichever repository a result
+/// came from. Read from the home alone, a session homed in a repository at the
+/// default bound took a result from a visited repository declaring a tighter
+/// one unbounded, and the same bytes in that repository's own session were
+/// rewritten: one result, two answers, decided by where the session began.
+/// Taking the minimum makes the rewrite uniform, and a visit can only tighten
+/// it, never widen it (house-style §8's raise-only direction, for the window).
+fn result_bound() -> u64 {
+    let home = hook_session_home();
+    let at_home = capture::result_max_tokens(capture_budget().as_ref());
+    let judging = hook_authority_root();
+    if git::canonical(judging) == git::canonical(home) {
+        return at_home;
+    }
+    at_home.min(capture::result_max_tokens(
+        capture_budget_at(judging).as_ref(),
+    ))
 }
 
 /// The directory `batten hook` reads its authority from (CLOUD-824).
