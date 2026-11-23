@@ -417,6 +417,73 @@ fn a_red_baseline_case_poisons_only_the_mutants_it_reaches() {
     );
 }
 
+/// A library with one case red only under the judge's own environment, and
+/// one that needs its temp directory inside the tree it was built from.
+const JUDGE_LIB: &str = "pub fn add(a: u8, b: u8) -> u8 {\n    a + b\n}\n\
+pub fn sneak() -> u8 {\n    1\n}\n\
+pub fn three() -> u8 {\n    3\n}\n\
+#[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {\n        assert_eq!(super::add(2, 3), 5);\n    }\n\
+    #[test]\n    fn envy() {\n        let _ = super::add(1, 1) + super::sneak();\n\
+        assert!(std::env::var_os(\"BATTEN_MUTANT\").is_none(), \"red under the judge\");\n    }\n\
+    #[test]\n    fn intree() {\n        assert_eq!(super::three(), 3);\n\
+        if std::env::var_os(\"BATTEN_MUTANT\").is_some() {\n\
+            let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();\n\
+            let tree = std::fs::canonicalize(env!(\"CARGO_MANIFEST_DIR\")).unwrap();\n\
+            assert!(tmp.starts_with(&tree), \"{} outside {}\", tmp.display(), tree.display());\n\
+        }\n    }\n}\n";
+
+/// A JUDGING RUN'S OWN ENVIRONMENT GETS A CONTROL (W2): a case green under
+/// reach but red under the judge's argv and env with no mutant active would
+/// read as the kill of every mutant it reaches. One null-mutant run per sweep
+/// finds it, and it is excluded exactly as a baseline-red case is; and the
+/// judge's fixtures sit inside the mirror, so a case that needs its tree
+/// around them kills its mutant there.
+///
+/// Fails by: the judge-only red case read as a kill (no control), it missing
+/// from the report, or the in-tree case red under the judge (its temp
+/// directory outside the mirror), which would leave `inner` unjudged.
+#[test]
+fn a_null_mutant_control_excludes_a_case_red_only_under_the_judge() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = seeded_with("mutate-schema-control", JUDGE_LIB);
+    let listing = serde_json::json!([
+        mutant(
+            "kill",
+            "BinaryOperator",
+            "*",
+            [2, 7, 2, 8],
+            ("add", "-> u8", [1, 1, 3, 2])
+        ),
+        mutant(
+            "sneaky",
+            "FnValue",
+            "0",
+            [5, 5, 5, 6],
+            ("sneak", "-> u8", [4, 1, 6, 2])
+        ),
+        mutant(
+            "inner",
+            "FnValue",
+            "0",
+            [8, 5, 8, 6],
+            ("three", "-> u8", [7, 1, 9, 2])
+        ),
+    ]);
+    let file = common::scratch("mutate-schema-control-listing").join("listing.json");
+    std::fs::write(&file, listing.to_string()).unwrap();
+    let output = common::run(&repo, &["__mutate-schema", &file.to_string_lossy(), "2"]);
+    let (said, err) = (common::stdout(&output), common::stderr(&output));
+    assert_eq!(output.status.code(), Some(2), "{said}\n{err}");
+    for line in [
+        "baseline-red\tfix tests::envy\tred under the judge\n",
+        "unjudged (baseline-red: fix tests::envy)\tsneaky\n",
+        "{\"caught\": 2, \"unjudged\": 1}",
+        "mutate schema: control run found 1 case(s) red under the judge",
+    ] {
+        assert!(said.contains(line), "{line:?} in {said}\n{err}");
+    }
+}
+
 #[test]
 fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
     if !cfg!(target_os = "linux") {
