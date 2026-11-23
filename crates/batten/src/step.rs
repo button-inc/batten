@@ -1725,15 +1725,13 @@ fn evict(entries: &[(String, String)], cap: usize) -> Vec<String> {
 /// once every `depends_on` exited 0, at most `jobs` at once (or the group's own
 /// `NAME=N`).
 ///
-/// THE GROUPS RUN IN ORDER AND A RED ONE STOPS NONE AFTER IT (CLOUD-2789). One
-/// `step graph run` per tier made the task runner's `run` array the scheduler,
-/// and it stops at the first failing line, so a lap reported one tier's reds
-/// and the next tier's only on the lap after, once those were fixed. Here a
-/// failure skips only the rows that name it in `depends_on`, and every red row
-/// is listed once more at the end, so one run
-/// reports every failure. A group still starts only after the one before it
-/// has finished, which keeps the green path's phases, and so its wall time,
-/// what the separate calls had.
+/// THE GROUPS ARE TIERS: A LATER ONE STARTS ONLY ONCE EVERY EARLIER ONE PASSED
+/// (CLOUD-2853; owner ruling, `.batten/asked.jsonl:223`: the most expensive
+/// stage runs only once every cheap stage has passed). After a group ends red,
+/// every row of every later group is recorded as skipped and never spawned.
+/// WITHIN a group a failure skips only the rows naming it in `depends_on`, so a
+/// tier reports every red it holds (CLOUD-2789), and every red row, a skipped
+/// later row included, is listed once more at the end.
 ///
 /// A CHILD PROCESS PER NODE, never `run_step` on a thread: `check`, `record`
 /// and `declared` read the working directory, `announce` pushes one phase per
@@ -1793,7 +1791,18 @@ pub fn run_graph(groups: &[String], jobs: Option<&str>, err: &mut dyn Write) -> 
     }
     let mut done: BTreeMap<String, i32> = BTreeMap::new();
     let mut worst = 0_i32;
+    let mut red: Option<&str> = None;
     for (group, rows, bound) in &phases {
+        // A LATER GROUP STARTS ONLY ONCE EVERY EARLIER ONE PASSED (CLOUD-2853,
+        // owner ruling `.batten/asked.jsonl:223`). Its rows are recorded as
+        // skipped and never spawned, so the red list below still names them.
+        if let Some(earlier) = red {
+            for row in rows {
+                done.insert(row.id.clone(), SKIPPED);
+            }
+            writeln!(err, "step graph: {group} skipped ({earlier} red)")?;
+            continue;
+        }
         let outcome = graph_phase(rows, *bound, &mut done);
         for line in &outcome.lines {
             writeln!(err, "step graph: {line}")?;
@@ -1805,6 +1814,9 @@ pub fn run_graph(groups: &[String], jobs: Option<&str>, err: &mut dyn Write) -> 
             bound.map_or_else(|| String::from("unbounded"), |jobs| jobs.to_string())
         )?;
         worst = worst.max(outcome.worst);
+        if outcome.worst != 0 {
+            red = Some(group);
+        }
     }
     // THE LAP'S ONE LIST OF REDS (CLOUD-2789): every row that ran and failed, in
     // run order, after every group has finished — the pointer each needs is its
