@@ -4,6 +4,9 @@ name: CI
 # (checkout, fetch, toolchain, caches, `mise run mutant:changed`); it runs
 # behind `ci`, so it carries no landing-lease shell of its own. CLOUD-2588 adds
 # one `actions/cache` step to it, a `uses:` step with no shell body.
+# CLOUD-2789 adds the `mutants-reach` job, argv steps only on the same terms
+# (checkout, fetch, toolchain, caches, `mise run mutant:changed`), and splits
+# the shards' verdict cache into `uses:` restore and save steps.
 
 # CI minutes cost money; an agent's local execution does not. So CI runs as
 # rarely as correctness allows:
@@ -1098,9 +1101,11 @@ jobs:
   # cargo-mutants book's PR recipe does: `--in-diff`, split across a matrix.
   # `MUTANT_SHARD` slices the cargo-mutants mutants and the declared rows alike
   # (`run_mutate_sweep`; by row, not by gate, since CLOUD-2533 measured one
-  # 45-row gate holding a shard past this job's bound), and a shard skips the
-  # baseline the unsharded local run
-  # already took. Measured locally on #1209: 22 mutants plus 3 declared rows in
+  # 45-row gate holding a shard past this job's bound). A shard does NOT skip
+  # the schema build or the unmutated baseline (the reach run): each shard used
+  # to pay both itself, which is why `mutants-reach` below builds and reaches
+  # once and hands the mirror to every shard. Measured locally on #1209: 22
+  # mutants plus 3 declared rows in
   # 32m41s serially, so four shards bring CI's share to about a quarter of that
   # on top of each shard's warm build. The #1132 matrix this replaces in spirit
   # was removed because it ran where `verify` never did; this one runs the task
@@ -1112,9 +1117,78 @@ jobs:
   #
   # IN `final`'s `needs:` AND IN `CI_REQUIRED_CHECKS`, for `batten-check`'s
   # reason above.
+  #
+  # THE SCHEMA BUILD AND THE REACH RUN ONCE, NOT ONCE PER SHARD (CLOUD-2789).
+  # Every shard builds and reaches over the WHOLE listing and judges only its
+  # slice, so each would compute the same mirror; this job computes it once
+  # with `MUTANT_PHASE=reach`, which stops the sweep after the reach run is
+  # sealed, and saves the mirror under this run's key. A shard restoring it
+  # resyncs nothing (`sync` rewrites only files whose bytes differ, and the
+  # cache keeps their times), so cargo finds the build fresh and the reach run
+  # resumes from its seal. NOT A GATE ON THE SHARDS: they run when it fails,
+  # and then build and reach themselves, as they did before it.
+  mutants-reach:
+    name: mutants (reach)
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-24.04-arm
+    # Unmeasured: one schema build and one reach run, the part of a shard's
+    # budget below that every shard used to repeat.
+    timeout-minutes: 45 # budget: grandfathered measured=2026-11-23
+    # BEHIND `ci`, FOR THE `mutants` JOB'S REASON: no lease step of its own.
+    needs: [ci]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Fetch the comparison base refs
+        run: git fetch origin main:refs/remotes/origin/main
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          version: 2026.9.1
+          # The `mutants` job's list, for its reason: the reach run is the suite.
+          install_args: rust hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker aqua:axodotdev/cargo-dist
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.pkl/cache
+          key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: mutants-
+          save-if: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/batten/*/provision
+          key: provision-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('batten.toml') }}
+          restore-keys: provision-${{ runner.os }}-${{ runner.arch }}-
+      # The journal the shards last saved: unviable verdicts a build round
+      # would otherwise rediscover.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/batten/*/mutate/schema/verdicts
+          key: mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-reach
+          restore-keys: mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-
+      - run: mise run mutant:changed
+        env:
+          MUTANT_PHASE: reach
+          DOCTOR_TARGETS: ""
+      # THIS RUN'S MIRROR, FOR THIS RUN'S SHARDS: keyed on the run, so no other
+      # run reads it, and the pull request's ref scopes it (`cache-sweep.yml`
+      # reclaims such entries).
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.local/share/batten/*/mutate/schema/tree
+            ~/.local/share/batten/*/mutate/schema/reach
+            ~/.local/share/batten/*/mutate/schema/verdicts
+          key: mutant-mirror-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+
   mutants:
     name: mutants (${{ matrix.shard }})
-    if: ${{ github.event.pull_request.draft == false }}
+    # `!cancelled()`, NOT THE DEFAULT `success()`: `mutants-reach` is a saving,
+    # never a verdict, so a shard runs when it failed and builds for itself.
+    if: ${{ !cancelled() && github.event.pull_request.draft == false && needs.ci.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -1130,7 +1204,7 @@ jobs:
     # refuses with no override route. A job that `needs:` `ci` starts only after
     # `ci`'s own lease has run, and a declined run has already been cancelled by
     # then. The cost is `ci`'s wall time ahead of the shards.
-    needs: [ci]
+    needs: [ci, mutants-reach]
     permissions:
       contents: read
     steps:
@@ -1182,22 +1256,42 @@ jobs:
           restore-keys: provision-${{ runner.os }}-${{ runner.arch }}-
       # THE SCHEMA'S VERDICT JOURNAL (CLOUD-2253): append-only, every verdict
       # keyed by the content it was decided over, so any shard's line stands
-      # wherever its key still holds and a lap re-judges only what moved. Saved
-      # under a key per run, since a cache entry is never overwritten, and
-      # restored from this shard's newest, else any shard's.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # wherever its key still holds and a lap re-judges only what moved.
+      # Restored from this shard's newest, else any shard's; the mirror below,
+      # restored after it, carries the reach job's journal over it when there
+      # is one.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.local/share/batten/*/mutate/schema/verdicts
           key: mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-${{ strategy.job-index }}-
             mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-
+      # THE REACH JOB'S MIRROR: its build, its sealed reach record and the
+      # context the seal is read in. Absent when that job failed, and the sweep
+      # then builds and reaches here, as it did before it.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.local/share/batten/*/mutate/schema/tree
+            ~/.local/share/batten/*/mutate/schema/reach
+            ~/.local/share/batten/*/mutate/schema/verdicts
+          key: mutant-mirror-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
       - run: mise run mutant:changed
         env:
           # Both halves from `strategy`, so another matrix axis cannot leave a
           # shard unrun: k is this job's index over every combination.
           MUTANT_SHARD: ${{ strategy.job-index }}/${{ strategy.job-total }}
           DOCTOR_TARGETS: ""
+      # SAVED WHATEVER THE SWEEP ANSWERED: a red shard's journal holds every
+      # verdict it decided before the survivor that turned it red, and the next
+      # lap re-judged all of them while this save rode on the job passing. A
+      # cache entry is never overwritten, so the key is per run.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always()
+        with:
+          path: ~/.local/share/batten/*/mutate/schema/verdicts
+          key: mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   final:
     name: final
