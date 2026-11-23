@@ -27,6 +27,8 @@
 #MUTANT git-upload-pack-unread|s@^\tnot git_runs_program(verb.rest)$@\ttrue@|a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused
 #MUTANT read-builtin-refused|s@^\t\t"read",$@@|a_plan_mode_read_loop_is_allowed_and_a_writing_loop_is_refused
 #MUTANT skill-refused|s@^\t\t"Skill",$@@|a_plan_mode_skill_is_allowed_and_a_write_tool_is_not
+#MUTANT-SUITE crates/batten/tests/it/permission_events.rs
+#MUTANT plan-mode-reads-refused|s@^read_event(event) if event in {"pre-tool", "permission-request", "permission-denied"}$@read_event(event) if event == "pre-tool"@|a_read_prompt_in_plan_mode_is_granted
 # A call that only reads is never put to the operator (CLOUD-1949).
 #
 # The host halts on a permission prompt, and a halted session is the failure the
@@ -52,8 +54,14 @@ import rego.v1
 
 rules contains "call read now"
 
+# THE TWO PERMISSION EVENTS AS WELL AS PRE-TOOL (CLOUD-2768): a read the host
+# is about to put to the person, or that its classifier denied, is the same
+# read, in every mode, plan's included, where it is the one grant the owner's
+# ruling leaves (plan mode is read-only).
+read_event(event) if event in {"pre-tool", "permission-request", "permission-denied"}
+
 preapprove contains "call read now" if {
-	input.call.event == "pre-tool"
+	read_event(input.call.event)
 	read_only(input.call)
 }
 
