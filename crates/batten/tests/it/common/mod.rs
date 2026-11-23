@@ -1510,6 +1510,24 @@ pub(crate) fn require_bin(tool: &str, bin: &str) -> PathBuf {
     path
 }
 
+/// The `--ca-certificates` selection every `pkl` spawn in this suite carries, so
+/// a case evaluating a `package://` amend fetches the way the tasks do.
+///
+/// THE SAME RULE AS `mise.toml`'s `vars.pkl_ca`, WHICH OWNS IT (CLOUD-2409):
+/// `BATTEN_CA_BUNDLE` when it names a file, else `SSL_CERT_FILE` when it names a
+/// file, else nothing — the flag REPLACES pkl's roots, so a set-but-missing
+/// bundle is never passed. A case that spawns bare `pkl` in a TLS-intercepting
+/// sandbox fails the handshake cold and reads a could-not-fetch as its verdict.
+#[must_use]
+pub(crate) fn pkl_ca_args() -> Vec<std::ffi::OsString> {
+    ["BATTEN_CA_BUNDLE", "SSL_CERT_FILE"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .find(|bundle| Path::new(bundle).is_file())
+        .map(|bundle| vec!["--ca-certificates".into(), bundle])
+        .unwrap_or_default()
+}
+
 /// A path the committed protected set guards TODAY: the policy authority while the
 /// owner's set is declared, and otherwise the asked ledger the narrower set always
 /// guards (CLOUD-1078).
