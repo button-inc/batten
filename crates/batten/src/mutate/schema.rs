@@ -1815,7 +1815,7 @@ fn run_cases(
     ]);
     // KEPT, NEVER ECHOED: the verdict is the report and an error keeps its
     // words below, so the run's output is shown nowhere ([`super::Said::Kept`]).
-    let ran = super::spawn_as(
+    let ran = super::spawn_suite(
         judging.work,
         super::Program::Cargo,
         &args,
@@ -2923,7 +2923,7 @@ pub fn record_reach(
         (String::from(REACH), base.to_string_lossy().into_owned()),
         (String::from(TREE_ENV), work.to_string_lossy().into_owned()),
     ]);
-    let ran = super::spawn_as(
+    let ran = super::spawn_suite(
         work,
         super::Program::Cargo,
         &args,

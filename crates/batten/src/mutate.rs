@@ -1966,6 +1966,36 @@ fn spawn_as(
     bound: std::time::Duration,
     said: Said,
 ) -> Result<Ran> {
+    spawn_scrubbed(dir, program, args, env, bound, said, scrubbed)
+}
+
+/// [`spawn_as`] for a suite run, which inherits no `NEXTEST_*` or `MUTANT_*`
+/// ([`suite_scrubbed`]).
+fn spawn_suite(
+    dir: &Path,
+    program: Program<'_>,
+    args: &[String],
+    env: &[(String, String)],
+    bound: std::time::Duration,
+    said: Said,
+) -> Result<Ran> {
+    spawn_scrubbed(dir, program, args, env, bound, said, suite_scrubbed)
+}
+
+/// Which inherited variables a spawn removes, given the names it inherited
+/// and the env it sets ([`scrubbed`], [`suite_scrubbed`]).
+type Scrub = fn(std::vec::IntoIter<String>, &[(String, String)]) -> Vec<String>;
+
+/// [`spawn_as`] with `scrub` naming the inherited variables to remove.
+fn spawn_scrubbed(
+    dir: &Path,
+    program: Program<'_>,
+    args: &[String],
+    env: &[(String, String)],
+    bound: std::time::Duration,
+    said: Said,
+    scrub: Scrub,
+) -> Result<Ran> {
     let program = program.name();
     #[expect(
         clippy::disallowed_types,
@@ -1973,10 +2003,10 @@ fn spawn_as(
     )]
     let mut command = std::process::Command::new(program);
     command.args(args).current_dir(dir);
-    for key in scrubbed(
-        std::env::vars_os().filter_map(|(key, _)| key.into_string().ok()),
-        env,
-    ) {
+    let inherited: Vec<String> = std::env::vars_os()
+        .filter_map(|(key, _)| key.into_string().ok())
+        .collect();
+    for key in scrub(inherited.into_iter(), env) {
         command.env_remove(key);
     }
     for (key, value) in env {
@@ -2691,6 +2721,29 @@ fn scrubbed(inherited: impl IntoIterator<Item = String>, env: &[(String, String)
     inherited
         .into_iter()
         .filter(|key| key.starts_with("NEXTEST_") && !env.iter().any(|(set, _)| set == key))
+        .collect()
+}
+
+/// The prefixes of the variables a suite run never inherits ([`suite_scrubbed`]).
+pub const SUITE_SCRUBBED: [&str; 2] = ["NEXTEST_", "MUTANT_"];
+
+/// The inherited variables to remove from a suite run, WHETHER OR NOT `env`
+/// names a profile: every `NEXTEST_*` and `MUTANT_*` the env does not set
+/// itself. The schema's reach and judge runs name their profile by argument,
+/// so [`scrubbed`] left `mutant:rust`'s `NEXTEST_PROFILE=mutants` on them, and
+/// on every case they ran: a case driving nextest over a fixture asked for the
+/// sweep's own `batten-cover` profile there (#1276), and an inherited
+/// `NEXTEST_RETRIES` turns a kill into a miss. A test body that runs a task
+/// removes the same set ([`SUITE_SCRUBBED`]).
+#[must_use]
+pub fn suite_scrubbed(
+    inherited: impl IntoIterator<Item = String>,
+    env: &[(String, String)],
+) -> Vec<String> {
+    inherited
+        .into_iter()
+        .filter(|key| SUITE_SCRUBBED.iter().any(|prefix| key.starts_with(prefix)))
+        .filter(|key| !env.iter().any(|(set, _)| set == key))
         .collect()
 }
 
@@ -5476,6 +5529,34 @@ mod tests {
         assert!(
             scrubbed(inherited, &[(String::from("PATH"), String::from("/bin"))]).is_empty(),
             "an env setting only PATH names no profile, so nothing is scrubbed"
+        );
+    }
+
+    /// A SUITE RUN INHERITS NO `NEXTEST_*` OR `MUTANT_*` (U1), though its env
+    /// names no profile: the schema names its profile by argument.
+    ///
+    /// Fails by: `mutant:rust`'s `NEXTEST_PROFILE` or `NEXTEST_RETRIES` left on
+    /// a reach or judge run, a `MUTANT_*` reaching the cases, one the env sets
+    /// itself removed, or an unrelated variable removed.
+    #[test]
+    fn a_suite_run_inherits_no_nextest_or_mutant_variable() {
+        let inherited = [
+            "NEXTEST_PROFILE",
+            "NEXTEST_RETRIES",
+            "MUTANT_JOB_DISK_MB",
+            "PATH",
+            "BATTEN_MUTANT_RECORD",
+            "TMPDIR",
+        ]
+        .map(String::from);
+        assert_eq!(
+            suite_scrubbed(inherited.clone(), &[]),
+            ["NEXTEST_PROFILE", "NEXTEST_RETRIES", "MUTANT_JOB_DISK_MB"]
+        );
+        let env = [(String::from("NEXTEST_RETRIES"), String::from("0"))];
+        assert_eq!(
+            suite_scrubbed(inherited, &env),
+            ["NEXTEST_PROFILE", "MUTANT_JOB_DISK_MB"]
         );
     }
 
