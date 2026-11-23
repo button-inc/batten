@@ -89,7 +89,7 @@ impl PresetModuleExt for PresetModule {
         {
             return std::borrow::Cow::Owned(text);
         }
-        std::borrow::Cow::Borrowed(self.source)
+        std::borrow::Cow::Borrowed(self.embedded_source)
     }
 
     fn name(&self) -> &'static str {
@@ -237,15 +237,15 @@ impl ManifestExt for Manifest {
             .collect();
         let defined: Vec<BTreeSet<String>> = peers
             .iter()
-            .map(|peer| helpers_defined(peer.source))
+            .map(|peer| helpers_defined(&peer.text()))
             .collect();
-        let code: Vec<String> = peers.iter().map(|peer| uncommented(peer.source)).collect();
+        let code: Vec<String> = peers.iter().map(|peer| uncommented(&peer.text())).collect();
         // A SHARED ID IS AN EDGE TOO. Two modules may each add to one
         // `rules contains` id (`call grant now` has two), and `claim_ids`
         // refuses an id two bundles declare, so splitting them collides.
         let ids: Vec<BTreeSet<String>> = peers
             .iter()
-            .map(|peer| crate::policy::finding_ids(peer.source))
+            .map(|peer| crate::policy::finding_ids(&peer.text()))
             .collect();
         let linked = |a: usize, b: usize| {
             a != b
@@ -378,7 +378,8 @@ fn ejected_source(manifest: &Manifest, module: &PresetModule) -> String {
         module.name(),
         manifest.version,
     );
-    for line in crate::preset_catalog::decided_lines(module.source) {
+    let source = module.text();
+    for line in crate::preset_catalog::decided_lines(&source) {
         text.push_str(line);
         text.push('\n');
     }
@@ -603,25 +604,25 @@ mod tests {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:fixture>/a.rego",
-                source: "package a\n#MUTANT row|s@x@y@|case\nhelper(x) if { x }\n",
+                embedded_source: "package a\n#MUTANT row|s@x@y@|case\nhelper(x) if { x }\n",
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: Some("github"),
                 pointer: "<preset:fixture>/b.rego",
-                source: "package b\nrules contains \"x\" if { helper(1) }\n",
+                embedded_source: "package b\nrules contains \"x\" if { helper(1) }\n",
             },
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:fixture>/c.rego",
-                source: "package c\n",
+                embedded_source: "package c\n",
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:fixture>/d.rego",
-                source: "package d\n# helper(1) in a comment links nothing\nlone := 1\n",
+                embedded_source: "package d\n# helper(1) in a comment links nothing\nlone := 1\n",
             },
         ],
         verdicts: &[],
@@ -892,7 +893,7 @@ mod tests {
         for manifest in MANIFESTS {
             let declared: BTreeSet<&str> = manifest.verdicts.iter().map(|entry| entry.id).collect();
             for module in manifest.modules {
-                for token in raised_in(module.source) {
+                for token in raised_in(&module.text()) {
                     assert!(
                         declared.contains(token.as_str()),
                         "`{}` raises `{token}` in `{}`, which its manifest does not \
@@ -917,7 +918,7 @@ mod tests {
             let raised: BTreeSet<String> = manifest
                 .modules
                 .iter()
-                .flat_map(|module| raised_in(module.source))
+                .flat_map(|module| raised_in(&module.text()))
                 .collect();
             for entry in manifest.verdicts {
                 assert!(
@@ -978,7 +979,7 @@ mod tests {
         for manifest in MANIFESTS {
             for module in manifest.modules {
                 let mut in_test_rule = false;
-                for (index, line) in module.source.lines().enumerate() {
+                for (index, line) in module.text().lines().enumerate() {
                     let trimmed = line.trim_start();
                     // A rule header at column zero opens a rule; `test_` opens one
                     // this scan does not read. Tracked by header rather than by
@@ -997,7 +998,7 @@ mod tests {
                         continue;
                     }
                     if line.contains("github.event") {
-                        found.push((module.source, index + 1));
+                        found.push((module.pointer, index + 1));
                     }
                 }
             }
@@ -1022,12 +1023,12 @@ mod tests {
             .iter()
             .flat_map(|manifest| manifest.modules)
             .filter(|module| module.provider.is_some())
-            .map(|module| module.source)
+            .map(|module| module.pointer)
             .collect();
 
         let undeclared: Vec<usize> = provider_syntax_sites()
             .into_iter()
-            .filter(|(source, _)| !declared.contains(source))
+            .filter(|(pointer, _)| !declared.contains(pointer))
             .map(|(_, line)| line)
             .collect();
 
@@ -1036,6 +1037,60 @@ mod tests {
             "a preset module reads a CI provider's expression language and declares \
              no `provider`, so it would compile for a consumer on any host and match \
              nothing there; lines: {undeclared:?}"
+        );
+    }
+
+    /// NO PRESET TEXT IS READ PAST THE OVERLAY (#1276's mutation-tier audit).
+    ///
+    /// A mutation sweep writes a preset's mutant to the overlay, and only
+    /// [`PresetModuleExt::text`] reads it there. A raw read of the embedded
+    /// field, or an `include_str!` of a preset file, holds the unmutated bytes,
+    /// so a case reading either never sees the mutation and its row reads
+    /// SURVIVED over a mutant it was never run against. The one embedding is
+    /// the catalog's and the one raw read is `text`'s own fallback (and the
+    /// catalog's lock digest, which hashes what ships). Fails by: either
+    /// spelling anywhere else in this crate's sources or tests.
+    #[test]
+    fn no_preset_text_is_read_past_the_overlay() {
+        // Spelled in pieces so this case is not its own finding.
+        let raw = [".", "embedded_source"].concat();
+        let embed = ["include_str", "!("].concat();
+        let presets = ["presets", "/"].concat();
+        let fallback = format!("std::borrow::Cow::Borrowed(self{raw})");
+        let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut found = Vec::new();
+        let mut dirs = vec![crate_dir.join("src"), crate_dir.join("tests")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(crate_dir)
+                    .map(|rest| rest.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                let catalog = relative == "src/preset_catalog.rs";
+                let text = crate::fsio::read_to_string(&path).unwrap_or_default();
+                for (index, line) in text.lines().enumerate() {
+                    let raw_read = line.contains(&raw)
+                        && !catalog
+                        && !(relative == "src/preset.rs" && line.trim() == fallback);
+                    let embedded = line.contains(&embed) && line.contains(&presets) && !catalog;
+                    if raw_read || embedded {
+                        found.push(format!("{relative}:{}", index + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "a preset's text is read past the overlay, so a mutation sweep's mutant is \
+             invisible to it: {found:?}"
         );
     }
 
