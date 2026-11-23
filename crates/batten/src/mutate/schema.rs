@@ -1771,6 +1771,144 @@ fn nextest_args(mutant: &Listed, cases: &BTreeSet<Case>) -> Vec<String> {
     args
 }
 
+/// The schema build's test binaries, recorded once after it built clean, as
+/// nextest's `--binaries-metadata` and `--cargo-metadata` read them.
+///
+/// THE SWITCH IS READ AT RUN TIME ([`ACTIVE`]), SO EVERY MUTANT RUNS THE SAME
+/// BINARIES, and a judging run that asked cargo for them paid its freshness
+/// check and nextest's build step once per run, thousands of times per sweep
+/// for a build that never changes after it is clean.
+#[derive(Debug)]
+struct Reuse {
+    /// nextest's `binaries-only` list.
+    binaries: std::path::PathBuf,
+    /// `cargo metadata`'s answer.
+    metadata: std::path::PathBuf,
+    /// Every binary id the list names ([`reuse_ids`]).
+    ids: BTreeSet<String>,
+}
+
+impl Reuse {
+    /// Whether every one of `cases` runs in a recorded binary. A case outside
+    /// the record would be selected by nothing on reused binaries, and its run
+    /// would pass vacuously under `--no-tests=pass`.
+    fn holds(&self, cases: &BTreeSet<Case>) -> bool {
+        cases
+            .iter()
+            .all(|(_, binary)| !binary.is_empty() && self.ids.contains(binary))
+    }
+}
+
+/// The binary ids a nextest `binaries-only` document lists: the keys of its
+/// `rust-binaries`. `None` when it is not such a document.
+fn reuse_ids(document: &str) -> Option<BTreeSet<String>> {
+    let parsed: serde_json::Value = serde_json::from_str(document).ok()?;
+    Some(
+        parsed
+            .get("rust-binaries")?
+            .as_object()?
+            .keys()
+            .cloned()
+            .collect(),
+    )
+}
+
+/// Record the clean schema build's binaries under `state` for every judging
+/// run to reuse. Best effort: `None` leaves each run to build as it always did,
+/// which is slower and never wrong.
+fn record_reuse(
+    work: &std::path::Path,
+    target: &std::path::Path,
+    mutants: &[Listed],
+    state: &std::path::Path,
+) -> Option<Reuse> {
+    let dir = state.join("reuse");
+    // A record from an earlier sweep names binaries this build may not have.
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).ok()?;
+    let document = |args: &[String], into: &std::path::Path| -> Option<String> {
+        let ran = super::spawn(
+            work,
+            super::Program::Cargo,
+            args,
+            &[],
+            super::runner_bound(),
+        )
+        .ok()?;
+        let line = ran.stdout.lines().find(|line| line.starts_with('{'))?;
+        (ran.passed() && crate::durable::replace(into, line).is_ok()).then(|| line.to_owned())
+    };
+    // THE BUILD'S OWN SELECTION AND DIRECTORIES, so cargo finds it fresh and
+    // the list names exactly the binaries the build wrote.
+    let mut list: Vec<String> = [
+        "nextest",
+        "list",
+        "--cargo-profile",
+        "test",
+        "--list-type",
+        "binaries-only",
+        "--message-format",
+        "json",
+    ]
+    .map(String::from)
+    .to_vec();
+    let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
+    for package in packages {
+        list.extend([String::from("-p"), package.to_owned()]);
+    }
+    list.extend(cargo_dirs(target));
+    let binaries = dir.join("binaries.json");
+    let ids = reuse_ids(&document(&list, &binaries)?)?;
+    let metadata = dir.join("cargo-metadata.json");
+    document(
+        &["metadata", "--format-version", "1", "--no-deps"].map(String::from),
+        &metadata,
+    )?;
+    Some(Reuse {
+        binaries,
+        metadata,
+        ids,
+    })
+}
+
+/// The whole argv one judging run of `cases` against `mutant` spawns cargo
+/// with: on `reuse`'s binaries when they hold every case, narrowed by binary in
+/// the filterset (nextest refuses `-p`, `--cargo-profile`, `--target-dir` and
+/// the target flags beside `--binaries-metadata`); else built as
+/// [`nextest_args`] selects, into `target`.
+fn judge_args(
+    mutant: &Listed,
+    cases: &BTreeSet<Case>,
+    target: &std::path::Path,
+    reuse: Option<&Reuse>,
+) -> Vec<String> {
+    let Some(reuse) = reuse.filter(|reuse| reuse.holds(cases)) else {
+        let mut args = nextest_args(mutant, cases);
+        args.extend(cargo_dirs(target));
+        return args;
+    };
+    let tests: BTreeSet<&str> = cases.iter().map(|(name, _)| name.as_str()).collect();
+    let binaries: BTreeSet<&str> = cases.iter().map(|(_, binary)| binary.as_str()).collect();
+    let by_binary = binaries
+        .iter()
+        .map(|binary| format!("binary_id(={binary})"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let mut args: Vec<String> = ["nextest", "run", "--profile", "mutants", "--color", "never"]
+        .map(String::from)
+        .to_vec();
+    args.extend([
+        String::from("-E"),
+        format!("({by_binary}) and ({})", super::cover::filterset(&tests)),
+        String::from("--no-tests=pass"),
+        String::from("--binaries-metadata"),
+        reuse.binaries.to_string_lossy().into_owned(),
+        String::from("--cargo-metadata"),
+        reuse.metadata.to_string_lossy().into_owned(),
+    ]);
+    args
+}
+
 /// Run `cases` once with mutant `id` switched on, and answer its verdict, the
 /// case that killed it, and every case that passed. `cases` must not be empty.
 ///
@@ -1809,8 +1947,7 @@ fn judge_run(
     mutant: &Listed,
     cases: &BTreeSet<Case>,
 ) -> (anyhow::Result<super::Ran>, Option<String>) {
-    let mut args = nextest_args(mutant, cases);
-    args.extend(cargo_dirs(judging.target));
+    let mut args = judge_args(mutant, cases, judging.target, judging.reuse);
     // INSIDE THE MIRROR (W2), as the reach run's fixtures are: a case whose
     // fixture needs a checkout around it passed under reach and failed here,
     // which read as a kill.
@@ -3789,6 +3926,8 @@ struct Judging<'a> {
     /// Every case that failed the unmutated baseline ([`baseline_red`]): never
     /// run against a mutant, never a kill.
     red: &'a Red,
+    /// The clean build's recorded binaries, when they could be recorded.
+    reuse: Option<&'a Reuse>,
 }
 
 impl<'a> Judging<'a> {
@@ -4555,6 +4694,19 @@ pub fn sweep(
         ids,
         out,
     )?;
+    // RECORDED ONCE, AFTER THE BUILD AND THE REACH RUN THAT USED IT: nothing
+    // after this point changes a source the binaries were built from, so every
+    // judging run reuses them rather than asking cargo again.
+    let reuse = record_reuse(&work, &target, mutants, &state);
+    writeln!(
+        out,
+        "mutate schema: judging runs {} the clean build's binaries",
+        if reuse.is_some() {
+            "reuse"
+        } else {
+            "rebuild-check"
+        }
+    )?;
     let todo = judged_by_switch(mutants.len(), &unviable, &classic)?;
     let judging = Judging {
         work: &work,
@@ -4568,6 +4720,7 @@ pub fn sweep(
         digests: &digests,
         store: &cache_path,
         red: &red,
+        reuse: reuse.as_ref(),
     };
     let red = control_red(&judging, out)?;
     let judging = judging.with_red(&red);
@@ -8026,6 +8179,82 @@ mod tests {
         assert_eq!(packages(&[("u", "")]), ["other"]);
     }
 
+    /// The binary ids a nextest `binaries-only` document lists, and none from
+    /// a document that is not one.
+    ///
+    /// Fails by: a binary read off anything but `rust-binaries`' keys, or a
+    /// malformed document read as listing nothing rather than unreadable.
+    #[test]
+    fn the_recorded_binaries_are_the_documents_rust_binaries() {
+        let document = r#"{"rust-build-meta":{},"rust-binaries":{"batten":{"binary-id":"batten"},"batten::cli":{"binary-id":"batten::cli"}}}"#;
+        assert_eq!(
+            reuse_ids(document),
+            Some(BTreeSet::from([
+                String::from("batten"),
+                String::from("batten::cli")
+            ]))
+        );
+        assert_eq!(reuse_ids("not json"), None);
+        assert_eq!(reuse_ids("{}"), None, "no `rust-binaries` is no record");
+    }
+
+    /// A judging run reuses the binaries the build recorded when every case's
+    /// binary is among them, narrowing by binary in the filterset since nextest
+    /// refuses cargo's selection flags beside `--binaries-metadata`; otherwise
+    /// it builds as before.
+    ///
+    /// Fails by: a reused run carrying a flag nextest refuses beside it (every
+    /// run an error), a reused run selecting no binary (every case filtered
+    /// out, every mutant missed), or a case outside the record run on reused
+    /// binaries that do not hold it (no case selected, a vacuous pass).
+    #[test]
+    fn a_judging_run_reuses_the_build_only_when_it_holds_every_case() {
+        let mutant = listed("BinaryOperator", "!=", (2, 7), (2, 9));
+        let reuse = Reuse {
+            binaries: std::path::PathBuf::from("/r/binaries.json"),
+            metadata: std::path::PathBuf::from("/r/cargo-metadata.json"),
+            ids: BTreeSet::from([String::from("batten"), String::from("batten::cli")]),
+        };
+        let cases = |list: &[(&str, &str)]| -> BTreeSet<Case> {
+            list.iter()
+                .map(|(name, binary)| ((*name).to_owned(), (*binary).to_owned()))
+                .collect()
+        };
+        let target = std::path::Path::new("/t");
+        let held = judge_args(
+            &mutant,
+            &cases(&[("t", "batten::cli")]),
+            target,
+            Some(&reuse),
+        );
+        for refused in ["-p", "--cargo-profile", "--target-dir", "--test", "--lib"] {
+            assert!(
+                !held.iter().any(|arg| arg == refused),
+                "{refused} in {held:?}"
+            );
+        }
+        let filter = held.windows(2).find(|pair| pair[0] == "-E").unwrap()[1].clone();
+        assert_eq!(filter, "(binary_id(=batten::cli)) and (test(=t))");
+        assert!(
+            held.windows(2)
+                .any(|pair| pair[0] == "--binaries-metadata" && pair[1] == "/r/binaries.json")
+        );
+        assert!(
+            held.windows(2)
+                .any(|pair| pair[0] == "--cargo-metadata" && pair[1] == "/r/cargo-metadata.json")
+        );
+        for outside in [&[("t", "other::x")][..], &[("t", "batten"), ("u", "")][..]] {
+            let built = judge_args(&mutant, &cases(outside), target, Some(&reuse));
+            assert!(
+                !built.iter().any(|arg| arg == "--binaries-metadata"),
+                "{built:?}"
+            );
+            assert!(built.iter().any(|arg| arg == "--target-dir"), "{built:?}");
+        }
+        let unrecorded = judge_args(&mutant, &cases(&[("t", "batten")]), target, None);
+        assert!(!unrecorded.iter().any(|arg| arg == "--binaries-metadata"));
+    }
+
     /// An error ending exactly where a probe region ends is outside it.
     ///
     /// Fails by: a region read as closed at its end, which unprobes a file
@@ -8284,6 +8513,7 @@ mod tests {
                 digests: &digests,
                 store: &store,
                 red: &Red::new(),
+                reuse: None,
             };
             let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
             let journal = std::sync::Mutex::new(None);
@@ -8419,6 +8649,7 @@ mod tests {
             digests: &digests,
             store: &store,
             red: &Red::new(),
+            reuse: None,
         };
         let todo: Vec<u32> = (0..105).collect();
         let mut out = Vec::new();
@@ -8505,6 +8736,7 @@ mod tests {
             digests: &digests,
             store: &store,
             red: &red,
+            reuse: None,
         };
         let verdicts = judge_all(&judging, &[0], 1, &mut Vec::new());
         assert_eq!(verdicts, [(0, Verdict::Unjudged)]);
