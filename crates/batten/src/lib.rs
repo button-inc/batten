@@ -467,7 +467,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.
         Some(Command::Receipt { command }) => run_receipt(command, mode, out, err),
-        Some(Command::Policy { command }) => run_policy(command, &overrides, out),
+        Some(Command::Policy { command }) => run_policy(command, &overrides, mode, out, err),
         // `lint <kind>` reads text the caller names and answers about its shape.
         // The §8 config chain is deliberately not threaded through it: the schema
         // is engine structure, not repo policy, so there is no key for a config to
@@ -10333,11 +10333,13 @@ fn explain_rule(
 fn run_policy(
     command: PolicyCommand,
     overrides: &Overrides,
+    mode: Mode,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {
         PolicyCommand::Budget { json } => run_budget(json, overrides, out),
-        PolicyCommand::Test { json } => run_policy_test(json, overrides, out),
+        PolicyCommand::Test { json } => run_policy_test(json, overrides, mode, out, err),
         PolicyCommand::Tools { json } => run_policy_tools(json, overrides, out),
         PolicyCommand::Explain {
             tokens,
@@ -11259,7 +11261,13 @@ fn explain_json(
     clippy::too_many_lines,
     reason = "the report's terms and the verdict they decide belong in one place; separating them is how a term came to report without deciding"
 )]
-fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+fn run_policy_test(
+    json: bool,
+    overrides: &Overrides,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     let root = Path::new(".");
     let config = resolve::resolve(root, overrides)?;
     let bundles = policy::load(
@@ -11335,6 +11343,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
             bundle,
             &input,
             rule.scope == crate::preset_catalog::RuleScope::MediatedCall,
+            Some(root),
         )? {
             facts::Look::Is(suite) => reports.push(SuiteReport {
                 bundle: rule.id.clone(),
@@ -11389,6 +11398,18 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
             reports.len()
         )?;
     }
+    // Which evaluator decided each case (#1276), and how many cases the
+    // coverage sweep — a report, never a verdict — ran on the interpreter.
+    report_policy_executions(mode, err)?;
+    output::message(
+        mode,
+        Verbosity::Debug,
+        err,
+        &format!(
+            "policy coverage: {} case(s) swept on the interpreter",
+            policy::coverage_cases()
+        ),
+    )?;
 
     // A suite that could not run is exit `1` — the config class — and it wins
     // over a verdict, because a run that did not happen must never be reported
