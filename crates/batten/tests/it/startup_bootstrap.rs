@@ -362,8 +362,8 @@ fn field(id: &str, key: &str) -> String {
 fn the_toolchain_row_does_not_read_a_reporter_as_a_gate() {
     // DERIVED FROM THE `mise` PRESET SINCE CLOUD-2633, so read as the engine
     // derives it rather than as committed text.
-    let config = batten::config::load(&common::at_root("batten.toml"))
-        .expect("the committed config loads");
+    let config =
+        batten::config::load(&common::at_root("batten.toml")).expect("the committed config loads");
     let row = batten::config_model::derive_startup(&config.startup, &config.rules)
         .into_iter()
         .find(|row| row.id == "toolchain-is-provisioned")
