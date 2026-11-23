@@ -7125,8 +7125,8 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
     #[test]
     fn a_stripped_bundle_seeded_from_the_full_reading_reads_what_describing_it_reads() {
         const READS: &str = "package batten\n\nimport rego.v1\n\n\
-            violation contains \"a\" if input.tree.kept == 1\n\n\
-            test_reads_more if {\n\tinput.tree.test_only == 1\n\tinput.facts.session == 1\n}\n";
+            violation contains \"a\" if input.tree.staged == 1\n\n\
+            test_reads_more if {\n\tinput.tree.tracked == 1\n\tinput.facts.session == 1\n}\n";
         let full = bundle_of("row", &[("policy/a.rego", READS)]);
         let stripped = || bundle_of("row", &[("policy/a.rego", &without_test_rules(READS))]);
         let described = stripped();
@@ -7136,7 +7136,7 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
         assert_eq!(ast_descriptions() - before, 1, "the full bundle, once");
         assert_eq!(
             seeded.tree_reads(),
-            Reads::Known(BTreeSet::from([String::from("kept")]))
+            Reads::Known(BTreeSet::from([String::from("staged")]))
         );
         let before = ast_descriptions();
         assert_eq!(seeded.tree_reads(), described.tree_reads());
