@@ -26,8 +26,9 @@
 //!
 //! The wrapper is the running binary itself (`current_exe`), so the path is right
 //! on every platform and the mechanism is the one under test, as every verify
-//! step here is (`cargo run -p batten`). CI's legs call `cargo nextest run`
-//! directly, start from no journal, and so run every case.
+//! step here is (`cargo run -p batten`). CI runs every case: `step::run` skips
+//! the journal under `CI` (CLOUD-2850), because CI's job is to confirm
+//! independently.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
