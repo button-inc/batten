@@ -167,7 +167,7 @@ const GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
 "#;
 
 /// The mutation the toy suite catches: the gate stops refusing anything.
-const CAUGHT: &str = "#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|over_the_limit";
+const CAUGHT: &str = "#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|over_the_limit_is_refused";
 
 /// The package every toy carries, so `cargo test` has something to build.
 ///
@@ -217,8 +217,9 @@ fn runs(gate: &str) -> String {
     GATE_HELPER.replace("@GATE@", gate)
 }
 
-/// One libtest case. Its NAME is what a row's filter selects, so a row names a
-/// case by a substring of the function, as libtest matches it.
+/// One libtest case. Its NAME is what a row's filter selects: a row names a
+/// case by the whole function name (or its trailing `module::` path), never a
+/// substring of it.
 fn case(name: &str, body: &str) -> String {
     format!("\n#[test]\nfn {name}() {{\n    {body}\n}}\n")
 }
@@ -1033,7 +1034,7 @@ fn a_sweep_reports_its_row_count_and_each_rows_time() {
         "progress",
         &[
             CAUGHT,
-            "#MUTANT limit-lowered|s/^LIMIT=10$/LIMIT=0/|under_the_limit",
+            "#MUTANT limit-lowered|s/^LIMIT=10$/LIMIT=0/|under_the_limit_passes",
         ],
     );
     let (code, out, err) = sweep(&root, "toy");
@@ -1204,7 +1205,7 @@ fn a_row_runs_the_one_build_and_never_compiles() {
         "one-build",
         &[
             CAUGHT,
-            "#MUTANT comparison-flipped|s/-le/-ge/|over_the_limit",
+            "#MUTANT comparison-flipped|s/-le/-ge/|over_the_limit_is_refused",
         ],
     );
     write(&root, "build.rs", ALWAYS_STALE_BUILD);
@@ -1290,7 +1291,7 @@ fn the_defect_a_mutation_the_suite_does_not_catch_fails() {
     // The mutation moves a line no case exercises, so the suite stays green.
     let root = toy_repo(
         "survivor",
-        &["#MUTANT unwatched|s/^exit 0$/exit 0 # unwatched/|over_the_limit"],
+        &["#MUTANT unwatched|s/^exit 0$/exit 0 # unwatched/|over_the_limit_is_refused"],
     );
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
@@ -1310,17 +1311,47 @@ fn a_row_is_exactly_three_fields_and_a_fourth_is_refused_before_the_split() {
 
 #[cfg(unix)]
 #[test]
-fn a_filter_that_selects_the_whole_suite_names_no_case_like_one_that_selects_none() {
-    // `the_limit` is a substring of BOTH case names, so the row stops naming a
-    // case and redness under mutation could come from anywhere in the suite.
-    let root = toy_repo(
-        "wide-filter",
-        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|the_limit"],
+fn a_filter_that_selects_more_than_one_case_names_no_case_like_one_that_selects_none() {
+    // A second module carries a case of the same name, so the exact filter
+    // selects two and redness under mutation could come from either.
+    let root = toy_repo("wide-filter", &[CAUGHT]);
+    let suite = format!(
+        "{}\nmod again {{\n    use super::gate;\n{}}}\n",
+        toy_suite("toy.sh", ""),
+        case(
+            "over_the_limit_is_refused",
+            "assert_eq!(gate(\"99\"), Some(1));"
+        ),
     );
+    write(&root, "tests/toy.rs", &suite);
+    track(&root);
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("filter-names-every-case"), "{out}");
     assert!(!out.contains("every one caught"), "{out}");
+}
+
+/// A SIBLING WHOSE NAME CONTAINS THE CASE'S IS NEVER CREDITED. `limit_case`
+/// does not see the mutation and `limit_case_over` does. Fails by: selecting by
+/// containment, which ran both and read the sibling's redness as the row's catch.
+#[cfg(unix)]
+#[test]
+fn a_case_is_selected_by_its_whole_name_and_a_longer_sibling_is_not_credited() {
+    let root = toy_repo(
+        "anchored-filter",
+        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|limit_case"],
+    );
+    let suite = format!(
+        "{}{}{}",
+        toy_suite("toy.sh", ""),
+        case("limit_case", "assert_eq!(gate(\"1\"), Some(0));"),
+        case("limit_case_over", "assert_eq!(gate(\"99\"), Some(1));"),
+    );
+    write(&root, "tests/toy.rs", &suite);
+    track(&root);
+    let (code, out, err) = sweep(&root, "toy");
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("SURVIVED (limit_case)"), "{out}{err}");
 }
 
 #[cfg(unix)]
@@ -1368,7 +1399,9 @@ fn the_tree_is_restored_between_rows_so_a_gate_is_judged_against_a_pristine_sibl
         &toy_suite("sibling.sh", "sibling_"),
     );
     let mut sibling = TOY_GATE.replace("tests/toy.rs", "tests/sibling.rs");
-    sibling.push_str("#MUTANT sibling-limit|s/^LIMIT=10$/LIMIT=999/|sibling_over_the_limit\n");
+    sibling.push_str(
+        "#MUTANT sibling-limit|s/^LIMIT=10$/LIMIT=999/|sibling_over_the_limit_is_refused\n",
+    );
     write_program(&root, "mise-tasks/sibling.sh", &sibling);
 
     // The mutation is `|`-free and anchored on a line carrying no `$`, so the
@@ -1382,7 +1415,7 @@ if [ "${DELEGATE}" = 1 ]; then
 	"$(dirname "$0")/sibling.sh" "${1:-0}" || exit 1
 fi
 exit 0
-#MUTANT composer-delegates|s@^DELEGATE=1$@DELEGATE=0@|composer_over_the_limit
+#MUTANT composer-delegates|s@^DELEGATE=1$@DELEGATE=0@|composer_over_the_limit_is_refused
 "#;
     write_program(&root, "mise-tasks/composer.sh", composer);
     write(
@@ -1406,7 +1439,7 @@ fn a_row_that_mutates_its_own_declaration_is_refused_not_reported_as_a_survivor(
     // run while reading as enforced coverage.
     let root = toy_repo(
         "self-mutating",
-        &["#MUTANT self|s/MUTANT self/MUTANT other/|over_the_limit"],
+        &["#MUTANT self|s/MUTANT self/MUTANT other/|over_the_limit_is_refused"],
     );
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
@@ -1476,7 +1509,7 @@ fn anti_vacuity_a_filter_naming_no_case_is_not_a_pass() {
 fn anti_vacuity_a_mutation_that_changes_nothing_is_not_a_pass() {
     let root = toy_repo(
         "inert",
-        &["#MUTANT inert|s/^NOTHING_MATCHES_THIS$/x/|over_the_limit"],
+        &["#MUTANT inert|s/^NOTHING_MATCHES_THIS$/x/|over_the_limit_is_refused"],
     );
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
@@ -1532,7 +1565,7 @@ fn a_name_resolving_to_nothing_is_no_such_gate() {
 fn pointer_never_payload_the_report_carries_no_line_of_the_mutated_source() {
     let root = toy_repo(
         "pointer",
-        &["#MUTANT leak|s/^exit 0$/SECRETMARKER=1/|over_the_limit"],
+        &["#MUTANT leak|s/^exit 0$/SECRETMARKER=1/|over_the_limit_is_refused"],
     );
     let (_, out, err) = sweep(&root, "toy");
     assert!(!out.contains("SECRETMARKER"), "{out}");
@@ -1581,7 +1614,8 @@ fn an_uncommitted_case_is_still_covered_because_the_working_tree_is_the_subject(
 /// A row `other`'s suite cannot catch: dropping `pipefail` changes nothing the
 /// suite observes. So the sweep exits non-zero exactly when `other` is swept,
 /// which is what lets a case tell "narrowed" from "swept everything and passed".
-const OTHER_SURVIVES: &str = "#MUTANT pipefail-dropped|s/^set -uo pipefail$/set -u/|other_refuses";
+const OTHER_SURVIVES: &str =
+    "#MUTANT pipefail-dropped|s/^set -uo pipefail$/set -u/|other_refuses_ninety_nine";
 
 /// `toy_repo` plus a second gate, `other`, whose one row survives, committed as
 /// the base a change is measured against.
@@ -2281,7 +2315,7 @@ fn a_deleted_preset_module_sweeps_its_gate() {
         &root,
         &format!("{dir}/a.rego"),
         "#MUTANT-SUITE tests/preset.rs\n\
-         #MUTANT package-renamed|s/^package batten.demo$/package batten.demo2/|preset_passes\n\
+         #MUTANT package-renamed|s/^package batten.demo$/package batten.demo2/|preset_passes_always\n\
          package batten.demo\n",
     );
     write(&root, &format!("{dir}/b.rego"), "package batten.demo\n");
