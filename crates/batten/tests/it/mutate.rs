@@ -752,6 +752,64 @@ fn a_signalled_sweep_takes_its_suite_with_it() {
     );
 }
 
+/// AN ORPHANED SWEEP ENDS, AND TAKES ITS SUITE (CLOUD-2854).
+///
+/// A capped `mutant:changed` lost its mise while `mutant:rust` ran on under
+/// init, holding the schema mirror's lock. Here the sweep runs under a shell
+/// that outlives the exec (`; :`), the shell is `SIGKILL`ed once the hung suite
+/// has started, and within [`ORPHAN_WITHIN`] neither the sweep nor anything its
+/// suite started may still run. The lock is an `flock`, so it drops with them.
+///
+/// Fails by: the parent watch never firing, so the sweep and its suite run on
+/// under init until the suite bound.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_orphaned_sweep_ends_and_leaves_nothing_running() {
+    let note = common::scratch("mutate-orphaned-note").join("pids");
+    let root = hung_toy("orphaned", &note);
+    let body = format!("{} mutate sweep; :", env!("CARGO_BIN_EXE_batten"));
+    let mut shell = common::task_bash(&root, &body)
+        .env("MUTANT_GATES", "toy")
+        .env("MUTANT_TASKS", "mise.toml")
+        // Far past PATIENCE, so the bound cannot be what ends the suite here.
+        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "3000")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn the shell over batten mutate");
+    await_note(&note, &mut shell);
+    let children = format!("/proc/{0}/task/{0}/children", shell.id());
+    let sweep: u32 = fs::read_to_string(&children)
+        .expect("the shell's children")
+        .split_whitespace()
+        .next()
+        .and_then(|pid| pid.parse().ok())
+        .expect("the sweep runs under the shell");
+
+    kill(shell.id(), "KILL");
+    let _ = shell.wait();
+    let started = std::time::Instant::now();
+    let sweep_gone = await_gone(sweep);
+    let survivors = survivors_of(&note);
+    if !sweep_gone {
+        kill(sweep, "KILL");
+    }
+    assert!(
+        sweep_gone && survivors.is_empty(),
+        "an orphaned sweep must end itself and its suite: sweep gone {sweep_gone}, \
+         survivors {survivors:?}"
+    );
+    assert!(
+        started.elapsed() < ORPHAN_WITHIN,
+        "the orphaned sweep took {:?} to end",
+        started.elapsed()
+    );
+}
+
+/// How soon an orphaned sweep and its suite must be gone.
+#[cfg(target_os = "linux")]
+const ORPHAN_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// How long a case waits for the hung toy to start: its cold build comes first.
 #[cfg(unix)]
 const BUILD_PATIENCE: std::time::Duration = std::time::Duration::from_secs(300);
