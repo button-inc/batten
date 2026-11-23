@@ -458,6 +458,38 @@ impl Bundle {
             .map(Vec::as_slice)
     }
 
+    /// Seed this bundle, compiled from `full`'s sources through
+    /// [`without_test_rules`], with `full`'s reading less its `test_` rules.
+    ///
+    /// ONE LOAD DESCRIBES EACH BUNDLE ONCE (CLOUD-1875), and a checked load's
+    /// bytecode miss holds two: the full-text interpreter its checks read, and
+    /// the stripped one its program and cache header are taken from. Describing
+    /// both serialised every module's AST twice. The stripped text is the full
+    /// text with exactly the column-zero `test_` rules removed, and [`describe`]
+    /// reads each rule on its own, so the full reading filtered by that name is
+    /// the stripped reading: the program's reads and facts come out the same,
+    /// and the AST is serialised once. A `full` with no reading leaves this one
+    /// to describe itself, as before.
+    fn seed_stripped_from(&self, full: &Self) {
+        let Some(described) = full.described() else {
+            return;
+        };
+        let stripped = described
+            .iter()
+            .map(|module| Described {
+                path: module.path.clone(),
+                package: module.package.clone(),
+                rules: module
+                    .rules
+                    .iter()
+                    .filter(|rule| !rule.name.starts_with("test_"))
+                    .cloned()
+                    .collect(),
+            })
+            .collect();
+        let _ = self.described.set(Some(std::sync::Arc::new(stripped)));
+    }
+
     /// Whether this bundle evaluates as bytecode (CLOUD-2236).
     #[must_use]
     pub fn is_bytecode(&self) -> bool {
@@ -2639,7 +2671,10 @@ fn with_bytecode(
     }
     let program = if keep_ast {
         match compile(id, sources, data) {
-            Ok(program) => Some(program),
+            Ok(program) => {
+                program.seed_stripped_from(&bundle);
+                Some(program)
+            }
             Err(err) => return interpreted_because(bundle, Fallback::CompileRefused, &err),
         }
     } else {
@@ -4570,6 +4605,7 @@ struct Described {
 }
 
 /// One top-level rule, as [`Described`] reads it.
+#[derive(Clone)]
 struct DescribedRule {
     /// The rule's own name — `violation`, `rules`, `test_no_force_push`.
     name: String,
@@ -6055,6 +6091,36 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
             panic!("the bundle answers");
         };
         assert!(allowed.is_empty());
+    }
+
+    /// The stripped bundle a checked load's program is taken from reads what
+    /// describing its own text reads, without describing it: the seed is the
+    /// full reading less the `test_` rules. A `test_` rule here reads a tree key
+    /// and a fact no verdict rule reads, so a seed that kept them, or dropped a
+    /// verdict rule, answers differently from describing the stripped text.
+    #[test]
+    fn a_stripped_bundle_seeded_from_the_full_reading_reads_what_describing_it_reads() {
+        const READS: &str = "package batten\n\nimport rego.v1\n\n\
+            violation contains \"a\" if input.tree.kept == 1\n\n\
+            test_reads_more if {\n\tinput.tree.test_only == 1\n\tinput.facts.session == 1\n}\n";
+        let full = bundle_of("row", &[("policy/a.rego", READS)]);
+        let stripped = || bundle_of("row", &[("policy/a.rego", &without_test_rules(READS))]);
+        let described = stripped();
+        let seeded = stripped();
+        let before = ast_descriptions();
+        seeded.seed_stripped_from(&full);
+        assert_eq!(ast_descriptions() - before, 1, "the full bundle, once");
+        assert_eq!(
+            seeded.tree_reads(),
+            Reads::Known(BTreeSet::from([String::from("kept")]))
+        );
+        let before = ast_descriptions();
+        assert_eq!(seeded.tree_reads(), described.tree_reads());
+        assert_eq!(
+            seeded.session_start_facts(),
+            described.session_start_facts()
+        );
+        assert_eq!(ast_descriptions() - before, 1, "only the control describes");
     }
 
     /// A suite is a violation when a test fails, a predicate goes unexercised,
