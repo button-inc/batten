@@ -162,6 +162,13 @@ const PLUMBING: &[&str] = &[
 /// deepest library module, `disk_watch`, is the number that can move.
 const DEEPEST_CLOSURE: usize = 89;
 
+/// The crate root's own recorded worst (CLOUD-2789): `lib` dispatches every
+/// verb, so its closure is every module it can reach and [`DEEPEST_CLOSURE`]
+/// does not judge it. It is ratcheted apart, on the same terms: the split moves
+/// modules out and this number down; a module added to the crate fails it until
+/// the number is re-recorded here, deliberately.
+const ROOT_CLOSURE: usize = 117;
+
 /// Every top-level module of the library, mapped to the modules it reaches.
 ///
 /// Keys are module names as `policy/module-layering.rego`'s `declared_modules`
@@ -335,6 +342,24 @@ fn no_module_reaches_deeper_than_the_recorded_worst() {
          improve.",
         deepest.1,
         deepest.0,
+    );
+}
+
+/// Fails by: the crate root left out of every ratchet, so a root that grew its
+/// reach (a new module, a new edge from `lib`) passed unseen — the deepest
+/// module's bound excludes `lib` by design.
+#[test]
+fn the_crate_root_reaches_no_further_than_its_recorded_worst() {
+    let sizes = distribution(&module_graph());
+    let (reach, _) = sizes
+        .iter()
+        .find(|(_, module)| module.as_str() == batten::module_graph::LIB)
+        .expect("the crate has a root");
+    assert!(
+        *reach <= ROOT_CLOSURE,
+        "the crate root now reaches {reach} modules, past its recorded worst of \
+         {ROOT_CLOSURE}. Re-record `ROOT_CLOSURE` only for a module added on \
+         purpose."
     );
 }
 
