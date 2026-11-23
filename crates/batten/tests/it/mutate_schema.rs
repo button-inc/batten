@@ -144,13 +144,24 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     let _ = common::require_bin("nextest", "cargo-nextest");
     let repo = seeded("mutate-schema-sweep");
     let file = listing("mutate-schema-listing");
+    // OFF CI (CLOUD-2850): under `CI` no stored verdict answers, and this case
+    // is about the ones that do.
     let sweep = || {
-        let output = common::run(&repo, &["__mutate-schema", &file, "2"]);
+        let output = common::batten()
+            .args(["__mutate-schema", &file, "2"])
+            .current_dir(&repo)
+            .env_remove("CI")
+            .streamed_output()
+            .expect("run batten");
         let said = common::stdout(&output);
         (output.status.code(), said, common::stderr(&output))
     };
     let (code, said, err) = sweep();
-    assert_eq!(code, Some(3), "the fixture's hang is a timeout, and a timeout decides nothing, so the sweep exits 3 (W1, could-not-look outranks a survivor's 2)\n{said}\n{err}");
+    assert_eq!(
+        code,
+        Some(3),
+        "the fixture's hang is a timeout, and a timeout decides nothing, so the sweep exits 3 (W1, could-not-look outranks a survivor's 2)\n{said}\n{err}"
+    );
     assert!(said.contains(COUNTS), "{said}\n{err}");
     for line in [
         "missed\tsurvive\n",
