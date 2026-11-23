@@ -517,6 +517,66 @@ fn test_shapes(
         .collect()
 }
 
+/// The crate cuts the branch made, read off its file moves: each pair of
+/// crates a library file moved between, to the crate-root modules that moved.
+/// What `crate_cut` was given, recovered from what it did.
+fn cuts(
+    moves: &BTreeMap<String, String>,
+    before: &crate::item_index::Index,
+    after: &crate::item_index::Index,
+) -> BTreeMap<(String, String), BTreeSet<String>> {
+    let mut cuts: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for (old, new) in moves {
+        let (Some(from), Some(to)) = (before.crate_of(old), after.crate_of(new)) else {
+            continue;
+        };
+        let Some(module) = before
+            .module_path_of(old)
+            .and_then(|path| path.first().cloned())
+        else {
+            continue;
+        };
+        if from != to {
+            cuts.entry((from, to)).or_default().insert(module);
+        }
+    }
+    cuts
+}
+
+/// A base body respelled through every cut (CLOUD-2789), as the cut respelled
+/// the file it now sits in, so its spliced form names HEAD's paths: `crate::m`
+/// read in the crate `m` left, and `old::m` read anywhere else, become the
+/// crate `m` now lives in — `crate` when the body now sits there too. A body
+/// the cut could not respell is spliced as it was, and fails as it would have.
+fn respell_cut(
+    body: &str,
+    base_crate: &str,
+    head_crate: &str,
+    cuts: &BTreeMap<(String, String), BTreeSet<String>>,
+) -> String {
+    let mut body = body.to_owned();
+    for ((from, to), modules) in cuts {
+        let root = if base_crate == from {
+            "crate"
+        } else {
+            from.as_str()
+        };
+        let target = if head_crate == to {
+            "crate"
+        } else {
+            to.as_str()
+        };
+        if root == target {
+            continue;
+        }
+        let modules: BTreeSet<&str> = modules.iter().map(String::as_str).collect();
+        if let Some(respelled) = crate::crate_cut::respell_body(&body, root, &modules, target) {
+            body = respelled;
+        }
+    }
+    body
+}
+
 /// `batten test replay --base <ref>`: run each modified test's base form against
 /// HEAD, and admit what changed only through the `asked` ledger.
 ///
@@ -554,7 +614,9 @@ pub fn run(
     // names, so a path respelled at an item's new home is no change.
     let base_index = crate::item_index::Index::new(&before, &manifests(root, &fork)?);
     let head_index = crate::item_index::Index::new(&after, &manifests(root, "HEAD")?);
-    let item_moves = crate::item_index::moved_items(&base_index, &head_index);
+    let mut item_moves = crate::item_index::moved_with_files(&base_index, &head_index, &moves);
+    item_moves.extend(crate::item_index::moved_items(&base_index, &head_index));
+    let cuts = cuts(&moves, &base_index, &head_index);
     let no_moves = BTreeMap::new();
     // `crate::` names a file's own crate only for a library source the index
     // read; in an integration test it is the test crate, which is not indexed,
@@ -597,7 +659,15 @@ pub fn run(
         if let Some(head_path) = head_path
             && !changed.modified.is_empty()
         {
-            splices.insert(head_path, (head_text.to_owned(), changed.modified));
+            let modified = changed
+                .modified
+                .into_iter()
+                .map(|test| Modified {
+                    base_body: respell_cut(&test.base_body, &base_crate, &head_crate, &cuts),
+                    ..test
+                })
+                .collect();
+            splices.insert(head_path, (head_text.to_owned(), modified));
         }
     }
 
