@@ -3,7 +3,7 @@
 #MUTANT task-appearance-unchecked|s@^\tnot trim_space(head\[h\]) in units_with_shell(base_side(path), shell_lines(base_entry(path)), unit)$@\tfalse@|a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls
 #MUTANT workflow-growth-unchecked|s@^\tcount(shell_lines(head_entry(path))) > count(shell_lines(base_entry(path)))$@\tfalse@|a_workflow_run_block_grown_is_refused
 #MUTANT exempt-unread|s@^\tsome glob in exempt_globs$@\tsome glob in set()@|an_exempt_file_is_admitted
-#MUTANT declaration-unread|s@^\tshell := doc.census.shell$@\tshell := doc.census.absent@|a_task_body_grown_by_one_line_is_refused
+#MUTANT declaration-unread|s@^\tshell := doc.census.shell$@\tshell := doc.census.absent@|shell_standing_at_the_base_is_admitted_by_the_declared_migration
 #MUTANT presence-arm-unread|s@^presence if not migrating$@presence if false@|a_base_tree_shell_file_is_refused_by_default_and_admitted_under_migrate
 #MUTANT legacy-exempt-read-as-presence|s@^migrating if count(exempt_globs) > 0$@migrating if false@|a_config_that_still_carries_exempt_keeps_its_growth_meaning
 #MUTANT generated-entry-for-absent-file-admitted|s@^\tmeasured.matches == 0$@\tfalse@|a_generated_entry_covering_no_file_is_a_finding
