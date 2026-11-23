@@ -292,6 +292,39 @@ fn no_compile_runs_without_a_source_pin() {
     assert!(!repo.join("target").exists(), "nothing built into target/");
 }
 
+/// A checkout carrying the engine's own crate and `config` as its authority,
+/// tracked so its source digest reads, and a host directory outside it whose
+/// `batten` is an unstamped placeholder: a release download, as `install.sh`
+/// leaves one (CLOUD-2871). Returns the checkout, the host directory, and a
+/// `PATH` that puts the host first.
+fn engine_bench(name: &str, config: &str) -> (PathBuf, PathBuf, std::ffi::OsString) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let repo = common::Fixture::new(name).build();
+    std::fs::create_dir_all(repo.join("crates/batten")).expect("the fixture repo");
+    write(
+        &repo,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/batten\"]\n",
+    );
+    write(
+        &repo,
+        "crates/batten/Cargo.toml",
+        "[package]\nname = \"batten\"\nversion = \"0.0.0\"\n",
+    );
+    write(&repo, "batten.toml", config);
+    let _ = common::git_in(&repo, &["add", "-A"]);
+    let host = common::scratch_outside_tree("session-start", name);
+    let hook_engine = host.join("batten");
+    std::fs::write(&hook_engine, "a release download\n").expect("the placeholder");
+    std::fs::set_permissions(&hook_engine, std::fs::Permissions::from_mode(0o755))
+        .expect("the placeholder is runnable");
+    let path = std::env::join_paths(
+        std::iter::once(host.clone()).chain(std::env::split_paths(&common::ambient_path())),
+    )
+    .expect("a joinable PATH");
+    (repo, host, path)
+}
+
 /// Fails by: a session in the engine's own checkout left hooking on a release
 /// download (CLOUD-2871), the build run on the hook path, or a second session
 /// rebuilding an engine the first already installed.
@@ -304,26 +337,8 @@ fn no_compile_runs_without_a_source_pin() {
 #[test]
 fn a_session_in_the_engine_checkout_installs_its_build_under_the_hooks() {
     use std::os::unix::fs::PermissionsExt as _;
-    let repo = common::Fixture::new("session-start-engine-build").build();
-    std::fs::create_dir_all(repo.join("crates/batten")).expect("the fixture repo");
-    write(
-        &repo,
-        "Cargo.toml",
-        "[workspace]\nmembers = [\"crates/batten\"]\n",
-    );
-    write(
-        &repo,
-        "crates/batten/Cargo.toml",
-        "[package]\nname = \"batten\"\nversion = \"0.0.0\"\n",
-    );
-    write(&repo, "batten.toml", "version = 1\n");
-    let _ = common::git_in(&repo, &["add", "-A"]);
-
-    let host = common::scratch_outside_tree("session-start", "engine-build-host");
+    let (repo, host, path) = engine_bench("session-start-engine-build", "version = 1\n");
     let hook_engine = host.join("batten");
-    std::fs::write(&hook_engine, "a release download\n").expect("the placeholder");
-    std::fs::set_permissions(&hook_engine, std::fs::Permissions::from_mode(0o755))
-        .expect("the placeholder is runnable");
     let gate = repo.join("gate");
     #[expect(
         clippy::disallowed_types,
@@ -348,10 +363,6 @@ fn a_session_in_the_engine_checkout_installs_its_build_under_the_hooks() {
     .expect("the cargo stub");
     std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755))
         .expect("the cargo stub is runnable");
-    let path = std::env::join_paths(
-        std::iter::once(host.clone()).chain(std::env::split_paths(&common::ambient_path())),
-    )
-    .expect("a joinable PATH");
     let session = |name: &str| {
         let payload = serde_json::json!({
             "hook_event_name": "SessionStart",
@@ -426,29 +437,12 @@ fn a_session_in_the_engine_checkout_installs_its_build_under_the_hooks() {
 #[test]
 fn the_engine_builds_on_the_toolchain_the_enabled_manager_pins() {
     use std::os::unix::fs::PermissionsExt as _;
-    let repo = common::Fixture::new("session-start-engine-toolchain").build();
-    std::fs::create_dir_all(repo.join("crates/batten")).expect("the fixture repo");
-    write(
-        &repo,
-        "Cargo.toml",
-        "[workspace]\nmembers = [\"crates/batten\"]\n",
-    );
-    write(
-        &repo,
-        "crates/batten/Cargo.toml",
-        "[package]\nname = \"batten\"\nversion = \"0.0.0\"\n",
-    );
-    write(
-        &repo,
-        "batten.toml",
+    let (repo, host, path) = engine_bench(
+        "session-start-engine-toolchain",
         "version = 1\n\n[[rule]]\nid = \"task reach loose\"\nkind = \"policy\"\n\
          scope = \"mediated_call\"\npreset = \"mise\"\nseverity = \"warn\"\n",
     );
-    let _ = common::git_in(&repo, &["add", "-A"]);
-
-    let host = common::scratch_outside_tree("session-start", "engine-toolchain-host");
     let hook_engine = host.join("batten");
-    std::fs::write(&hook_engine, "a release download\n").expect("the placeholder");
     let log = repo.join("mise.log");
     let mise = host.join("mise");
     std::fs::write(
@@ -460,14 +454,8 @@ fn the_engine_builds_on_the_toolchain_the_enabled_manager_pins() {
         ),
     )
     .expect("the mise stub");
-    for stub in [&hook_engine, &mise] {
-        std::fs::set_permissions(stub, std::fs::Permissions::from_mode(0o755))
-            .expect("the stub is runnable");
-    }
-    let path = std::env::join_paths(
-        std::iter::once(host.clone()).chain(std::env::split_paths(&common::ambient_path())),
-    )
-    .expect("a joinable PATH");
+    std::fs::set_permissions(&mise, std::fs::Permissions::from_mode(0o755))
+        .expect("the stub is runnable");
     let payload = serde_json::json!({
         "hook_event_name": "SessionStart",
         "session_id": "session-start-engine-toolchain",
