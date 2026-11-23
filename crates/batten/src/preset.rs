@@ -58,11 +58,66 @@ use crate::preset_catalog::RuleScope;
 use crate::preset_catalog::find;
 use crate::preset_catalog::names;
 
+/// The file under a mutation overlay naming the one module the sweep mutated,
+/// as its path under the overlay (CLOUD-2839). The sweep writes it beside the
+/// mutated copy. A reader whose module it names and whose copy will not read
+/// has nothing to judge: the embedded text is the UNMUTATED module.
+pub const OVERLAY_TARGET: &str = ".target";
+
+/// The suffix of the receipt a reader leaves beside an overlay copy it read
+/// (CLOUD-2839). A sweep holding no receipt for its row's copy judged
+/// unmutated code, so its run is no verdict.
+pub const OVERLAY_READ: &str = ".read";
+
+/// What a preset module reads under an overlay ([`read_overlay`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Overlaid {
+    /// No overlay, or not this module's: the embedded source.
+    Embedded,
+    /// The mutated copy, read and receipted.
+    Mutated(String),
+    /// The overlay names this module, and its copy at this path will not read.
+    Unreadable(std::path::PathBuf),
+}
+
+/// What the module at `relative` under the overlay `dir` reads (CLOUD-2839).
+///
+/// A copy that reads is the source, and leaves its [`OVERLAY_READ`] receipt.
+/// The receipt is how the sweep knows this run judged the mutation. A copy that
+/// will not read, for the module [`OVERLAY_TARGET`] names, is
+/// [`Overlaid::Unreadable`], NEVER the embedded text. Falling back there judged
+/// the unmutated module, and its green run was reported `SURVIVED`.
+#[must_use]
+pub fn read_overlay(dir: Option<&Path>, relative: &str) -> Overlaid {
+    let Some(dir) = dir else {
+        return Overlaid::Embedded;
+    };
+    let copy = dir.join(relative);
+    if let Ok(text) = crate::fsio::read_to_string(&copy) {
+        let mut receipt = copy.into_os_string();
+        receipt.push(OVERLAY_READ);
+        // A receipt that cannot be written leaves the sweep holding none, which it
+        // reads as unjudged: fail-closed, so the error needs no other route.
+        let _ = std::fs::write(receipt, "");
+        return Overlaid::Mutated(text);
+    }
+    let targeted = crate::fsio::read_to_string(dir.join(OVERLAY_TARGET))
+        .is_ok_and(|named| named.trim() == relative);
+    if targeted {
+        Overlaid::Unreadable(copy)
+    } else {
+        Overlaid::Embedded
+    }
+}
+
 /// `PresetModule` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
 pub trait PresetModuleExt: Sized {
     /// The source an engine compiles: the embedded one, or under the
     /// `preset-overlay` feature the mutated copy a mutation sweep wrote to
-    /// `$BATTEN_PRESET_OVERLAY/<preset>/<module>.rego`, where one is there.
+    /// `$BATTEN_PRESET_OVERLAY/<preset>/<module>.rego`, where one is there
+    /// ([`read_overlay`]). The module the overlay names as its target, with a
+    /// copy that will not read, exits 3 instead of reading the embedded text
+    /// (CLOUD-2839).
     ///
     /// A BUILD FEATURE, NEVER A RUNTIME SWITCH ALONE: a variable that swapped a
     /// shipped rule for a file would let the caller under judgement rewrite the
@@ -81,13 +136,27 @@ pub trait PresetModuleExt: Sized {
 impl PresetModuleExt for PresetModule {
     fn text(&self) -> std::borrow::Cow<'static, str> {
         #[cfg(feature = "preset-overlay")]
-        if let Some(dir) = std::env::var_os("BATTEN_PRESET_OVERLAY")
-            && let Some(relative) = self.pointer.strip_prefix("<preset:")
-            && let Ok(text) = crate::fsio::read_to_string(
-                std::path::Path::new(&dir).join(relative.replacen('>', "", 1)),
-            )
-        {
-            return std::borrow::Cow::Owned(text);
+        if let Some(relative) = self.pointer.strip_prefix("<preset:") {
+            let dir = std::env::var_os("BATTEN_PRESET_OVERLAY");
+            match read_overlay(
+                dir.as_deref().map(Path::new),
+                &relative.replacen('>', "", 1),
+            ) {
+                Overlaid::Mutated(text) => return std::borrow::Cow::Owned(text),
+                // COULD-NOT-LOOK, EXIT 3 (CLOUD-2839): the embedded text is the
+                // module unmutated, and judging it is the laundered verdict. The
+                // run leaves no receipt, so the sweep reads it as unjudged.
+                Overlaid::Unreadable(copy) => {
+                    use std::io::Write as _;
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "batten: preset overlay: {} will not read; could-not-look",
+                        copy.display()
+                    );
+                    std::process::exit(3);
+                }
+                Overlaid::Embedded => {}
+            }
         }
         std::borrow::Cow::Borrowed(self.embedded_source)
     }
@@ -631,6 +700,48 @@ mod tests {
 
     fn pointers(pairs: &[(String, String)]) -> Vec<&str> {
         pairs.iter().map(|(pointer, _)| pointer.as_str()).collect()
+    }
+
+    /// A wiped overlay directory, keyed by pid so concurrent runs never meet.
+    fn overlay_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("batten-overlay-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("demo")).expect("create overlay dir");
+        dir
+    }
+
+    /// CLOUD-2839's three cases at the reader, plus the module the sweep did not
+    /// mutate. Fails by: reading the embedded text for a targeted copy that will
+    /// not read, which judged the unmutated module and reported it `SURVIVED`.
+    #[test]
+    fn an_overlay_copy_is_read_receipted_or_refused_never_silently_skipped() {
+        use super::{OVERLAY_READ, OVERLAY_TARGET, Overlaid, read_overlay};
+        // Variable unset: the embedded source, as today.
+        assert_eq!(read_overlay(None, "demo/a.rego"), Overlaid::Embedded);
+
+        // Overlay mutated: the copy, and its receipt beside it.
+        let dir = overlay_dir("mutated");
+        std::fs::write(dir.join("demo/a.rego"), "mutated\n").expect("write copy");
+        std::fs::write(dir.join(OVERLAY_TARGET), "demo/a.rego\n").expect("write target");
+        assert_eq!(
+            read_overlay(Some(&dir), "demo/a.rego"),
+            Overlaid::Mutated(String::from("mutated\n"))
+        );
+        assert!(dir.join(format!("demo/a.rego{OVERLAY_READ}")).is_file());
+
+        // A module the sweep did not mutate: the embedded source, unreceipted.
+        assert_eq!(read_overlay(Some(&dir), "demo/b.rego"), Overlaid::Embedded);
+        assert!(!dir.join(format!("demo/b.rego{OVERLAY_READ}")).exists());
+
+        // Variable set, target named, copy absent: refused, never embedded.
+        let dir = overlay_dir("absent");
+        std::fs::write(dir.join(OVERLAY_TARGET), "demo/a.rego\n").expect("write target");
+        assert_eq!(
+            read_overlay(Some(&dir), "demo/a.rego"),
+            Overlaid::Unreadable(dir.join("demo/a.rego"))
+        );
+        assert!(!dir.join(format!("demo/a.rego{OVERLAY_READ}")).exists());
     }
 
     #[test]
