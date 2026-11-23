@@ -1,6 +1,6 @@
 #MUTANT-SUITE crates/batten/tests/it/git_preset.rs
 #MUTANT git-ungranted|s@^\tgit_call(program)$@\tfalse@|an_everyday_git_call_is_granted
-#MUTANT destructive-granted|s@^\tnot git_host.host_decides\(program, pathspec_status\)$@\ttrue@|a_destructive_git_call_is_left_to_the_host
+#MUTANT destructive-granted|s@^\tnot git_host.host_decides(program, pathspec_status)$@\ttrue@|a_destructive_git_call_is_left_to_the_host
 #MUTANT plan-granted|s@^\tnot input.call\["permission-mode"\] == "plan"$@\ttrue@|a_git_write_is_not_granted_in_plan_mode
 # Every git call batten allows is put to no one (CLOUD-2057).
 #

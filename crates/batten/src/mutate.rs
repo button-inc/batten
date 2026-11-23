@@ -3904,9 +3904,52 @@ fn basic_to_rust(pattern: &str, delimiter: char) -> Option<String> {
     // `^` anchors only first (or first in a group) and `$` only last: anywhere
     // else a basic regex reads them as themselves (`version=$(awk`, `"\[^"`).
     let mut at_start = true;
+    // A BRACKET EXPRESSION IS ITS OWN GRAMMAR: a leading `^` negates it and a
+    // leading `]` is a member, so `"[^"]*"` is "a quoted run" in sed and must
+    // not become `[\^"]` (the `rust-base-undeclared` row, inert on #1276).
+    let mut in_bracket = false;
     while let Some(c) = chars.next() {
         let starting = std::mem::replace(&mut at_start, false);
+        if in_bracket {
+            match c {
+                ']' => {
+                    in_bracket = false;
+                    out.push(']');
+                }
+                '[' if chars.peek() == Some(&':') => {
+                    out.push('[');
+                    for d in chars.by_ref() {
+                        out.push(d);
+                        if d == ']' {
+                            break;
+                        }
+                    }
+                }
+                '\\' => match chars.next()? {
+                    'n' => out.push_str("\\n"),
+                    't' => out.push_str("\\t"),
+                    other => out.push_str(&regex::escape(&other.to_string())),
+                },
+                // A range's dash stays live; every other class operator the
+                // regex crate has (`&&`, `~~`, a nested `[`) is a literal here.
+                '-' => out.push('-'),
+                other => out.push_str(&regex::escape(&other.to_string())),
+            }
+            continue;
+        }
         match c {
+            '[' => {
+                in_bracket = true;
+                out.push('[');
+                if chars.peek() == Some(&'^') {
+                    chars.next();
+                    out.push('^');
+                }
+                if chars.peek() == Some(&']') {
+                    chars.next();
+                    out.push_str("\\]");
+                }
+            }
             '^' if !starting => out.push_str("\\^"),
             '$' if chars.peek().is_some() => out.push_str("\\$"),
             '\\' => match chars.next()? {
@@ -7484,6 +7527,27 @@ mod tests {
         assert_eq!(basic_to_rust(r"a\/b", '/').as_deref(), Some("a/b"));
         assert_eq!(basic_to_rust(r"a\@b", '@').as_deref(), Some("a@b"));
         assert_eq!(basic_to_rust(r"\w", '/').as_deref(), Some(r"\w"));
+    }
+
+    /// Fails by: a bracket's leading `^` read as a literal caret, a leading `]`
+    /// read as the close, or a regex-crate class operator left live inside one.
+    #[test]
+    fn a_bracket_expression_negates_on_its_leading_caret() {
+        assert_eq!(
+            basic_to_rust(r#""[^"]*""#, '@').as_deref(),
+            Some(r#""[^"]*""#)
+        );
+        assert_eq!(basic_to_rust(r"[]a]", '@').as_deref(), Some(r"[\]a]"));
+        assert_eq!(basic_to_rust(r"[a&&b]", '@').as_deref(), Some(r"[a\&\&b]"));
+        assert_eq!(basic_to_rust(r"[a-z]", '@').as_deref(), Some(r"[a-z]"));
+        assert_eq!(
+            basic_to_rust(r"[[:digit:]]x^", '@').as_deref(),
+            Some(r"[[:digit:]]x\^")
+        );
+        assert_eq!(
+            substitute("k = \"v\", j\n", r#"s@= "[^"]*"@= ""@"#).as_deref(),
+            Some("k = \"\", j\n")
+        );
     }
 
     /// Fails by: an empty or non-numeric issue number accepted.
