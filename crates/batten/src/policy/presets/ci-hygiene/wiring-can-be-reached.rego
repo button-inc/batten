@@ -223,9 +223,9 @@ violation contains {
 	"subjects": [{"path": path}, {"artifact": dep}],
 } if {
 	some path, _ in workflow
-	some name, job in workflow[path].jobs
+	some name, _ in workflow[path].jobs
 	count(job_body(path, name)) > 0
-	some dep in job.needs
+	some dep in needs_of(path, name)
 	not asserts_the_whole_set(path, name)
 	some_dependency_is_named(path, name)
 	not names_the_dependency(path, name, dep)
@@ -236,8 +236,22 @@ violation contains {
 # simply waits, which is what `needs:` is for. The defect is a job that asserts
 # SOME of its dependencies and thereby looks like it asserts them all.
 some_dependency_is_named(path, name) if {
-	some dep in workflow[path].jobs[name].needs
+	some dep in needs_of(path, name)
 	names_the_dependency(path, name, dep)
+}
+
+# A job's `needs:` as a list: GitHub takes a single job name as a string, and
+# iterating the string itself faulted regorus's interpreter (`some .. in
+# collection` expects a collection), so on a tree with one such job this whole
+# preset answered could-not-look and judged nothing (#1276).
+needs_of(path, name) := needs if {
+	needs := workflow[path].jobs[name].needs
+	is_array(needs)
+}
+
+needs_of(path, name) := [needs] if {
+	needs := workflow[path].jobs[name].needs
+	is_string(needs)
 }
 
 # --- a cache-warm compile is guarded ------------------------------------------
@@ -630,6 +644,27 @@ test_an_overlapping_but_distinct_expression_is_not_a_collision if {
 	every f in found {
 		f.verdict != "job start same"
 	}
+}
+
+# A `needs:` NAMING ONE JOB AS A STRING is one dependency, and the module judges
+# the workflow rather than faulting over it. Fails by: the string iterated as a
+# collection (#1276), so `found` is a fault and no verdict at all.
+test_a_needs_naming_one_job_as_a_string_is_judged if {
+	doc := {
+		"on": {"pull_request": {"types": ["opened"]}},
+		"concurrency": {"group": "g", "cancel-in-progress": true},
+		"jobs": {
+			"final": {
+				"needs": ["a", "b"],
+				"if": "always()",
+				"steps": [{"run": "test needs.a.result = success"}],
+			},
+			"after": {"needs": "a", "steps": [{"run": "true"}]},
+		},
+	}
+	found := violation with input as wf(doc)
+	some f in found
+	f.verdict == "job require unseen"
 }
 
 test_a_fan_in_that_enumerates_only_some_of_its_needs_is_refused if {

@@ -15787,7 +15787,7 @@ produces over a file it never opened.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run lint:shell"
+target = "mise run hooks"
 
 # --- the formatters-only subset (CLOUD-681) ----------------------------------
 
@@ -15840,7 +15840,7 @@ vacuous pass this engine exists to keep inexpressible.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run pkl-check hk.pkl"
+target = "mise run hooks"
 
 [[verdict]]
 id = "shell retire missing"

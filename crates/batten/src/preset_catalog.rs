@@ -500,7 +500,7 @@ writing the family, and re-mint the record from the query.",
     },
     Manifest {
         name: "ci-hygiene",
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 1, 1),
         suggested: true,
         install: None,
         modules: &[
@@ -2467,7 +2467,7 @@ workspace packages it may reach, `^$` for none",
     // enabling it names the one class it raises.
     Manifest {
         name: RED_HEAD,
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 1, 0),
         suggested: true,
         install: None,
         modules: &[PresetModule {

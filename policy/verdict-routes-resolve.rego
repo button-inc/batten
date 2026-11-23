@@ -73,14 +73,21 @@ rules contains "route resolve missing"
 # The routes, flattened out of the registry.
 # ---------------------------------------------------------------------------
 
+# THE TARGET IS BOUND IN THE BODY, NOT READ IN THE HEAD (#1276). An override
+# route carries a `precondition` and no `target`; read in the head, regorus's
+# interpreter faulted on that absent key (`not an object`) and this whole row
+# answered could-not-look on every tree holding an override route — this one
+# included — so it judged no route at all. Bound here, a route with no target
+# simply contributes no row, which is what the head always meant.
 route_rows contains {
 	"verdict": entry.id,
 	"route": row.id,
 	"kind": row.kind,
-	"target": row.target,
+	"target": target,
 } if {
 	some entry in input.tree.documents["batten.toml"].verdict
 	some row in entry.route
+	target := row.target
 }
 
 # ---------------------------------------------------------------------------
@@ -120,7 +127,10 @@ mise_task(command) := task if {
 	words[0] == "mise"
 	words[1] == "run"
 	rest := [word | some i, word in words; i > 1; not startswith(word, "-")]
-	task := rest[0]
+
+	# A route's target is prose as often as a command line: `mise run land,
+	# then …` names `land`, not `land,` (#1276).
+	task := trim_right(rest[0], ",.;")
 }
 
 # ---------------------------------------------------------------------------
@@ -217,6 +227,44 @@ test_an_override_route_is_not_judged_here if {
 			"mise.toml": {"tasks": {}},
 		},
 		"tracked": ["batten.toml"],
+		"missing": {},
+	}}
+	count(found) == 0
+}
+
+# AN OVERRIDE ROUTE CARRIES NO `target` AT ALL, and the case above passes one.
+# Fails by: the row faulting over the absent key (#1276), so the undefined task
+# beside it is never refused.
+test_an_override_route_without_a_target_leaves_the_others_judged if {
+	found := violation with input as {"tree": {
+		"documents": {
+			"batten.toml": {"verdict": [{
+				"id": "x probe probex",
+				"route": [
+					{"id": "ask probe probe", "kind": "override", "precondition": "a reason"},
+					{"id": "run probe probe", "kind": "command", "target": "mise run absent-task"},
+				],
+			}]},
+			"mise.toml": {"tasks": {"present": {}}},
+		},
+		"tracked": ["mise.toml"],
+		"missing": {},
+	}}
+	count(found) == 1
+}
+
+# A PROSE TARGET NAMES ITS TASK WITHOUT ITS PUNCTUATION. Fails by: `land,`
+# read as the task and refused as undefined (#1276).
+test_a_prose_target_names_its_task_without_punctuation if {
+	found := violation with input as {"tree": {
+		"documents": {
+			"batten.toml": {"verdict": [{
+				"id": "x probe probex",
+				"route": [{"id": "run probe probe", "kind": "command", "target": "mise run land, then retry"}],
+			}]},
+			"mise.toml": {"tasks": {"land": {}}},
+		},
+		"tracked": ["mise.toml"],
 		"missing": {},
 	}}
 	count(found) == 0
