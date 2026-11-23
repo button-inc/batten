@@ -135,11 +135,32 @@ pub fn wrap(
     prune_others(&bins, &journal)?;
     std::fs::create_dir_all(&journal)?;
     let config = state.join("nextest.toml");
-    crate::durable::replace(
-        &config,
-        config_text(config_root, &std::env::current_exe()?, &journal)?,
-    )?;
+    let wrapper = pinned_wrapper(state, &std::env::current_exe()?)?;
+    crate::durable::replace(&config, config_text(config_root, &wrapper, &journal)?)?;
     Ok(with_config(command, &config.to_string_lossy()))
+}
+
+/// The wrapper every case execs, PINNED under `state` rather than named where
+/// it was built (CLOUD-2789): a hard link to `exe` where the filesystem allows
+/// one, a copy where it does not, replacing the last run's.
+///
+/// THE BUILD DIRECTORY MOVES UNDER A RUN. Cargo replaces `target/debug/batten`
+/// by a new file on any build, and a run naming it then execs a path the kernel
+/// reports as `… (deleted)`: every case failed `[double-spawn] failed to exec`
+/// with exit 70, and the replay read 597 base bodies as expectation changes,
+/// measured on #1276. A link keeps the inode the run started with; a copy keeps
+/// its bytes.
+fn pinned_wrapper(state: &Path, exe: &Path) -> Result<std::path::PathBuf> {
+    let pinned = state.join("wrapper");
+    match std::fs::remove_file(&pinned) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err).context("retire the last run's wrapper"),
+    }
+    if std::fs::hard_link(exe, &pinned).is_err() {
+        std::fs::copy(exe, &pinned).context("pin the run-wrapper")?;
+    }
+    Ok(pinned)
 }
 
 /// The format tag of a run's journal key ([`run_key`]), moved whenever what
@@ -1086,6 +1107,35 @@ mod tests {
     /// nextest run left whole.
     /// Fails by: the config named past `--` (handed to every test binary as a
     /// filter, so nextest never reads it), or not named at all.
+    #[test]
+    fn a_pinned_wrapper_outlives_a_rebuild_of_its_source() -> Result<()> {
+        // Fails by: the config naming the build directory's binary, which a
+        // concurrent build replaces mid-run (#1276: 597 cases exited 70).
+        let dir = std::env::temp_dir().join(format!("pin-wrapper-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let exe = dir.join("batten");
+        std::fs::write(&exe, "the build the run started with")?;
+        let state = dir.join("state");
+        std::fs::create_dir_all(&state)?;
+        let pinned = pinned_wrapper(&state, &exe)?;
+        assert!(pinned.starts_with(&state));
+        // Cargo writes a new file and renames it over the old one.
+        let fresh = dir.join("batten.new");
+        std::fs::write(&fresh, "a rebuild")?;
+        std::fs::rename(&fresh, &exe)?;
+        assert_eq!(
+            std::fs::read_to_string(&pinned)?,
+            "the build the run started with"
+        );
+        // A second run pins afresh, over the first run's.
+        assert_eq!(
+            std::fs::read_to_string(pinned_wrapper(&state, &exe)?)?,
+            "a rebuild"
+        );
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
     #[test]
     fn the_config_goes_ahead_of_the_test_binaries_arguments() {
         let argv = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
