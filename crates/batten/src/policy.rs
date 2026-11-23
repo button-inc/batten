@@ -5817,7 +5817,7 @@ violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects
     /// Two tree modules, one reading a provider's language, and one mediated.
     const MIXED: crate::preset_catalog::Manifest = crate::preset_catalog::Manifest {
         name: "mixed",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[
             crate::preset_catalog::PresetModule {

@@ -5797,7 +5797,8 @@ fn ejected_behind(
         let Some((preset, module, recorded)) = crate::preset::ejected_from(&source) else {
             continue;
         };
-        let Some(shipped) = crate::preset_catalog::find(&preset).map(|manifest| manifest.version)
+        let Some(shipped) =
+            crate::preset_catalog::find(&preset).map(|manifest| manifest.version.clone())
         else {
             continue;
         };
@@ -5818,7 +5819,7 @@ fn ejected_behind(
             )],
             owner: Some(rule.id.clone()),
             rule: MODULE_PIN_STALE.to_owned(),
-            severity: RuleSeverity::Advise,
+            severity: stale_severity(&recorded, &shipped),
             path,
             line: Some(1),
             identity: identity_of(rule, identity::FindingKind::Code, default),
@@ -5826,6 +5827,19 @@ fn ejected_behind(
             remediation: policy_remediation(registry, MODULE_PIN_STALE),
             reason: None,
         });
+    }
+}
+
+/// How loudly a copy behind its preset is reported (CLOUD-2822).
+///
+/// A major bump means the shipped preset refuses something the copy admits, so
+/// the copy is a gate the binary no longer agrees with: `deny`. A minor or patch
+/// bump only admits more or rewords, so the copy is stricter or equal: `advise`.
+fn stale_severity(recorded: &semver::Version, shipped: &semver::Version) -> RuleSeverity {
+    if recorded.major < shipped.major {
+        RuleSeverity::Deny
+    } else {
+        RuleSeverity::Advise
     }
 }
 
@@ -15887,7 +15901,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
 
     /// The first manifest a preset ships, and a module header copied from it at
     /// `version`.
-    fn ejected_header(version: u32) -> String {
+    fn ejected_header(version: &str) -> String {
         let manifest = &crate::preset_catalog::MANIFESTS[0];
         format!(
             "# batten-ejected: {}/m version {version}\npackage batten.x\n",
@@ -15901,16 +15915,16 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     /// Fails by: emitting nothing, or the version comparison inverted.
     #[test]
     fn a_copy_behind_its_preset_warns() {
-        let shipped = crate::preset_catalog::MANIFESTS[0].version;
+        let shipped = crate::preset_catalog::MANIFESTS[0].version.to_string();
         assert!(
-            shipped > 0,
+            crate::preset_catalog::MANIFESTS[0].version > semver::Version::new(0, 0, 0),
             "a stale copy needs a version below the shipped one"
         );
         let dir = temp_dir("rules-ejected-behind");
-        write(&dir, "old.rego", &ejected_header(shipped - 1));
-        write(&dir, "current.rego", &ejected_header(shipped));
-        write(&dir, "pol/old.rego", &ejected_header(shipped - 1));
-        write(&dir, "pol/notes.txt", &ejected_header(shipped - 1));
+        write(&dir, "old.rego", &ejected_header("0.0.0"));
+        write(&dir, "current.rego", &ejected_header(&shipped));
+        write(&dir, "pol/old.rego", &ejected_header("0.0.0"));
+        write(&dir, "pol/notes.txt", &ejected_header("0.0.0"));
         let warned = |rule: Rule| {
             let mut findings = Vec::new();
             ejected_behind(&rule, &dir, &[], &mut findings);
@@ -15941,6 +15955,31 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         );
     }
 
+    /// A copy a major version behind is refused; a minor or patch behind is
+    /// advice (CLOUD-2822).
+    ///
+    /// Fails by: the major comparison inverted, or reading minor as major.
+    #[test]
+    fn a_copy_a_major_behind_is_refused_and_a_minor_behind_advises() {
+        let at = |major, minor, patch| semver::Version::new(major, minor, patch);
+        assert_eq!(
+            stale_severity(&at(1, 4, 0), &at(2, 0, 0)),
+            RuleSeverity::Deny
+        );
+        assert_eq!(
+            stale_severity(&at(2, 0, 0), &at(2, 1, 0)),
+            RuleSeverity::Advise
+        );
+        assert_eq!(
+            stale_severity(&at(2, 1, 0), &at(2, 1, 3)),
+            RuleSeverity::Advise
+        );
+        assert_eq!(
+            stale_severity(&at(0, 0, 1), &at(0, 0, 2)),
+            RuleSeverity::Advise
+        );
+    }
+
     /// Only a policy row is checked for a stale copy, and only off the hook.
     ///
     /// Fails by: the kind test inverted, the conjunction disjoined, or the
@@ -15948,8 +15987,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     #[test]
     fn only_a_policy_row_off_the_hook_is_checked_for_a_stale_copy() {
         let dir = temp_dir("rules-evaluate-ejected");
-        let shipped = crate::preset_catalog::MANIFESTS[0].version;
-        write(&dir, "old.rego", &ejected_header(shipped - 1));
+        write(&dir, "old.rego", &ejected_header("0.0.0"));
         // Held back by an unmet requirement, so only the stale-copy check runs.
         let held = |id: &str, kind| Rule {
             module: Some(String::from("old.rego")),

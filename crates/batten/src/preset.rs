@@ -351,15 +351,19 @@ const EJECTED: &str = "# batten-ejected: ";
 /// What an ejected file's header records: the preset, the module and the
 /// manifest version it was copied at. `None` for a file no eject wrote.
 #[must_use]
-pub fn ejected_from(source: &str) -> Option<(String, String, u32)> {
+///
+/// The version is semver. A header an older binary wrote carries a bare integer
+/// `N`, which reads as `0.0.N`: an integer counter promised no stable major, so
+/// the faithful translation is an increment below `1.0.0`, never a major.
+pub fn ejected_from(source: &str) -> Option<(String, String, semver::Version)> {
     let header = source.lines().find_map(|line| line.strip_prefix(EJECTED))?;
     let (target, version) = header.split_once(" version ")?;
     let (preset, module) = target.split_once('/')?;
-    Some((
-        preset.to_owned(),
-        module.to_owned(),
-        version.trim().parse().ok()?,
-    ))
+    let version = version.trim();
+    let version = semver::Version::parse(version)
+        .ok()
+        .or_else(|| Some(semver::Version::new(0, 0, version.parse().ok()?)))?;
+    Some((preset.to_owned(), module.to_owned(), version))
 }
 
 /// The copy of `module` an eject writes: the header, then the vendored source
@@ -594,7 +598,7 @@ mod tests {
     /// provider's language.
     const FIXTURE: Manifest = Manifest {
         name: "fixture",
-        version: 3,
+        version: semver::Version::new(3, 1, 0),
         suggested: true,
         modules: &[
             PresetModule {
@@ -726,16 +730,33 @@ mod tests {
     fn an_ejected_copy_records_where_it_came_from_and_drops_the_mutant_rows() {
         let copy = ejected_source(&FIXTURE, &FIXTURE.modules[0]);
         assert!(
-            copy.starts_with("# batten-ejected: fixture/a version 3\n"),
+            copy.starts_with("# batten-ejected: fixture/a version 3.1.0\n"),
             "{copy}"
         );
         assert!(!copy.contains("#MUTANT"), "{copy}");
         assert!(copy.ends_with("helper(x) if { x }\n"), "{copy}");
         assert_eq!(
             ejected_from(&copy),
-            Some(("fixture".to_owned(), "a".to_owned(), 3))
+            Some((
+                "fixture".to_owned(),
+                "a".to_owned(),
+                semver::Version::new(3, 1, 0)
+            ))
         );
         assert_eq!(ejected_from("package a\n"), None);
+        assert_eq!(
+            ejected_from("# batten-ejected: fixture/a version 2\n"),
+            Some((
+                "fixture".to_owned(),
+                "a".to_owned(),
+                semver::Version::new(0, 0, 2)
+            )),
+            "a header an integer-versioned binary wrote reads as 0.0.N"
+        );
+        assert_eq!(
+            ejected_from("# batten-ejected: fixture/a version two\n"),
+            None
+        );
     }
 
     #[test]

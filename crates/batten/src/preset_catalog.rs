@@ -219,7 +219,21 @@ pub struct Manifest {
     /// `spec::SPEC_VERSION` is separate: a version moving with the binary says
     /// "the binary changed", which the release tag already says. This moves when
     /// what the preset DECIDES changes.
-    pub version: u32,
+    ///
+    /// **Semver, never a bare integer** (CLOUD-2822), so a consumer can tell
+    /// which way the decision moved:
+    ///
+    /// - **major**: a module refuses something it admitted;
+    /// - **minor**: it admits more, or a verdict gains a route;
+    /// - **patch**: prose only.
+    ///
+    /// The level is the author's to declare. `preset_versions.lock` pins each
+    /// version to a digest of what the preset decides, so a source changed under
+    /// an unchanged version fails the suite and the bump shows in the diff.
+    ///
+    /// The integer counter this replaced reads as `0.0.N`: it promised no stable
+    /// major, so each of its bumps is an increment below `1.0.0`.
+    pub version: semver::Version,
     /// Whether the config a new repository starts from names this preset
     /// (CLOUD-2628).
     ///
@@ -273,6 +287,77 @@ pub struct Manifest {
     pub patterns: &'static [&'static str],
 }
 
+impl Manifest {
+    /// The digest of everything this preset decides: each module's pointer, scope
+    /// and source, every verdict and route it ships, and its pattern rows. Its
+    /// name, version and whether the starter suggests it are not decisions, so
+    /// they are not hashed.
+    ///
+    /// `Debug` over static data is a stable rendering within one source tree,
+    /// which is all the lock needs: it compares this tree's manifests with the
+    /// table this tree commits.
+    #[must_use]
+    pub fn digest(&self) -> String {
+        use sha2::{Digest as _, Sha256};
+        use std::fmt::Write as _;
+
+        let mut hasher = Sha256::new();
+        hasher.update(format!("{:?}", self.modules).as_bytes());
+        hasher.update([0]);
+        hasher.update(format!("{:?}", self.verdicts).as_bytes());
+        hasher.update([0]);
+        hasher.update(format!("{:?}", self.patterns).as_bytes());
+        hasher
+            .finalize()
+            .iter()
+            .fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            })
+    }
+}
+
+/// The committed table pinning each preset version to its digest (CLOUD-2822).
+pub const VERSIONS_LOCK: &str = include_str!("preset_versions.lock");
+
+/// Every disagreement between `manifests` and the `lock` table, one line each,
+/// naming the preset, its version and both digests.
+///
+/// A manifest must have a row at its own version, and that row's digest must be
+/// the manifest's. Rows for older versions stay as history and are not judged.
+#[must_use]
+pub fn version_drift(lock: &str, manifests: &[Manifest]) -> Vec<String> {
+    let rows: Vec<(&str, &str, &str)> = lock
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| {
+            let mut columns = line.split_whitespace();
+            Some((columns.next()?, columns.next()?, columns.next()?))
+        })
+        .collect();
+    let mut drift = Vec::new();
+    for manifest in manifests {
+        let version = manifest.version.to_string();
+        let digest = manifest.digest();
+        match rows
+            .iter()
+            .find(|(name, at, _)| *name == manifest.name && *at == version)
+        {
+            None => drift.push(format!(
+                "{} {version} has no row in preset_versions.lock: add `{} {version} {digest}`",
+                manifest.name, manifest.name
+            )),
+            Some((_, _, recorded)) if *recorded != digest => drift.push(format!(
+                "{} {version} changed what it decides without a version bump: recorded {recorded}, now {digest}",
+                manifest.name
+            )),
+            Some(_) => {}
+        }
+    }
+    drift
+}
+
 /// Every vendored preset, in a stable order.
 ///
 /// The ONE authority. `preset_names`, the modules a preset ships, and the
@@ -297,7 +382,7 @@ pub const MANIFESTS: &[Manifest] = &[
     // rows over one preset collide on its predicate ids at load.
     Manifest {
         name: "check-verdict",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
@@ -359,7 +444,7 @@ writing the family, and re-mint the record from the query.",
     },
     Manifest {
         name: "ci-hygiene",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[
             PresetModule {
@@ -559,7 +644,7 @@ value is what does the work, and it is a boolean rather than the string `true`."
     // module is silent.
     Manifest {
         name: "ci-signal",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[
             PresetModule {
@@ -798,7 +883,7 @@ than its producer, which writes whole or removes, and reads the same way.",
     // rewritten to the host's maximum.
     Manifest {
         name: "claude-code-cloud",
-        version: 3,
+        version: semver::Version::new(0, 0, 3),
         suggested: true,
         modules: &[
             PresetModule {
@@ -958,7 +1043,7 @@ could-not-look arm exists to refuse.",
         name: "commit-hygiene",
         // 2: the commit is git's projected subcommand, not a `commit` word anywhere
         // in its argv (CLOUD-2813).
-        version: 2,
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
@@ -980,7 +1065,7 @@ the pipeline.",
     },
     Manifest {
         name: "landing-loop",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[
             PresetModule {
@@ -1168,7 +1253,7 @@ abandon the other unread.",
     // a regex.
     Manifest {
         name: "mise",
-        version: 2,
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         // TWO SURFACES, ONE CONCERN (CLOUD-1672). This is the manifest that made
         // the per-module scope necessary, and the reason is that "mise" is a
@@ -1264,7 +1349,7 @@ could not, which is a gate reporting on a surface it never saw.",
     },
     Manifest {
         name: "pinned-toolchain",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[
             PresetModule {
@@ -1333,7 +1418,7 @@ declares, and a probe inside the pin's environment is already correct",
     // consumer's own build workflow, so that half stays in the consumer's module.
     Manifest {
         name: "release-hygiene",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
@@ -1382,7 +1467,7 @@ the record rather than a verdict about the release. Record it again.",
     // KIND, the family being the consumer's to declare.
     Manifest {
         name: "engine-hygiene",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
@@ -1428,7 +1513,7 @@ step.",
         // write that authors shell over the `shell-introduced` fact the hook
         // decides with the same detector. A second row at `mediated_call`
         // enables it.
-        version: 3,
+        version: semver::Version::new(0, 0, 3),
         suggested: true,
         modules: &[
             PresetModule {
@@ -1641,7 +1726,7 @@ commit.",
     // consumer fact either.
     Manifest {
         name: "tracker-hygiene",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[
             PresetModule {
@@ -1949,7 +2034,7 @@ one. Fetch the cited issue and pipe the set again.",
     // consumer fact travels inside one.
     Manifest {
         name: "supply-chain",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[
             PresetModule {
@@ -2077,7 +2162,7 @@ dependencies. A recovered crate outside it means the binary was not built from t
     // Moved from a repository-local module (plan item 4c).
     Manifest {
         name: "lease-asserted",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
@@ -2116,7 +2201,7 @@ fetched it, so there is no expected value to name that a reader could check",
     },
     Manifest {
         name: "trunk-based",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
@@ -2151,7 +2236,7 @@ remote moved, which is the same operation with the one check that makes it safe.
         name: "linear-history",
         // 2: `git rebase --rebase-merges` (`-r`) is refused too, since it replays
         // a branch's merge commits as merge commits (CLOUD-2813).
-        version: 2,
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
@@ -2187,7 +2272,7 @@ push --force-with-lease=<branch>:<the head you rebased onto>",
     // module's header for the evidence).
     Manifest {
         name: "rust-quality",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
@@ -2237,7 +2322,7 @@ and remove it, move the item down, or inject it",
     // row. No crate name is compiled here (rule 1).
     Manifest {
         name: "rust",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
@@ -2296,7 +2381,7 @@ workspace packages it may reach, `^$` for none",
     // enabling it names the one class it raises.
     Manifest {
         name: RED_HEAD,
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
@@ -2332,7 +2417,7 @@ look at again. Read each named failed job's log first; reading is what admits th
     // the engine already allowed. Destructive calls are left to the host.
     Manifest {
         name: "git",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
@@ -2359,7 +2444,7 @@ look at again. Read each named failed job's log first; reading is what admits th
     // declares; a row that declares no extract leaves the module deciding nothing.
     Manifest {
         name: "claude-code-plan",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
         suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
@@ -2478,5 +2563,66 @@ pub const fn admit(id: &'static str, precondition: &'static str) -> VendoredRout
         kind: RouteKind::Override,
         target: "",
         precondition: Some(precondition),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MANIFESTS, Manifest, PresetModule, RuleScope, VERSIONS_LOCK, version_drift};
+
+    /// Fails by: a preset whose modules, verdicts or patterns changed while its
+    /// version stood still, or a version bumped with no row recorded for it.
+    #[test]
+    fn every_manifest_matches_its_recorded_digest() {
+        let drift = version_drift(VERSIONS_LOCK, MANIFESTS);
+        assert!(drift.is_empty(), "{}", drift.join("\n"));
+    }
+
+    const BEFORE: &[PresetModule] = &[PresetModule {
+        scope: RuleScope::Tree,
+        provider: None,
+        pointer: "<preset:fixture>/a.rego",
+        source: "package a\n",
+    }];
+    const AFTER: &[PresetModule] = &[PresetModule {
+        scope: RuleScope::Tree,
+        provider: None,
+        pointer: "<preset:fixture>/a.rego",
+        source: "package a\nrefused if { true }\n",
+    }];
+
+    fn fixture(version: semver::Version, modules: &'static [PresetModule]) -> Manifest {
+        Manifest {
+            name: "fixture",
+            version,
+            suggested: false,
+            modules,
+            verdicts: &[],
+            patterns: &[],
+        }
+    }
+
+    /// Fails by: a source change under an unchanged version passing, a bump with
+    /// no new row passing, or a recorded bump refused.
+    #[test]
+    fn a_source_change_without_a_bump_is_refused() {
+        let first = fixture(semver::Version::new(1, 0, 0), BEFORE);
+        let lock = format!("fixture 1.0.0 {}\n", first.digest());
+        assert!(version_drift(&lock, &[first]).is_empty());
+
+        let edited = fixture(semver::Version::new(1, 0, 0), AFTER);
+        let drift = version_drift(&lock, &[edited]);
+        assert_eq!(drift.len(), 1, "{drift:?}");
+        assert!(drift[0].contains("without a version bump"), "{drift:?}");
+
+        let bumped = fixture(semver::Version::new(2, 0, 0), AFTER);
+        let digest = bumped.digest();
+        let drift = version_drift(&lock, &[bumped]);
+        assert_eq!(drift.len(), 1, "{drift:?}");
+        assert!(drift[0].contains("has no row"), "{drift:?}");
+
+        let recorded = format!("{lock}fixture 2.0.0 {digest}\n");
+        let bumped = fixture(semver::Version::new(2, 0, 0), AFTER);
+        assert!(version_drift(&recorded, &[bumped]).is_empty());
     }
 }
