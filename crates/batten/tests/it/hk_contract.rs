@@ -253,7 +253,7 @@ fn resolved_hk() -> serde_json::Value {
     let pkl = common::require_tool("pkl");
     #[expect(
         clippy::disallowed_types,
-        reason = "the subject IS hk's resolved config, builtins included, and `pkl eval` is the evaluator of hk's config language; a read with no effect"
+        reason = "stays, and test-only: the subject IS hk's resolved config, builtins included, and `pkl eval` is the evaluator of hk's config language; a read with no effect"
     )]
     let mut command = std::process::Command::new(pkl);
     command
@@ -466,7 +466,7 @@ fn a_staged_crate_root_is_formatted_without_its_children() {
             .collect();
         #[expect(
             clippy::disallowed_types,
-            reason = "the subject is the pinned formatter's own verdict on a scratch file; a read-only `--check`"
+            reason = "stays, and test-only: the subject is the pinned formatter's own verdict on a scratch file; a read-only `--check`"
         )]
         let mut process = std::process::Command::new(&rustfmt);
         process.args(&argv).current_dir(&dir);
