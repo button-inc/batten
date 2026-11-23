@@ -9918,7 +9918,11 @@ id = "layer place wrong"
 no_fix_reason = "class 2 (a Rego CST): the repair is a row in a policy module, and codemod parses Rust only"
 kind = "policy"
 scope = "tree"
-use_sources = ["crates/batten/src/*.rs"]
+# Every package's top-level modules (#1276): the crate split moved modules out of
+# `crates/batten/src`, and this read none of them. ONE LEVEL DEEP on purpose:
+# the module names a file by its stem, so `config_check/verdict.rs` would be
+# judged as `verdict`.
+use_sources = ["crates/*/src/*.rs"]
 module = "policy/module-layering.rego"
 severity = "deny"
 
