@@ -342,6 +342,7 @@ mod permission_events;
 mod pinned_programs;
 mod pipefail_grep;
 mod pipeline_shapes;
+mod pkl_ca;
 mod plan_complete;
 mod pointer_only;
 mod policy_cache;
