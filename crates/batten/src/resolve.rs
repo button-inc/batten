@@ -1399,7 +1399,7 @@ pub fn resolve_with_env(
     // A preset row's argv, derived from the authority's own rule rows — never
     // the layered set, for the reason `startup` itself is not layered
     // (CLOUD-2633).
-    resolved.startup = crate::startup::derive(&repo.startup, &repo.rules);
+    resolved.startup = crate::config_model::derive_startup(&repo.startup, &repo.rules);
 
     // CLOUD-332's boundary, decided HERE rather than in `config show`: the
     // resolver is the one authority, and a reader that decided this itself would
