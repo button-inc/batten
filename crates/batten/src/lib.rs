@@ -23373,6 +23373,26 @@ fn forget_drain_result(envelope: &hook::Envelope) {
     }
 }
 
+/// The host's payload for a shell call, respelled as the direct connector call
+/// it mediates (CLOUD-2789): its tool-name and tool-input members, in whichever
+/// spelling the host used, name `tool` and carry `params`; every other member
+/// is the host's own. `None` where the payload is no JSON object.
+fn mediated_payload(raw: &str, tool: &str, params: &serde_json::Value) -> Option<String> {
+    let mut value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let object = value.as_object_mut()?;
+    for key in ["tool_name", "toolName"] {
+        if let Some(slot) = object.get_mut(key) {
+            *slot = serde_json::Value::from(tool);
+        }
+    }
+    for key in ["tool_input", "toolArgs"] {
+        if let Some(slot) = object.get_mut(key) {
+            *slot = params.clone();
+        }
+    }
+    Some(value.to_string())
+}
+
 /// Run the declared handlers for this envelope's event (CLOUD-898).
 ///
 /// Returns the decision a handler forced, if any, and appends its advice and its
@@ -23413,14 +23433,33 @@ fn dispatch_handlers(
     // command from one whose command is empty — and an expression like `^$` would
     // otherwise match every `Read` in the session.
     let command = Some(envelope.command.as_str()).filter(|text| !text.is_empty());
+    let host = handler::Payload::from(raw);
+    // A MEDIATED CALL IS HANDED AS THE CALL IT MEDIATES (CLOUD-2789): a handler
+    // only its connector name selects reads the payload the host sends for the
+    // direct call, so a connector guard judges both routes alike.
+    let mediated = envelope
+        .mediated
+        .as_ref()
+        .and_then(|(tool, params)| mediated_payload(raw, tool, params))
+        .map(|text| handler::Payload::from(text.as_str()));
+    let mut routed = vec![handler::Routed {
+        tool: &envelope.raw_tool,
+        command,
+        payload: &host,
+    }];
+    if let (Some((tool, _)), Some(payload)) = (&envelope.mediated, &mediated) {
+        routed.push(handler::Routed {
+            tool,
+            command: None,
+            payload,
+        });
+    }
     let dispatched = handler::dispatch_writing(
         hook_authority_root(),
         &hook_config.handlers,
         envelope.event,
-        &tools,
-        command,
+        &routed,
         envelope.writes.as_deref(),
-        &handler::Payload::from(raw),
     );
     // TIERED AT THE PUSH SITE (CLOUD-896), because "how soon must this be
     // answered" is a property of what is being said and the boundary has only
