@@ -1746,6 +1746,55 @@ pub fn result_view_spilled(
     Ok((path, at.index))
 }
 
+/// Record which lines of `view` hold each field, under the capture `digest`,
+/// so `capture show <handle> --field` resolves a field of a capture that is not
+/// itself a JSON document (CLOUD-2284).
+///
+/// A spilled leaf is stored as its raw text, so `--field` refused it as "not a
+/// JSON document" while the pointer beside it named that very field. The index
+/// sits beside the view (`views/<digest>.json`), one per stored leaf, and names
+/// the view and each field's line range in it: the same lines the pointer
+/// printed, so both routes land on one section.
+///
+/// # Errors
+///
+/// When the state root cannot be resolved or the index cannot be written.
+pub fn write_view_index(
+    repo_root: &Path,
+    digest: &str,
+    view: &Path,
+    index: &[ViewField],
+) -> Result<()> {
+    let fields: Vec<serde_json::Value> = index
+        .iter()
+        .map(|field| serde_json::json!({ "pointer": field.pointer, "from": field.from, "to": field.to }))
+        .collect();
+    let document = serde_json::json!({ "view": view.display().to_string(), "fields": fields });
+    let path = captures_dir(repo_root)?
+        .join("views")
+        .join(format!("{digest}.json"));
+    crate::durable::replace(&path, document.to_string().as_bytes())
+        .with_context(|| format!("write the view index {}", path.display()))
+}
+
+/// The text of the field `pointer` of the capture `digest`, read from the
+/// view its index names (CLOUD-2284); `None` where no index names the field.
+#[must_use]
+pub fn view_field(repo_root: &Path, digest: &str, pointer: &str) -> Option<Vec<u8>> {
+    let dir = captures_dir(repo_root).ok()?.join("views");
+    let raw = crate::fsio::read(dir.join(format!("{digest}.json"))).ok()?;
+    let document: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    let field = document["fields"]
+        .as_array()?
+        .iter()
+        .find(|field| field["pointer"] == pointer)?;
+    let from = usize::try_from(field["from"].as_u64()?).ok()?;
+    let to = usize::try_from(field["to"].as_u64()?).ok()?;
+    let view = crate::fsio::read_to_string(Path::new(document["view"].as_str()?)).ok()?;
+    let lines: Vec<&str> = view.split('\n').collect();
+    Some(lines.get(from.checked_sub(1)?..to)?.join("\n").into_bytes())
+}
+
 /// Copy `source` into `out`, returning its bytes, its line count and its
 /// tokens.
 fn copy_counted(source: &Path, out: &mut impl Write) -> Result<(usize, usize, u64)> {
