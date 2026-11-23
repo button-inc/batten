@@ -4761,6 +4761,9 @@ pub enum CensusVerdict {
     ExemptUnfiled,
     /// Declared and exempt at once, so the exemption's reason is a dead letter.
     DeclaredAndExempt,
+    /// Exempt while still declaring rows, so the rows read as covered and no
+    /// sweep ever applies them: the exemption is stale, or the gate owes a sweep.
+    ExemptWithRows,
     /// A name in the enforced set resolving to no gate at all.
     NamesNoSubject,
     /// A declared row whose script, applied to its own file, changes nothing:
@@ -4784,6 +4787,7 @@ impl fmt::Display for CensusVerdict {
             CensusVerdict::Uncovered => "uncovered",
             CensusVerdict::ExemptUnfiled => "exempt-unfiled",
             CensusVerdict::DeclaredAndExempt => "declared-and-exempt",
+            CensusVerdict::ExemptWithRows => "exempt-with-rows",
             CensusVerdict::NamesNoSubject => "names-no-subject",
             CensusVerdict::InertMutation => "inert-mutation",
             CensusVerdict::MalformedRow => "malformed-row",
@@ -4995,13 +4999,27 @@ pub fn census(
         let in_set = names.iter().any(|declared| declared == name);
         // Through the block for a `task-` gate (CLOUD-1909): an exemption written
         // in one task's table is not a statement about any other task.
-        let exempt = sources_for(root, name)
+        let declaring: Vec<(String, Vec<String>)> = sources_for(root, name)
+            .into_iter()
+            .filter_map(|source| {
+                let lines = declaring_lines(root, name, &source)?;
+                Some((source, lines))
+            })
+            .collect();
+        let exempt = declaring
             .iter()
-            .filter_map(|source| declaring_lines(root, name, source))
-            .find_map(|lines| declared(&lines, EXEMPT));
+            .find_map(|(_, lines)| declared(lines, EXEMPT));
+        // AN EXEMPTION OVER ROWS: the rows are a promise of coverage and the
+        // exemption says no sweep will keep it, so one of them is false.
+        let has_rows = declaring
+            .iter()
+            .any(|(source, lines)| !rows_in(lines, source).is_empty());
         match exempt {
             Some(row) if !exemption_is_filed(&row) => {
                 findings.push((path.clone(), CensusVerdict::ExemptUnfiled));
+            }
+            Some(_) if has_rows => {
+                findings.push((path.clone(), CensusVerdict::ExemptWithRows));
             }
             Some(_) if in_set => {
                 findings.push((path.clone(), CensusVerdict::DeclaredAndExempt));
