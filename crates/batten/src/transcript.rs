@@ -655,6 +655,11 @@ pub struct Repeats {
     /// speaking, which is the case this member was measured on: a session that
     /// answered four mid-turn messages with tool calls only.
     pub unanswered_human_calls: usize,
+    /// The 1-based transcript line of the operator message
+    /// `unanswered_human_calls` counts from, when the last marker was the
+    /// operator's (CLOUD-2861). A pointer, never the message: the Stop refusal
+    /// names the line and reads nothing on it.
+    pub operator_line: Option<usize>,
     /// The TRAILING run of assistant turns carrying no tool call — the monologue
     /// shape, and deliberately the member that needs no hashing at all.
     ///
@@ -714,6 +719,11 @@ pub struct Tally {
     /// (`false`); `None` before either.
     operator_marker: Option<bool>,
     calls_since_marker: usize,
+    /// The file line of the last authored operator turn (CLOUD-2861).
+    operator_line: Option<usize>,
+    /// Complete lines folded so far, so a tail parsed on its own numbers its
+    /// records from where the file is, not from 1.
+    lines: usize,
     plan_exits: usize,
 }
 
@@ -792,9 +802,10 @@ fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<
         .map_or(0, <[u8]>::len);
     let whole = tail.len() - unfinished;
     let (complete, partial) = tail.as_slice().split_at(whole);
-    parse(std::str::from_utf8(complete).ok()?, &label, shape)
-        .ok()?
-        .fold_into(&mut tally);
+    let complete = std::str::from_utf8(complete).ok()?;
+    parse(complete, &label, shape).ok()?.fold_into(&mut tally);
+    // `complete` ends at a newline, so its lines are exactly the ones consumed.
+    tally.lines += complete.lines().count();
     let advanced = Tallied {
         offset: offset + whole,
         head,
@@ -818,7 +829,7 @@ fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<
 const HEAD_PROBE: u64 = 64 * 1024;
 
 /// Bump on any change to [`Tally`] or [`Tallied`]; every older entry misses.
-const TALLY_FORMAT: &str = "batten-transcript-tally-3";
+const TALLY_FORMAT: &str = "batten-transcript-tally-4";
 
 /// What [`tally_appended`] persists between calls.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -940,7 +951,7 @@ impl ExtractionOf for crate::facts::Extraction {
 }
 
 impl Tally {
-    fn fold(&mut self, event: &Event) {
+    fn fold(&mut self, line: usize, event: &Event) {
         match event {
             Event::Turn(role, origin) => {
                 self.turns += 1;
@@ -952,6 +963,7 @@ impl Tally {
                         if *origin == Origin::Authored {
                             self.operator_marker = Some(true);
                             self.calls_since_marker = 0;
+                            self.operator_line = Some(line);
                         }
                     }
                 }
@@ -1022,6 +1034,11 @@ impl Tally {
                 self.calls_since_marker
             } else {
                 0
+            },
+            operator_line: if self.operator_marker == Some(true) {
+                self.operator_line
+            } else {
+                None
             },
             agent_turn_run: self.agent_turn_run,
             plan_exits: self.plan_exits,
@@ -1189,20 +1206,21 @@ impl Stream {
         // answers the operator and zeroes it, an operator message ends the scan
         // and keeps the count, and reaching the start means nobody spoke.
         let mut calls = 0;
-        let mut spoke = false;
+        let mut spoke = None;
         for record in self.records.iter().rev() {
             match &record.event {
                 Event::AssistantText => break,
                 Event::ToolCall { .. } => calls += 1,
                 Event::Turn(Role::User, Origin::Authored) => {
-                    spoke = true;
+                    spoke = Some(record.line);
                     break;
                 }
                 _ => {}
             }
         }
-        if spoke {
+        if spoke.is_some() {
             repeats.unanswered_human_calls = calls;
+            repeats.operator_line = spoke;
         }
         // A TOTAL, not a run, so it reads the whole stream rather than a tail.
         repeats.plan_exits = self
@@ -1215,8 +1233,9 @@ impl Stream {
 
     /// Fold every record, in file order, into `tally` (CLOUD-2315).
     pub fn fold_into(&self, tally: &mut Tally) {
+        let base = tally.lines;
         for record in &self.records {
-            tally.fold(&record.event);
+            tally.fold(base + record.line, &record.event);
         }
     }
 
@@ -2679,7 +2698,7 @@ mod tests {
     #[test]
     fn a_turn_end_alone_records_turns() {
         let mut tally = Tally::default();
-        tally.fold(&Event::TurnEnd(StopReason::EndTurn));
+        tally.fold(1, &Event::TurnEnd(StopReason::EndTurn));
         assert_eq!(
             tally.records(),
             std::collections::BTreeSet::from([Kind::Turns])
@@ -2841,6 +2860,9 @@ mod tests {
                     parse(&part.join("\n"), "t.jsonl", RecordShape::Jsonl)
                         .expect("parses")
                         .fold_into(&mut tally);
+                    // As `tally_under` advances past each complete chunk, so
+                    // the operator line is the file's, not the chunk's.
+                    tally.lines += part.len();
                 }
                 assert_eq!(
                     tally.counts(),
