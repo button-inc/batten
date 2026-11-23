@@ -15,9 +15,9 @@
 //! from a tree with no stale declarations at all. A `with input as` case cannot
 //! see that, because it supplies both sides itself.
 //!
-//! The committed row's globs are therefore reproduced in [`row`] rather than
-//! narrowed for the fixture: a suite path outside them is the defect this file
-//! exists to catch, and a fixture that widened them would hide it.
+//! The committed row is therefore READ by [`row`], never reproduced or narrowed
+//! for the fixture: a suite path outside its globs is the defect this file
+//! exists to catch, and a copy of the globs drifts from the row unseen.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -60,24 +60,12 @@ fn install_module(root: &Path) {
         .expect("install committed module");
 }
 
-/// The committed row's shape, globs included — the field this suite exists to
-/// keep honest.
+/// The committed row itself, globs included — the field this suite exists to
+/// keep honest. READ from `batten.toml`, never copied (#1276): a copy pinned
+/// the five globs it was written with while the committed row's set stayed
+/// missing `hk.pkl`, `action.yml` and the workflows, and every case here passed.
 fn row() -> Rule {
-    serde_json::from_value(serde_json::json!({
-        "id": "marker name undefined",
-        "kind": "policy",
-        "scope": "tree",
-        "line_sources": [
-            "crates/batten/tests/**/*.rs",
-            "crates/batten/src/policy/presets/**/*.rego",
-            "policy/*.rego",
-            "tests/**/*.bats",
-            "mise-tasks/**",
-        ],
-        "module": "policy/mutation-declared-case.rego",
-        "severity": "deny",
-    }))
-    .expect("the loader accepts the committed row's shape")
+    common::committed_rule(UNDEFINED)
 }
 
 fn verdicts(root: &Path) -> Vec<String> {
@@ -245,6 +233,46 @@ fn a_bats_title_the_suite_lacks_is_refused_over_the_engine() {
         ],
     );
     assert_eq!(verdicts(&root), vec![UNDEFINED.to_owned()]);
+}
+
+/// THE `//` OPENER, which `mutate.rs`'s `OPENERS` honours for a file whose
+/// comments are not `#` (`hk.pkl`, CLOUD-2828). Read only as `#MUTANT`, such a
+/// row was never judged, and `hk.pkl` was outside the row's globs besides.
+const SLASH: &str = "//";
+
+#[test]
+fn a_slash_opened_declaration_is_judged() {
+    let root = repo(
+        "mutation-case-slash-opener",
+        &[
+            (
+                "hk.pkl",
+                // Spelled through a variable: `build.rs` refuses a line of Rust
+                // source that opens with the marker (CLOUD-2253).
+                &format!(
+                    "{SLASH}MUTANT-SUITE crates/batten/tests/it/subject.rs\n\
+                     {SLASH}MUTANT slug|s@a@b@|a_case_nobody_wrote\n"
+                ),
+            ),
+            (
+                "crates/batten/tests/it/subject.rs",
+                "#[test]\nfn a_case_that_exists() {}\n",
+            ),
+        ],
+    );
+    assert_eq!(verdicts(&root), vec![UNDEFINED.to_owned()]);
+}
+
+/// THE POPULATION, over this repository: every tracked file declaring a row is
+/// one the committed row reads. A declaring file outside its globs is a
+/// declaration this gate can never judge, silently and green.
+#[test]
+fn every_declaring_file_in_this_repository_is_read() {
+    let unread = common::declaring_files_unread(&row());
+    assert!(
+        unread.is_empty(),
+        "declaring files outside `{UNDEFINED}`'s line_sources: {unread:?}"
+    );
 }
 
 /// COULD-NOT-LOOK, and it is the case the `line_sources` glob decides. The
