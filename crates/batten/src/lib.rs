@@ -7825,6 +7825,36 @@ fn run_claim_bot(
 /// is NOT could-not-look is a listing that came back whole and carries no entry
 /// for this head: that is a branch with no open pull request, which has nothing
 /// to race.
+/// The commits the declared trunk already holds below `HEAD`, which a rival's
+/// log must not count as its own: none when no trunk is declared or the range
+/// cannot be read.
+fn trunk_commits(repo: &Path) -> std::collections::BTreeSet<String> {
+    worktree::declared_trunk(repo)
+        .ok()
+        .flatten()
+        .and_then(|trunk| git::commits_in_range(repo, &trunk.tracking, "HEAD").ok())
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+/// A pull request's own commit messages, the ones `shared` does not hold, one
+/// per line; `None` when the forge does not answer.
+fn pull_log(
+    slug: &str,
+    number: &str,
+    shared: &std::collections::BTreeSet<String>,
+) -> Option<String> {
+    bot::forge::commits(slug, number).ok().map(|listing| {
+        listing
+            .into_iter()
+            .filter(|(sha, _)| !shared.contains(sha))
+            .map(|(_, message)| message)
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
+
 fn run_claim_race(
     repo: &Path,
     mode: Mode,
@@ -7916,23 +7946,10 @@ fn run_claim_race(
     // on it, "claimed" five of its keys). A competitor's commits that this
     // branch also holds are subtracted BY SHA before its trailers are read,
     // from local history rather than the forge, whose listing is capped.
-    let trunk = worktree::declared_trunk(repo).ok().flatten();
-    let shared: std::collections::BTreeSet<String> = trunk
-        .as_ref()
-        .and_then(|trunk| git::commits_in_range(repo, &trunk.tracking, "HEAD").ok())
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+    let shared = trunk_commits(repo);
     let race::Filled { pulls, unanswered } =
         race::with_logs(pulls, &mine_number, &mine, &grammar, |number| {
-            bot::forge::commits(&slug, number).ok().map(|listing| {
-                listing
-                    .into_iter()
-                    .filter(|(sha, _)| !shared.contains(sha))
-                    .map(|(_, message)| message)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
+            pull_log(&slug, number, &shared)
         });
     // JUDGED FIRST, AND THE COULD-NOT-LOOK ARMS ONLY REPLACE THE CLEAN ONE,
     // because returning before `races` throws away refusing information the
