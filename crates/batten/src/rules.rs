@@ -5624,6 +5624,7 @@ fn fact_value(
         // CLOUD-2270: hook-surface; its question is about a push.
         | crate::facts::Fact::RedHead
         | crate::facts::Fact::LandLive
+        | crate::facts::Fact::InstallPending
         | crate::facts::Fact::PathspecStatus
         | crate::facts::Fact::Budgeted
         // CLOUD-2335: hook-surface; its question is about a write.
