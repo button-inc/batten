@@ -66,6 +66,34 @@ fn step_excludes(pkl: &str, step: &str) -> Option<Vec<String>> {
     Some(globs)
 }
 
+/// Clippy runs at every commit, never only in the `slow` tier: a warning is a
+/// defect, and in that tier one was refused only by a land lap, hours after it
+/// was written (five reached PR #1276's pushed head that way).
+///
+/// Fails by: `profiles = List("slow")`, or any profile list, put back on the step.
+#[test]
+fn clippy_runs_at_every_commit_not_only_in_the_slow_tier() {
+    let pkl = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../hk.pkl"),
+    )
+    .expect("hk.pkl reads");
+    let opener = "  [\"cargo-clippy\"] = ";
+    let start = pkl
+        .lines()
+        .position(|line| line.starts_with(opener))
+        .expect("hk.pkl still declares the cargo-clippy step");
+    let profiled: Vec<&str> = pkl
+        .lines()
+        .skip(start + 1)
+        .take_while(|line| *line != "  }")
+        .filter(|line| line.trim_start().starts_with("profiles"))
+        .collect();
+    assert!(
+        profiled.is_empty(),
+        "the clippy step is profile-gated: {profiled:?}"
+    );
+}
+
 /// Every nested Cargo workspace is outside the root clippy step (CLOUD-2051).
 ///
 /// The builtin forms one hk job per Cargo workspace, and the step's command,
