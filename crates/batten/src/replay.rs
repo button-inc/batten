@@ -620,6 +620,15 @@ pub fn run(
         &head_index,
     ));
     item_moves.extend(crate::item_index::moved_items(&base_index, &head_index));
+    // FOR THE SPLICE ONLY, an item also pairs by a name declared once on each
+    // side: an edited item is still compared as modified, and its base body
+    // then runs against HEAD's item rather than failing to compile.
+    let mut splice_moves = crate::item_index::relocated_items(&base_index, &head_index);
+    splice_moves.extend(
+        item_moves
+            .iter()
+            .map(|(from, to)| (from.clone(), to.clone())),
+    );
     let cuts = cuts(&moves, &base_index, &head_index);
     let no_moves = BTreeMap::new();
     // `crate::` names a file's own crate only for a library source the index
@@ -683,7 +692,7 @@ pub fn run(
                                 &crate::item_index::respell_span_at_moves(
                                     &base_index,
                                     &head_index,
-                                    &item_moves,
+                                    &splice_moves,
                                     path,
                                     base_text,
                                     *span,
