@@ -1199,6 +1199,72 @@ fn a_wrapped_compile_collects_under_pressure() {
     ));
 }
 
+/// A compile in a linked worktree reads `[prune]` from the WORKTREE's
+/// `batten.toml` (CLOUD-2532). The main checkout declares no `[prune]`, so a
+/// read through `repo_root` — the main checkout from a worktree — finds no band
+/// and collects nothing; the worktree's own table is what arms it.
+#[test]
+fn a_wrapped_compile_in_a_worktree_reads_the_worktrees_prune() {
+    if !cfg!(unix) {
+        return;
+    }
+    let base = common::scratch("rustc-wrapped-worktree");
+    let main = common::Fixture::at(base.join("repo"))
+        .config("version = 1\n")
+        .file("Cargo.toml", "[workspace]\n")
+        .git()
+        .base_commit()
+        .build();
+    let linked = base.join("linked");
+    common::git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.to_str().unwrap_or_default(),
+            "HEAD",
+        ],
+    );
+    common::write(&linked, "batten.toml", &hook_config(true));
+    unit(
+        &linked.join("target/debug"),
+        "aged",
+        "dddddddddddddddd",
+        7200,
+        4096,
+    );
+    let rustc = main.join("rustc");
+    std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let out_dir = linked.join("target/debug/deps");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ran = common::batten()
+        .current_dir(&linked)
+        .arg(&rustc)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
+    assert!(
+        !present(&linked.join("target/debug"), "aged", "dddddddddddddddd"),
+        "the worktree's own [prune] band armed the collection"
+    );
+}
+
 /// Above the default floor a wrapped compile reads no config at all: resolving
 /// it per compile cost 26.6 ms each. A declared band ABOVE the default is the
 /// witness — honouring it here would mean the config was read.

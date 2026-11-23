@@ -499,6 +499,53 @@ fn a_config_below_the_repository_root_is_not_armed_by_the_roots_claim() {
     );
 }
 
+/// A linked worktree carrying its own `batten.toml` IS the root of its
+/// authority (CLOUD-2532), so its claimed branch is armed at its fork point.
+///
+/// `repo_root` from a linked worktree is the MAIN checkout, so comparing `here`
+/// against it never matched and the claim never armed there: a weakening on a
+/// claimed worktree branch passed the pre-commit lint that refuses it in the
+/// main checkout. The claim is read from the worktree's own git dir, which is
+/// where `git_dir` keys a worktree's receipts.
+#[test]
+fn a_claimed_worktree_branch_is_armed_at_its_fork_point() {
+    let main = weakening_pr("lint-admit-worktree", Some(PAIR));
+    let linked = common::scratch("lint-admit-worktree-linked");
+    let _ = fs::remove_dir_all(&linked);
+    common::git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.to_str().unwrap_or_default(),
+            "HEAD",
+        ],
+    );
+    let git_dir = common::git_in(&linked, &["rev-parse", "--absolute-git-dir"]);
+    let store = Path::new(git_dir.trim()).join("batten-receipts");
+    fs::create_dir_all(&store).unwrap();
+    fs::write(
+        store.join(batten::claim::receipt_name("linked")),
+        "CLOUD-1\nready-lint pass\n",
+    )
+    .unwrap();
+    let out = lint(&linked, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a claimed worktree branch's unanswered weakening must refuse: {}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains("severity-lowered"),
+        "{}",
+        stdout(&out)
+    );
+}
+
 /// Why the FORK POINT and not the trunk's tip: a trunk that moved after the
 /// branch was cut must not be charged to the branch.
 ///
