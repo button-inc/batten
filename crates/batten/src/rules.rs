@@ -3627,6 +3627,20 @@ pub fn rule_costs() -> Vec<RuleCost> {
 /// `format` is `None` when the caller could not classify the extension; that is
 /// [`NotAcquired::UnknownFormat`] and costs no I/O.
 pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquired {
+    let mut read = None;
+    acquire_reading(root, rel_path, want, &mut read)
+}
+
+/// [`acquire`], reading the file into `read` only where it holds nothing yet,
+/// so one file wanted in several forms is read once (CLOUD-2830). The counters
+/// still count each form: each is an acquisition, and the census's numbers do
+/// not move with the read's reuse.
+fn acquire_reading(
+    root: &Path,
+    rel_path: &str,
+    want: Option<Want>,
+    read: &mut Option<Result<Vec<u8>, std::io::ErrorKind>>,
+) -> Acquired {
     let Some(want) = want else {
         // Before any I/O, deliberately: an extension this build cannot parse is
         // a config fault, and opening the file first would spend a read to
@@ -3637,9 +3651,11 @@ pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquir
     // work is actually spent, and the `UnknownFormat` arm above deliberately
     // costs nothing and is deliberately not counted.
     DOCUMENTS_ACQUIRED.fetch_add(1, Ordering::Relaxed);
-    let bytes = match crate::fsio::read(root.join(rel_path)) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+    let read = read
+        .get_or_insert_with(|| crate::fsio::read(root.join(rel_path)).map_err(|err| err.kind()));
+    let bytes = match read {
+        Ok(bytes) => bytes.clone(),
+        Err(std::io::ErrorKind::NotFound) => {
             return Acquired::No(NotAcquired::Absent);
         }
         // EACCES, EISDIR and every other I/O failure. A gate that cannot look
@@ -4141,6 +4157,8 @@ pub(crate) fn acquire_declared(
     line_files: &[String],
 ) -> anyhow::Result<BTreeMap<(String, Wanted), Acquired>> {
     let mut cache: BTreeMap<(String, Wanted), Acquired> = BTreeMap::new();
+    let mut pending: std::collections::BTreeSet<(String, Wanted)> =
+        std::collections::BTreeSet::new();
     // THE THREE COLLECT-FIRST SETS ARE GONE, and their absence is the fix. They
     // existed so a path two rows wanted differently would not resolve by
     // whichever row the loop reached first — a hazard that only exists while one
@@ -4179,28 +4197,7 @@ pub(crate) fn acquire_declared(
             ),
         ];
         for (form, paths) in wanted {
-            for path in paths {
-                let key = (path, form);
-                if cache.contains_key(&key) {
-                    // THE CACHE, and the assertion `documents_acquired` makes: N
-                    // rows over one path IN ONE FORM is one read and one parse.
-                    // Two rows wanting two forms is two, which is honest — they
-                    // are two different parses of the same bytes.
-                    continue;
-                }
-                // THE BUDGET, checked before the read rather than after it, so
-                // the refusal is a bound and not a report of one already
-                // exceeded. It now counts (path, form) pairs: a file wanted
-                // three ways costs three, because it IS three parses.
-                //
-                // POINTER-ONLY, and here that means less than a pointer (§5): a
-                // count and a limit, never the path list. The list is exactly
-                // the consumer's file names, and a refusal that printed it would
-                // put the shape of a private tree into an error message.
-                refuse_over_budget(cache.len(), READ_BUDGET)?;
-                let acquired = acquire(root, &key.0, want_for(&key.0, form));
-                cache.insert(key, acquired);
-            }
+            pending.extend(paths.into_iter().map(|path| (path, form)));
         }
         // THE BASE SIDE (plan item 4): each declared unit path read at the row's
         // `base` rev, from git OBJECTS, so an edit in flight cannot change it.
@@ -4246,6 +4243,35 @@ pub(crate) fn acquire_declared(
                 cache.insert(key, acquired);
             }
         }
+    }
+    // PATH-MAJOR, EVERY ROW'S WANTS TOGETHER (CLOUD-2830): one file's forms are
+    // acquired back to back, so the Rust tree its call sites, `use` edges and
+    // units are each read from is parsed once ([`batten_facts::source::rust_tree`]
+    // answers the repeat of the text it parsed last). Acquired row by row and
+    // form by form, a file wanted two ways was parsed twice: measured 14% of
+    // `policy test`'s samples.
+    // The file the last key read, reused by the next key on the same path.
+    let mut read: (String, Option<Result<Vec<u8>, std::io::ErrorKind>>) = (String::new(), None);
+    for key in pending {
+        if cache.contains_key(&key) {
+            // THE CACHE, and the assertion `documents_acquired` makes: N rows
+            // over one path IN ONE FORM is one read and one parse.
+            continue;
+        }
+        if read.0 != key.0 {
+            read = (key.0.clone(), None);
+        }
+        // THE BUDGET, checked before the read rather than after it, so the
+        // refusal is a bound and not a report of one already exceeded. It
+        // counts (path, form) pairs: a file wanted three ways costs three.
+        //
+        // POINTER-ONLY, and here that means less than a pointer (§5): a count
+        // and a limit, never the path list. The list is exactly the consumer's
+        // file names, and a refusal that printed it would put the shape of a
+        // private tree into an error message.
+        refuse_over_budget(cache.len(), READ_BUDGET)?;
+        let acquired = acquire_reading(root, &key.0, want_for(&key.0, key.1), &mut read.1);
+        cache.insert(key, acquired);
     }
     Ok(cache)
 }
