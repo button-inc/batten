@@ -22019,7 +22019,7 @@ fn protected_escape(
         serde_json::from_value(snapshot["patterns"].clone()).unwrap_or_default();
     let before: std::collections::BTreeMap<String, String> =
         serde_json::from_value(snapshot["state"].clone()).unwrap_or_default();
-    let Some(after) = hook::protected_state_of(&root, &patterns) else {
+    let Some(after) = hook::protected_state_of(&root, &patterns, Some(&before)) else {
         return Ok(None);
     };
     let changed = hook::protected_changes(&before, &after);

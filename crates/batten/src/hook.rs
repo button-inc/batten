@@ -12525,13 +12525,22 @@ fn protects(policy: &Policy, path: &str) -> bool {
 /// its `PostToolUse` records it again, and any difference is a protected
 /// write the command did not name.
 ///
-/// # Why a stat and not a hash
+/// # Content decides, the stat only saves a read (CLOUD-2789)
 ///
-/// This runs on every shell call. A fingerprint of length, modification time
-/// and inode is a `stat` per covered file and reads no content, so the cost is
-/// bounded by the size of the protected set alone — the derived module paths
-/// and whatever the consumer declared, never the tree. Any write that changes
-/// a file's bytes moves its mtime; a rename over it moves its inode.
+/// Each entry is `<stat>#<digest>`: the stat (length, modification time, inode)
+/// and a BLAKE3 digest of the bytes. [`protected_changes`] compares the DIGEST
+/// alone. A stat moves without a write: a backgrounded `git commit`'s hk
+/// pre-commit hook stashed and restored an unstaged protected module while an
+/// unrelated foreground `rm -rf` ran, the file came back with its own bytes
+/// through a new inode, and the stat comparison refused the `rm` for a write
+/// nothing made.
+///
+/// The cost stays bounded by the protected set alone — the derived module
+/// paths and whatever the consumer declared, never the tree. `prior` (the
+/// pre-call reading, on the post-call side) lends its digest to any path whose
+/// stat is unchanged, so the post-call reading of an untouched set is a `stat`
+/// per file, as before; only a moved stat is re-read. That reuse is exactly
+/// the trust the stat fingerprint already carried.
 ///
 /// A glob is walked from its literal prefix, never from the root, and the walk
 /// is bounded: a protected set reaching past the bound is read as far as the
@@ -12539,6 +12548,7 @@ fn protects(policy: &Policy, path: &str) -> bool {
 pub(crate) fn protected_state(
     root: &Path,
     protected: &crate::path_set::PathSet,
+    prior: Option<&std::collections::BTreeMap<String, String>>,
 ) -> std::collections::BTreeMap<String, String> {
     const GLOB: [char; 4] = ['*', '?', '[', '{'];
     let mut state = std::collections::BTreeMap::new();
@@ -12547,7 +12557,7 @@ pub(crate) fn protected_state(
             None => pattern,
             Some(at) => pattern[..at].rsplit_once('/').map_or("", |(dir, _)| dir),
         };
-        walk_protected(root, start, protected, &mut state);
+        walk_protected(root, start, protected, prior, &mut state);
     }
     state
 }
@@ -12560,6 +12570,7 @@ fn walk_protected(
     root: &Path,
     start: &str,
     protected: &crate::path_set::PathSet,
+    prior: Option<&std::collections::BTreeMap<String, String>>,
     state: &mut std::collections::BTreeMap<String, String>,
 ) {
     let mut pending = vec![start.trim_end_matches('/').to_owned()];
@@ -12593,7 +12604,14 @@ fn walk_protected(
                 });
             }
         } else if protected.contains(&relative) {
-            state.insert(relative, fingerprint(&meta));
+            let identity = fingerprint(&meta);
+            let reused = prior
+                .and_then(|prior| prior.get(&relative))
+                .and_then(|entry| entry.split_once('#'))
+                .filter(|(was, _)| *was == identity)
+                .map(|(_, digest)| digest.to_owned());
+            let digest = reused.unwrap_or_else(|| content_digest(&path));
+            state.insert(relative, format!("{identity}#{digest}"));
         }
     }
 }
@@ -12613,8 +12631,24 @@ fn fingerprint(meta: &std::fs::Metadata) -> String {
     format!("{}:{modified}:{inode}", meta.len())
 }
 
-/// The protected paths that differ between two [`protected_state`] readings:
-/// changed, created or removed, in path order.
+/// A file's bytes as a BLAKE3 hex digest; an unreadable file is its own
+/// marker, which differs from every digest, so it can only read as changed.
+fn content_digest(path: &Path) -> String {
+    std::fs::read(path).map_or_else(
+        |_| String::from("unreadable"),
+        |bytes| blake3::hash(&bytes).to_hex().to_string(),
+    )
+}
+
+/// The content half of a [`protected_state`] entry: the digest after `#`, or
+/// the whole entry for a snapshot written before entries carried one.
+fn content_of(entry: &str) -> &str {
+    entry.split_once('#').map_or(entry, |(_, digest)| digest)
+}
+
+/// The protected paths whose CONTENT differs between two [`protected_state`]
+/// readings: changed, created or removed, in path order. A stat that moved
+/// over identical bytes is no change (CLOUD-2789).
 pub(crate) fn protected_changes(
     before: &std::collections::BTreeMap<String, String>,
     after: &std::collections::BTreeMap<String, String>,
@@ -12622,7 +12656,10 @@ pub(crate) fn protected_changes(
     before
         .keys()
         .chain(after.keys())
-        .filter(|path| before.get(*path) != after.get(*path))
+        .filter(|path| {
+            before.get(*path).map(|entry| content_of(entry))
+                != after.get(*path).map(|entry| content_of(entry))
+        })
         .cloned()
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -12650,19 +12687,21 @@ impl Policy {
             .into_iter()
             .map(ToOwned::to_owned)
             .collect();
-        let state = protected_state(&root, &self.protected);
+        let state = protected_state(&root, &self.protected, None);
         Some((root, patterns, state))
     }
 }
 
 /// [`protected_state`] over patterns a snapshot carried, rebuilt into the set
-/// they came from; `None` when they no longer compile.
+/// they came from, reusing `prior`'s digest wherever the stat is unchanged;
+/// `None` when they no longer compile.
 pub(crate) fn protected_state_of(
     root: &Path,
     patterns: &[String],
+    prior: Option<&std::collections::BTreeMap<String, String>>,
 ) -> Option<std::collections::BTreeMap<String, String>> {
     let set = crate::path_set::PathSet::includes("protected", patterns).ok()?;
-    Some(protected_state(root, &set))
+    Some(protected_state(root, &set, prior))
 }
 
 /// Compose the protected-path refusal: what was aimed where, and what to run.
@@ -23718,11 +23757,73 @@ deny contains "refused by themodule" if {
         for at in 0..PROTECTED_WALK_BOUND + 5 {
             std::fs::write(root.join("d").join(at.to_string()), "").unwrap();
         }
-        let state = protected_state_of(&root, &[String::from("d/**")]).unwrap();
+        let state = protected_state_of(&root, &[String::from("d/**")], None).unwrap();
         assert_eq!(
             state.len(),
             PROTECTED_WALK_BOUND - 1,
             "the directory is a visit"
         );
+    }
+
+    /// Replace `name` under `root` with `body` through a new inode, the way a
+    /// `git stash` / restore rewrites an unstaged file: both inodes exist at
+    /// once, so the stat fingerprint is guaranteed to move.
+    fn rewrite_via_rename(root: &Path, name: &str, body: &str) {
+        let staging = root.join(format!("{name}.staging"));
+        std::fs::write(&staging, body).unwrap();
+        std::fs::rename(&staging, root.join(name)).unwrap();
+    }
+
+    /// Fails by: a protected path's identity read from its stat (mtime, inode)
+    /// rather than its bytes. A backgrounded `git commit`'s hk stash/restore
+    /// rewrote `policy/admit-ask.rego` with its own bytes during an unrelated
+    /// foreground call, and the post-call comparison refused that call
+    /// (CLOUD-2789).
+    #[test]
+    fn a_rewrite_of_identical_bytes_is_no_protected_change() {
+        let root = crate::scratch::scratch("hook-protected-same-bytes");
+        std::fs::write(root.join("guarded.rego"), "package x\n").unwrap();
+        let patterns = [String::from("guarded.rego")];
+        let before = protected_state_of(&root, &patterns, None).unwrap();
+        rewrite_via_rename(&root, "guarded.rego", "package x\n");
+        let after = protected_state_of(&root, &patterns, None).unwrap();
+        assert!(
+            protected_changes(&before, &after).is_empty(),
+            "same bytes through a new inode is not a write: {before:?} -> {after:?}"
+        );
+    }
+
+    /// Fails by: the comparison reading only length, or only what (1) above
+    /// relaxes — a same-length write of different bytes is a write.
+    #[test]
+    fn a_rewrite_of_different_bytes_of_equal_length_is_a_protected_change() {
+        let root = crate::scratch::scratch("hook-protected-other-bytes");
+        std::fs::write(root.join("guarded.rego"), "package x\n").unwrap();
+        let patterns = [String::from("guarded.rego")];
+        let before = protected_state_of(&root, &patterns, None).unwrap();
+        rewrite_via_rename(&root, "guarded.rego", "package y\n");
+        let after = protected_state_of(&root, &patterns, None).unwrap();
+        assert_eq!(protected_changes(&before, &after), ["guarded.rego"]);
+    }
+
+    /// Fails by: a post-call reading reusing the pre-call digest when only the
+    /// length matches. The reuse is keyed on the whole stat; an in-place write
+    /// keeping length and inode still moves mtime, so is re-read.
+    #[test]
+    fn an_in_place_write_of_equal_length_is_a_protected_change() {
+        let root = crate::scratch::scratch("hook-protected-in-place");
+        std::fs::write(root.join("guarded.rego"), "package x\n").unwrap();
+        let patterns = [String::from("guarded.rego")];
+        let before = protected_state_of(&root, &patterns, None).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(root.join("guarded.rego"))
+            .unwrap();
+        std::os::unix::fs::FileExt::write_at(&file, b"y", 8).unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+            .unwrap();
+        drop(file);
+        let after = protected_state_of(&root, &patterns, None).unwrap();
+        assert_eq!(protected_changes(&before, &after), ["guarded.rego"]);
     }
 }
