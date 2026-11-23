@@ -526,7 +526,7 @@
           "description": "Fact::Keys -- the tracker-key evidence, or null for could-not-look."
         },
         "land-live": {
-          "description": "Fact::LandLive (CLOUD-2781). The pid of the live `land` lap holding this checkout's singleton lock under the per-worktree git dir, by the same reading `land` uses to refuse a second lap (`task::singleton_holder`: the lock names a pid and that pid exists). NULL when no lap is live or the lock could not be read. A pid and nothing else.",
+          "description": "Fact::LandLive (CLOUD-2781, CLOUD-2789). The absolute root of a checkout this call WRITES in (a program's directory as its own options move it, an output redirection's target, a write tool's target) whose singleton lock a live `land` lap holds under the per-worktree git dir, by the same reading `land` uses to refuse a second lap (`task::singleton_holder`: the lock names a pid and that pid exists). NULL when no such lap is live or the lock could not be read. A path and nothing else: a module judges an absolute target by whether it lies under it.",
           "type": [
             "string",
             "null"
