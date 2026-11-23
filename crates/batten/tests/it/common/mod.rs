@@ -3098,6 +3098,32 @@ pub(crate) fn engine_sources() -> Vec<PathBuf> {
     found
 }
 
+/// Every workspace crate's TEST sources: each member's `tests/`, never its
+/// `src`. [`engine_sources`]' other half, for a claim about how the suites are
+/// written: a suite in a crate cut out of `batten` is still a suite, and a walk
+/// of `crates/batten/tests` alone stops seeing it (CLOUD-2789).
+///
+/// # Panics
+///
+/// When the sweep finds too few files to be the suites, for the reason
+/// [`rust_sources`] gives.
+#[must_use]
+pub(crate) fn test_sources() -> Vec<PathBuf> {
+    let tests_of = |path: &PathBuf| {
+        path.strip_prefix(at_root("crates"))
+            .ok()
+            .and_then(|rest| rest.components().nth(1))
+            .is_some_and(|dir| dir.as_os_str() == "tests")
+    };
+    let found: Vec<PathBuf> = rust_sources().into_iter().filter(tests_of).collect();
+    assert!(
+        found.len() > 40,
+        "the test sweep found {} files, which is too few to be the suites",
+        found.len()
+    );
+    found
+}
+
 fn collect_rust(dir: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
