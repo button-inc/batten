@@ -105,17 +105,30 @@ impl Graph {
         if nodes == 0 {
             return 0.0;
         }
-        let reached: usize = self
-            .reach()
+        let share = batten_facts::coupling::exact(self.reached_pairs())
+            / batten_facts::coupling::exact(nodes * nodes);
+        share * 100.0
+    }
+
+    /// [`Self::propagation_cost`] as whole basis points, rounded half up, in
+    /// integer arithmetic: the ratchet compares this, so no float reaches the
+    /// record and no cast back to an integer is needed.
+    #[must_use]
+    pub fn propagation_points(&self) -> usize {
+        let pairs = self.edges.len() * self.edges.len();
+        if pairs == 0 {
+            return 0;
+        }
+        (self.reached_pairs() * 10_000 + pairs / 2) / pairs
+    }
+
+    /// The (node, node) pairs where the first reaches the second, each node
+    /// counted as reaching itself.
+    fn reached_pairs(&self) -> usize {
+        self.reach()
             .iter()
             .map(|(node, seen)| seen.len() + usize::from(!seen.contains(node)))
-            .sum();
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "a module count is far below 2^52, so the ratio is exact enough for a percentage"
-        )]
-        let share = reached as f64 / (nodes * nodes) as f64;
-        share * 100.0
+            .sum()
     }
 
     /// Lakos's levelization (*Large-Scale C++ Software Design*, 1996): a
@@ -600,10 +613,6 @@ fn parse_src(src: &str, files: &BTreeMap<String, String>) -> (Vec<String>, Parse
 /// `use …::TExt as _;`, gated `#[cfg(test)]` where only test code calls it;
 /// `cargo fix` drops the ones a same-named method elsewhere made spurious.
 #[must_use]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one pass over one parse: group, declare, import, rewrite; split it when a second caller needs a stage"
-)]
 pub fn impls_to_extension_traits(
     src: &str,
     krate: &str,
@@ -633,7 +642,7 @@ pub fn impls_to_extension_traits(
                 .push(site.found);
         }
     }
-    let mut edits: BTreeMap<String, Vec<(std::ops::Range<usize>, String)>> = BTreeMap::new();
+    let mut edits: BTreeMap<String, Edits> = BTreeMap::new();
     let mut imports: Imports = BTreeMap::new();
     for ((file, name), blocks) in groups {
         let Some(trait_) = extension_trait(&name, &blocks) else {
@@ -700,6 +709,21 @@ pub fn impls_to_extension_traits(
             }
         }
     }
+    place_imports(files, imports, &mut edits);
+    applied(files, edits)
+}
+
+/// One file's pending edits: each byte range and its replacement.
+type Edits = Vec<(std::ops::Range<usize>, String)>;
+
+/// Each `use` block `imports` names, as an insertion at its scope, or before
+/// the file's first item where the scope is the file. A test-only line is
+/// gated `#[cfg(test)]`.
+fn place_imports(
+    files: &BTreeMap<String, String>,
+    imports: Imports,
+    edits: &mut BTreeMap<String, Edits>,
+) {
     for ((file, scope), lines) in imports {
         let Ok(tree) = parse(&files[&file]) else {
             continue;
@@ -723,10 +747,19 @@ pub fn impls_to_extension_traits(
             .collect();
         edits.entry(file).or_default().push((at..at, block));
     }
+}
+
+/// Each file `edits` changes, with its edits applied back to front so an
+/// earlier range is not shifted by a later one. A file the edits leave as it
+/// was is not returned.
+fn applied(
+    files: &BTreeMap<String, String>,
+    edits: BTreeMap<String, Edits>,
+) -> BTreeMap<String, String> {
     edits
         .into_iter()
         .filter_map(|(file, mut list)| {
-            let original = &files[&file];
+            let original = files.get(&file)?;
             let mut text = original.clone();
             list.sort_by_key(|(range, _)| (range.start, range.end));
             for (range, replacement) in list.into_iter().rev() {
@@ -938,10 +971,6 @@ fn locate(below: &str) -> Option<(String, Vec<String>)> {
 /// unresolved, is left where it is, so the gate still counts it. What this
 /// cannot see is a compile error naming the site, never a silent change.
 #[must_use]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one pass over one parse: locate, lift, re-import, splice; split it when a second caller needs a stage"
-)]
 pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let (keys, parsed) = parse_src(src, files);
     let Sites { sites, declared } = impl_sites(&parsed);
@@ -952,7 +981,7 @@ pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<
         .collect();
     // An item two moving impls both name is raised once.
     let mut raised: BTreeSet<(usize, usize)> = BTreeSet::new();
-    let mut edits: BTreeMap<usize, Vec<(std::ops::Range<usize>, String)>> = BTreeMap::new();
+    let mut edits: BTreeMap<usize, Edits> = BTreeMap::new();
     let mut uses: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
     let mut landed: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     for site in &sites {
@@ -977,42 +1006,12 @@ pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<
             .filter(|token| token.kind() == SyntaxKind::IDENT)
             .map(|token| token.text().to_owned())
             .collect();
-        let used_outside = |name: &str| {
-            tree.syntax()
-                .descendants_with_tokens()
-                .filter_map(ra_ap_syntax::NodeOrToken::into_token)
-                .any(|token| {
-                    let at = usize::from(token.text_range().start());
-                    token.kind() == SyntaxKind::IDENT
-                        && token.text() == name
-                        && !(start..end).contains(&at)
-                })
-        };
-        // The moved impl's private methods its old module still calls.
-        let mut text = source[start..end].to_owned();
-        let mut private_calls: Vec<usize> = site
-            .found
-            .assoc_item_list()
-            .into_iter()
-            .flat_map(|list| list.assoc_items())
-            .filter_map(|item| match item {
-                ast::AssocItem::Fn(function) => Some(function),
-                _ => None,
-            })
-            .filter(|function| function.visibility().is_none())
-            .filter(|function| {
-                function
-                    .name()
-                    .is_some_and(|name| used_outside(name.text()))
-            })
-            .filter_map(|function| item_start(function.syntax()))
-            .map(|at| at - start)
-            .collect();
-        private_calls.sort_unstable();
-        for at in private_calls.into_iter().rev() {
-            text.insert_str(at, "pub(crate) ");
-        }
-        landed.entry(target).or_default().push(text);
+        landed.entry(target).or_default().push(lifted(
+            &site.found,
+            tree,
+            &source[start..end],
+            start,
+        ));
         edits
             .entry(site.file)
             .or_default()
@@ -1048,48 +1047,92 @@ pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<
         }
     }
     for (target, texts) in landed {
-        let tree = &parsed[target].2;
-        let text = &files[&keys[target]];
-        let local: BTreeSet<String> = top_level_aliases(tree)
-            .into_keys()
-            .chain(tree.items().filter_map(|item| item_name(&item)))
-            .collect();
-        let at = tree
-            .items()
-            .find(|item| matches!(item, ast::Item::Module(_)) && cfg_test(item.syntax()))
-            .map_or(text.len(), |item| {
-                usize::from(item.syntax().text_range().start())
-            });
-        let body = texts.iter().fold(String::new(), |mut body, moved| {
-            let _ = write!(body, "\n{moved}\n\n");
-            body
-        });
-        let list = edits.entry(target).or_default();
-        list.push((at..at, body));
-        let lines: Vec<String> = uses
-            .remove(&target)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|line| use_name(line).is_none_or(|name| name == "_" || !local.contains(name)))
-            .collect();
-        if !lines.is_empty()
-            && let Some(first) = tree.items().next()
-        {
-            let at = usize::from(first.syntax().text_range().start());
-            list.push((at..at, format!("{}\n", lines.join("\n"))));
-        }
+        let lines = uses.remove(&target).unwrap_or_default();
+        land(
+            &parsed[target].2,
+            &files[&keys[target]],
+            &texts,
+            lines,
+            edits.entry(target).or_default(),
+        );
     }
-    edits
+    let edits = edits
         .into_iter()
-        .filter_map(|(file, mut list)| {
-            let mut text = files[&keys[file]].clone();
-            list.sort_by_key(|(range, _)| (range.start, range.end));
-            for (range, replacement) in list.into_iter().rev() {
-                text.replace_range(range, &replacement);
-            }
-            (text != files[&keys[file]]).then(|| (keys[file].clone(), text))
+        .map(|(file, list)| (keys[file].clone(), list))
+        .collect();
+    applied(files, edits)
+}
+
+/// The text of `found`, the impl at `start` in `tree`'s file whose source is
+/// `text`, with each private method its old module still calls raised to
+/// `pub(crate)`, so the module still reaches it once the impl has moved.
+fn lifted(found: &ast::Impl, tree: &SourceFile, text: &str, start: usize) -> String {
+    let end = start + text.len();
+    let used_outside = |name: &str| {
+        tree.syntax()
+            .descendants_with_tokens()
+            .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+            .any(|token| {
+                let at = usize::from(token.text_range().start());
+                token.kind() == SyntaxKind::IDENT
+                    && token.text() == name
+                    && !(start..end).contains(&at)
+            })
+    };
+    let mut private_calls: Vec<usize> = found
+        .assoc_item_list()
+        .into_iter()
+        .flat_map(|list| list.assoc_items())
+        .filter_map(|item| match item {
+            ast::AssocItem::Fn(function) => Some(function),
+            _ => None,
         })
-        .collect()
+        .filter(|function| function.visibility().is_none())
+        .filter(|function| {
+            function
+                .name()
+                .is_some_and(|name| used_outside(name.text()))
+        })
+        .filter_map(|function| item_start(function.syntax()))
+        .map(|at| at - start)
+        .collect();
+    private_calls.sort_unstable();
+    let mut lifted = text.to_owned();
+    for at in private_calls.into_iter().rev() {
+        lifted.insert_str(at, "pub(crate) ");
+    }
+    lifted
+}
+
+/// The edits that land `texts`, the moved impls, in the file `text` parses
+/// to as `tree`: before its `#[cfg(test)]` module, or at its end, with each of
+/// `uses` the file does not already name inserted before its first item.
+fn land(tree: &SourceFile, text: &str, texts: &[String], uses: BTreeSet<String>, list: &mut Edits) {
+    let local: BTreeSet<String> = top_level_aliases(tree)
+        .into_keys()
+        .chain(tree.items().filter_map(|item| item_name(&item)))
+        .collect();
+    let at = tree
+        .items()
+        .find(|item| matches!(item, ast::Item::Module(_)) && cfg_test(item.syntax()))
+        .map_or(text.len(), |item| {
+            usize::from(item.syntax().text_range().start())
+        });
+    let body = texts.iter().fold(String::new(), |mut body, moved| {
+        let _ = write!(body, "\n{moved}\n\n");
+        body
+    });
+    list.push((at..at, body));
+    let lines: Vec<String> = uses
+        .into_iter()
+        .filter(|line| use_name(line).is_none_or(|name| name == "_" || !local.contains(name)))
+        .collect();
+    if !lines.is_empty()
+        && let Some(first) = tree.items().next()
+    {
+        let at = usize::from(first.syntax().text_range().start());
+        list.push((at..at, format!("{}\n", lines.join("\n"))));
+    }
 }
 
 /// Each inherent impl under `src` the census counts outside its type's
@@ -1451,19 +1494,6 @@ impl Metrics {
     }
 }
 
-/// Propagation cost, a percentage, as whole basis points.
-#[must_use]
-pub fn basis_points(percent: f64) -> usize {
-    // A share of pairs is in [0, 100], so the product is in [0, 10000].
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "a percentage in [0, 100] times 100 fits usize and is non-negative"
-    )]
-    let points = (percent * 100.0).round().max(0.0) as usize;
-    points
-}
-
 /// Measure every metric of `root`.
 ///
 /// # Errors
@@ -1474,7 +1504,7 @@ pub fn metrics(root: &Path) -> anyhow::Result<Metrics> {
     let impls = impl_census(root)?;
     Ok(Metrics {
         cycle: graph.largest_component(),
-        propagation: basis_points(graph.propagation_cost()),
+        propagation: graph.propagation_points(),
         impls: impls.outside + impls.ambiguous,
         shims: shim_census(root)?.reexports,
     })
@@ -1553,10 +1583,6 @@ pub fn judge(recorded: &Metrics, measured: &Metrics) -> Judged {
 /// # Errors
 ///
 /// `out` or `err` cannot be written.
-// DELETED, not split: `modules ratchet` and `modules.lock` retire into the
-// `rust-quality` preset at plan step 14 (CLOUD-2821), the commit that bumps
-// the engine pin. Two lines over the limit do not warrant reshaping dead code.
-#[allow(clippy::too_many_lines)]
 pub fn run_ratchet(
     record: &Path,
     check: bool,
@@ -1645,26 +1671,30 @@ pub fn run_ratchet(
         return Ok(ExitCode::Violation);
     }
     if tightened {
-        // Comments and blank lines are kept where they stood; only row lines
-        // take the measurement.
-        let mut next = String::new();
-        for line in text.lines() {
-            let row = line
-                .split_once(' ')
-                .and_then(|(root, _)| measured_rows.get(root).map(|m| (root, m)));
-            match row {
-                Some((root, measured)) if !line.starts_with('#') => {
-                    let _ = writeln!(next, "{root} {}", measured.line());
-                }
-                _ => {
-                    let _ = writeln!(next, "{line}");
-                }
-            }
-        }
-        crate::durable::replace(record, next)?;
+        crate::durable::replace(record, tightened_record(&text, &measured_rows))?;
         writeln!(out, "modules ratchet: tightened {}", record.display())?;
     }
     Ok(ExitCode::Success)
+}
+
+/// The record `text` with each row taking its measurement. Comments and blank
+/// lines are kept where they stood; only row lines change.
+fn tightened_record(text: &str, measured_rows: &BTreeMap<&str, Metrics>) -> String {
+    let mut next = String::new();
+    for line in text.lines() {
+        let row = line
+            .split_once(' ')
+            .and_then(|(root, _)| measured_rows.get(root).map(|m| (root, m)));
+        match row {
+            Some((root, measured)) if !line.starts_with('#') => {
+                let _ = writeln!(next, "{root} {}", measured.line());
+            }
+            _ => {
+                let _ = writeln!(next, "{line}");
+            }
+        }
+    }
+    next
 }
 
 /// Every library source under `root`, parsed, with its graph node.
@@ -2092,6 +2122,17 @@ mod tests {
         let cycle = graph(&[("a", &["b"]), ("b", &["a"])]);
         assert!((cycle.propagation_cost() - 100.0).abs() < 1e-9);
         assert!(Graph::default().propagation_cost().abs() < 1e-9);
+    }
+
+    /// Fails by: the basis points truncated rather than rounded (6/9 is
+    /// 6666.67), a self-pair dropped, or an empty graph dividing by zero.
+    #[test]
+    fn propagation_points_round_the_same_share_in_integers() {
+        let chain = graph(&[("a", &["b"]), ("b", &["c"]), ("c", &[])]);
+        assert_eq!(chain.propagation_points(), 6667);
+        let cycle = graph(&[("a", &["b"]), ("b", &["a"])]);
+        assert_eq!(cycle.propagation_points(), 10_000);
+        assert_eq!(Graph::default().propagation_points(), 0);
     }
 
     /// Fails by: an edge with a parallel path ranked as breaking the cycle, or
