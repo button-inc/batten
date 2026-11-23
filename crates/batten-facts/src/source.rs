@@ -108,12 +108,37 @@ pub fn rust_tree(
     source: &str,
     edition: ra_ap_syntax::Edition,
 ) -> crate::facts::Look<ra_ap_syntax::SourceFile> {
+    // THE LAST TEXT'S TREE ANSWERS ITS REPEAT (CLOUD-2830). One file is read
+    // into several facts, call sites, `use` edges and units, and each producer
+    // asks for its tree; acquired back to back, the second ask is the same
+    // text, and parsing it again measured 14% of `policy test`. One entry, so
+    // the memo holds one tree and never grows with the tree it walks. The tree
+    // is immutable, and a clone shares it.
+    type Last = Option<(
+        String,
+        ra_ap_syntax::Edition,
+        crate::facts::Look<ra_ap_syntax::SourceFile>,
+    )>;
+    thread_local! {
+        static LAST: std::cell::RefCell<Last> = const { std::cell::RefCell::new(None) };
+    }
+    let hit = LAST.with(|last| {
+        last.borrow()
+            .as_ref()
+            .filter(|(text, parsed_as, _)| *parsed_as == edition && text == source)
+            .map(|(_, _, tree)| tree.clone())
+    });
+    if let Some(tree) = hit {
+        return tree;
+    }
     let parse = rust_parse(source, edition);
-    if parse.errors().is_empty() {
+    let tree = if parse.errors().is_empty() {
         crate::facts::Look::Is(parse.tree())
     } else {
         crate::facts::Look::CouldNotLook
-    }
+    };
+    LAST.with(|last| *last.borrow_mut() = Some((source.to_owned(), edition, tree.clone())));
+    tree
 }
 
 /// The 1-based line of any byte offset in one source text, answered by binary
