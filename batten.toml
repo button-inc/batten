@@ -7770,7 +7770,7 @@ no_fix_reason = "class 3 (review disposition): which rewrite is right is a readi
 kind = "policy"
 scope = "tree"
 line_sources = [
-  "crates/batten/tests/**/*.rs",
+  "crates/*/{tests,examples}/**/*.rs",
   "crates/batten/src/policy/presets/**/*.rego",
   "policy/*.rego",
   "tests/**/*.bats",

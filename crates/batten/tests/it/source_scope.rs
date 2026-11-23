@@ -117,6 +117,7 @@ fn every_crate_scoped_row_reads_every_crate() {
         ("path write unsafe", "crates/*/src/**/*.rs"),
         ("test name undefined", "crates/*/src/**/*.rs"),
         ("test name undefined", "crates/*/{tests,examples}/**/*.rs"),
+        ("marker name undefined", "crates/*/{tests,examples}/**/*.rs"),
         ("review state other", "crates/*/src/**/*.rs"),
         ("patch judge wrong", "crates/*/src/**/*.rs"),
         ("spawn add other", "crates/*/src/**/*.rs"),
