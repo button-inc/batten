@@ -589,3 +589,89 @@ fn a_failing_suite_names_its_cases_and_a_focused_command() {
         "the failing case and no other\n{said}"
     );
 }
+
+/// [`selected_repo`] with no reach record at all: the store as a fresh
+/// container finds it, with no sweep ever run (CLOUD-2842).
+fn unseeded_repo(name: &str) -> std::path::PathBuf {
+    let repo = selected_repo(name);
+    let state = batten::state::repo_state_dir(&repo).expect("the state dir");
+    std::fs::remove_dir_all(state.join("mutate").join("schema").join("reach"))
+        .expect("clear the reach store");
+    repo
+}
+
+/// The singleton lock `task` takes under `repo`'s git dir.
+fn singleton(repo: &std::path::Path, task: &str) -> std::path::PathBuf {
+    repo.join(".git").join("batten-singleton").join(task)
+}
+
+/// Hold `task`'s singleton in `repo` for `pid`, as `singleton acquire` does.
+fn hold(repo: &std::path::Path, task: &str, pid: u32) {
+    common::write(&singleton(repo, task), "pid", &format!("{pid}\n"));
+}
+
+/// Whether `repo`'s run state says a reach seed is owed.
+fn seed_owed(repo: &std::path::Path) -> bool {
+    batten::state::repo_state_dir(repo)
+        .expect("the state dir")
+        .join("test-run")
+        .join("seed-pending")
+        .is_file()
+}
+
+/// `step run suite` in `repo` with `CI` as given: whether it passed and what it
+/// said.
+fn seeding_step(repo: &std::path::Path, log: &std::path::Path, ci: bool) -> (bool, String) {
+    let mut command = common::batten();
+    command
+        .args(["step", "run", "suite", "--", "cargo", "nextest", "run"])
+        .current_dir(repo)
+        .env("FIXTURE_LOG", log)
+        .env_remove("FIXTURE_FAIL")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS");
+    if ci {
+        command.env("CI", "1");
+    } else {
+        command.env_remove("CI");
+    }
+    let output = command.streamed_output().expect("run batten");
+    (output.status.success(), common::stderr(&output))
+}
+
+/// A passing run whose selection held nothing owes a reach seed, and while a
+/// lap holds the land singleton the seed waits rather than competing with the
+/// lap's gates: it is left owed, and no seed takes its lock (CLOUD-2842).
+///
+/// Fails by: no seed owed after a run that selected nothing (the seed never
+/// asked for), or a seed started beside a live lap.
+#[test]
+fn a_passing_run_during_a_lap_leaves_the_reach_seed_owed() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = unseeded_repo("step-seed-lap");
+    let log = common::scratch("step-seed-lap-log");
+    hold(&repo, "land", std::process::id());
+    let (passed, err) = seeding_step(&repo, &log, false);
+    assert!(passed, "{err}");
+    assert_eq!(counts(&log), [1, 1, 1, 1], "{err}");
+    assert!(seed_owed(&repo), "the seed is owed to the lap's end\n{err}");
+    assert!(
+        !singleton(&repo, "reach-seed").exists(),
+        "no seed runs beside a lap\n{err}"
+    );
+}
+
+/// On CI no seed is owed or started: nothing there restores the reach store,
+/// so a seed would spend metered minutes with no reader (CLOUD-2842).
+///
+/// Fails by: a seed owed or started with `CI` set.
+#[test]
+fn a_step_run_on_ci_seeds_nothing() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = unseeded_repo("step-seed-ci");
+    let log = common::scratch("step-seed-ci-log");
+    hold(&repo, "land", std::process::id());
+    let (passed, err) = seeding_step(&repo, &log, true);
+    assert!(passed, "{err}");
+    assert!(!seed_owed(&repo), "no seed is owed on CI\n{err}");
+    assert!(!singleton(&repo, "reach-seed").exists(), "{err}");
+}
