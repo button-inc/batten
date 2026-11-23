@@ -8727,7 +8727,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':group -- The graph to run, as the step table'\''s `group` field names it:_default' \
+':group -- The graphs to run, in order, as the step table'\''s `group` field names them; `NAME=N` runs that one at most N at once:_default' \
 && ret=0
 ;;
 (help)
