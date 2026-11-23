@@ -1816,7 +1816,6 @@ mod tests {
             depends_on: group.map_or_else(Vec::new, |_| vec![String::from("x")]),
             verdict: group.map(|_| crate::step_table::Verdict::Exit),
             journal: group.map(|_| crate::step_table::Journal::Nextest),
-            ci: Vec::new(),
         };
         let today = r#"row {"id":"s","inputs":["a"],"tools":[["t","--version"]]}"#;
         assert_eq!(super::row_line(&keyed(None, None)).as_deref(), Some(today));
@@ -1869,7 +1868,6 @@ mod tests {
             depends_on: Vec::new(),
             verdict: None,
             journal: None,
-            ci: Vec::new(),
         };
         // The platform's own shell spells each tool: one that answers, one
         // that exits zero saying nothing, and one that answers and fails.
@@ -2074,7 +2072,6 @@ mod tests {
             depends_on: Vec::new(),
             verdict: None,
             journal: None,
-            ci: Vec::new(),
         };
         let held = material(&root, &row, &[], None).expect("the line keys the step");
         assert!(held.contains(&digest), "keyed on the in-process digest");

@@ -815,11 +815,11 @@ mod module_digest_tests {
     /// (an admission outliving a change its module reads).
     #[test]
     fn a_step_row_moves_only_a_module_rules_epoch() {
-        let rows = |ci: &str| {
+        let rows = |run: &str| {
             format!(
                 "version = 1\n\n[[rule]]\nid = \"plain\"\nkind = \"command\"\n\n\
                  [[rule]]\nid = \"moduled\"\nkind = \"policy\"\nmodule = \"m.rego\"\n\n\
-                 [[step]]\nid = \"s\"\nrun = [\"true\"]\ngroup = \"g\"\nci = [\"{ci}\"]\n"
+                 [[step]]\nid = \"s\"\nrun = [\"{run}\"]\ngroup = \"g\"\n"
             )
         };
         let (before, _) =
