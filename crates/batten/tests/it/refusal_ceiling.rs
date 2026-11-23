@@ -337,6 +337,19 @@ fn session_fixture(name: &str) -> PathBuf {
     let mut config: toml_edit::DocumentMut =
         committed().parse().expect("the committed config is TOML");
     config.remove("startup");
+    // AND THE INSTALLS A STARTUP ROW WOULD PLACE: a rule's `environments` (and
+    // its `install_env`) declare an install that only a `[[startup]]` row may
+    // place, and the loader refuses one left unplaced, so a fixture that drops
+    // the rows drops what they placed too (a30ca3d3, CLOUD-2859).
+    if let Some(rules) = config
+        .get_mut("rule")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    {
+        for row in rules.iter_mut() {
+            row.remove("environments");
+            row.remove("install_env");
+        }
+    }
     if let Some(handlers) = config
         .get_mut("hook")
         .and_then(|hook| hook.get_mut("handler"))
