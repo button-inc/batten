@@ -12332,6 +12332,9 @@ on = "pre-tool"
 # writes the timing line to stderr, which the door reads as a refusal's reason.
 run = ["env", "MISE_TASK_TIMINGS=0", "mise", "run", "-q", "filed-here:guard"]
 matcher = "^(Edit|Write|MultiEdit|NotebookEdit)$"
+# A write outside the checkout (a scratchpad, the host's plan file) is not the
+# work a filed row shapes, so this row does not judge it (CLOUD-2390).
+tree_only = true
 timeout_ms = 10000
 owner = "CLOUD-514"
 expires = "2027-02-28"
