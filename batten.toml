@@ -1999,6 +1999,14 @@ regex = '(?i)\badmit(s|ted|ting)?\b(?:[^.!?]|[.!?]\S)*\?'
 id = "finding-path"
 regex = '[A-Za-z0-9_./-]+\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z0-9_:]+)?'
 
+# The pair the ledger looks an answer up by (`lint::admissions`): a kebab smell
+# id, one space, then its key — a finding path as above, or a config key
+# `rule[<id>].<column>` whose id may hold spaces. A question naming the path and
+# the id apart binds nothing; measured on #1276 for `rule[layer place wrong]`.
+[[pattern]]
+id = "ledger-pair"
+regex = '\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_]+\[[^\]]+\](?:\.[A-Za-z0-9_]+)*)'
+
 # CLOUD-2241: work promised to a later branch in a final message, which the turn
 # must file before it ends. The literals are the three witnessed on PR #1132
 # ("goes on the next branch", "ships on the next branch", "their own short
