@@ -1661,9 +1661,7 @@ pub fn run_ratchet(
                 }
             }
         }
-        let staged = record.with_extension("lock.tmp");
-        std::fs::write(&staged, next)?;
-        std::fs::rename(&staged, record)?;
+        crate::durable::replace(record, next)?;
         writeln!(out, "modules ratchet: tightened {}", record.display())?;
     }
     Ok(ExitCode::Success)
