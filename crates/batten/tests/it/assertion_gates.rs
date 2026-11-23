@@ -83,27 +83,11 @@ fn marker() -> String {
     format!("{}-{}:", "verified", "by")
 }
 
-/// Every `.rs` under the engine's source root.
+/// Every `.rs` under EVERY workspace crate's `src/`: the engine, which since
+/// the split (CLOUD-2789) is not `crates/batten/src` alone. A claim in a module
+/// cut into `batten-base` is still a claim in the engine.
 fn engine_sources() -> Vec<PathBuf> {
-    let root = common::at_root("crates/batten/src");
-    let mut found = Vec::new();
-    walk(&root, &mut found);
-    found.sort();
-    found
-}
-
-fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk(&path, found);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            found.push(path);
-        }
-    }
+    common::engine_sources()
 }
 
 /// Every comment block in `text` carrying a claim phrase and no marker, as
