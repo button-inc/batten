@@ -285,10 +285,6 @@ fn line_of(published: &str, key: &str) -> String {
 /// The collector, run over a fixture target dir holding one sentinel under each
 /// of `seeds` (paths relative to that target dir). Returns whether each sentinel
 /// survived, in order, and everything the collector published.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only: the subject is the shell command nextest runs, so asserting it means running `sh`"
-)]
 fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, String) {
     collect_seeded_at(&crate::common::scratch(name), others, seeds)
 }
