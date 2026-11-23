@@ -8105,10 +8105,10 @@ scope = "tree"
 line_sources = [
   "policy/*.rego",
   "rules/*.md",
-  "crates/batten/src/*.rs",
-  "crates/batten-facts/src/*.rs",
-  "crates/batten-base/src/*.rs",
-  "crates/batten-core/src/*.rs",
+  # Every package's source, recursive (#1276): the per-crate list missed
+  # `batten-fsio`, `batten-stream` and `batten-codemods`, and one level deep
+  # missed `config_check/` -- the hole `spawn add other` records.
+  "crates/*/src/**/*.rs",
   "mise-tasks/*.sh",
   "batten.toml",
 ]
