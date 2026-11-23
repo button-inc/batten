@@ -439,105 +439,130 @@ fn a_session_read_is_preapproved_in_plan_mode() {
     assert_granted_by(&read, "call read now");
 }
 
-/// A prompt unique to one case, and its receipts removed when the case ends,
-/// so the real checkout's store keeps nothing a case wrote.
-struct Dispatch {
-    prompt: String,
-    git_dir: PathBuf,
-}
-
-impl Dispatch {
-    fn new(case: &str) -> Self {
-        let prompt = format!("dispatch fixture {case} {}", std::process::id());
-        let git_dir = batten::git::git_dir(&root()).expect("the checkout has a git dir");
-        Dispatch { prompt, git_dir }
-    }
-
-    fn linted(&self) -> &Self {
-        batten::dispatch::record_brief(&self.git_dir, &self.prompt).expect("store writable");
-        self
-    }
-
-    fn approved(&self) -> &Self {
-        let asked = format!("Dispatch brief:{}?", batten::dispatch::digest(&self.prompt));
-        let input = serde_json::json!({ "questions": [{ "question": asked, "options": [] }] });
-        let result = serde_json::json!({ "answers": { asked: batten::dispatch::APPROVE_LABEL } });
-        batten::dispatch::record_approvals(&self.git_dir, &input, &result).expect("store writable");
-        self
-    }
-
-    fn call(mode: &str, prompt: &str) -> String {
-        envelope(
-            mode,
-            "mcp__Claude_Code_Remote__create_session",
-            &serde_json::json!({ "prompt": prompt }),
-        )
-    }
-}
-
-impl Drop for Dispatch {
-    fn drop(&mut self) {
-        let digest = batten::dispatch::digest(&self.prompt);
-        let store = self.git_dir.join("batten-receipts");
-        for name in [batten::dispatch::BRIEF, batten::dispatch::APPROVED] {
-            let _ = std::fs::remove_file(store.join(format!("{name}.{digest}")));
-        }
-    }
-}
-
-#[test]
-fn a_linted_and_approved_dispatch_is_preapproved_in_auto() {
-    let fixture = Dispatch::new("cleared");
-    fixture.linted().approved();
-    assert_granted_by(&Dispatch::call("auto", &fixture.prompt), "call open now");
-}
-
-/// THE CASE `dispatch-auto-only` KILLS: a cleared dispatch in `default` mode is
-/// the dispatch grant's (owner ruling 2026-11-23, CLOUD-2768), so the rule the
-/// reason names is `call open now`. With the grant put back to auto mode only,
-/// the mode grant answers the call instead and names itself.
-#[test]
-fn a_cleared_dispatch_in_default_mode_is_granted_by_its_rule() {
-    let fixture = Dispatch::new("cleared-default");
-    fixture.linted().approved();
-    assert_granted_by(&Dispatch::call("default", &fixture.prompt), "call open now");
-}
-
-/// THE CASE `dispatch-uncleared` KILLS: linted but never approved — the owner
-/// rejected the bundle or has not answered — so the dispatch grant is not the
-/// one that answers.
+/// The committed rows plus the row enabling `claude-code-dispatch`, the preset
+/// `dispatch brief refused` ships in (CLOUD-2858).
 ///
-/// IN AUTO MODE, the only mode the dispatch grant fires in: a default-mode
-/// case could not tell an approval check from its absence, because the mode
-/// check refuses first. In auto every call batten allows is granted by auto's
-/// own row (CLOUD-2125), so what is asserted is WHICH row granted: never the
-/// dispatch rule, which the grant's first sighting names.
-#[test]
-fn a_dispatch_without_approval_is_not_preapproved() {
-    let fixture = Dispatch::new("unapproved");
-    fixture.linted();
-    let (_, reason) = verdict(&Dispatch::call("auto", &fixture.prompt)).unwrap_or_default();
-    assert!(
-        !reason.contains("call open now"),
-        "an unapproved dispatch is not the dispatch grant's: {reason}"
-    );
-    assert_not_granted_by(&Dispatch::call("default", &fixture.prompt), "call open now");
+/// A FIXTURE ROW UNTIL THE PIN CARRIES THE PRESET: a release that does not ship
+/// `claude-code-dispatch` refuses a row naming it, so the committed config
+/// enables it with the pin bump that brings it, as `claude-code-plan`'s row was
+/// (2ef6df8b).
+fn dispatch_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = common::committed_fixture_with_substitution(&format!(
+            "preapprove-dispatch-{}",
+            std::process::id()
+        ));
+        let config = dir.join("batten.toml");
+        let mut text = std::fs::read_to_string(&config).expect("read the fixture config");
+        text.push_str(
+            "\n[[rule]]\nid = \"dispatch brief refused\"\nno_fix_reason = \"class 3 (a call \
+             rewrite): the subject is a tool call refused before it runs\"\nkind = \"policy\"\n\
+             scope = \"mediated_call\"\npreset = \"claude-code-dispatch\"\nseverity = \"deny\"\n",
+        );
+        std::fs::write(&config, text).expect("write the fixture config");
+        common::git_in(&dir, &["commit", "-qam", "enable the dispatch preset"]);
+        dir
+    })
+    .clone()
 }
 
-/// The grant is bound to the bytes the owner saw: an edited prompt clears
-/// nothing, and plan mode is the one mode the ruling grants no dispatch in
-/// (CLOUD-2768).
-#[test]
-fn an_edited_prompt_or_another_mode_is_not_preapproved() {
-    let fixture = Dispatch::new("edited");
-    fixture.linted().approved();
-    let edited = format!("{} and one more thing", fixture.prompt);
-    let (_, reason) = verdict(&Dispatch::call("auto", &edited)).unwrap_or_default();
-    assert!(
-        !reason.contains("dispatch"),
-        "an edited prompt is not the dispatch grant's: {reason}"
+/// Every document the hook put on stdout in [`dispatch_root`], parsed.
+fn dispatch_documents(payload: &str) -> Vec<serde_json::Value> {
+    let outcome = common::stdin_run(
+        &mut common::batten(),
+        &dispatch_root(),
+        &["adjudicate", "--harness", "claude-code"],
+        payload,
     );
-    assert_not_granted(&Dispatch::call("plan", &fixture.prompt));
+    parsed(&outcome)
+}
+
+/// [`verdict`] in [`dispatch_root`].
+fn dispatch_verdict(payload: &str) -> Option<(String, String)> {
+    dispatch_documents(payload).iter().find_map(|document| {
+        let inner = document.get("hookSpecificOutput")?;
+        Some((
+            inner.get("permissionDecision")?.as_str()?.to_owned(),
+            inner.get("permissionDecisionReason")?.as_str()?.to_owned(),
+        ))
+    })
+}
+
+/// A dispatch message that passes `batten lint brief`: every section the
+/// schema requires, and a fenced command under `check`. `marker` is a word no
+/// refusal may carry, so a case can assert no byte of the message reaches one.
+fn linted_brief(marker: &str) -> String {
+    format!(
+        "## identifiers\n{marker}\n\n## period\nthis turn\n\n## instructions\ndo it\n\n\
+         ## read\nthe row\n\n## check\n\n```\nmise run lint:clippy\n```\n"
+    )
+}
+
+/// A `send_message` carrying `message`, in `mode`, at the event the host names.
+fn dispatch_at(event: &str, mode: &str, message: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": event,
+        "permission_mode": mode,
+        "tool_name": "mcp__Claude_Code_Remote__send_message",
+        "tool_input": { "session_id": "session_x", "message": message },
+    })
+    .to_string()
+}
+
+/// THE GATE DECIDES, NEVER A HUMAN (CLOUD-2858): a dispatch whose message
+/// passes the brief lint is granted like any call the engine allows, at
+/// pre-tool and at the prompt, with no receipt in the store. Fails by: the
+/// grant still keyed on an owner-approval receipt.
+#[test]
+fn a_linted_dispatch_is_granted_without_approval() {
+    let message = linted_brief("granted-c2858");
+    let (decision, reason) =
+        dispatch_verdict(&dispatch_at("PreToolUse", "default", &message)).unwrap_or_default();
+    assert_eq!(decision, "allow", "a linted dispatch is granted: {reason}");
+    let answered = dispatch_documents(&dispatch_at("PermissionRequest", "default", &message));
+    assert!(
+        answered
+            .iter()
+            .any(|document| { document["hookSpecificOutput"]["decision"]["behavior"] == "allow" }),
+        "the prompt is answered allow: {answered:?}"
+    );
+}
+
+/// A MESSAGE THE LINT REFUSES IS REFUSED (CLOUD-2858): the brief schema is a
+/// deny gate on the call, and the refusal names the missing section by its id,
+/// never a byte of the message (rule 4). Fails by: the lint result ignored
+/// (`brief-lint-unread`).
+#[test]
+fn an_unlinted_dispatch_is_refused_with_its_findings() {
+    let marker = "unlinted-c2858";
+    let message = linted_brief(marker);
+    let unlinted = &message[..message.find("## check").expect("the check section")];
+    let (decision, reason) =
+        dispatch_verdict(&dispatch_at("PreToolUse", "default", unlinted)).unwrap_or_default();
+    assert_eq!(
+        decision, "deny",
+        "an unlinted dispatch is refused: {reason}"
+    );
+    assert!(reason.contains("dispatch brief refused"), "{reason}");
+    assert!(
+        reason.contains("check"),
+        "the refusal names the section: {reason}"
+    );
+    assert!(!reason.contains(marker), "no byte of the message: {reason}");
+}
+
+/// Plan mode keeps refusing a dispatch, a passing brief included.
+#[test]
+fn a_dispatch_in_plan_mode_is_refused() {
+    let (decision, reason) = dispatch_verdict(&dispatch_at(
+        "PreToolUse",
+        "plan",
+        &linted_brief("plan-c2858"),
+    ))
+    .unwrap_or_default();
+    assert_eq!(decision, "deny", "must be refused: {reason}");
+    assert!(reason.contains("plan write refused"), "{reason}");
 }
 
 /// CLOUD-2026: in auto mode no subagent or workflow call is put to the owner,

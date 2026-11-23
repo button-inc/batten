@@ -814,13 +814,14 @@ pub enum Fact {
     /// same shape [`Fact::Stop`] takes: the price counted here is the price of
     /// the reading, not of the thing being read.
     Pinned,
-    /// Whether the prompt a session-management call carries has BOTH a passing
-    /// brief-lint receipt and the owner's approval receipt (CLOUD-1978).
+    /// The brief lint's report on the message a session-management call carries
+    /// (CLOUD-2858): whether it is clean, and the `missing` and `unrunnable`
+    /// section ids. Ids only, never a byte of the message (rule 4).
     ///
-    /// Two file stats under `$GIT_DIR`, keyed by the prompt's own digest, so a
-    /// prompt edited after approval clears nothing. `false` on every call that is
-    /// not such a method; `null` when the store could not be located.
-    DispatchCleared,
+    /// Linted in process at pre-tool, so no receipt is read and no file is
+    /// stat'ed. `null` on every call that is not such a method, which raises
+    /// nothing.
+    DispatchBrief,
     /// The root of a checkout the call writes in whose singleton a live `land`
     /// lap holds, or `null` when no such lap is live (CLOUD-2781, CLOUD-2789).
     /// One lock read and a pid probe under each written checkout's per-worktree
@@ -1619,10 +1620,10 @@ pub const INSTANT: Class = Class::new(Cost::Free, Surface::Check);
 /// and would say something false about what a call costs.
 pub const PINNED: Class = Class::new(Cost::Read, Surface::Hook);
 
-/// [`Fact::DispatchCleared`] — two file stats under `$GIT_DIR` for a digest of
-/// the call's own argument (CLOUD-1978). A read, and asked only of the
-/// mediated call it is about.
-pub const DISPATCH_CLEARED: Class = Class::new(Cost::Read, Surface::Hook);
+/// [`Fact::DispatchBrief`] — the brief lint over the call's own argument, in
+/// process (CLOUD-2858). A read, and asked only of the mediated call it is
+/// about.
+pub const DISPATCH_BRIEF: Class = Class::new(Cost::Read, Surface::Hook);
 /// [`Fact::LandLive`]: one lock read and a pid probe under `$GIT_DIR`, asked
 /// of the mediated call it would refuse (CLOUD-2781).
 pub const LAND_LIVE: Class = Class::new(Cost::Read, Surface::Hook);
@@ -1696,7 +1697,7 @@ impl Fact {
         Fact::RecordsBlocked,
         Fact::Instant,
         Fact::Pinned,
-        Fact::DispatchCleared,
+        Fact::DispatchBrief,
         Fact::LandLive,
         Fact::InstallPending,
         Fact::RedHead,
@@ -1755,7 +1756,7 @@ impl Fact {
             Fact::RecordsBlocked => "records-blocked",
             Fact::Instant => "instant",
             Fact::Pinned => "pinned-programs",
-            Fact::DispatchCleared => "dispatch-cleared",
+            Fact::DispatchBrief => "dispatch-brief",
             Fact::LandLive => "land-live",
             Fact::InstallPending => "install-pending",
             Fact::RedHead => "red-head",
@@ -1822,7 +1823,7 @@ impl Fact {
             Fact::RecordsBlocked => RECORDS_BLOCKED,
             Fact::Instant => INSTANT,
             Fact::Pinned => PINNED,
-            Fact::DispatchCleared => DISPATCH_CLEARED,
+            Fact::DispatchBrief => DISPATCH_BRIEF,
             Fact::LandLive => LAND_LIVE,
             Fact::InstallPending => INSTALL_PENDING,
             Fact::RedHead => RED_HEAD,
@@ -1919,7 +1920,7 @@ impl Fact {
             | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
-            | Fact::DispatchCleared
+            | Fact::DispatchBrief
             | Fact::LandLive
             | Fact::InstallPending
             | Fact::RedHead
@@ -2100,7 +2101,7 @@ impl Fact {
             | Fact::Pinned
             // CLOUD-1978. Hook-only: the question is about THIS call's argument,
             // and a tree walk has no call.
-            | Fact::DispatchCleared
+            | Fact::DispatchBrief
             // CLOUD-2781. Hook-only: whether a lap is live is asked of the call
             // it would refuse, and a tree walk has none.
             | Fact::LandLive
@@ -2179,7 +2180,7 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::Instant
             | Fact::Pinned
-            | Fact::DispatchCleared
+            | Fact::DispatchBrief
             | Fact::LandLive
             | Fact::InstallPending
             | Fact::RedHead
@@ -2277,7 +2278,7 @@ impl Fact {
             // count, and it is the seam this function's own doc says to split
             // along. `Instant` arriving is what took it past its ceiling, exactly
             // as `Landing` did for the git family.
-            Fact::Instant | Fact::DispatchCleared | Fact::LandLive | Fact::InstallPending => {
+            Fact::Instant | Fact::DispatchBrief | Fact::LandLive | Fact::InstallPending => {
                 self.scalar_schema_fragment()
             }
             // The description-only family delegates, for the same reason and
@@ -2682,9 +2683,16 @@ impl Fact {
             // predicate over it must not hold. Collapsing the two would make
             // `--instant` optional in the worst way: a forgotten flag would date
             // every record to 1970 and report every lease expired.
-            Fact::DispatchCleared => serde_json::json!({
-                "type": ["boolean", "null"],
-                "description": "Fact::DispatchCleared (CLOUD-1978). TRUE when this call is a session-management method (`create_session`, `send_message`) whose prompt's SHA-256 has BOTH a passing `batten lint brief` receipt and the owner's approval receipt; FALSE for any other call or any prompt missing either receipt; NULL when the receipt store could not be located. Keyed by the prompt's own bytes, so a prompt edited after approval is false. A boolean and nothing else: no byte of the prompt reaches this document.",
+            Fact::DispatchBrief => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::DispatchBrief (CLOUD-2858). The `batten lint brief` report on the message a session-management call (`create_session`, `send_message`) carries, linted in process at pre-tool: `clean`, and the `missing` and `unrunnable` section ids. Ids only, never a byte of the message. NULL on every call that is not such a method.",
+                "properties": {
+                    "clean": { "type": "boolean" },
+                    "missing": { "type": "array", "items": { "type": "string" } },
+                    "unrunnable": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["clean", "missing", "unrunnable"],
+                "additionalProperties": false
             }),
             Fact::LandLive => serde_json::json!({
                 "type": ["string", "null"],
@@ -2849,7 +2857,7 @@ impl Fact {
             | Fact::ToolVerdict
             | Fact::Minted
             | Fact::Captured
-            | Fact::DispatchCleared
+            | Fact::DispatchBrief
             | Fact::LandLive
             | Fact::InstallPending
             | Fact::RedHead
@@ -3073,7 +3081,7 @@ impl Fact {
             | Fact::Tasks
             | Fact::Extracted
             | Fact::Landing
-            | Fact::DispatchCleared
+            | Fact::DispatchBrief
             | Fact::RedHead
             | Fact::LandLive
             | Fact::InstallPending
@@ -3339,7 +3347,7 @@ impl Fact {
             | Fact::GitTags
             | Fact::GitConfig
             | Fact::GitIndex
-            | Fact::DispatchCleared
+            | Fact::DispatchBrief
             | Fact::RedHead
             | Fact::LandLive
             | Fact::InstallPending
@@ -3386,7 +3394,7 @@ impl Fact {
             | Fact::GitStatus
             | Fact::GitRemote
             | Fact::GitWorktrees
-            | Fact::DispatchCleared
+            | Fact::DispatchBrief
             | Fact::GitRef
             | Fact::GitRange
             | Fact::CommitMeta
