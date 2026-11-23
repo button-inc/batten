@@ -3405,6 +3405,12 @@ regex = '^[A-Za-z_][A-Za-z0-9_]*$'
 id = "published-budget-value"
 regex = '^[0-9]+$'
 
+# A measured figure README publishes in a perf row's p50 or p95 cell: fractional
+# milliseconds, unlike the integer budget above (CLOUD-2852).
+[[pattern]]
+id = "published-measure-value"
+regex = '^[0-9]+(\.[0-9]+)?$'
+
 # A retirement arm's INVOCATION field (CLOUD-1219). A ledger row declares its
 # successors as PATHS, which is the wrong shape for a caller of a program that
 # retired onto a verb: substituting one yields
@@ -13868,6 +13874,18 @@ id = "path measure late"
 gloss = "a measured invocation path is over the latency budget this repository publishes"
 class = """
 An absolute ceiling rather than a ratchet: 100ms is the Command Line Interface Guidelines' floor for a response that reads as instant, and the ceiling sitting ~20-30x over the measured value IS the tolerance band a shared runner's p95 needs. So this is not noise -- a path here is genuinely slower than the contract batten publishes for itself. Fix what got slower, or move the budget in `policy/perf-assert.rego` AND in README's Performance table together, which the `perf budget unpublished` class refuses to let you do by halves. Whether this commit is slower than the trunk is a different question with a different answer shape and is `perf-gate`'s.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/perf-assert.rego"
+
+[[verdict]]
+id = "path measure absent"
+gloss = "README publishes no measured p95 for a commit-time hook step this repository budgets"
+class = """
+The record half of this gate abstains wherever no perf record resolves, which is every checkout without the release build the record is keyed to, so a commit step's budget could sit asserted and never measured: at ca88533a all eight read `—` while one step measured 29x its ceiling (CLOUD-2852). README is read on every run, so a commit step whose p95 cell carries no number is refused here without a build or a record. Run `mise run perf` and publish the step's p50 and p95, or, when the step cannot meet the 100 ms ceiling, move it off commit time in `hk.pkl` and drop its budget and row together.
 """
 
 [[verdict.route]]
