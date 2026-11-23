@@ -6,7 +6,7 @@
 #MUTANT noun-first-read-any-method|s@`^mcp__(github__(issue\x7cpull_request)\x7cMiro__(board_preview\x7cprototype))_read\$`@`^mcp__(github\x7cMiro)__[a-z0-9_]+_read$`@|a_write_named_like_a_list_is_not_preapproved
 #MUTANT noun-first-unscoped|s@`^mcp__github__\[a-z0-9_\]+_(list@`^mcp__[^_].*__[a-z0-9_]+_(list@|a_write_named_like_a_list_is_not_preapproved
 #MUTANT noun-first-read-unscoped|s@`^mcp__(github__(issue\x7cpull_request)\x7cMiro__(board_preview\x7cprototype))_read\$`@`^mcp__[^_].*__[a-z0-9_]+_read$`@|a_write_named_like_a_list_is_not_preapproved
-#MUTANT mcp-call-unread|s@^\tprogram.name == "batten"$@\tprogram.name == "none"@|a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not
+#MUTANT mcp-call-unread|s@^\tprogram.name == "batten"$@\tprogram.name == "none"@|a_plan_mode_batten_mcp_read_beside_another_read_is_allowed
 #MUTANT guide-not-read|s@"Explore", "Plan", "claude-code-guide"@"Explore", "Plan"@|a_plan_mode_guide_subagent_is_allowed
 #MUTANT printenv-not-read|s@"tree", "printenv", "ps",@"tree", "ps",@|a_plan_mode_printenv_is_allowed
 #MUTANT ps-not-read|s@"tree", "printenv", "ps",@"tree", "printenv",@|a_plan_mode_ps_is_allowed
