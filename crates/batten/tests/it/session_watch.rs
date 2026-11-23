@@ -46,6 +46,8 @@ struct Recorded {
     page: usize,
     /// Every events call, as `(session, before, after)`.
     calls: Vec<(String, Option<String>, Option<String>)>,
+    /// How many session-list pages were asked for.
+    session_calls: usize,
     unreadable: bool,
 }
 
@@ -74,13 +76,29 @@ impl Recorded {
 }
 
 impl Source for Recorded {
-    fn sessions(&mut self, _after: Option<&str>) -> Option<Page> {
+    fn sessions(&mut self, after: Option<&str>) -> Option<Page> {
+        self.session_calls += 1;
         if self.unreadable {
             return None;
         }
+        // Paged like the toolbox: `after` is the last id of the page before.
+        let start = after.map_or(0, |after| {
+            self.rows
+                .iter()
+                .position(|row| row["id"] == after)
+                .map_or(self.rows.len(), |at| at + 1)
+        });
+        let end = (start + self.page).min(self.rows.len());
+        let items = self.rows[start..end].to_vec();
         Some(Page {
-            items: self.rows.clone(),
-            ..Page::default()
+            first_id: items
+                .first()
+                .map(|row| row["id"].as_str().unwrap().to_owned()),
+            last_id: items
+                .last()
+                .map(|row| row["id"].as_str().unwrap().to_owned()),
+            has_more: end < self.rows.len(),
+            items,
         })
     }
 
@@ -345,4 +363,155 @@ fn an_ended_child_dispatches_its_state_as_a_child_session_event() {
             "poll {poll}"
         );
     }
+}
+
+/// A recorded toolbox answer about another session: one text block wrapping
+/// the record in the host's `<other-session nonce=…>` envelope.
+fn wrapped(document: &Value) -> Value {
+    let text = format!(
+        "<other-session nonce=\"9f\" untrusted=\"true\">\nAnother Claude session's record (JSON):\n    {document}\n</other-session nonce=\"9f\">"
+    );
+    serde_json::json!({"content": [{"type": "text", "text": text}]})
+}
+
+/// Fails by: a page read wrong off the toolbox's answer, an enveloped record
+/// left unread, or a failed or pageless result answered as an empty page.
+#[test]
+fn a_recorded_answer_decodes_to_its_page_and_a_failed_one_to_could_not_look() {
+    use batten::session_watch::{document, page_of_result};
+
+    let recorded: Value = serde_json::from_str(
+        &std::fs::read_to_string(common::at_root(
+            "crates/batten/tests/fixtures/session-watch/worker-events.json",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    // Bare (this session's own answer) and enveloped (another's) read alike.
+    assert_eq!(document(&recorded), Some(recorded.clone()));
+    for answer in [recorded.clone(), wrapped(&recorded)] {
+        let page = page_of_result(&answer).expect("a page");
+        assert_eq!(page.items.len(), 6);
+        assert_eq!(page.first_id.as_deref(), Some("w0"));
+        assert_eq!(page.last_id.as_deref(), Some("w5"));
+        assert!(!page.has_more);
+    }
+    let more = serde_json::json!({"ccr": {"data": [], "has_more": true}});
+    assert!(Page::of(&more).unwrap().has_more);
+
+    let failed =
+        serde_json::json!({"isError": true, "content": [{"type": "text", "text": "denied"}]});
+    assert_eq!(page_of_result(&failed), None);
+    assert_eq!(
+        page_of_result(&serde_json::json!({"ccr": {"note": "no data"}})),
+        None
+    );
+}
+
+/// Fails by: a cursor dropped from, or a stray key added to, the toolbox's
+/// arguments.
+#[test]
+fn the_toolbox_is_asked_for_children_and_pages_by_cursor() {
+    use batten::session_watch::{PAGE, events_arguments, sessions_arguments};
+
+    assert_eq!(
+        sessions_arguments(None),
+        serde_json::json!({"children": true, "limit": PAGE})
+    );
+    assert_eq!(
+        sessions_arguments(Some("s9")),
+        serde_json::json!({"children": true, "limit": PAGE, "after_id": "s9"})
+    );
+    assert_eq!(
+        events_arguments("s1", Some("e4"), None),
+        serde_json::json!({"session_id": "s1", "limit": PAGE, "before_id": "e4"})
+    );
+    assert_eq!(
+        events_arguments("s1", None, Some("e7")),
+        serde_json::json!({"session_id": "s1", "limit": PAGE, "after_id": "e7"})
+    );
+}
+
+/// Fails by: a child on a later page of the session list never watched, or
+/// the list paged past its last page.
+#[test]
+fn every_page_of_children_is_watched_and_no_more() {
+    let mut source = Recorded::new(2);
+    for id in ["session_a", "session_b", "session_c"] {
+        source = source.child(row(id, "IDLE", None), events("worker-events.json"));
+    }
+    let mut watch = Watch::new(Vec::new());
+    let (reports, _) = watch.poll(&mut source, &cache("paged-children")).unwrap();
+    let ids: Vec<&str> = reports.iter().map(|r| r.session.as_str()).collect();
+    assert_eq!(ids, ["session_a", "session_b", "session_c"]);
+    assert_eq!(source.session_calls, 2, "three children in pages of two");
+}
+
+/// Fails by: a dead child outranked by a done one, or the backoff not
+/// doubling between polls.
+#[test]
+fn a_dead_child_outranks_a_done_one_and_the_wait_backs_off() {
+    use batten::session_watch::{FIRST_DELAY, run};
+
+    let mut finished = events("worker-events.json");
+    finished.extend(events("shard-exit.json"));
+    let mut source = Recorded::new(100)
+        .child(row("session_done", "IDLE", None), finished)
+        .child(
+            row("session_dead", "IDLE", Some("disconnected")),
+            events("worker-events.json"),
+        );
+    let mut watch = Watch::new(Vec::new());
+    let (_, ending) = watch.poll(&mut source, &cache("rank")).unwrap();
+    assert_eq!(ending, Some(Ending::Dead));
+    assert!(Ending::Dead > Ending::Done && Ending::Done > Ending::Nothing);
+
+    // An unstarted child ends the run at the poll count, after two waits.
+    let mut source = Recorded::new(100).child(
+        row("session_unstarted", "IDLE", None),
+        events("unstarted-events.json"),
+    );
+    let mut waits = Vec::new();
+    let mut wait = |delay| waits.push(delay);
+    let mut watch = Watch::new(Vec::new());
+    let (_, ending) = run(&mut watch, &mut source, &cache("backoff"), &mut wait).unwrap();
+    assert_eq!(ending, Ending::Dead);
+    assert_eq!(waits, [FIRST_DELAY, FIRST_DELAY * 2]);
+}
+
+/// Fails by: a session id that could name another path accepted as a cache
+/// file name, a well-formed one refused, or the cache not round-tripping.
+#[test]
+fn the_cache_keeps_a_well_formed_session_and_refuses_a_path() {
+    let store = cache("round-trip");
+    let mut inventory = Inventory::default();
+    inventory.fold(&events("worker-events.json"));
+    inventory.cursor = Some("w5".to_owned());
+    store.store("session_01Gg-x9", &inventory);
+    assert_eq!(store.load("session_01Gg-x9"), Some(inventory.clone()));
+    for bad in ["../escape", "a/b", "a.b", ""] {
+        store.store(bad, &inventory);
+        assert_eq!(store.load(bad), None, "{bad:?}");
+    }
+}
+
+/// Fails by: the inventory capture or the state directory answered empty.
+#[test]
+fn the_inventory_capture_names_each_childs_state_and_tasks() {
+    use batten::session_watch::{inventory_document, state_dir};
+
+    let mut source = Recorded::new(100).child(
+        row("session_waiting", "IDLE", None),
+        events("worker-events.json"),
+    );
+    let mut watch = Watch::new(Vec::new());
+    let (reports, _) = watch.poll(&mut source, &cache("capture")).unwrap();
+    let document = inventory_document(&reports);
+    assert_eq!(document[0]["session"], "session_waiting");
+    assert_eq!(document[0]["state"], "waiting");
+    assert_eq!(document[0]["open"], serde_json::json!(["bgwg3bqcd"]));
+    assert_eq!(document[0]["exited"]["bt0h7b90r"]["code"], 0);
+
+    let dir = state_dir(&common::at_root(".")).expect("the state directory resolves");
+    assert!(dir.ends_with("session-watch"), "{}", dir.display());
 }
