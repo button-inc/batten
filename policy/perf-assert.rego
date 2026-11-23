@@ -472,10 +472,10 @@ test_a_readme_publishing_no_budget_for_a_gated_path_is_refused if {
 
 # A COMMIT STEP PUBLISHED UNMEASURED IS REFUSED, record or no record (CLOUD-2852):
 # the row the measurement half could never see, since it abstains wherever no
-# record resolves. Row 13 is `conventional-commit`.
+# record resolves. Row 14 is `conventional-commit`.
 test_a_commit_step_readme_publishes_unmeasured_is_refused if {
-	count(violation) == 1 with input as {"tree": {"lines": {"README.md": readme_with_row(13, "| `conventional-commit` | a commit-time hook step | — | — | ≤ 100 ms |")}}}
-	unpublished_measure == {"conventional-commit"} with input as {"tree": {"lines": {"README.md": readme_with_row(13, "| `conventional-commit` | a commit-time hook step | — | — | ≤ 100 ms |")}}}
+	count(violation) == 1 with input as {"tree": {"lines": {"README.md": readme_with_row(14, "| `conventional-commit` | a commit-time hook step | — | — | ≤ 100 ms |")}}}
+	unpublished_measure == {"conventional-commit"} with input as {"tree": {"lines": {"README.md": readme_with_row(14, "| `conventional-commit` | a commit-time hook step | — | — | ≤ 100 ms |")}}}
 }
 
 # THE COLUMN IS FOUND BY ITS HEADER, so a table that grows a column still compares
