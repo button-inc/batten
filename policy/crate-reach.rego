@@ -35,8 +35,8 @@ reach[name] := reached if {
 	some line in lines
 	startswith(line, "reach ")
 	fields := split(trim_space(substring(line, count("reach "), -1)), " ")
-	name := fields[0]
-	reached := reached_of(fields)
+	name = fields[0]
+	reached = reached_of(fields)
 }
 
 reached_of(fields) := split(fields[1], ",") if count(fields) > 1
@@ -51,7 +51,7 @@ violation contains {
 	"subjects": [{"artifact": name}, {"artifact": other}],
 } if {
 	some name, reached in reach
-	allow := allow_of(name)
+	allow = allow_of(name)
 	some other in reached
 	not regex.match(allow, other)
 }

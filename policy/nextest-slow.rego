@@ -194,7 +194,7 @@ header_of(i) := max([j |
 # override this repository carried until CLOUD-2059 had no comment of its own and
 # read as filed only through another section's citation.
 filed(i) if {
-	h := header_of(i)
+	h = header_of(i)
 	some j, line in lines
 	j < h
 	contains(line, "CLOUD-")
@@ -241,7 +241,7 @@ kill_seconds contains kill if {
 	some line in terminating
 	quoted := split(line, "\"")
 	count(quoted) > 1
-	value := quoted[1]
+	value = quoted[1]
 	endswith(value, "s")
 	not endswith(value, "ms")
 	period := to_number(trim_suffix(value, "s"))

@@ -42,7 +42,7 @@ rules contains "path ship refused"
 spec := ".batten-ripcord"
 
 sentinel := fact if {
-	fact := input.tree["git-index"][spec]
+	fact = input.tree["git-index"][spec]
 	is_object(fact)
 }
 

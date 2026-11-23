@@ -77,7 +77,7 @@ board_row[id] := {
 	f := split(line, "\t")
 	count(f) == 13
 	f[0] == "row"
-	id := f[2]
+	id = f[2]
 }
 
 # `edge <from> <to> <the target's ordinal>`. The ordinal rides on the edge
@@ -97,7 +97,7 @@ board_ready[id] := {"verdict": f[2], "bump": f[3]} if {
 	f := split(line, "\t")
 	count(f) == 4
 	f[0] == "ready"
-	id := f[1]
+	id = f[1]
 }
 
 # The byte-stable order every pointer list uses: by the key's ordinal, then the

@@ -391,7 +391,7 @@ process_probes contains i if {
 # wanted.
 condition_program(segment) := name if {
 	segment.construct.kind in {"until", "while"}
-	name := basename(segment.words[words_program_index(segment.words)])
+	name = basename(segment.words[words_program_index(segment.words)])
 }
 
 # `git commit`, resolved over WORDS the engine split rather than a string this
@@ -404,7 +404,7 @@ condition_program(segment) := name if {
 # its own root, and a migration that silently fixed it would be changing the
 # predicate rather than moving it.
 git_commit_words(words) if {
-	idx := words_program_index(words)
+	idx = words_program_index(words)
 	basename(words[idx]) == "git"
 	subcommands := [w |
 		some i, w in words
@@ -421,7 +421,7 @@ words_program_index(words) := idx if {
 		some i, w in words
 		not skippable(w)
 	]
-	idx := candidates[0]
+	idx = candidates[0]
 }
 
 # Does this segment tell git to read the message from STDIN? `-F -`, a cluster
@@ -466,7 +466,7 @@ default first_word(_) := ""
 
 first_word(s) := w if {
 	parts := [p | some p in split(trim_space(s), " "); p != ""]
-	w := parts[0]
+	w = parts[0]
 }
 
 # A line is body text while some opener above it is still unclosed. The
@@ -560,12 +560,12 @@ tokens(stage) := [t | some t in split(trim_space(stage), " "); t != ""]
 # false negative the bash carries, because a wrapper's non-flag argument is
 # where its look-through stops.
 program_index(stage) := idx if {
-	toks := tokens(stage)
+	toks = tokens(stage)
 	candidates := [i |
 		some i, t in toks
 		not skippable(t)
 	]
-	idx := candidates[0]
+	idx = candidates[0]
 }
 
 skippable(tok) if {
@@ -582,12 +582,12 @@ skippable(tok) if {
 
 basename(tok) := b if {
 	parts := split(tok, "/")
-	b := parts[count(parts) - 1]
+	b = parts[count(parts) - 1]
 }
 
 git_commit(stage) if {
-	toks := tokens(stage)
-	idx := program_index(stage)
+	toks = tokens(stage)
+	idx = program_index(stage)
 	basename(toks[idx]) == "git"
 	words := [w |
 		some i, w in toks

@@ -179,6 +179,7 @@ const PRESET_SCOPES: &[(&str, &[bool])] = &[
     ("tracker-hygiene", &[true]),
     ("release-hygiene", &[true]),
     ("engine-hygiene", &[true]),
+    ("rego-hygiene", &[true]),
     ("check-verdict", &[true]),
 ];
 

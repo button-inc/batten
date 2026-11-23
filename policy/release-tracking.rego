@@ -131,7 +131,7 @@ calls(path) := {call |
 	some u, line in raw(path)
 	not comment_only(line)
 	some found in regex.find_all_string_submatch_n(data.batten.patterns["linear-release-uses"], line, 1)
-	bounds := boundaries(path)
+	bounds = boundaries(path)
 	start := max({b | some b in bounds; b <= u} | {-1})
 	stop := min({b | some b in bounds; b > u} | {count(raw(path))})
 	call := {
@@ -145,9 +145,9 @@ calls(path) := {call |
 }
 
 job_found(path, u) := key if {
-	found := headers(path)
+	found = headers(path)
 	j := max({i | some i, _ in found; i <= u})
-	key := found[j]
+	key = found[j]
 }
 
 job_of(path, u) := job_found(path, u)
@@ -196,7 +196,7 @@ step_declared(path, name) if {
 # `inputs:` sets. Walked rather than grepped: a bare `tag:` also matches a step's
 # `with: tag:`, and `required` is an input's own key one level deeper.
 input_declared(path, name) if {
-	lines := code(path)
+	lines = code(path)
 	some w, wd in lines
 	[wd_indent, "workflow_dispatch", ""] = key_line(wd)
 	wd_end := min({j | some j, l in lines; j > w; [n, _, _] = key_line(l); n <= wd_indent} | {count(lines)})
@@ -222,7 +222,7 @@ job_span(path, job) := [start, stop] if {
 }
 
 deep(path, job) if {
-	[start, stop] := job_span(path, job)
+	[start, stop] = job_span(path, job)
 	some i, line in code(path)
 	i > start
 	i < stop
@@ -233,7 +233,7 @@ deep(path, job) if {
 # The job's first checkout, or 0 — "the file, not a line in it": a job invoking the
 # action with no checkout at all is the same finding.
 checkout_found(path, job) := min(lines) + 1 if {
-	[start, stop] := job_span(path, job)
+	[start, stop] = job_span(path, job)
 	lines := {i | some i, line in code(path); i > start; i < stop; regex.match(data.batten.patterns["checkout-uses"], line)}
 	count(lines) > 0
 }
@@ -255,7 +255,7 @@ refreshed(path, job) if {
 		call.job == job
 		index := call.line - 1
 	})
-	[start, _] := job_span(path, job)
+	[start, _] = job_span(path, job)
 	some i, line in code(path)
 	i > start
 	i < first
@@ -394,7 +394,7 @@ first_job(path) := "" if not first_found(path)
 # The FIRST `ref:` line bound to an input, read back out and required declared: an
 # undeclared name expands empty, which is checkout's default branch.
 ref_bound(path) if {
-	lines := code(path)
+	lines = code(path)
 	refs := {i | some i, l in lines; [n, "ref", _] = key_line(l); n > 0; dispatch_input(key_line(l)[2])}
 	first := min(refs)
 	input_declared(path, dispatch_input(key_line(lines[first])[2]))
@@ -405,7 +405,7 @@ dispatch_input(value) := m[2] if {
 }
 
 range_based(path) if {
-	lines := code(path)
+	lines = code(path)
 	bases := {i | some i, l in lines; [n, "base_ref", _] = key_line(l); n > 0; step_output(key_line(l)[2])}
 	first := min(bases)
 	step_declared(path, step_output(key_line(lines[first])[2]))

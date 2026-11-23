@@ -162,5 +162,5 @@ test_a_read_only_search_is_allowed if {
 
 deny contains message if {
 	some v in violation
-	message := v.verdict
+	message = v.verdict
 }

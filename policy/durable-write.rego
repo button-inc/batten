@@ -80,7 +80,7 @@ gated_boundary(line) if line == "#[cfg(test)]"
 gated_boundary(line) if line == "#[cfg(any(test, feature = \"seam\"))]"
 
 one_line_item(lines, j) if {
-	item := lines[j + 1]
+	item = lines[j + 1]
 	not startswith(item, "#[")
 	endswith(trim_space(item), ";")
 }

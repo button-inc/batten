@@ -87,7 +87,7 @@ route_rows contains {
 } if {
 	some entry in input.tree.documents["batten.toml"].verdict
 	some row in entry.route
-	target := row.target
+	target = row.target
 }
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ defined contains name if {
 	some path in input.tree.tracked
 	startswith(path, "mise-tasks/")
 	parts := split(path, "/")
-	name := parts[count(parts) - 1]
+	name = parts[count(parts) - 1]
 }
 
 defined contains stem if {
@@ -115,9 +115,9 @@ defined contains stem if {
 	some path in input.tree.tracked
 	startswith(path, "mise-tasks/")
 	parts := split(path, "/")
-	name := parts[count(parts) - 1]
+	name = parts[count(parts) - 1]
 	contains(name, ".")
-	stem := split(name, ".")[0]
+	stem = split(name, ".")[0]
 }
 
 # The task a `mise run` route names, or nothing for any other program. Narrow on
@@ -148,7 +148,7 @@ violation contains {
 	count(defined) > 0
 	some row in route_rows
 	row.kind == "command"
-	task := mise_task(row.target)
+	task = mise_task(row.target)
 	entry := object.union(row, {"task": task})
 	not defined[entry.task]
 }

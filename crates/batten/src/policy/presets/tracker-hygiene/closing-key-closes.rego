@@ -63,7 +63,7 @@ closing_values(name) := {columns[1] |
 }
 
 closing_field(name) := value if {
-	candidates := closing_values(name)
+	candidates = closing_values(name)
 	count(candidates) == 1
 	some value in candidates
 }
@@ -82,7 +82,7 @@ closing_torn if {
 closing_keys(name) := set() if closing_field(name) in {"-", "none", "global"}
 
 closing_keys(name) := result if {
-	value := closing_field(name)
+	value = closing_field(name)
 	not value in {"-", "none", "global"}
 	result := {key | some key in split(value, " "); key != ""}
 }

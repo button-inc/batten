@@ -420,3 +420,57 @@ violation contains {"rule": "partial binding probe", "verdict": "partial binding
     let clean = scan(&root, &[units_row(&["subject/*.rego"])]);
     assert!(clean.findings.is_empty(), "{:?}", clean.findings);
 }
+
+/// The vendored `rego-hygiene` preset enabled over `subject/*.rego`. The
+/// preset's own module, not a copy, so its `#MUTANT` row reaches it.
+fn rego_hygiene_row() -> Rule {
+    serde_json::from_value(serde_json::json!({
+        "id": "module bind partial",
+        "kind": "policy",
+        "scope": "tree",
+        "preset": "rego-hygiene",
+        "unit_sources": ["subject/*.rego"],
+        "severity": "deny",
+    }))
+    .expect("a tree-scoped preset row declaring `unit_sources`")
+}
+
+/// The pointers the preset refuses `subject` at, as `path:line`.
+fn rego_hygiene_findings(root: &Path, subject: &str) -> Vec<String> {
+    fs::write(root.join("subject/h.rego"), subject).expect("subject");
+    common::git_in(root, &["add", "-A"]);
+    let found = scan(root, &[rego_hygiene_row()]);
+    assert!(
+        !found.not_evaluated.contains_key("module bind partial"),
+        "the row evaluated: a skip would read as clean"
+    );
+    found
+        .findings
+        .iter()
+        .map(|finding| {
+            assert_eq!(finding.rule, "module bind partial");
+            format!("{}:{}", finding.path, finding.line.unwrap_or_default())
+        })
+        .collect()
+}
+
+/// Fails by: a partial helper bound with `:=` admitted (`#MUTANT
+/// partial-helper-admitted`), a defaulted helper refused, `_ := e` admitted, or
+/// a binding with `=` refused — `=` carries the guard on both evaluators.
+#[test]
+fn the_rego_hygiene_preset_refuses_what_bytecode_reads_differently() {
+    let root = scratch("rego-hygiene");
+    fs::create_dir_all(root.join("subject")).expect("dir");
+    let partial = "package h\n\nimport rego.v1\n\nsubject(args) := m if {\n\tsome m in args\n}\n\nv contains 1 if {\n\tm := subject(input.x)\n\tnot m\n}\n";
+    let refused = rego_hygiene_findings(&root, partial);
+    assert_eq!(refused, ["subject/h.rego:10"]);
+
+    let total = "package h\n\nimport rego.v1\n\ndefault subject(_) := \"\"\n\nsubject(args) := m if {\n\tsome m in args\n}\n\nv contains 1 if {\n\tm := subject(input.x)\n\tm == \"\"\n}\n";
+    assert_eq!(rego_hygiene_findings(&root, total), Vec::<String>::new());
+
+    let wildcard = "package h\n\nimport rego.v1\n\nv contains 1 if {\n\t_ := input.x.y\n}\n";
+    assert_eq!(rego_hygiene_findings(&root, wildcard), ["subject/h.rego:6"]);
+
+    let unified = "package h\n\nimport rego.v1\n\nsubject(args) := m if {\n\tsome m in args\n}\n\nv contains 1 if {\n\t_ = input.x.y\n\tm = subject(input.x)\n\tnot m\n}\n";
+    assert_eq!(rego_hygiene_findings(&root, unified), Vec::<String>::new());
+}

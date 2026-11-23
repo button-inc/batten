@@ -87,7 +87,7 @@ must_not_select := {
 }
 
 workflow_lines := lines if {
-	lines := input.tree.lines[workflow_path]
+	lines = input.tree.lines[workflow_path]
 }
 
 # --- the committed filter ----------------------------------------------------

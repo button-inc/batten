@@ -80,7 +80,7 @@ governed if count(object.keys(workflow.jobs)) > 0
 skipped_names contains name if {
 	some _, job in workflow.jobs
 	some step in job.steps
-	raw := step.env.HK_SKIP_STEPS
+	raw = step.env.HK_SKIP_STEPS
 	some part in split(raw, ",")
 	name := trim_space(part)
 	name != ""
@@ -88,7 +88,7 @@ skipped_names contains name if {
 
 skipped_names contains name if {
 	some _, job in workflow.jobs
-	raw := job.env.HK_SKIP_STEPS
+	raw = job.env.HK_SKIP_STEPS
 	some part in split(raw, ",")
 	name := trim_space(part)
 	name != ""
@@ -102,7 +102,7 @@ skipped_names contains name if {
 run_bodies contains body if {
 	some _, job in workflow.jobs
 	some step in job.steps
-	body := step.run
+	body = step.run
 }
 
 runs_task(name) if {

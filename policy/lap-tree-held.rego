@@ -69,14 +69,14 @@ inside(target) if {
 # on the hook path (`policy_cache::the_repositorys_bundles_answer_alike_*`).
 inside(target) if {
 	is_string(target)
-	root := input.facts["land-live"]
+	root = input.facts["land-live"]
 	is_string(root)
 	startswith(target, concat("", [root, "/"]))
 }
 
 held contains path if {
 	input.call.operation == "write"
-	path := input.call.writes
+	path = input.call.writes
 	inside(path)
 }
 

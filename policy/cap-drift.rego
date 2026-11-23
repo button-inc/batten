@@ -64,11 +64,11 @@ manifest_path := "Cargo.toml"
 bot_path := "renovate.json5"
 
 manifest_lines := lines if {
-	lines := input.tree.lines[manifest_path]
+	lines = input.tree.lines[manifest_path]
 }
 
 bot_lines := lines if {
-	lines := input.tree.lines[bot_path]
+	lines = input.tree.lines[bot_path]
 }
 
 unquoted(text) := replace(text, "\"", "")
@@ -186,7 +186,7 @@ rule_text(j) := concat("\n", [decommented(bot_lines[k]) |
 # package matcher used for grouping is not read as a cap mirror.
 withheld contains name if {
 	some j in rule_open
-	text := rule_text(j)
+	text = rule_text(j)
 	contains(text, "allowedVersions")
 	contains(text, "matchPackageNames")
 	after := substring(text, indexof(text, "matchPackageNames"), -1)

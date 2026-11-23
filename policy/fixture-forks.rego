@@ -96,7 +96,7 @@ rules contains "test add duplicate"
 # the same fact, in this same branch, and this module was written beside it
 # without reading it.
 delta := d if {
-	d := input.tree["base-delta"]
+	d = input.tree["base-delta"]
 	is_object(d)
 }
 
@@ -165,7 +165,7 @@ forks_at_base(path) := count([index |
 # Undefined where the delta carries no base side for `path`, which is what makes
 # the arm above undefined too rather than vacuously zero.
 base_lines(path) := lines if {
-	lines := delta["base-lines"][path]
+	lines = delta["base-lines"][path]
 }
 
 # AN ADDED FIXTURE THAT FORKS. Every matching line is new by construction — the
