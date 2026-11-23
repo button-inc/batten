@@ -738,6 +738,22 @@ fn a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not() {
     assert_eq!(mediated, direct, "and refused as the direct write is");
 }
 
+/// THE PROGRAM ARM, and the case `#MUTANT mcp-call-unread` reddens. A LONE
+/// `batten mcp call` is mediated into the `mcp__<server>__<method>` call it
+/// stands for (`hook::mediated_mcp_call`), so the tool arm grants it and the
+/// case above never reaches the `program.name == "batten"` arm. Beside another
+/// read the command is no single mediated call, so only that arm can say the
+/// mcp read reads.
+#[test]
+fn a_plan_mode_batten_mcp_read_beside_another_read_is_allowed() {
+    let read = shell(
+        "plan",
+        r#"batten mcp call Linear get_issue '{"id":"CLOUD-1"}' && git status"#,
+    );
+    assert_not_plan_refused(&read);
+    assert_granted_by(&read, "call read now");
+}
+
 /// CLOUD-2289: reading the session's own notification queue is a read.
 #[test]
 fn a_plan_mode_read_notifications_is_allowed() {
