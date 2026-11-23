@@ -134,3 +134,21 @@ fn cross_check_denies_warnings_so_a_dead_cfg_gated_helper_fails() {
         assert!(check.contains("-D warnings"), "warnings tolerated: {check}");
     }
 }
+
+/// The compiler does the reduction to one `path:line:col: error: …` line per
+/// diagnostic, so a failure names its line and not a page of span art.
+///
+/// `main` held this as `the_cross_check_asks_the_compiler_for_one_line_per_diagnostic`
+/// in `turn_cross_check.rs`, which was deleted whole with the per-turn detached
+/// check (229841f43) while the flag it pinned stayed on the task.
+///
+/// Fails by: dropping the flag from any `cargo check` of the task.
+#[test]
+fn the_cross_check_asks_the_compiler_for_one_line_per_diagnostic() {
+    for check in checks() {
+        assert!(
+            check.contains("--message-format=short"),
+            "cross-check emits span art, not one line per diagnostic: {check}"
+        );
+    }
+}
