@@ -208,8 +208,11 @@ gated_tests(lines) := count([index |
 # An ADDED path has no base side, and its base count is therefore zero rather
 # than unreadable: a new file carrying a platform-gated test is the same defect
 # arriving in one commit instead of two.
-base_lines_of(path) := lines if {
-	lines = delta["base-lines"][path]
+#
+# The local is not `lines`: bound with `=`, that name unifies with the package
+# rule `lines` (`run-arg-shape.rego`'s test helper) instead of declaring a local.
+base_lines_of(path) := base_side if {
+	base_side = delta["base-lines"][path]
 }
 
 base_lines_of(path) := [] if {
