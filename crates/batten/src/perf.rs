@@ -706,26 +706,107 @@ pub fn base_key(repo: &Path, base_sha: &str) -> Result<String> {
     ))
 }
 
-/// The trees the `batten` BINARY is compiled from at `rev`: its `src`, both
-/// manifest layers and the lockfile.
+/// The trees the `batten` BINARY is compiled from at `rev`: the `src`,
+/// `build.rs` and manifest of `batten` and of every workspace crate in its
+/// path-dependency closure, in sorted crate order, then the workspace manifest
+/// and the lockfile.
 ///
 /// NARROWER THAN [`base_key`] ON PURPOSE. That key names a cache entry, so it
 /// takes all of `crates/`; this one answers whether two builds COULD differ, and
-/// `crates/batten/tests` cannot change a byte of the binary. Every non-test
+/// a crate's `tests` cannot change a byte of the binary. Every non-test
 /// `include_str!` in the crate reads under `src/`.
+///
+/// THE CLOSURE, NOT `crates/batten` ALONE (CLOUD-2789): after the crate split
+/// most of the binary compiles from `batten-base`, `batten-core` and the rest,
+/// and a key blind to them reads a change there as "same sources", which
+/// disarms the wrong-binary guard [`sources_differ`] feeds. A crate that depends
+/// ON `batten` (`batten-codemods`) is outside the closure and stays out.
 ///
 /// # Errors
 ///
-/// A repository that cannot be opened.
+/// A repository that cannot be opened, or a manifest at `rev` that is not TOML.
 pub fn binary_source_key(repo: &Path, rev: &str) -> Result<String> {
     let id = |path: &str| -> Result<String> {
         Ok(crate::git::resolve_ref(repo, &format!("{rev}:{path}"))?.unwrap_or_default())
     };
+    let mut sources = Vec::new();
+    let mut manifests = Vec::new();
+    for name in binary_crates(repo, rev)? {
+        sources.push(format!("{name} {}", id(&format!("crates/{name}/src"))?));
+        sources.push(format!(
+            "{name} {}",
+            id(&format!("crates/{name}/build.rs"))?
+        ));
+        manifests.push(format!(
+            "{name} {}",
+            id(&format!("crates/{name}/Cargo.toml"))?
+        ));
+    }
+    manifests.push(id("Cargo.toml")?);
     Ok(crate_key(
-        &id("crates/batten/src")?,
-        &format!("{}\n{}", id("crates/batten/Cargo.toml")?, id("Cargo.toml")?),
+        &sources.join("\n"),
+        &manifests.join("\n"),
         &id("Cargo.lock")?,
     ))
+}
+
+/// The `crates/<dir>` names `batten` is built from at `rev`: itself and every
+/// workspace crate its manifests reach by a `path = "../<dir>"` dependency,
+/// transitively, sorted. Build and target-specific dependency tables count;
+/// `dev-dependencies` do not, since they never link into the binary.
+///
+/// # Errors
+///
+/// A crate of the closure whose manifest is absent at `rev`, or a `rev` that
+/// does not resolve: the closure is then UNKNOWN, and the caller's `.ok()`
+/// reads unknown as "differs", which keeps the wrong-binary guard armed.
+fn binary_crates(repo: &Path, rev: &str) -> Result<BTreeSet<String>> {
+    let mut seen = BTreeSet::new();
+    let mut queue = vec![String::from("batten")];
+    while let Some(name) = queue.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let path = format!("crates/{name}/Cargo.toml");
+        let manifest = match crate::git::read_at(repo, rev, &path)? {
+            crate::git::BaseBlob::Found { text, .. } => text,
+            crate::git::BaseBlob::RefUnreachable { .. } => bail!("{rev} does not resolve"),
+            crate::git::BaseBlob::AbsentAtRef { .. } => bail!("{path} is absent at {rev}"),
+        };
+        let table: toml::Table = manifest
+            .parse()
+            .with_context(|| format!("crates/{name}/Cargo.toml at {rev} is not TOML"))?;
+        queue.extend(path_dependencies(&table));
+    }
+    Ok(seen)
+}
+
+/// The sibling directory each workspace path dependency in `manifest` names:
+/// `[dependencies]`, `[build-dependencies]` and their `[target.*]` forms.
+fn path_dependencies(manifest: &toml::Table) -> Vec<String> {
+    let mut tables: Vec<&toml::Table> = Vec::new();
+    for key in ["dependencies", "build-dependencies"] {
+        tables.extend(manifest.get(key).and_then(toml::Value::as_table));
+    }
+    for target in manifest
+        .get("target")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(toml::Table::values)
+        .filter_map(toml::Value::as_table)
+    {
+        for key in ["dependencies", "build-dependencies"] {
+            tables.extend(target.get(key).and_then(toml::Value::as_table));
+        }
+    }
+    tables
+        .into_iter()
+        .flat_map(toml::Table::values)
+        .filter_map(|spec| spec.get("path").and_then(toml::Value::as_str))
+        .filter_map(|path| path.strip_prefix("../"))
+        .filter(|dir| !dir.is_empty() && !dir.contains('/'))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Whether two arms' binary sources differ, so identical bytes are a
@@ -3716,7 +3797,18 @@ mod tests {
         std::fs::create_dir_all(repo.join("crates/batten/tests")).expect("mkdir");
         std::fs::write(repo.join("crates/batten/src/lib.rs"), "a").expect("write");
         std::fs::write(repo.join("crates/batten/tests/it.rs"), "t").expect("write");
-        let tree = ["crates/batten/src/lib.rs", "crates/batten/tests/it.rs"];
+        // The manifest the closure walk starts from: without it the key is
+        // unknown (CLOUD-2789), which is a different case.
+        std::fs::write(
+            repo.join("crates/batten/Cargo.toml"),
+            "[package]\nname = \"batten\"\n",
+        )
+        .expect("write");
+        let tree = [
+            "crates/batten/Cargo.toml",
+            "crates/batten/src/lib.rs",
+            "crates/batten/tests/it.rs",
+        ];
         let first = commit(&tree, "one");
         std::fs::write(repo.join("crates/batten/tests/it.rs"), "t2").expect("write");
         let second = commit(&tree, "two");
@@ -3729,6 +3821,110 @@ mod tests {
         );
         assert_eq!(key(&first), key(&second));
         assert_ne!(key(&second), key(&third));
+    }
+
+    /// CLOUD-2789: after the crate split the binary is compiled from `batten`
+    /// AND every workspace crate in its path-dependency closure, so a commit in
+    /// one of those moves [`binary_source_key`]; a crate that depends ON
+    /// `batten` (codemods) is outside the closure and leaves it.
+    ///
+    /// MUTANT: keying `crates/batten/src` alone keeps the second key equal to
+    /// the first and the dependency case goes red.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
+    fn a_dependency_crates_commit_moves_the_binary_source_key() {
+        let repo = perf_scratch("binary-source-key-deps");
+        let commit = |paths: &[&str], message: &str| {
+            let paths: Vec<String> = paths.iter().map(|path| (*path).to_owned()).collect();
+            crate::gitwrite::commit_paths(&repo, &paths, message).expect("commit");
+            crate::git::head_commit(&repo).expect("head")
+        };
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        for dir in [
+            "crates/batten/src",
+            "crates/batten-base/src",
+            "crates/batten-fsio/src",
+            "crates/batten-codemods/src",
+        ] {
+            std::fs::create_dir_all(repo.join(dir)).expect("mkdir");
+        }
+        let write = |path: &str, text: &str| std::fs::write(repo.join(path), text).expect("write");
+        write(
+            "crates/batten/Cargo.toml",
+            "[package]\nname = \"batten\"\n\n[dependencies]\n\
+             batten-base = { path = \"../batten-base\" }\n",
+        );
+        // Reached only TRANSITIVELY, through `batten-base`.
+        write(
+            "crates/batten-base/Cargo.toml",
+            "[package]\nname = \"batten-base\"\n\n\
+             [target.'cfg(unix)'.dependencies]\n\
+             batten-fsio = { path = \"../batten-fsio\" }\n",
+        );
+        write(
+            "crates/batten-fsio/Cargo.toml",
+            "[package]\nname = \"batten-fsio\"\n",
+        );
+        write(
+            "crates/batten-codemods/Cargo.toml",
+            "[package]\nname = \"batten-codemods\"\n\n[dependencies]\n\
+             batten = { path = \"../batten\" }\n",
+        );
+        write("crates/batten/src/lib.rs", "a");
+        write("crates/batten-base/src/lib.rs", "b");
+        write("crates/batten-fsio/src/lib.rs", "f");
+        write("crates/batten-codemods/src/lib.rs", "c");
+        let tree = [
+            "crates/batten/Cargo.toml",
+            "crates/batten/src/lib.rs",
+            "crates/batten-base/Cargo.toml",
+            "crates/batten-base/src/lib.rs",
+            "crates/batten-fsio/Cargo.toml",
+            "crates/batten-fsio/src/lib.rs",
+            "crates/batten-codemods/Cargo.toml",
+            "crates/batten-codemods/src/lib.rs",
+        ];
+        let first = commit(&tree, "one");
+        write("crates/batten-base/src/lib.rs", "b2");
+        let direct = commit(&tree, "direct dependency");
+        write("crates/batten-fsio/src/lib.rs", "f2");
+        let transitive = commit(&tree, "transitive dependency");
+        write("crates/batten-codemods/src/lib.rs", "c2");
+        let dependent = commit(&tree, "dependent crate");
+        let key = |sha: &str| binary_source_key(&repo, sha).expect("key");
+        assert_ne!(key(&first), key(&direct), "a direct dependency's src");
+        assert_ne!(
+            key(&direct),
+            key(&transitive),
+            "a transitive dependency's src"
+        );
+        assert_eq!(
+            key(&transitive),
+            key(&dependent),
+            "codemods depends on batten"
+        );
+        // A dependency's build script compiles into the binary as surely as
+        // its `src` does.
+        write("crates/batten-fsio/build.rs", "fn main() {}");
+        let mut with_build: Vec<&str> = tree.to_vec();
+        with_build.push("crates/batten-fsio/build.rs");
+        let built = commit(&with_build, "a dependency's build script");
+        assert_ne!(key(&dependent), key(&built), "a dependency's build.rs");
+        // A closure crate missing at `rev` is UNKNOWN, never a quiet key: the
+        // caller reads the error as "differs" and the guard stays armed.
+        let without_fsio: Vec<&str> = with_build
+            .iter()
+            .copied()
+            .filter(|path| !path.starts_with("crates/batten-fsio/"))
+            .collect();
+        let missing = commit(&without_fsio, "a closure crate removed");
+        assert!(
+            binary_source_key(&repo, &missing).is_err(),
+            "a crate the closure names but the tree lacks keys as unknown"
+        );
     }
 
     /// A perf dir nothing else in this process writes, keyed on pid and thread.
