@@ -561,11 +561,14 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
 /// so the whole-tree schedule is not turned into a base-and-tree usage error
 /// (CLOUD-2849). Fails by: the default deleted (`rust-base-undeclared`), a
 /// caller's base overridden, or the default leaking into the whole-tree run.
-#[cfg(unix)]
+///
+/// THE STUB IS A `#!/bin/sh` SCRIPT, which only a unix host executes, so the
+/// case returns early elsewhere and still compiles on every target (CLOUD-1148).
 #[test]
 fn mutant_rust_runs_on_its_own_against_a_declared_base() {
-    use std::os::unix::fs::PermissionsExt as _;
-
+    if !cfg!(unix) {
+        return;
+    }
     let dir = common::scratch_repo("mutant-rust-base");
     let stub = dir.join("batten-stub");
     std::fs::write(
@@ -573,8 +576,12 @@ fn mutant_rust_runs_on_its_own_against_a_declared_base() {
         "#!/bin/sh\nprintf 'base=[%s] whole=[%s] argv=[%s]\\n' \"$MUTANT_CHANGED_SINCE\" \"$MUTANT_WHOLE_TREE\" \"$*\"\n",
     )
     .expect("plant the stub engine");
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-        .expect("make the stub executable");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+            .expect("make the stub executable");
+    }
     let bin = stub.to_string_lossy().into_owned();
     let run = |env: &[(&str, &str)]| {
         let mut all = vec![("BATTEN_BIN", bin.as_str())];
