@@ -69,10 +69,17 @@ lines := input.tree.lines
 # PER ROW, THE NEAREST ABOVE (CLOUD-2193, as `mutate.rs` judges it): a file may
 # declare several suites, and a row above every one keeps the first. One suite
 # per file was a function with several outputs on such a file, which faults.
-suite_headers(path) := [[j, trim_space(substring(line, count("#MUTANT-SUITE "), -1))] |
+suite_headers(path) := [[j, trim_space(substring(line, count(opener) + count("MUTANT-SUITE "), -1))] |
 	some j, line in lines[path]
-	startswith(line, "#MUTANT-SUITE ")
+	some opener in openers
+	startswith(line, concat("", [opener, "MUTANT-SUITE "]))
 ]
+
+# THE OPENERS `mutate.rs`'s `OPENERS` honours, at column zero (#1276). A file
+# whose comments are `//` (`hk.pkl`, `hk-fix-selection.pkl`) declares its rows
+# with that opener, and reading `#` alone left every one of them unjudged.
+# Neither opener is a prefix of the other, so one line matches at most one.
+openers := ["#", "//"]
 
 suite_above(path, i) if {
 	some header in suite_headers(path)
@@ -104,7 +111,8 @@ declared_suite(path, i) := suite if {
 declaration contains entry if {
 	some path, file_lines in lines
 	some i, line in file_lines
-	startswith(line, "#MUTANT ")
+	some opener in openers
+	startswith(line, concat("", [opener, "MUTANT "]))
 	fields := split(line, "|")
 	count(fields) == 3
 	entry := {
@@ -291,6 +299,19 @@ test_a_suite_this_run_did_not_read_is_not_judged if {
 		"#MUTANT-SUITE crates/batten/tests/it/a.rs",
 		"#MUTANT slug|s@a@b@|a_case_nobody_wrote",
 	]})
+}
+
+# THE `//` OPENER: a row and its suite declared with it are judged exactly as
+# the `#` spelling is.
+test_a_slash_opened_declaration_naming_a_missing_case_is_refused if {
+	some v in violation with input as tree({
+		"hk.pkl": [
+			"//MUTANT-SUITE crates/batten/tests/it/a.rs",
+			"//MUTANT slug|s@a@b@|a_case_nobody_wrote",
+		],
+		"crates/batten/tests/it/a.rs": ["fn a_case_that_exists() {"],
+	})
+	v.subjects[0].path == "hk.pkl"
 }
 
 # The other markers are not rows, and a rule reading them as rows would find
