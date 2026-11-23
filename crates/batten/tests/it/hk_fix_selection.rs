@@ -402,6 +402,7 @@ fn fix_selection(name: &str, config: &str) -> (bool, String) {
     )]
     let output = std::process::Command::new(pkl)
         .arg("eval")
+        .args(common::pkl_ca_args())
         .arg(root.join("hk-fix-selection.pkl"))
         .current_dir(&root)
         .streamed_output()

@@ -257,7 +257,9 @@ fn resolved_hk() -> serde_json::Value {
     )]
     let mut command = std::process::Command::new(pkl);
     command
-        .args(["eval", "-f", "json", "hk.pkl"])
+        .arg("eval")
+        .args(common::pkl_ca_args())
+        .args(["-f", "json", "hk.pkl"])
         .current_dir(common::at_root("."));
     let output = command.streamed_output().expect("pkl evaluates hk.pkl");
     assert!(
