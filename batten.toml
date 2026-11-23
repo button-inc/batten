@@ -18643,6 +18643,34 @@ id = "toolchain-is-provisioned"
 gloss = "every tool this repository pins for an agent session is installed, so a gate does not install one inside its own timeout"
 preset = "mise"
 
+# THE AGENT TOOLCHAIN IS INSTALLED BEFORE ANY CLIENT LAUNCHES (CLOUD-2859). Serena
+# is pinned only in `mise.agent.toml`, which mise loads only under
+# `MISE_ENV=agent` (CLOUD-2553), so the row above never installs it. It was
+# installed by `session:install`, a SessionStart handler, while the host launches
+# `.mcp.json`'s servers alongside SessionStart: `mise exec` then installed it on
+# demand inside the MCP start window (24 s measured) and the server came up late
+# or not at all. `batten startup --repair` runs in the container's Setup line,
+# before any client starts. CI never runs `batten startup`, so no build installs
+# an agent tool and CLOUD-2553's boundary holds. `.mcp.json` sets
+# `MISE_EXEC_AUTO_INSTALL=false`, so a missing Serena fails at once, not late.
+#MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
+#MUTANT agent-toolchain-unprovisioned|s@^  "MISE_ENV=agent",$@@|the_agent_toolchain_is_installed_before_any_client_launches
+[[startup]]
+id = "agent-toolchain-is-provisioned"
+gloss = "every tool the agent environment pins is installed before a client launches its MCP servers"
+check = ["env", "MISE_ENV=agent", "mise", "ls", "--current", "--missing"]
+decided_by = "silent-exit"
+repair = [
+  "env",
+  "MISE_ENV=agent",
+  "MISE_LOCKFILE=true",
+  "MISE_LOCKED=1",
+  "MISE_AQUA_GITHUB_ATTESTATIONS=false",
+  "mise",
+  "install",
+  "--yes",
+]
+
 # AND THIS ROW ASKED THE RUNNER A QUESTION ABOUT BATTEN (CLOUD-1454, same report).
 #
 # `check = ["mise", "run", "deps"]` routed a question about batten's presence
