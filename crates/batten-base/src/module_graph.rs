@@ -36,6 +36,11 @@ use crate::codemod::CouldNotLook;
 /// The node standing for the items `lib.rs` defines.
 pub const LIB: &str = "lib";
 
+/// The prefix of every helper a mutation schema renders into the crate root
+/// (`__batten_fn`, `__batten_mutant`, `__batten_record`): never a module and
+/// never an item the source declared.
+pub const SCHEMA_HELPER: &str = "__batten";
+
 /// A module graph: every node, and each node's distinct successors.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Graph {
@@ -289,6 +294,13 @@ pub fn read(root: &Path) -> anyhow::Result<Graph> {
         for name in
             root_names(&source, &module).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?
         {
+            // A MUTATION SCHEMA'S HELPERS ARE NO EDGE: the sweep renders a
+            // probe and a switch into every function, each naming a helper
+            // the schema adds to `lib.rs`, and read as items they joined
+            // every probed module to the root (U2, #1276).
+            if name.starts_with(SCHEMA_HELPER) {
+                continue;
+            }
             let target = if modules.contains(&name) {
                 name
             } else if lib_items.contains(&name) {
