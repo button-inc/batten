@@ -609,8 +609,8 @@ fn a_shebang_under_any_suffix_is_refused() {
 /// One `[[census.shell.generated]]` row.
 fn generated_row(path: &str, check: &str) -> String {
     format!(
-        "\n[[census.shell.generated]]\npath = \"{path}\"\n\
-         generator = \"batten completions bash\"\ncheck = \"{check}\"\n"
+        "\n[[census.shell.generated]]\npath = '{path}'\n\
+         generator = \"batten completions bash\"\ncheck = '{check}'\n"
     )
 }
 
