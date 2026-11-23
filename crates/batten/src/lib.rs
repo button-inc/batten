@@ -15099,6 +15099,9 @@ fn verify_stall(root: &Path, registered: Option<u32>) -> Option<land::Stall> {
         .filter(|secs| *secs > 0)
         .unwrap_or_else(|| lease::Terms::default().beat);
     let git_dir = crate::git::git_dir(root).ok()?;
+    // A red answer filed under this task by an earlier gate is not this
+    // gate's (CLOUD-2253): the stall is built once per gate, just before it.
+    step::clear_red(&git_dir, pid);
     Some(land::Stall {
         git_dir,
         pid,
@@ -15202,9 +15205,6 @@ fn run_land_verify_seen(
     // moved the registry the stall arm reads.
     let stall = verify_stall(root, registered);
     if let Some(stall) = &stall {
-        // A red answer filed under this task by an earlier gate is not this
-        // gate's (CLOUD-2253).
-        step::clear_red(&stall.git_dir, stall.pid);
         published.push((step::TASK_PID.to_owned(), stall.pid.to_string()));
     }
     let environment = verify_environment(root);
