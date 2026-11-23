@@ -19,9 +19,13 @@
 //! - the binary's own `check` and `enforce` halves report, on `-vv`, that no
 //!   verdict ran on the interpreter.
 //!
-//! A module the bytecode compiler genuinely cannot express is listed in
-//! [`ALLOWED`] with its reason, and the list only shrinks: an entry that now
-//! compiles, or names nothing loaded, fails the case.
+//! THERE IS NO EXEMPTION LIST. Four bundles once decided on the interpreter
+//! because regorus 0.15's bytecode answers two constructs wrongly — a keyed
+//! partial set (`f[k] contains v`) and an `else` after a body that iterates —
+//! and each module was rewritten into a form that compiles alike instead. A
+//! module using either construct is still refused bytecode by batten
+//! ([`Fallback::KeyedPartialSet`], [`Fallback::RuleElse`]), so it fails here: the
+//! fix is the module's spelling, never a list entry.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -32,68 +36,30 @@ use batten::config_model::Rule;
 use batten::policy::{self, Execution, Fallback, ModuleChecks};
 use batten::preset_catalog::RuleScope;
 
-/// The bundles allowed to decide on the interpreter: `(bundle id, reason)`.
-/// It only shrinks (see the module doc). Each is a construct regorus 0.15's
-/// bytecode answers WRONGLY rather than refusing, which batten refuses for it:
-/// - `KeyedPartialSet`: `f[k] contains v` answered as a flat set
-///   (`module-layering.rego:974`, `forbidden[from] contains to`);
-/// - `RuleElse`: an `else` after a body that iterates nothing is dropped
-///   (`release-tracking.rego:91`, `filed-here.rego:101`,
-///   `obligations-bound.rego:133`).
-///
-/// The policy unit cases pin both defects, so an entry leaves when regorus is
-/// fixed or the module stops using the construct.
-const ALLOWED: &[(&str, Fallback)] = &[
-    ("layer place wrong", Fallback::KeyedPartialSet),
-    ("release wire other", Fallback::RuleElse),
-    ("issue file other", Fallback::RuleElse),
-    ("test name undefined", Fallback::RuleElse),
-];
-
 /// Every bundle in `bundles` that did not land on bytecode, as one line each.
-fn interpreted(label: &str, bundles: &[policy::Bundle]) -> Vec<(String, Fallback, String)> {
+fn interpreted(label: &str, bundles: &[policy::Bundle]) -> Vec<String> {
     bundles
         .iter()
         .filter_map(|bundle| match bundle.execution() {
             Execution::Bytecode { .. } => None,
-            Execution::Interpreted(why) => Some((
-                bundle.id().to_owned(),
-                why,
-                format!(
-                    "{label}: {} on the interpreter ({}): {}",
-                    bundle.id(),
-                    why.as_str(),
-                    bundle.fallback_detail().unwrap_or("no detail")
-                ),
+            Execution::Interpreted(why) => Some(format!(
+                "{label}: {} on the interpreter ({}): {}",
+                bundle.id(),
+                why.as_str(),
+                bundle.fallback_detail().unwrap_or("no detail")
             )),
         })
         .collect()
 }
 
-/// Fail on any interpreted bundle not in [`ALLOWED`] with that reason, and on
-/// any [`ALLOWED`] entry that `seen` contains but did not fall back.
-fn hold(found: &[(String, Fallback, String)], seen: &[String]) {
-    let unexpected: Vec<&str> = found
-        .iter()
-        .filter(|(id, why, _)| !ALLOWED.contains(&(id.as_str(), *why)))
-        .map(|(_, _, line)| line.as_str())
-        .collect();
+/// Fail on any interpreted bundle: none is exempt.
+fn hold(found: &[String]) {
     assert!(
-        unexpected.is_empty(),
-        "these policy bundles decide on the tree-walking interpreter; make them \
-         compile to bytecode, or list them in ALLOWED with the reason:\n{}",
-        unexpected.join("\n")
+        found.is_empty(),
+        "these policy bundles decide on the tree-walking interpreter; rewrite each \
+         module into a form the bytecode compiles alike:\n{}",
+        found.join("\n")
     );
-    for (id, why) in ALLOWED {
-        if seen.iter().any(|loaded| loaded == id) {
-            assert!(
-                found.iter().any(|(at, was, _)| at == id && was == why),
-                "`{id}` is allowed the interpreter for {} but now decides on bytecode: \
-                 delete its ALLOWED entry",
-                why.as_str()
-            );
-        }
-    }
 }
 
 /// This repository's resolved config.
@@ -118,7 +84,6 @@ fn every_repository_policy_row_decides_on_bytecode_at_every_load() {
         records: &resolved.records,
     };
     let mut found = Vec::new();
-    let mut seen = Vec::new();
     // Twice per mode: the first load may compile, the second must read the
     // entry the first wrote; neither may fall back.
     for checks in [
@@ -134,10 +99,9 @@ fn every_repository_policy_row_decides_on_bytecode_at_every_load() {
             "{checks:?}: the repository's policy rows reach the load: {}",
             bundles.len()
         );
-        seen.extend(bundles.iter().map(|bundle| bundle.id().to_owned()));
         found.extend(interpreted(&format!("{checks:?}"), &bundles));
     }
-    hold(&found, &seen);
+    hold(&found);
 }
 
 /// The case inputs a module's own cases rarely write: every path it reads set
@@ -325,7 +289,6 @@ fn every_shipped_preset_module_decides_on_bytecode() {
     common::scratch_state_root();
     let root = common::scratch("policy-execution-presets");
     let mut found = Vec::new();
-    let mut seen = Vec::new();
     let mut modules = 0;
     for preset in batten::preset_catalog::MANIFESTS {
         for (scope, provider) in selections(preset) {
@@ -356,7 +319,6 @@ fn every_shipped_preset_module_decides_on_bytecode() {
                 continue;
             };
             modules += bundles.iter().map(|b| b.modules().len()).sum::<usize>();
-            seen.extend(bundles.iter().map(|bundle| bundle.id().to_owned()));
             found.extend(interpreted(&id, &bundles));
         }
     }
@@ -366,7 +328,7 @@ fn every_shipped_preset_module_decides_on_bytecode() {
         modules >= 50,
         "the shipped presets' modules reach the load: {modules}"
     );
-    hold(&found, &seen);
+    hold(&found);
 }
 
 /// A tree-scope module, in a repository the binary runs in. It decides nothing

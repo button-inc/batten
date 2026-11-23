@@ -128,9 +128,11 @@ closes_lines := [raw |
 	columns[1] != "-"
 ]
 
-column(columns, at) := value if {
-	value := columns[at]
-} else := "-"
+# TWO DEFINITIONS, NO `else` (#1276): `filed-here.rego`'s reason, spelled the
+# same in both.
+column(columns, at) := columns[at]
+
+column(columns, at) := "-" if not columns[at]
 
 # Every `<file>:<slug>` this branch's rows declared.
 #
