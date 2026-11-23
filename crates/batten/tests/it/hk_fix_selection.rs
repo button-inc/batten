@@ -388,7 +388,6 @@ const PKL_ROUTE: &str = "  [\"deno-fmt\"] = gate[\"deno-fmt\"]\n";
 /// Evaluate the committed predicate beside `config`: whether it passed, and
 /// everything it printed.
 fn fix_selection(name: &str, config: &str) -> (bool, String) {
-    let pkl = common::require_tool("pkl");
     let root = common::scratch(&format!("hk-fix-selection-pkl-{name}"));
     common::write(&root, "hk.pkl", config);
     fs::copy(
@@ -396,13 +395,7 @@ fn fix_selection(name: &str, config: &str) -> (bool, String) {
         root.join("hk-fix-selection.pkl"),
     )
     .expect("install the committed predicate");
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays — CLOUD-1991: the predicate is evaluated by `pkl`, which the engine does not host; this is the task's own spawn"
-    )]
-    let output = std::process::Command::new(pkl)
-        .arg("eval")
-        .args(common::pkl_ca_args())
+    let output = common::pkl_command()
         .arg(root.join("hk-fix-selection.pkl"))
         .current_dir(&root)
         .streamed_output()
