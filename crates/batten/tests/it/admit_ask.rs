@@ -132,3 +132,39 @@ fn an_admit_ask_naming_no_ledger_pair_is_refused() {
         "the ledger's own pair is asked: {paired}"
     );
 }
+
+/// Fails by: a question whose only alternative to the recommended option is a
+/// non-action reaching the owner (the owner's ruling of 2026-11-23: "why the
+/// fuck are you stopping to ask questions where there's only one useful
+/// answer"), or a question between two real choices refused.
+#[test]
+fn a_question_with_one_useful_answer_is_refused() {
+    let dir = fixture("admit-ask-single");
+    let settled = ask(
+        &dir,
+        "Rewrite the PR range unsigned?",
+        &["Yes, rewrite unsigned (Recommended)", "No"],
+    );
+    assert!(
+        settled.contains("\"deny\"") && settled.contains(VERDICT),
+        "a recommendation against staying blocked is refused: {settled}"
+    );
+    let reapproval = ask(
+        &dir,
+        "Send the batch?",
+        &["Approve dispatch (Recommended)", "Revise first"],
+    );
+    assert!(
+        reapproval.contains("\"deny\"") && reapproval.contains(VERDICT),
+        "an approval against revising is refused: {reapproval}"
+    );
+    let choice = ask(
+        &dir,
+        "Where should the shards run?",
+        &["Dispatched sessions (Recommended)", "CI matrix legs"],
+    );
+    assert!(
+        !choice.contains(VERDICT),
+        "two real choices are asked: {choice}"
+    );
+}
