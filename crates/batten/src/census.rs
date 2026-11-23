@@ -729,8 +729,18 @@ fn walk_spawns(
 ) {
     use ra_ap_syntax::AstNode as _;
     use ra_ap_syntax::ast;
-    for node in root.descendants() {
-        if test_code(&node) {
+    // PRUNED TOP-DOWN: a test item's whole subtree is skipped on entry, which
+    // is exactly "some ancestor-or-self is test code" with each node judged
+    // once. Asking that of every node by walking its ancestors (and
+    // `cfg_test` walking theirs again) was depth-squared per node, and 58% of
+    // `state record`'s samples.
+    let mut walk = root.preorder();
+    while let Some(event) = walk.next() {
+        let ra_ap_syntax::WalkEvent::Enter(node) = event else {
+            continue;
+        };
+        if test_item(&node) {
+            walk.skip_subtree();
             continue;
         }
         let mut record = |at: ra_ap_syntax::TextSize, argv: &[String]| {
@@ -840,20 +850,19 @@ fn walk_macro(
     }
 }
 
-/// Whether `node` sits in test code: an ancestor item carrying `#[test]` or
-/// exactly `#[cfg(test)]`. Test code is CLOUD-2336's, not this arm's.
-fn test_code(node: &ra_ap_syntax::SyntaxNode) -> bool {
+/// Whether `node` ITSELF opens test code: an item carrying exactly
+/// `#[cfg(test)]`, or a function carrying `#[test]`. Test code is CLOUD-2336's,
+/// not this arm's; [`walk_spawns`] skips the subtree this answers true for.
+fn test_item(node: &ra_ap_syntax::SyntaxNode) -> bool {
     use ra_ap_syntax::AstNode as _;
     use ra_ap_syntax::ast::HasAttrs as _;
-    node.ancestors().any(|ancestor| {
-        crate::module_graph::cfg_test(&ancestor)
-            || ra_ap_syntax::ast::Fn::cast(ancestor).is_some_and(|function| {
-                function.attrs().any(|attr| {
-                    attr.path()
-                        .is_some_and(|path| path.syntax().text() == "test")
-                })
+    crate::module_graph::carries_cfg_test(node)
+        || ra_ap_syntax::ast::Fn::cast(node.clone()).is_some_and(|function| {
+            function.attrs().any(|attr| {
+                attr.path()
+                    .is_some_and(|path| path.syntax().text() == "test")
             })
-    })
+        })
 }
 
 /// The function, `const` or `static` holding `node`, by name.
