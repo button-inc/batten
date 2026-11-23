@@ -18062,8 +18062,16 @@ fn narrow_to_change(root: &Path, names: Vec<String>, err: &mut dyn Write) -> Res
         .collect();
     let code_changed: std::collections::BTreeSet<String> =
         delta.code_changed.iter().cloned().collect();
+    // A GATE THE CHANGE ENROLLED IS ONE IT MOVED (#1276), though nothing of its
+    // own changed: kept in the set's own order.
+    let touched = mutate::touched(root, &names, &changed, &code_changed);
+    let enrolled = mutate::enrolled_since(root, &base, &names, &changed);
+    let names = names
+        .into_iter()
+        .filter(|name| touched.contains(name) || enrolled.contains(name))
+        .collect();
     Ok(Narrowed {
-        names: mutate::touched(root, &names, &changed, &code_changed),
+        names,
         change: Some((base, changed)),
     })
 }
