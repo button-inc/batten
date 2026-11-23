@@ -971,7 +971,13 @@ declared_modules := {
 #   surface (data) -> cli (typed values) -> lib (dispatch)
 #   config (load) -> resolve (precedence) -> trust (judging) -> lint -> epoch
 #   store (which store) / findings (what is in it) / journal (how it is written)
-forbidden[from] contains to if {
+#
+# AN OBJECT OF SETS, WRITTEN AS ONE (#1276): `forbidden[from] contains to` is the
+# same value, but regorus 0.15's bytecode answers that keyed partial set as the
+# flat set of every target, so the bundle decided on the interpreter. Every
+# target set here is non-empty, so the two spellings agree on every lookup and on
+# `count(forbidden)`.
+forbidden := {from: targets |
 	some from, targets in {
 		"rules": {"hook"},
 		# CLOUD-1121/CLOUD-745: `hook` adjudicates a mediated call under
@@ -1296,7 +1302,6 @@ forbidden[from] contains to if {
 		# decides over a tree or a mediated call.
 		"replay": {"rules", "hook"},
 	}
-	some to in targets
 }
 
 # The module a judged path denotes. Stem of the file name, which is Rust's own

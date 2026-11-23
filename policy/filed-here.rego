@@ -96,9 +96,13 @@ lines := input.tree.records["board-writes"]
 # THE TAIL COLUMNS ARE OPTIONAL BY CONSTRUCTION. A record written by an older
 # recorder is shorter, so a column past its end reads `-` and passes — a branch is
 # never refused for a question its recorder could not ask.
-column(columns, at) := value if {
-	value := columns[at]
-} else := "-"
+#
+# TWO DEFINITIONS, NO `else` (#1276): regorus 0.15's bytecode drops an `else`
+# after a body indexing by a variable. A column is a string, never `false`, so
+# `not` reads only that the index is out of range.
+column(columns, at) := columns[at]
+
+column(columns, at) := "-" if not columns[at]
 
 # Every `issue` line, keyed by its position so a later reading can supersede an
 # earlier one.
