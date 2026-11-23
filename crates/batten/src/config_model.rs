@@ -4484,6 +4484,23 @@ pub struct Rule {
     /// running beside the copy that was meant to replace it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub except: Vec<String>,
+    /// The tool environments the enabled preset installs at startup, by name
+    /// (CLOUD-2633). Only a preset declaring an install takes it.
+    ///
+    /// **A consumer fact, passed rather than discovered**: an agent environment
+    /// is not a CI one is not a dev one, so the install loads the base
+    /// configuration plus exactly these, never every environment file present.
+    /// A `[[startup]]` row naming the same `preset` places the install in the
+    /// startup sequence. `Some(empty)` is refused at load rather than read as
+    /// "base only", and so is a name the repository configures nothing for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environments: Option<Vec<String>>,
+    /// `NAME=VALUE` assignments the derived install runs under (CLOUD-2633) —
+    /// how this repository's tool must install, such as from its lockfile.
+    /// Requires `environments`; it may not set the preset's own selector, which
+    /// `environments` owns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub install_env: Vec<String>,
     /// Which compiled gate a [`RuleKind::Native`] row enables (CLOUD-2291).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<NativeGate>,
@@ -6893,7 +6910,20 @@ pub struct Startup {
     /// string for `[[hook.action]]`'s reason — there is then no quoting layer
     /// between what an operator wrote and what runs: no word splitting, no glob
     /// expansion, no `$(…)`.
+    ///
+    /// Omitted exactly when [`Startup::preset`] is set, which derives it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub check: Vec<String>,
+    /// The enabled preset whose install this row runs (CLOUD-2633), in place
+    /// of a hand-written `check` and `repair`.
+    ///
+    /// The row's position is the consumer's — it runs once the rows above it
+    /// have bootstrapped the tool — and its argv is derived from the preset's
+    /// declared install and the enabling `[[rule]]`'s `environments` and
+    /// `install_env`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "preset_name_schema")]
+    pub preset: Option<String>,
     /// How the check's run becomes a verdict.
     ///
     /// Absent is [`Decided::ExitStatus`], which is the ordinary case and the one

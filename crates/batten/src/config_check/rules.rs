@@ -1821,6 +1821,15 @@ impl RuleExt for Rule {
                 self.id
             )));
         }
+        // `environments` and `install_env` parameterise a preset's install
+        // (CLOUD-2633) and qualify `preset` the same way.
+        if (self.environments.is_some() || !self.install_env.is_empty()) && self.preset.is_none() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `environments` and `install_env` parameterise a preset's install, \
+                 and this row names no preset; nothing reads the columns",
+                self.id
+            )));
+        }
         if self.kind != RuleKind::Policy {
             return Ok(());
         }
@@ -2764,6 +2773,20 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         declares: Declares::NotFactBearing(
             "qualifies `preset`, naming modules it does not compile; the facts stay the \
              remaining modules' own declarations (CLOUD-2290)",
+        ),
+    },
+    ColumnCensus {
+        field: "environments",
+        declares: Declares::NotFactBearing(
+            "qualifies `preset`, naming which tool environments its startup install loads; \
+             read by `[[startup]]`, never by a rule's evaluation (CLOUD-2633)",
+        ),
+    },
+    ColumnCensus {
+        field: "install_env",
+        declares: Declares::NotFactBearing(
+            "qualifies `environments`, the assignments its startup install runs under \
+             (CLOUD-2633)",
         ),
     },
     ColumnCensus {

@@ -1856,6 +1856,12 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
         Native::StartupTableRefused,
         crate::config_check::startup::validate(&config.startup),
     )?;
+    // A preset install parameterised and never placed, placed and never
+    // parameterised, or given a list it cannot install (CLOUD-2633).
+    under(
+        Native::StartupTableRefused,
+        crate::config_check::startup::validate_installs(&config.rules, &config.startup),
+    )?;
     // LAST, after every table validator, so a multi-fault config still reports
     // its table's class first. Working tree only: a config read from a git ref is
     // COMPARED, and a consumer shrinking an over-cap row compares against a base
@@ -3829,6 +3835,8 @@ fn default_rules() -> Vec<Rule> {
         // over conflict markers and reads no CI language at all (CLOUD-1625).
         provider: None,
         except: Vec::new(),
+        environments: None,
+        install_env: Vec::new(),
         gate: None,
         documents: Vec::new(),
         // Unconditional (CLOUD-125): the zero-config layer has no repository
