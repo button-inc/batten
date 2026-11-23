@@ -59,6 +59,8 @@ struct Reach {
     children: Vec<String>,
     root: std::ops::Range<usize>,
     offset: usize,
+    /// Where the one child of a plain path ends; `None` for a use group.
+    child_end: Option<usize>,
 }
 
 /// The names one cut is spelled in, shared by its phases.
@@ -333,6 +335,64 @@ pub fn respell_body(
     Some(wrapped.split_off(OPEN.len()))
 }
 
+/// Where a crate-root alias points (CLOUD-2800 step 0): a module of another
+/// crate under the same name (`pub use batten_x::m;`), or that crate itself
+/// (`pub use batten_x as m;`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Alias<'a> {
+    /// `pub use <crate>::m;`: `root::m…` becomes `<crate>::m…`.
+    Module(&'a str),
+    /// `pub use <crate> as m;`: `root::m…` becomes `<crate>…`.
+    Crate(&'a str),
+}
+
+/// Every `root::m…` in `text` whose `m` is a key of `aliases`, respelled at
+/// the alias's target so the path no longer goes through the crate root:
+/// what a cut needs first, since it refuses a moved file reaching any
+/// `crate::m` it does not move, an alias included. Macro token trees are
+/// respelled; comments and strings never are.
+///
+/// Returns the text and the offset of each reach left as written: a use
+/// group naming an alias beside anything else, or through a crate alias.
+/// `None` when the parser reports any error.
+#[must_use]
+pub fn respell_aliases(
+    text: &str,
+    root: &str,
+    aliases: &BTreeMap<&str, Alias<'_>>,
+) -> Option<(String, Vec<usize>)> {
+    let tree = parsed(text)?;
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    let mut left = Vec::new();
+    for reach in reaches(&tree, root) {
+        let targets: BTreeSet<Option<Alias<'_>>> = reach
+            .children
+            .iter()
+            .map(|child| aliases.get(child.as_str()).copied())
+            .collect();
+        if targets.iter().all(Option::is_none) {
+            continue;
+        }
+        match (
+            targets.len(),
+            targets.first().copied().flatten(),
+            reach.child_end,
+        ) {
+            (1, Some(Alias::Module(krate)), _) => edits.push((reach.root, krate.to_owned())),
+            (1, Some(Alias::Crate(krate)), Some(end)) => {
+                edits.push((reach.root.start..end, krate.to_owned()));
+            }
+            _ => left.push(reach.offset),
+        }
+    }
+    let mut edited = text.to_owned();
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    for (range, to) in edits {
+        edited.replace_range(range, &to);
+    }
+    Some((edited, left))
+}
+
 /// Each package naming the new crate gains its dependency; the new crate gets
 /// its manifest.
 fn wire_manifests(
@@ -410,7 +470,8 @@ fn reaches(tree: &ast::SourceFile, root: &str) -> Vec<Reach> {
         };
         let range = head.text_range();
         let root_range = usize::from(range.start())..usize::from(range.end());
-        let children: Vec<String> = if next.kind() == SyntaxKind::L_CURLY {
+        let group = next.kind() == SyntaxKind::L_CURLY;
+        let children: Vec<String> = if group {
             group_children(head, root).into_iter().collect()
         } else {
             vec![next.text().to_owned()]
@@ -419,6 +480,7 @@ fn reaches(tree: &ast::SourceFile, root: &str) -> Vec<Reach> {
             children,
             offset: root_range.start,
             root: root_range,
+            child_end: (!group).then(|| usize::from(next.text_range().end())),
         });
     }
     found

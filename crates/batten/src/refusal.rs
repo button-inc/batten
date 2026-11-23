@@ -41,8 +41,6 @@
 
 use std::path::Path;
 
-#[cfg(test)]
-use crate::config_check::refusal::validate;
 use crate::config_model::Ceiling;
 use serde::{Serialize, Serializer};
 
@@ -72,7 +70,7 @@ impl std::error::Error for Denial {}
 impl Denial {
     /// Build a [`Denial`] as an [`anyhow::Error`], ready to `return Err(..)`.
     ///
-    /// Named `raise` for symmetry with [`crate::UsageError::raise`]: it returns an
+    /// Named `raise` for symmetry with [`batten_facts::error::UsageError::raise`]: it returns an
     /// [`anyhow::Error`] wrapping the `Denial`, not `Self`.
     #[must_use]
     pub fn raise(refusal: &Refusal, arm: Arm) -> anyhow::Error {
@@ -225,7 +223,7 @@ pub struct Refusal {
     /// (CLOUD-2143). Skipped for [`Refusal::gloss`]'s reason: the `-J` payload
     /// is unchanged. Empty for a refusal with no class.
     #[serde(skip)]
-    doc: crate::doc::Doc,
+    doc: batten_base::doc::Doc,
     /// The declared class this refusal belongs to, when it has one (CLOUD-1050).
     ///
     /// `Some` for every one of Batten's OWN refusal sites, which name a
@@ -398,7 +396,7 @@ pub fn first_sighting(root: &Path, context: &str, key: &str, full: &str) -> bool
     // One file per key, CREATED EXCLUSIVELY (CLOUD-2145): the existence test and
     // the mark are one operation, so of a parallel batch of identical firings
     // exactly one reads "first". A check-then-write let every one of them.
-    let path = dir.join(crate::digest::sha256_hex(key.as_bytes()));
+    let path = dir.join(batten_facts::digest::sha256_hex(key.as_bytes()));
     let _ = std::fs::create_dir_all(&dir);
     // An error other than "already there" answers TRUE: an unwritable store
     // means the next firing explains itself again, which is the safe direction.
@@ -406,7 +404,7 @@ pub fn first_sighting(root: &Path, context: &str, key: &str, full: &str) -> bool
     // UNSYNCED (CLOUD-2315): this runs on every refused call, and a marker lost
     // to a power failure costs one repeated explanation — the same answer as an
     // unwritable store. Measured, its `fsync` was 40 ms of one deny.
-    crate::durable::create_exclusive_as(&path, full, crate::durable::Persist::Atomic)
+    batten_facts::durable::create_exclusive_as(&path, full, batten_facts::durable::Persist::Atomic)
         .unwrap_or(true)
 }
 
@@ -437,8 +435,8 @@ pub fn with_legend(root: &Path, context: &str, text: &str) -> String {
 
 /// The directory one context's sightings live in.
 fn context_dir(root: &Path, context: &str) -> Option<std::path::PathBuf> {
-    let store = crate::git::git_dir(root).ok()?.join(STORE);
-    Some(store.join(crate::digest::sha256_hex(context.as_bytes())))
+    let store = batten_core::git::git_dir(root).ok()?.join(STORE);
+    Some(store.join(batten_facts::digest::sha256_hex(context.as_bytes())))
 }
 
 /// Which arm this firing of `refusal` gets in `context`, marking it seen.
@@ -463,7 +461,10 @@ pub fn peek(root: &Path, context: &str, refusal: &Refusal) -> Arm {
         return Arm::Full;
     };
     let key = refusal.sighting_key();
-    if dir.join(crate::digest::sha256_hex(key.as_bytes())).exists() {
+    if dir
+        .join(batten_facts::digest::sha256_hex(key.as_bytes()))
+        .exists()
+    {
         Arm::Pointer
     } else {
         Arm::Full
@@ -482,7 +483,7 @@ pub fn forget_sightings(root: &Path, context: &str) {
 /// an edit to a gloss, route, precondition or reason mid-cycle is a new item
 /// that renders in full again (CLOUD-1582, absorbed).
 fn key_of(rule: &str, class: Option<&str>, definition: &str) -> String {
-    let digest = crate::digest::sha256_hex(definition.as_bytes());
+    let digest = batten_facts::digest::sha256_hex(definition.as_bytes());
     format!("{rule}\u{1f}{}\u{1f}{digest}", class.unwrap_or_default())
 }
 
@@ -686,12 +687,12 @@ pub enum Arm {
     Pointer,
 }
 
-use crate::grammar::PROVENANCE;
-use crate::grammar::Severity;
-use crate::grammar::head;
+use batten_core::grammar::PROVENANCE;
+use batten_core::grammar::Severity;
+use batten_core::grammar::head;
 #[cfg(test)]
-use crate::grammar::is_headed;
-use crate::grammar::{RULE_HOP_PLACEHOLDER, plain};
+use batten_core::grammar::is_headed;
+use batten_core::grammar::{RULE_HOP_PLACEHOLDER, plain};
 
 /// The two names a finding line labels, so a reader can always tell a rule
 /// from a verdict (CLOUD-2075).
@@ -806,7 +807,7 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
         Some(remedy) => vec![remedy],
         None => refusal.doc.act.iter().map(String::as_str).collect(),
     };
-    let sections = crate::doc::render(&refusal.doc, &act);
+    let sections = batten_base::doc::render(&refusal.doc, &act);
     if !sections.is_empty() {
         line.push(' ');
         line.push_str(&plain(&sections));
@@ -890,14 +891,14 @@ fn route_text(refusal: &Refusal, route: &crate::config_model::Route) -> Option<S
 /// that follow it: `None` for a [`crate::error::Passthrough`] (no output of
 /// Batten's own) or a [`crate::refusal::Denial`] (already a rendered finding).
 ///
-/// A [`crate::UsageError`] is its declared class, or `input parse refused`; any
+/// A [`batten_facts::error::UsageError`] is its declared class, or `input parse refused`; any
 /// other error is `verb run broken` with its chain as subjects, outermost first.
 /// A finding is ONE line, so each message's first line is the subject and the
 /// rest — a TOML parse caret, a multi-line detail — is returned to print after it.
 #[must_use]
 pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
     if failure
-        .downcast_ref::<crate::error::Passthrough>()
+        .downcast_ref::<batten_facts::error::Passthrough>()
         .is_some()
         || failure.downcast_ref::<crate::refusal::Denial>().is_some()
     {
@@ -908,8 +909,8 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
         let head = lines.next().unwrap_or_default().trim().to_owned();
         (head, lines.collect::<Vec<_>>().join("\n"))
     };
-    if let Some(usage) = failure.downcast_ref::<crate::UsageError>() {
-        use crate::error::Native;
+    if let Some(usage) = failure.downcast_ref::<batten_facts::error::UsageError>() {
+        use batten_facts::error::Native;
         let class = usage.verdict.unwrap_or(Native::UsageRefused);
         let (head, rest) = split(&usage.message);
         // ALREADY A FINDING: a raiser that rendered its own refusal (`check`'s
@@ -930,7 +931,7 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
             rest.push(tail);
         }
     }
-    let refusal = Refusal::engine(crate::error::Native::RunBroken, &subjects, Fix::None);
+    let refusal = Refusal::engine(batten_facts::error::Native::RunBroken, &subjects, Fix::None);
     Some((refusal, rest.join("\n")))
 }
 
@@ -991,7 +992,7 @@ impl Refusal {
             // Likewise: no class, so no gloss. The undeclared arm's payload is
             // the consumer's own `reason`, which the full arm carries.
             gloss: String::new(),
-            doc: crate::doc::Doc::default(),
+            doc: batten_base::doc::Doc::default(),
             verdict: None,
             reason: reason.into(),
             fix,
@@ -1144,11 +1145,11 @@ impl Refusal {
     #[must_use]
     pub fn declared(
         rule: impl Into<String>,
-        native: crate::error::Native,
+        native: batten_facts::error::Native,
         subjects: &[crate::verdict::Subject],
         fix: Fix,
     ) -> Refusal {
-        let registry = crate::config_check::verdict::vendored();
+        let registry = crate::verdict::registry::vendored();
         Refusal::from_class(rule, &registry, native.id(), subjects, fix)
     }
 
@@ -1162,7 +1163,7 @@ impl Refusal {
     /// `hook.handler.<id>`, a capture reason.
     #[must_use]
     pub fn engine(
-        native: crate::error::Native,
+        native: batten_facts::error::Native,
         subjects: &[crate::verdict::Subject],
         fix: Fix,
     ) -> Refusal {
@@ -1384,11 +1385,11 @@ mod tests {
     #[test]
     fn an_engine_finding_carries_no_rule_label() {
         let refusal = Refusal::engine(
-            crate::error::Native::RunBroken,
+            batten_facts::error::Native::RunBroken,
             &[crate::verdict::artifact("disk full")],
             Fix::None,
         );
-        let class = crate::error::Native::RunBroken.id();
+        let class = batten_facts::error::Native::RunBroken.id();
         for arm in [Arm::Pointer, Arm::Full] {
             let line = refusal.render_finding(arm);
             assert!(
@@ -1411,7 +1412,7 @@ mod tests {
     fn absorbing_joins_a_new_subject_and_its_bindings_once() {
         let refusal = |subject: &str| {
             Refusal::engine(
-                crate::error::Native::RunBroken,
+                batten_facts::error::Native::RunBroken,
                 &[crate::verdict::artifact(subject)],
                 Fix::None,
             )
@@ -1466,7 +1467,7 @@ mod tests {
         let (refusal, rest) = of_failure(&failure).expect("an internal failure renders");
         assert_eq!(
             refusal.verdict(),
-            Some(crate::error::Native::RunBroken.id())
+            Some(batten_facts::error::Native::RunBroken.id())
         );
         let line = refusal.render_finding(Arm::Pointer);
         let outer = line.find("write the store").expect("outer cause named");
@@ -1501,14 +1502,14 @@ mod tests {
     fn a_rendered_usage_refusal_is_not_wrapped_in_a_second_finding() {
         let inner = Refusal::declared(
             "banned",
-            crate::error::Native::SpawningRuleOnReadVerb,
+            batten_facts::error::Native::SpawningRuleOnReadVerb,
             &[crate::verdict::artifact("command")],
             Fix::None,
         )
         .render_finding(Arm::Full);
-        let failure = crate::UsageError::raise(inner);
+        let failure = batten_facts::error::UsageError::raise(inner);
         assert!(of_failure(&failure).is_none(), "printed as raised");
-        let plain = crate::UsageError::raise("unexpected argument");
+        let plain = batten_facts::error::UsageError::raise("unexpected argument");
         assert!(
             of_failure(&plain).is_some(),
             "a prose refusal is still classed"
@@ -1548,7 +1549,7 @@ mod tests {
         // construct a refusal with no way out even by omission.
         let refusal = Refusal::declared(
             "provision",
-            crate::error::Native::ScannerUnprovisioned,
+            batten_facts::error::Native::ScannerUnprovisioned,
             &[crate::verdict::Subject::Artifact {
                 artifact: "gitleaks".to_owned(),
             }],
@@ -1585,7 +1586,7 @@ mod tests {
         // silently flattened three tiers into one.
         let refusal = Refusal::declared(
             "protected-mutation",
-            crate::error::Native::ProtectedMutation,
+            batten_facts::error::Native::ProtectedMutation,
             &[],
             Fix::Run("use `serena rename_memory`".to_owned()),
         );
@@ -1647,7 +1648,7 @@ mod tests {
     fn the_pointer_arm_is_a_byte_prefix_of_the_full_arm() {
         let refusal = Refusal::declared(
             "protected-mutation",
-            crate::error::Native::ProtectedMutation,
+            batten_facts::error::Native::ProtectedMutation,
             &[crate::verdict::Subject::Path {
                 path: "docs/a.md".to_owned(),
             }],
@@ -1723,18 +1724,6 @@ mod tests {
         assert!(!ceiling(tokens, None).over_first_sighting(&line.repeat(50)));
     }
 
-    /// Fails by: a ceiling nothing can satisfy admitted at load, or one that can
-    /// refused.
-    #[test]
-    fn a_ceiling_nothing_can_satisfy_is_refused() {
-        assert!(validate(None).is_ok());
-        assert!(validate(Some(&ceiling(1, None))).is_ok());
-        assert!(validate(Some(&ceiling(5, Some(6)))).is_ok());
-        assert!(validate(Some(&ceiling(0, None))).is_err());
-        assert!(validate(Some(&ceiling(5, Some(0)))).is_err());
-        assert!(validate(Some(&ceiling(5, Some(5)))).is_err());
-    }
-
     /// Fails by: an escaped quote or a literal backslash read wrong, or an
     /// unterminated name read as one.
     #[test]
@@ -1798,7 +1787,7 @@ mod tests {
     /// second finding.
     #[test]
     fn a_passthrough_or_a_denial_is_no_failure_to_render() {
-        assert!(of_failure(&crate::error::Passthrough::raise(3)).is_none());
+        assert!(of_failure(&batten_facts::error::Passthrough::raise(3)).is_none());
         let refusal = Refusal::new("g", "r", Fix::None);
         assert!(of_failure(&crate::refusal::Denial::raise(&refusal, Arm::Full)).is_none());
     }
@@ -1809,7 +1798,7 @@ mod tests {
     fn only_a_classed_refusal_differing_in_subjects_absorbs() {
         let refusal = |subject: &str| {
             Refusal::engine(
-                crate::error::Native::RunBroken,
+                batten_facts::error::Native::RunBroken,
                 &[crate::verdict::artifact(subject)],
                 Fix::None,
             )
@@ -1869,12 +1858,12 @@ mod tests {
                 .iter()
                 .any(|route| route.contains("mise run x"))
         );
-        let native = Refusal::engine(crate::error::Native::RunBroken, &[], Fix::None);
+        let native = Refusal::engine(batten_facts::error::Native::RunBroken, &[], Fix::None);
         assert_eq!(
             native.gloss(),
             crate::verdict::gloss_of(
-                &crate::config_check::verdict::vendored(),
-                crate::error::Native::RunBroken.id()
+                &crate::verdict::registry::vendored(),
+                batten_facts::error::Native::RunBroken.id()
             )
             .unwrap_or_default()
         );
@@ -1904,14 +1893,14 @@ mod tests {
             });
             refusal
         };
-        let class = crate::error::Native::RunBroken.id();
+        let class = batten_facts::error::Native::RunBroken.id();
         let mediated = with_override(Refusal::engine(
-            crate::error::Native::RunBroken,
+            batten_facts::error::Native::RunBroken,
             &subjects,
             Fix::None,
         ));
         let gathered = with_override(
-            Refusal::engine(crate::error::Native::RunBroken, &subjects, Fix::None)
+            Refusal::engine(batten_facts::error::Native::RunBroken, &subjects, Fix::None)
                 .over_findings(&paths),
         );
         // The override route is the one pushed last; the class's own come first.
@@ -1946,7 +1935,7 @@ mod sightings {
         // `$GIT_DIR`: without one every case below measures the unreadable-store
         // arm instead of the once-per-session one under test. In-process through
         // `gix` — the fixture needs a `.git`, not the git binary (CLOUD-1924).
-        crate::gitwrite::init_on_main(&dir).expect("git init");
+        batten_core::gitwrite::init_on_main(&dir).expect("git init");
         dir
     }
 

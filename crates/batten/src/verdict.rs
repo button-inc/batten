@@ -44,18 +44,20 @@
 //! convention for a single row type while deciding nothing differently. The
 //! registry's semantics are exactly the ones the row specifies.
 
+pub mod registry;
+
 use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use crate::config_check::verdict::vendored;
 #[cfg(test)]
 use crate::config_model::VocabularyWord;
 use crate::config_model::{DeclaredVerdict, Route, Vocabulary};
-use crate::error::UsageError;
 #[cfg(test)]
 use crate::preset_catalog::Applicability;
 use crate::preset_catalog::RouteKind;
+use crate::verdict::registry::vendored;
+use batten_facts::error::UsageError;
 
 // THE `V-` AND `R-` PREFIXES ARE GONE (CLOUD-1284).
 //
@@ -132,7 +134,7 @@ impl DeclaredVerdictExt for DeclaredVerdict {
     fn first_sighting(&self) -> String {
         let act: Vec<&str> = self.doc.act.iter().map(String::as_str).collect();
         let mut body = self.gloss.trim().to_owned();
-        let sections = crate::doc::render(&self.doc, &act);
+        let sections = batten_base::doc::render(&self.doc, &act);
         if !sections.is_empty() {
             body.push_str(". ");
             body.push_str(&sections);
@@ -820,7 +822,7 @@ fn validate_one(
     // loads, and this repository's own registry is held to carrying one by
     // `every_vendored_and_declared_doc_is_within_160_o200k_tokens`.
     if !verdict.retired()
-        && let Some(why) = crate::doc::violation(&verdict.doc, &verdict.first_sighting())
+        && let Some(why) = batten_base::doc::violation(&verdict.doc, &verdict.first_sighting())
     {
         return Err(UsageError::raise(format!("verdict `{id}`'s doc {why}")));
     }
@@ -977,7 +979,7 @@ pub fn live_tokens(verdicts: &[DeclaredVerdict]) -> BTreeSet<&str> {
 // `Native` lives in `crate::error` (CLOUD-2789), which a `UsageError` names
 // it from, so the module every other one reports through reaches no higher.
 // Its path here is unchanged.
-use crate::error::Native;
+use batten_facts::error::Native;
 
 /// Every token the crate's own refusal sites may raise.
 ///
@@ -1182,7 +1184,7 @@ mod tests {
         DeclaredVerdict {
             id: id.to_owned(),
             gloss: "a short line".to_owned(),
-            doc: crate::doc::Doc::default(),
+            doc: batten_base::doc::Doc::default(),
             class: "the long definition".to_owned(),
             routes: vec![route("do the thing")],
             successor: None,
@@ -1696,13 +1698,6 @@ mod tests {
                 native.id()
             );
         }
-        // Held to the same prose census as a consumer's rows (CLOUD-1642),
-        // whatever the vendored count is when a class lands.
-        assert_eq!(
-            crate::config::text_offenders("verdict", &table),
-            Vec::<String>::new(),
-            "a vendored class is longer than its column's cap"
-        );
     }
 
     #[test]

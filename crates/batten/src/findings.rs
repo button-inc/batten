@@ -81,8 +81,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::identity::{CountChange, FindingKind, Fingerprint, StoredIdentity, compare_to_anchor};
-use crate::severity::{AdvisoryTier, RuleSeverity, row_for_rule};
+use batten_core::severity::{AdvisoryTier, RuleSeverity, row_for_rule};
+use batten_facts::identity::{
+    CountChange, FindingKind, Fingerprint, StoredIdentity, compare_to_anchor,
+};
 
 /// A single policy finding: the rule that fired and where, as a pointer only.
 ///
@@ -146,7 +148,7 @@ pub struct Finding {
     /// *function* but never the extractor — there was none. This is the
     /// extractor, and deleting that test-side join is how the pack now proves it
     /// picks the right span.
-    pub identity: crate::identity::StoredIdentity,
+    pub identity: batten_facts::identity::StoredIdentity,
     /// The predicate that settles this finding, captured from the producing rule
     /// (CLOUD-81). Carried on the finding rather than looked up later, so the
     /// store never has to reach back into a config it cannot see.
@@ -211,7 +213,7 @@ pub struct Finding {
 /// (`mise run verify`) does not; a consumer wanting structure reads `-J`.
 impl crate::output::Line for Finding {
     fn line(&self) -> String {
-        let head = crate::grammar::head(self.severity.finding_severity(), &self.rule);
+        let head = batten_core::grammar::head(self.severity.finding_severity(), &self.rule);
         let mut at = match self.line {
             Some(line) => format!("{head} at {}:{line}", self.path),
             None => format!("{head} at {}", self.path),
@@ -714,7 +716,7 @@ fn record_path(store_dir: &Path, fingerprint: Fingerprint) -> PathBuf {
 /// from the *future* is still absent — that half stays fail-closed, because a
 /// field this binary cannot see is a field it would silently drop on write.
 fn read_record(path: &Path) -> Option<FindingRecord> {
-    let text = crate::fsio::read_to_string(path).ok()?;
+    let text = batten_fsio::read_to_string(path).ok()?;
     let record: FindingRecord = serde_json::from_str(&text).ok()?;
     (FINDINGS_SCHEMA_MIN..=FINDINGS_SCHEMA)
         .contains(&record.schema)
@@ -732,7 +734,7 @@ fn write_record(store_dir: &Path, record: &FindingRecord) -> Result<()> {
         record.identity.fingerprint.to_hex(),
         std::process::id()
     ));
-    crate::durable::replace(&temp, format!("{json}\n"))
+    batten_facts::durable::replace(&temp, format!("{json}\n"))
         .with_context(|| format!("write the finding {}", temp.display()))?;
     std::fs::rename(&temp, record_path(store_dir, record.identity.fingerprint))
         .with_context(|| format!("publish the finding in {}", dir.display()))?;
@@ -907,7 +909,7 @@ pub struct Recorded {
 ///
 /// # Errors
 ///
-/// Returns a [`crate::UsageError`] (→ exit `1`) for a finding carrying no check
+/// Returns a [`batten_facts::error::UsageError`] (→ exit `1`) for a finding carrying no check
 /// or no remediation — a config defect, so the config-error code, never the `2`
 /// that is the deny channel. Returns an error when a record cannot be read or
 /// written.
@@ -926,7 +928,7 @@ pub fn record(
     // and pointer-only (rule id + identity hash), never the finding's content.
     for finding in findings {
         if finding.remediation.is_none() {
-            return Err(crate::UsageError::raise(format!(
+            return Err(batten_facts::error::UsageError::raise(format!(
                 "finding {} from rule {}: no `fix` and no `no_fix_reason`; a finding a caller \
                  cannot act on is not storable",
                 finding.identity.fingerprint.to_hex(),
@@ -1349,7 +1351,7 @@ pub(crate) fn line_of(text: &str, offset: usize) -> usize {
 mod tests {
     use super::*;
     #[cfg(test)]
-    use crate::identity::{FindingKind, SpanNormalization, code_fingerprint};
+    use batten_facts::identity::{FindingKind, SpanNormalization, code_fingerprint};
 
     fn identity_for(rule: &str, path: &str, span: &str) -> StoredIdentity {
         StoredIdentity::new(
@@ -1408,7 +1410,7 @@ mod tests {
     /// observations. A `PartialEq` over a deserialized enum cannot see a write
     /// path that re-serialized the field differently.
     fn stored_tier_bytes(dir: &Path, fingerprint: Fingerprint) -> String {
-        let text = crate::fsio::read_to_string(record_path(dir, fingerprint)).unwrap();
+        let text = batten_fsio::read_to_string(record_path(dir, fingerprint)).unwrap();
         text.lines()
             .find(|line| line.trim_start().starts_with("\"tier\""))
             .expect("the record persists a tier")
@@ -1973,7 +1975,8 @@ mod tests {
         // (house style §7, non-negotiable rule 5). A malformed rule must not be
         // able to deny a call.
         assert!(
-            err.downcast_ref::<crate::error::UsageError>().is_some(),
+            err.downcast_ref::<batten_facts::error::UsageError>()
+                .is_some(),
             "a missing remediation is a config error (exit 1), not a policy verdict (exit 2): a \
              malformed rule must not be able to deny a call"
         );

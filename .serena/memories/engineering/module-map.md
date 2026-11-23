@@ -122,6 +122,7 @@ row here, so a new module lands with its line.
 - `token_enum.rs` (crate `batten-facts`) — `token_enum!`, one declaration per tokened enum: the variants, `ALL` and the token from one `Variant => "token"` list, with duplicate tokens refused at compile time (CLOUD-2442).
 - `verbs.rs` (crate `batten-base`) — the mutating-verb table (CLOUD-36): which programs change the world, config-driven (rule 1) and typed by `effect.rs`'s one §5 vocabulary.
 - `verdict.rs` — the refusal vocabulary (CLOUD-1050): the `[[verdict]]` table, its `Subject` pointers and its closed `Route` list.
+- `registry.rs` (under `verdict/`) — every class the binary ships (`vendored`): the native table and each vendored preset's rows (`verdict_rows`), moved down from `config_check` so the vocabulary no longer reaches the loader's validators (CLOUD-2800).
 - `waiver.rs` — the designed escape hatch (CLOUD-208): a `[[waiver]]` names a rule, a required reason and a required expiry, and `apply` filters findings in the one funnel both `check` and `enforce` pass through.
 - `wiring.rs` — the one WRITE path over a host's hook registrations (CLOUD-893), surfaced as `wiring reclaim`: `destructive`, `-y` required, never the committed file.
 - `worktree.rs` — at-risk work detection (CLOUD-51), surfaced as `worktree status`.

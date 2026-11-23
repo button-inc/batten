@@ -223,3 +223,34 @@ fn run() {
         "idempotent"
     );
 }
+
+/// Fails by: an alias read from a line that is not a root `pub use` of a
+/// `batten_*` crate, a file outside the cut set rewritten, `error` left
+/// through the root, or a second run rewriting anything (CLOUD-2800 step 0).
+#[test]
+fn the_alias_recipe_respells_only_the_cut_set_through_root_aliases() {
+    let recipe = batten_codemods::named_tree("respell-root-aliases").unwrap();
+    let lib = "pub mod findings;\npub mod hook;\npub use batten_base::exit;\npub use batten_fsio as fsio;\npub use serde::Serialize;\n";
+    let body =
+        "use crate::exit::ExitCode;\nfn f() { let _ = crate::fsio::read(crate::error::code()); }\n";
+    let files: std::collections::BTreeMap<String, String> = [
+        ("crates/batten/src/lib.rs", lib),
+        ("crates/batten/src/findings.rs", body),
+        ("crates/batten/src/hook.rs", body),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.to_owned(), text.to_owned()))
+    .collect();
+    let changed = (recipe.apply)(&files, &std::collections::BTreeMap::new());
+    assert_eq!(
+        changed.keys().collect::<Vec<_>>(),
+        vec!["crates/batten/src/findings.rs"]
+    );
+    assert_eq!(
+        changed["crates/batten/src/findings.rs"],
+        "use batten_base::exit::ExitCode;\nfn f() { let _ = batten_fsio::read(batten_facts::error::code()); }\n"
+    );
+    let mut again = files.clone();
+    again.extend(changed);
+    assert!((recipe.apply)(&again, &std::collections::BTreeMap::new()).is_empty());
+}

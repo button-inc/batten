@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use batten::crate_cut::{Cut, Plan, cut_crate, respell_body};
+use batten::crate_cut::{Alias, Cut, Plan, cut_crate, respell_aliases, respell_body};
 
 fn tree() -> (BTreeMap<String, String>, BTreeMap<String, String>) {
     let files = [
@@ -188,4 +188,45 @@ fn a_body_is_respelled_as_the_cut_respells_a_file() {
         respell_body("{ use crate::{git, other}; }", "crate", &modules, "two"),
         None
     );
+}
+
+/// Fails by: a path through a root alias left spelled through the root, a
+/// crate alias respelled as a module of itself, a comment, a string or an
+/// unaliased module rewritten, or a group mixing targets split rather than
+/// left as remainder (CLOUD-2800 step 0).
+#[test]
+fn a_path_through_a_root_alias_names_its_target() {
+    let aliases: BTreeMap<&str, Alias<'_>> = [
+        ("exit", Alias::Module("base")),
+        ("doc", Alias::Module("base")),
+        ("fsio", Alias::Crate("fsio_crate")),
+        ("error", Alias::Module("facts")),
+    ]
+    .into_iter()
+    .collect();
+    let text = "//! crate::exit::ExitCode in prose.\n\
+use crate::exit::ExitCode;\n\
+use crate::{doc, exit::Code};\n\
+use crate::{exit, findings::Finding};\n\
+fn f() -> u8 {\n\
+    let s = \"crate::exit::x\";\n\
+    assert!(crate::fsio::read(s).is_ok());\n\
+    crate::findings::one(crate::error::code())\n\
+}\n";
+    let (edited, left) = respell_aliases(text, "crate", &aliases).unwrap();
+    assert_eq!(
+        edited,
+        "//! crate::exit::ExitCode in prose.\n\
+use base::exit::ExitCode;\n\
+use base::{doc, exit::Code};\n\
+use crate::{exit, findings::Finding};\n\
+fn f() -> u8 {\n\
+    let s = \"crate::exit::x\";\n\
+    assert!(fsio_crate::read(s).is_ok());\n\
+    crate::findings::one(facts::error::code())\n\
+}\n"
+    );
+    assert_eq!(left, vec![text.find("crate::{exit, findings").unwrap()]);
+    let (again, _) = respell_aliases(&edited, "crate", &aliases).unwrap();
+    assert_eq!(again, edited, "a second run rewrites nothing");
 }

@@ -3039,7 +3039,7 @@ pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::config_model::DeclaredVerd
     // again is the collision `check` refuses (CLOUD-2089) — the binary's
     // definition is the one that renders, so the row would be dead. A fixture module raising a vendored class is a legitimate thing to
     // write, so the filter belongs here rather than in the fixtures.
-    let vendored: std::collections::BTreeSet<String> = batten::config_check::verdict::vendored()
+    let vendored: std::collections::BTreeSet<String> = batten::verdict::registry::vendored()
         .into_iter()
         .map(|entry| entry.id)
         .collect();

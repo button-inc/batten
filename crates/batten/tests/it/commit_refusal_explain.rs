@@ -60,7 +60,7 @@ fn refused(dir: &Path, verb: &str, body: &str) -> String {
 #[test]
 fn a_refused_commit_msg_line_names_a_class_policy_explain_resolves() {
     let dir = fixture("commit-refusal-explain");
-    let registry: Vec<String> = batten::config_check::verdict::vendored()
+    let registry: Vec<String> = batten::verdict::registry::vendored()
         .into_iter()
         .map(|row| row.id)
         .collect();

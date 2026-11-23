@@ -48,3 +48,29 @@ pub fn validate(ceiling: Option<&Ceiling>) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// A `[refusal]` ceiling of `max` tokens and an optional first-sighting one.
+    fn ceiling(max: usize, first: Option<usize>) -> Ceiling {
+        Ceiling {
+            max_tokens: max,
+            first_sighting_max_tokens: first,
+        }
+    }
+
+    /// Fails by: a ceiling nothing can satisfy admitted at load, or one that can
+    /// refused.
+    #[test]
+    fn a_ceiling_nothing_can_satisfy_is_refused() {
+        assert!(validate(None).is_ok());
+        assert!(validate(Some(&ceiling(1, None))).is_ok());
+        assert!(validate(Some(&ceiling(5, Some(6)))).is_ok());
+        assert!(validate(Some(&ceiling(0, None))).is_err());
+        assert!(validate(Some(&ceiling(5, Some(0)))).is_err());
+        assert!(validate(Some(&ceiling(5, Some(5)))).is_err());
+    }
+}

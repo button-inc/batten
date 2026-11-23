@@ -474,7 +474,10 @@ own text and could carry anything. What to run instead is the row's declared rem
 `batten policy explain` prints; where that remedy cannot perform the change, the class is \
 admissible through a recorded admission bound to the row id at the current commit.",
         routes: &[
-            run("rule read first", crate::grammar::RULE_HOP_PLACEHOLDER),
+            run(
+                "rule read first",
+                batten_core::grammar::RULE_HOP_PLACEHOLDER,
+            ),
             SHAPE_ADMIT_ROUTE,
         ],
         applicability: Applicability::Advice,
@@ -1260,7 +1263,7 @@ pub fn vendored() -> Vec<DeclaredVerdict> {
     VENDORED
         .iter()
         .map(declared_from)
-        .chain(crate::config_check::preset::verdict_rows())
+        .chain(verdict_rows())
         .collect()
 }
 
@@ -1276,7 +1279,7 @@ pub fn declared_from(entry: &VendoredVerdict) -> DeclaredVerdict {
         gloss: entry.gloss.to_owned(),
         // Joined by id from the one doc table (CLOUD-2143), so the vendored and
         // preset halves are documented in one place.
-        doc: crate::doc::vendored(entry.id),
+        doc: batten_base::doc::vendored(entry.id),
         class: entry.class.to_owned(),
         // Carried rather than defaulted (CLOUD-1639): this is the one projection
         // between the two tables, so a vendored class that declares a repairing
@@ -1296,4 +1299,18 @@ pub fn declared_from(entry: &VendoredVerdict) -> DeclaredVerdict {
         successor: None,
         withdrawn: None,
     }
+}
+
+/// Every verdict row the vendored presets declare, as the registry carries them.
+///
+/// Chained onto the native rows by [`vendored`]. Derived rather
+/// than declared a second time: before this, adding a preset class meant editing
+/// a table in another module under a comment, and nothing tied the two together.
+#[must_use]
+pub fn verdict_rows() -> Vec<DeclaredVerdict> {
+    crate::preset_catalog::MANIFESTS
+        .iter()
+        .flat_map(|manifest| manifest.verdicts.iter())
+        .map(declared_from)
+        .collect()
 }

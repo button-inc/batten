@@ -60,15 +60,13 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
-#[cfg(test)]
-use crate::config_check::budget::validate;
 use crate::config_model::{Budget, BudgetSet, EmbeddedDecl};
-use crate::error::UsageError;
 use crate::findings::Finding;
-use crate::git::tree_files;
-use crate::identity::{self, FindingKind, StoredIdentity};
-use crate::selector::glob_match;
-use crate::severity::RuleSeverity;
+use batten_core::git::tree_files;
+use batten_core::selector::glob_match;
+use batten_core::severity::RuleSeverity;
+use batten_facts::error::UsageError;
+use batten_facts::identity::{self, FindingKind, StoredIdentity};
 
 /// Bytes per estimated token. A convention-level constant, not a
 /// literature-backed claim — see the module docs for why an approximation is the
@@ -341,7 +339,7 @@ pub fn loaded(text: &str) -> String {
 /// second fence rule here, which is the defect the paragraph above exists to
 /// have fixed.
 fn strip_frontmatter(text: &str) -> &str {
-    match crate::facts::split_frontmatter(text) {
+    match batten_facts::facts::split_frontmatter(text) {
         Some(found) => found.body,
         None => text,
     }
@@ -409,7 +407,7 @@ fn find_line_anchored(haystack: &str, needle: &str) -> Option<usize> {
 /// one, which is the same false green a dead glob produced (CLOUD-298).
 fn embedded_value(root: &Path, name: &str, decl: &EmbeddedDecl) -> Result<Option<String>> {
     let full = root.join(&decl.path);
-    let text = match crate::fsio::read_to_string(&full) {
+    let text = match batten_fsio::read_to_string(&full) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(UsageError::raise(format!(
@@ -548,7 +546,7 @@ pub fn measure(root: &Path, name: &str, budget: &BudgetSet) -> Result<Report> {
     let mut lines = 0;
     // `BTreeSet` iterates in sorted order, which is the fixed reporting order.
     for path in selected {
-        let text = crate::fsio::read_to_string(root.join(&path))?;
+        let text = batten_fsio::read_to_string(root.join(&path))?;
         let loaded = loaded(&text);
         let file = FileCount {
             path,
@@ -762,44 +760,6 @@ mod tests {
         assert!(!unenforced.over_budget());
     }
 
-    fn budget_of(name: &str) -> Budget {
-        Budget(
-            [(
-                name.to_owned(),
-                BudgetSet {
-                    files: vec!["AGENTS.md".to_owned()],
-                    max_tokens: 1,
-                    max_lines: None,
-                    max_bytes_per_file: None,
-                    embedded: Vec::new(),
-                },
-            )]
-            .into_iter()
-            .collect(),
-        )
-    }
-
-    #[test]
-    fn a_budget_table_declaring_no_budget_is_refused() {
-        let err = validate(Some(&Budget(BTreeMap::new()))).unwrap_err();
-        assert!(err.downcast_ref::<UsageError>().is_some());
-        assert!(validate(None).is_ok());
-        assert!(validate(Some(&budget_of("instructions"))).is_ok());
-    }
-
-    #[test]
-    fn a_set_name_is_the_consumers_and_the_engine_carries_none() {
-        // Rule 1: the engine must hold no consumer-specific identifier. Any name
-        // works, because the table is a map rather than a field per set — before
-        // this, a second consumer's budget needed an engine change.
-        for name in ["instructions", "prompts", "whatever-they-call-it"] {
-            let budget = budget_of(name);
-            assert!(validate(Some(&budget)).is_ok());
-            let (declared, _) = budget.sets().next().unwrap();
-            assert_eq!(declared, name);
-        }
-    }
-
     #[test]
     fn an_over_budget_report_is_an_ordinary_finding_naming_its_set() {
         // Budgets bite through `check` as a normal finding, which is what makes
@@ -1007,7 +967,7 @@ mod tests {
     /// value answered as a constant.
     #[test]
     fn files_and_every_embedded_format_sum_into_the_totals() {
-        let dir = crate::scratch::scratch("budget-measure-totals");
+        let dir = batten_facts::scratch::scratch("budget-measure-totals");
         fs::write(dir.join("a.md"), "12345678\n").unwrap();
         fs::write(dir.join("b.md"), "abcdefghijkl\nx\n").unwrap();
         fs::write(
@@ -1058,7 +1018,7 @@ mod tests {
     /// misreported as a dead entry.
     #[test]
     fn only_a_missing_embedded_file_is_a_dead_entry() {
-        let dir = crate::scratch::scratch("budget-embedded-errors");
+        let dir = batten_facts::scratch::scratch("budget-embedded-errors");
         fs::create_dir_all(dir.join("dir.json")).unwrap();
         let decl = |path: &str| EmbeddedDecl {
             path: path.to_owned(),

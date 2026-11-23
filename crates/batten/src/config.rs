@@ -1586,7 +1586,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
         // second authority over one name, which is the shape the exemption
         // itself exists to avoid. The vendored and native halves stay unfiltered
         // for the other reason: they are never held to a consumer's lists at all.
-        let vendored = crate::config_check::preset::verdict_rows();
+        let vendored = crate::verdict::registry::verdict_rows();
         let declared: std::collections::BTreeSet<&str> = config
             .verdicts
             .iter()
@@ -4049,6 +4049,18 @@ mod tests {
     #[cfg(test)]
     use crate::error::UsageError;
     use std::fs;
+
+    /// Fails by: a vendored verdict class longer than its column's cap shipped.
+    /// Held to the same prose census as a consumer's rows (CLOUD-1642),
+    /// whatever the vendored count is when a class lands.
+    #[test]
+    fn the_vendored_verdicts_fit_the_prose_census() {
+        assert_eq!(
+            text_offenders("verdict", &crate::verdict::registry::vendored()),
+            Vec::<String>::new(),
+            "a vendored class is longer than its column's cap"
+        );
+    }
 
     // --- `[perf]` and the version floor --------------------------------------
 

@@ -648,8 +648,6 @@ pub fn mode_sources() -> Vec<(String, String)> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{eject, ejected_from, ejected_source, helpers_defined, mode_sources, uses};
-    #[cfg(test)]
-    use crate::config_check::preset::verdict_rows;
     use crate::config_model::Rule;
     #[cfg(test)]
     use crate::preset::ManifestExt as _;
@@ -657,6 +655,8 @@ mod tests {
     use crate::preset::PresetModuleExt as _;
     use crate::preset_catalog::RuleScope;
     use crate::preset_catalog::{MANIFESTS, Manifest, PresetModule, find, names};
+    #[cfg(test)]
+    use crate::verdict::registry::verdict_rows;
 
     use std::collections::BTreeSet;
 

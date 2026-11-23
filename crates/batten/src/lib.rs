@@ -10137,7 +10137,7 @@ fn run_policy_explain(
     let config = resolve::resolve(Path::new("."), overrides).ok();
     let registry = match &config {
         Some(config) => policy::registry_for(&config.verdicts)?,
-        None => crate::config_check::verdict::vendored(),
+        None => crate::verdict::registry::vendored(),
     };
     let mut documents: Vec<serde_json::Value> = Vec::new();
     let mut misses: Vec<&str> = Vec::new();

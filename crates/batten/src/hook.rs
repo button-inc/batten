@@ -14695,7 +14695,7 @@ mod tests {
             // the class as bare, and suppresses a refusal production never
             // suppresses. Found by `the_bypass_hatch_does_not_reach_the_protected_gate`
             // going red — the fixture was the thing that was wrong.
-            verdicts: crate::config_check::verdict::vendored(),
+            verdicts: crate::verdict::registry::vendored(),
             root: None,
             shapes: Vec::new(),
             fail_on_warning: false,
@@ -18023,7 +18023,7 @@ deny contains "refused by themodule" if {
             ..shape(SCRIPT_ROW, "unused", None)
         };
         let mut policy = ceiling_policy(vec![row]);
-        policy.verdicts = crate::config_check::verdict::vendored();
+        policy.verdicts = crate::verdict::registry::vendored();
         policy.root = Some(root.clone());
         let mut envelope = envelope(command);
         envelope.cwd = Some(root);
@@ -18144,7 +18144,7 @@ deny contains "refused by themodule" if {
     /// hand-kept list is what lets a class gain an override route and no binding
     /// with nothing noticing.
     fn classes_with_an_override_route() -> Vec<String> {
-        crate::config_check::verdict::vendored()
+        crate::verdict::registry::vendored()
             .iter()
             .filter(|entry| {
                 entry.routes.iter().any(|route| {

@@ -28,7 +28,7 @@ use common::{Fixture, run, run_with_stdin};
 /// Read off the binary rather than written as a literal, so the case follows
 /// whatever the build ships instead of going vacuous the day one token moves.
 fn declaring_a_vendored_class() -> String {
-    let shipped = batten::config_check::verdict::vendored();
+    let shipped = batten::verdict::registry::vendored();
     let token = &shipped
         .first()
         .expect("the binary vendors at least one class")
