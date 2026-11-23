@@ -2331,7 +2331,7 @@ fn run(
     // reason (CLOUD-850), and measured onto its own census row. Extracted rather
     // than inline only because it put `run` over `too_many_lines`; the reasoning
     // it carries is the callee's own.
-    let documents = acquire_declared_measured(rules, root, &files)?;
+    let documents = acquire_declared_measured(rules, root, &files, &scoped)?;
 
     // WHAT EARLIER RUNS PRODUCED, acquired once for the whole run beside the
     // three above and for the same reason (CLOUD-851). Bounded by DECLARATION —
@@ -4104,11 +4104,12 @@ fn acquire_declared_measured(
     rules: &[Rule],
     root: &Path,
     files: &[String],
+    line_files: &[String],
 ) -> anyhow::Result<BTreeMap<(String, Wanted), Acquired>> {
     costs_lock().clear();
     let started = std::time::Instant::now();
     let (files_before, bytes_before) = (files_read(), bytes_read());
-    let documents = acquire_declared(rules, root, files)?;
+    let documents = acquire_declared(rules, root, files, line_files)?;
     if !documents.is_empty() {
         costs_lock().push(RuleCost {
             rule: DECLARED_ACQUISITION.to_owned(),
@@ -4120,10 +4121,16 @@ fn acquire_declared_measured(
     Ok(documents)
 }
 
+///
+/// `line_files` is the list `line_sources` selects from: the run's scope, which
+/// is `files` itself unless `check --staged`/`--since` narrowed it (CLOUD-2789).
+/// Reading every tracked `.rs` file's lines to judge the one being committed is
+/// what made the commit-time cfg-gated-test step 4.4 s.
 pub(crate) fn acquire_declared(
     rules: &[Rule],
     root: &Path,
     files: &[String],
+    line_files: &[String],
 ) -> anyhow::Result<BTreeMap<(String, Wanted), Acquired>> {
     let mut cache: BTreeMap<(String, Wanted), Acquired> = BTreeMap::new();
     // THE THREE COLLECT-FIRST SETS ARE GONE, and their absence is the fix. They
@@ -4151,7 +4158,7 @@ pub(crate) fn acquire_declared(
             (Wanted::Document, declared),
             (
                 Wanted::Lines,
-                declared_lines(rule, files).unwrap_or_default(),
+                declared_lines(rule, line_files).unwrap_or_default(),
             ),
             (
                 Wanted::Invocations,
@@ -5867,6 +5874,7 @@ fn policy_rule(
     // growing a line every time the fact model does.
     let &RunInputs {
         files: tracked,
+        scoped,
         documents,
         git,
         bundles,
@@ -5889,7 +5897,14 @@ fn policy_rule(
     // malformed glob is refused by `validate` before any rule evaluates — so a
     // failure here is a row this surface does not own, treated the same way
     // `declared_documents` is treated a few lines up.
-    let declared_line_paths = declared_lines(rule, tracked).ok()?;
+    // LINES FOLLOW THE RUN'S SCOPE (CLOUD-2789). Under `check --staged` a module
+    // reads the lines of the change-set's files only: the commit-time
+    // cfg-gated-test step read every tracked `.rs` file (4.4 s p50) to judge the
+    // one being committed, and refused the commit for an unstaged file beside it.
+    // Unnarrowed, `scoped` IS `tracked`, so a tree run reads what it always did.
+    // The other selectors stay on the full set, for the header's reason: a
+    // declared document or unit is a property of the repository.
+    let declared_line_paths = declared_lines(rule, scoped).ok()?;
     let declared_invocation_paths = declared_invocations(rule, tracked).ok()?;
     let declared_use_paths = declared_uses(rule, tracked).ok()?;
     let declared_unit_paths = declared_units(rule, tracked).ok()?;
@@ -11166,8 +11181,9 @@ mod tests {
             ..blank("wants-calls", RuleKind::Policy)
         };
         let files = vec!["subject.rs".to_owned()];
-        let cache = super::acquire_declared(&[as_lines.clone(), as_calls.clone()], &dir, &files)
-            .expect("acquisition succeeds");
+        let cache =
+            super::acquire_declared(&[as_lines.clone(), as_calls.clone()], &dir, &files, &files)
+                .expect("acquisition succeeds");
 
         // BOTH entries exist, under the same path. That is the whole property:
         // one file, two parses, neither displacing the other.
@@ -15596,8 +15612,8 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             documents: vec![String::from("a.json")],
             ..blank("p", RuleKind::Policy)
         };
-        let tree =
-            acquire_declared_measured(&[row(RuleScope::Tree)], &dir, &files).expect("acquires");
+        let tree = acquire_declared_measured(&[row(RuleScope::Tree)], &dir, &files, &files)
+            .expect("acquires");
         assert_eq!(tree.len(), 1);
         // Exact, for `a_scan_counts_what_it_read_and_what_each_rule_cost`'s reason:
         // one run per process under nextest, which `test:cargo` uses.
@@ -15607,8 +15623,9 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             [DECLARED_ACQUISITION],
             "the acquisition is its own cost row"
         );
-        let mediated = acquire_declared_measured(&[row(RuleScope::MediatedCall)], &dir, &files)
-            .expect("acquires");
+        let mediated =
+            acquire_declared_measured(&[row(RuleScope::MediatedCall)], &dir, &files, &files)
+                .expect("acquires");
         assert!(mediated.is_empty());
         assert!(rows().is_empty(), "nothing read, no row");
     }
