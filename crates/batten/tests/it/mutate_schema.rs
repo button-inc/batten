@@ -553,3 +553,49 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
         assert!(third.contains(line), "{line:?} in {third}\n{err}");
     }
 }
+
+/// `mise run mutant:rust` ON ITS OWN JUDGES A DECLARED BASE (CLOUD-2855): the
+/// task, not its caller, owns `origin/main`, so a standalone run no longer hands
+/// `batten mutate cargo` an empty base (the verb's usage refusal). A caller's
+/// own base wins, and under `mutant`'s `MUTANT_WHOLE_TREE` the default yields,
+/// so the whole-tree schedule is not turned into a base-and-tree usage error
+/// (CLOUD-2849). Fails by: the default deleted (`rust-base-undeclared`), a
+/// caller's base overridden, or the default leaking into the whole-tree run.
+#[cfg(unix)]
+#[test]
+fn mutant_rust_runs_on_its_own_against_a_declared_base() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = common::scratch_repo("mutant-rust-base");
+    let stub = dir.join("batten-stub");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf 'base=[%s] whole=[%s] argv=[%s]\\n' \"$MUTANT_CHANGED_SINCE\" \"$MUTANT_WHOLE_TREE\" \"$*\"\n",
+    )
+    .expect("plant the stub engine");
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+        .expect("make the stub executable");
+    let bin = stub.to_string_lossy().into_owned();
+    let run = |env: &[(&str, &str)]| {
+        let mut all = vec![("BATTEN_BIN", bin.as_str())];
+        all.extend_from_slice(env);
+        let output = common::mise_task(&dir, "--skip-deps mutant:rust", &all, "");
+        let said = common::stdout(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{said}{}",
+            common::stderr(&output)
+        );
+        said
+    };
+    let alone = run(&[]);
+    assert!(
+        alone.contains("base=[origin/main] whole=[] argv=[mutate cargo]"),
+        "{alone}"
+    );
+    let chosen = run(&[("MUTANT_CHANGED_SINCE", "HEAD~1")]);
+    assert!(chosen.contains("base=[HEAD~1]"), "{chosen}");
+    let whole = run(&[("MUTANT_WHOLE_TREE", "1")]);
+    assert!(whole.contains("base=[] whole=[1]"), "{whole}");
+}
