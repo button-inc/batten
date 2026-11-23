@@ -1122,11 +1122,16 @@ jobs:
   # Every shard builds and reaches over the WHOLE listing and judges only its
   # slice, so each would compute the same mirror; this job computes it once
   # with `MUTANT_PHASE=reach`, which stops the sweep after the reach run is
-  # sealed, and saves the mirror under this run's key. A shard restoring it
-  # resyncs nothing (`sync` rewrites only files whose bytes differ, and the
-  # cache keeps their times), so cargo finds the build fresh and the reach run
-  # resumes from its seal. NOT A GATE ON THE SHARDS: they run when it fails,
-  # and then build and reach themselves, as they did before it.
+  # sealed, and saves under this run's key what the shards need and nothing
+  # more: the sealed reach record and its context, the journal, and the reuse
+  # record with its PACKED binaries, the test binaries and what they launch,
+  # tagged with the rendered tree they were built from. A shard whose rendering
+  # matches takes the build as made, puts the binaries back and runs no cargo;
+  # the reach run resumes from its seal. NOT THE WHOLE MIRROR: its target was
+  # 6 GB on #1276, over half the repository's 10 GB cache store, and saved per
+  # run it evicted the Rust caches every other job restores; the pack measured
+  # 146 MB gzipped for `batten`'s set. NOT A GATE ON THE SHARDS: they run when
+  # it fails, and then build and reach themselves, as they did before it.
   mutants-reach:
     name: mutants (reach)
     if: ${{ github.event.pull_request.draft == false }}
@@ -1173,13 +1178,13 @@ jobs:
         env:
           MUTANT_PHASE: reach
           DOCTOR_TARGETS: ""
-      # THIS RUN'S MIRROR, FOR THIS RUN'S SHARDS: keyed on the run, so no other
-      # run reads it, and the pull request's ref scopes it (`cache-sweep.yml`
-      # reclaims such entries).
+      # THIS RUN'S BUILD AND REACH, FOR THIS RUN'S SHARDS: keyed on the run, so
+      # no other run reads it, and the pull request's ref scopes it
+      # (`cache-sweep.yml` reclaims such entries).
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.local/share/batten/*/mutate/schema/tree
+            ~/.local/share/batten/*/mutate/schema/reuse
             ~/.local/share/batten/*/mutate/schema/reach
             ~/.local/share/batten/*/mutate/schema/verdicts
           key: mutant-mirror-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1269,13 +1274,13 @@ jobs:
           restore-keys: |
             mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-${{ strategy.job-index }}-
             mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-
-      # THE REACH JOB'S MIRROR: its build, its sealed reach record and the
-      # context the seal is read in. Absent when that job failed, and the sweep
-      # then builds and reaches here, as it did before it.
+      # THE REACH JOB'S BUILD AND REACH: its packed binaries, its sealed reach
+      # record and the context the seal is read in. Absent when that job
+      # failed, and the sweep then builds and reaches here, as it did before it.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.local/share/batten/*/mutate/schema/tree
+            ~/.local/share/batten/*/mutate/schema/reuse
             ~/.local/share/batten/*/mutate/schema/reach
             ~/.local/share/batten/*/mutate/schema/verdicts
           key: mutant-mirror-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
