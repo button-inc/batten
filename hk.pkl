@@ -1038,6 +1038,7 @@ fail_fast = false
 local fixers = new Mapping<String, Step> {
   ["shfmt"] = gate["shfmt"]
   ["taplo-format"] = gate["taplo-format"]
+  ["taplo-format-schema"] = gate["taplo-format-schema"]
   ["pkl-format"] = gate["pkl-format"]
   ["prettier"] = gate["prettier"]
   ["deno-fmt"] = gate["deno-fmt"]
