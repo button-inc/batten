@@ -647,6 +647,74 @@ fn a_verify_that_never_reports_is_never_stalled() {
     assert!(!out.contains("verify stalled"), "{out}");
 }
 
+/// A KNOWN-RED TREE COSTS A LAP SECONDS, NOT THE FAN (CLOUD-2253). A gate step
+/// answered from a failure receipt cancels the whole gate at once, though a
+/// sibling of it is still running: the gate here runs the red step, then
+/// wedges, standing for the rest of a fan that would run to completion.
+///
+/// Fails by: the receipt-answered failure not reaching the lap (the gate runs
+/// on until something else ends it), the lap reading it as a stall or a lap
+/// rather than a refusal of the tree, or the cancel not reclaiming the gate.
+#[test]
+fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
+    let repo = Fixture::at(scratch("land-verify-red").join("repo"))
+        .config(
+            "version = 1\n\n\
+             [[rule]]\n\
+             id = \"landing\"\n\
+             kind = \"policy\"\n\
+             scope = \"tree\"\n\
+             preset = \"landing-loop\"\n\
+             severity = \"deny\"\n\n\
+             [[step]]\n\
+             id = \"red\"\n\
+             inputs = [\"lib.rs\"]\n\
+             tools = [[\"git\", \"--version\"]]\n",
+        )
+        .file("lib.rs", "fine\n")
+        .git()
+        .base_commit()
+        .build();
+    let failing = repo.parent().expect("the fixture's scratch").join("fail.sh");
+    std::fs::write(&failing, "#!/bin/sh\nexit 5\n").expect("write the step");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755))
+            .expect("make the step executable");
+    }
+    let engine = env!("CARGO_BIN_EXE_batten");
+    let step = format!("{engine} step run red -- {}", failing.display());
+    let seeded = std::process::Command::new("sh")
+        .args(["-c", &step])
+        .current_dir(&repo)
+        .env_remove("CI")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+        .env_remove("BATTEN_TASK_PID")
+        .output()
+        .expect("seed the failure");
+    assert_eq!(seeded.status.code(), Some(5), "{}", stderr(&seeded));
+    let marker = repo.join("gate.pid");
+    let gate = script(
+        &repo,
+        "red.sh",
+        &format!(
+            "unset CI BATTEN_STEP_RECEIPT_BYPASS\n{step}\necho $$ > {}\nexec sleep 600\n",
+            marker.display()
+        ),
+    );
+    let started = std::time::Instant::now();
+    let (code, out) = land_verify_supervised(&repo, &gate, "424245", "600");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(120),
+        "the lap ended at once, not when the wedge ran out: {out}"
+    );
+    assert_eq!(code, 2, "a known-red tree is refused: {out}");
+    assert!(!out.contains("verify stalled"), "{out}");
+    let record = lap_record(&repo, &branch_of(&repo));
+    assert!(record.contains("verify refused "), "{record}");
+    assert!(record.contains("gate-red red true"), "{record}");
+}
+
 /// `batten land verify` with a receipt name declared, over a gate that REFUSES —
 /// so an exit `0` can only have come from the receipt.
 fn land_verify_receipted(repo: &Path, gate: &str) -> (i32, String, String) {
