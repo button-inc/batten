@@ -308,10 +308,11 @@ mod tests {
 
     const SRC: &str = "use std::fmt;\nuse std::io;\nfn f() {}\n";
 
-    // The `Option` is `plan`'s reader signature: a file it cannot read is `None`.
-    #[allow(clippy::unnecessary_wraps)]
-    fn read(_: &str) -> Option<String> {
-        Some(SRC.to_owned())
+    /// `plan`'s reader, which reads every file as [`SRC`]. A closure, because
+    /// the `Option` is `plan`'s signature (a file it cannot read is `None`) and
+    /// a `fn` that always answers `Some` is the wrap clippy refuses.
+    fn reader() -> impl Fn(&str) -> Option<String> {
+        |_| Some(SRC.to_owned())
     }
 
     /// Fails by: an import unused only in the non-test build deleted (which
@@ -330,7 +331,7 @@ mod tests {
                 unit_test: &test,
                 other: "",
             },
-            &read,
+            &reader(),
         );
         assert_eq!((plan.gated, plan.left, plan.errors), (1, 0, 0));
         let fixed = apply(SRC, &plan.edits["src/a.rs"]).expect("the edits apply");
@@ -358,7 +359,7 @@ mod tests {
                 unit_test: &line,
                 other: &line,
             },
-            &read,
+            &reader(),
         );
         assert_eq!(plan.edits["src/a.rs"].len(), 1);
         assert_eq!(
@@ -379,7 +380,7 @@ mod tests {
                 unit_test: "",
                 other: &lib,
             },
-            &read,
+            &reader(),
         );
         assert_eq!((plan.gated, plan.edits["src/a.rs"].len()), (1, 1));
         assert!(

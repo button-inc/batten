@@ -356,7 +356,7 @@ fn logical(node: &SyntaxNode) -> Option<ast::LogicOp> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -439,7 +439,7 @@ mod tests {
     fn shape_names_docs_and_pointers_are_read() {
         let found =
             functions("\n\n/// doc\npub fn f(&self, a: u8, bb: u8) { let c = a; g(c); bb; }");
-        let unit = &found[0];
+        let unit = found.first().expect("one function");
         assert_eq!(
             (unit.line, unit.name.as_str(), unit.position),
             (3, "f", "item")
@@ -467,8 +467,8 @@ mod tests {
             .map(|unit| (unit.name.as_str(), unit.position))
             .collect();
         assert_eq!(shape, [("f", "item"), ("inner", "nested"), ("m", "impl")]);
-        assert_eq!(found[0].counts.decisions, 0);
-        assert_eq!(found[1].counts.decisions, 1);
+        let decisions: Vec<_> = found.iter().map(|unit| unit.counts.decisions).collect();
+        assert_eq!(decisions.get(..2), Some(&[0, 1][..]));
     }
 
     /// Fails by: a comment or string missed (the half `syn` cannot give), its
