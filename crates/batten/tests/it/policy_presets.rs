@@ -1684,13 +1684,10 @@ fn an_ejected_module_behind_the_manifest_version_is_reported() {
     let path = "policy/claude-code-cloud/unwatch-is-preapproved.rego";
     let shipped = batten::preset_catalog::find("claude-code-cloud")
         .expect("the preset ships")
-        .version;
+        .version
+        .clone();
     let text = fs::read_to_string(dir.join(path)).expect("the copy");
-    let behind = text.replacen(
-        &format!("version {shipped}\n"),
-        &format!("version {}\n", shipped - 1),
-        1,
-    );
+    let behind = text.replacen(&format!("version {shipped}\n"), "version 0.0.0\n", 1);
     assert_ne!(behind, text, "the premise: the header carried the version");
     fs::write(dir.join(path), behind).expect("rewind the copy");
 
