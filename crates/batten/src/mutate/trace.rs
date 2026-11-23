@@ -48,13 +48,6 @@ pub(crate) fn traced_already() -> bool {
 /// leads its group failed (seven baseline failures, #1276). `-q` rather than
 /// `-qq` keeps the case's own exit line, which is how the reader knows the
 /// detached tracer finished writing ([`trace_whole`]).
-///
-/// THE PROCESS TREE AND `fchdir` ARE TRACED TOO (CLOUD-2789), so each pid's
-/// working directory is known ([`Cwds`]): every process cargo starts runs
-/// `chdir` to its package before it execs, and when one `chdir` anywhere
-/// disabled the start directory for every pid, one relative probe
-/// (`access("libgcc_s.so.1")`) left every cargo step's trace unreadable, so
-/// `cross-check`, `darwin-link`, `semver` and `enforce-tree` never recorded.
 pub(crate) fn trace_args(trace: &Path, program: &str, rest: &[String]) -> Vec<String> {
     let mut args: Vec<String> = [
         "-DD",
@@ -63,7 +56,7 @@ pub(crate) fn trace_args(trace: &Path, program: &str, rest: &[String]) -> Vec<St
         "-q",
         "-y",
         "-e",
-        "trace=%file,openat2,fchdir,clone,clone3,fork,vfork",
+        "trace=%file,openat2",
         "-o",
     ]
     .map(String::from)
@@ -83,11 +76,11 @@ pub(crate) fn trace_args(trace: &Path, program: &str, rest: &[String]) -> Vec<St
 /// What a caller keeps of them is its own rule.
 ///
 /// A RELATIVE PATH WITH NO DIRECTORY ARGUMENT (`stat("c")`, a shell's `test -e
-/// c`) resolves against the working directory of the process that named it, as
-/// [`Cwds`] reads it: `cwd` for the traced command, then each `chdir` and
-/// `fchdir` a pid made, and a forked pid inheriting its parent's at the fork.
-/// Where that cannot be known the path is unresolvable, and with `cwd` absent
-/// the root's is, the reach recorder's reading.
+/// c`) resolves against `cwd`, the directory the traced command started in, but
+/// only when no process in the trace changed directory: a `chdir` is in
+/// `%file`, so one is seen and the trace then reads as unresolvable. `fchdir`
+/// is outside `%file`, a stated gap. With `cwd` absent such a path is
+/// unresolvable, the reach recorder's reading.
 pub(crate) fn touched(trace: &str, cwd: Option<&Path>) -> Option<Vec<PathBuf>> {
     Some(
         walk(trace, cwd, false)?
@@ -170,18 +163,21 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
     if !trace_whole(trace) {
         return None;
     }
-    let cwds = Cwds::read(trace, cwd);
+    let cwd = cwd.filter(|_| {
+        !trace.lines().any(|line| {
+            line.split_once(' ')
+                .is_some_and(|(_, rest)| rest.trim_start().starts_with("chdir("))
+        })
+    });
     let mut out = Vec::new();
-    for (index, line) in trace.lines().enumerate() {
+    for line in trace.lines() {
         if trace_event(line).is_some() {
             continue;
         }
-        let pid = line.split(' ').next().unwrap_or_default();
-        let cwd = cwds.at(pid, index);
-        let cwd = cwd.as_deref();
         let access = access_of(line);
-        if let Some(resolved) = result_of(line)
-            .and_then(|result| result.split_once('<'))
+        if let Some(resolved) = line
+            .rsplit_once(") = ")
+            .and_then(|(_, result)| result.split_once('<'))
             .and_then(|(_, rest)| rest.strip_suffix('>'))
         {
             out.push((lexical(Path::new(resolved)), access));
@@ -205,147 +201,6 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
         }
     }
     Some(out)
-}
-
-/// Each traced pid's working directory over the trace (CLOUD-2789), read from
-/// the lines the tracer writes: the root pid starts in `start`; a pid's own
-/// successful `chdir` or `fchdir` moves it; a pid a `clone`, `clone3`, `fork`
-/// or `vfork` returned starts where its parent was when that call began.
-///
-/// A pid none of those account for (a trace written before the process tree
-/// was traced) inherits `start` only while no pid in the trace changed
-/// directory, the earlier reading; otherwise its directory is unknown. A
-/// thread sharing its parent's directory (`CLONE_FS`) and moving it later is
-/// not followed, a stated gap: the processes a step starts move their own.
-struct Cwds {
-    /// The traced command's pid.
-    root: String,
-    start: Option<PathBuf>,
-    /// Each forked pid's parent and the line its fork began on.
-    parent: std::collections::HashMap<String, (String, usize)>,
-    /// Each pid's directory changes, in order: the line and the target, a
-    /// `chdir` argument as written or an `fchdir` descriptor's path.
-    moves: std::collections::HashMap<String, Vec<(usize, String)>>,
-}
-
-impl Cwds {
-    /// The working directories `trace` shows, the root starting in `start`.
-    fn read(trace: &str, start: Option<&Path>) -> Self {
-        let mut cwds = Cwds {
-            root: trace
-                .lines()
-                .next()
-                .and_then(|line| line.split(' ').next())
-                .unwrap_or_default()
-                .to_owned(),
-            start: start.map(Path::to_path_buf),
-            parent: std::collections::HashMap::new(),
-            moves: std::collections::HashMap::new(),
-        };
-        // A CALL SPLIT ACROSS TWO LINES begins on the first: its argument (a
-        // `chdir` target) or its start (a fork) is held until the resumed half
-        // says it succeeded.
-        let mut pending: std::collections::HashMap<&str, (usize, Option<String>)> =
-            std::collections::HashMap::new();
-        for (index, line) in trace.lines().enumerate() {
-            let Some((pid, rest)) = line.split_once(' ') else {
-                continue;
-            };
-            let rest = rest.trim_start();
-            let name = syscall(line);
-            let (began, target) = if rest.starts_with("<... ") {
-                match pending.remove(pid) {
-                    Some(held) => held,
-                    None => continue,
-                }
-            } else {
-                let target = match name {
-                    "chdir" => rest
-                        .split_once('"')
-                        .and_then(|(_, arg)| quoted_arg(arg))
-                        .map(|(arg, _)| arg),
-                    "fchdir" => rest
-                        .split_once('<')
-                        .and_then(|(_, fd)| fd.split_once(">)"))
-                        .map(|(path, _)| path.to_owned()),
-                    _ => None,
-                };
-                if rest.ends_with("<unfinished ...>") {
-                    if matches!(
-                        name,
-                        "chdir" | "fchdir" | "clone" | "clone3" | "fork" | "vfork"
-                    ) {
-                        pending.insert(pid, (index, target));
-                    }
-                    continue;
-                }
-                (index, target)
-            };
-            let Some(result) = result_of(line) else {
-                continue;
-            };
-            let result = result.split_whitespace().next().unwrap_or_default();
-            match name {
-                "chdir" | "fchdir" if result == "0" => {
-                    if let Some(target) = target {
-                        cwds.moves
-                            .entry(pid.to_owned())
-                            .or_default()
-                            .push((began, target));
-                    }
-                }
-                "clone" | "clone3" | "fork" | "vfork" => {
-                    if result.parse::<u32>().is_ok_and(|child| child > 0) {
-                        cwds.parent
-                            .insert(result.to_owned(), (pid.to_owned(), began));
-                    }
-                }
-                _ => {}
-            }
-        }
-        cwds
-    }
-
-    /// `pid`'s working directory as of line `index`, or `None` where unknown.
-    fn at(&self, pid: &str, index: usize) -> Option<PathBuf> {
-        self.walk_back(pid, index, 0)
-    }
-
-    fn walk_back(&self, pid: &str, index: usize, depth: usize) -> Option<PathBuf> {
-        // A cycle needs a reused pid; a bound answers it as unknown.
-        if depth > 256 {
-            return None;
-        }
-        if let Some((at, target)) = self
-            .moves
-            .get(pid)
-            .and_then(|moves| moves.iter().rev().find(|(at, _)| *at < index))
-        {
-            let target = Path::new(target);
-            if target.is_absolute() {
-                return Some(lexical(target));
-            }
-            return Some(lexical(&self.walk_back(pid, *at, depth + 1)?.join(target)));
-        }
-        if pid == self.root {
-            return self.start.clone();
-        }
-        if let Some((parent, at)) = self.parent.get(pid) {
-            return self.walk_back(parent, *at, depth + 1);
-        }
-        self.moves.is_empty().then(|| self.start.clone()).flatten()
-    }
-}
-
-/// What a syscall line returned: the text after its closing `)` and `= `.
-///
-/// STRACE PADS THE RESULT COLUMN (CLOUD-2789): a short call is followed by
-/// spaces up to a fixed column (`<... vfork resumed>)              = 6111`),
-/// so the literal `") = "` this read before missed every padded line — a
-/// fork's child pid, and the descriptor path `-y` printed for a padded open.
-fn result_of(line: &str) -> Option<&str> {
-    let (head, result) = line.rsplit_once(" = ")?;
-    head.trim_end().ends_with(')').then_some(result)
 }
 
 /// A traced path argument made absolute: as it is, against the directory
@@ -505,73 +360,15 @@ mod tests {
         assert_eq!(super::touched(&trace, None), None);
     }
 
-    // A `chdir` moves only the pid that made it (CLOUD-2789): the bare path after
-    // it resolves in the new directory, never the start one.
+    // A `chdir` anywhere makes the start directory no longer the answer, so the
+    // bare path is unresolvable rather than attributed to the wrong place.
     #[test]
-    fn a_changed_directory_moves_its_own_pid() {
+    fn a_changed_directory_leaves_a_bare_path_unresolvable() {
         let trace = whole(&[
             "7     chdir(\"sub\") = 0",
             "7     stat(\"c\", 0x1) = -1 ENOENT (No such file or directory)",
         ]);
-        assert_eq!(
-            super::touched(&trace, Some(Path::new("/repo"))),
-            Some(vec![
-                PathBuf::from("/bin/sh"),
-                PathBuf::from("/repo/sub"),
-                PathBuf::from("/repo/sub/c"),
-            ])
-        );
-    }
-
-    // THE CARGO SHAPE (CLOUD-2789): the root forks a child that `chdir`s to its
-    // package before exec, and that child's loader probes a bare name. Read as
-    // one `chdir` anywhere disabling every pid's start directory, this trace
-    // was unreadable, so no cargo step ever recorded. Now the child's probe
-    // resolves in its package, the root's after it in the start directory,
-    // and a grandchild inherits the child's directory at its fork.
-    #[test]
-    fn a_forked_child_keeps_its_own_directory_and_the_root_its_own() {
-        let trace = whole(&[
-            "7     clone3({flags=CLONE_VM|CLONE_VFORK, exit_signal=SIGCHLD}, 88 <unfinished ...>",
-            "8     chdir(\"/pkg\" <unfinished ...>",
-            // strace pads a short call's result column, as it printed these.
-            "7     <... clone3 resumed>)             = 8",
-            "8     <... chdir resumed>)              = 0",
-            "8     access(\"libgcc_s.so.1\", F_OK) = -1 ENOENT (No such file or directory)",
-            "8     clone(child_stack=NULL, flags=SIGCHLD) = 9",
-            "9     stat(\"out\", 0x1) = -1 ENOENT (No such file or directory)",
-            "7     stat(\"c\", 0x1) = -1 ENOENT (No such file or directory)",
-            "8     +++ exited with 0 +++",
-        ]);
-        let touched = super::touched(&trace, Some(Path::new("/repo"))).expect("readable");
-        for path in ["/pkg/libgcc_s.so.1", "/pkg/out", "/repo/c"] {
-            assert!(
-                touched.contains(&PathBuf::from(path)),
-                "{path}: {touched:?}"
-            );
-        }
-    }
-
-    // A pid nothing accounts for, once some pid moved, is unknown: its bare path
-    // stays unresolvable rather than attributed to the start directory.
-    #[test]
-    fn an_unaccounted_pid_after_a_move_is_unresolvable() {
-        let trace = whole(&[
-            "8     chdir(\"/pkg\") = 0",
-            "9     stat(\"c\", 0x1) = -1 ENOENT (No such file or directory)",
-        ]);
         assert_eq!(super::touched(&trace, Some(Path::new("/repo"))), None);
-    }
-
-    // `fchdir` moves its pid to the path `-y` printed for the descriptor.
-    #[test]
-    fn an_fchdir_moves_to_its_descriptors_path() {
-        let trace = whole(&[
-            "7     fchdir(3</pkg>) = 0",
-            "7     stat(\"c\", 0x1) = -1 ENOENT (No such file or directory)",
-        ]);
-        let touched = super::touched(&trace, Some(Path::new("/repo"))).expect("readable");
-        assert!(touched.contains(&PathBuf::from("/pkg/c")), "{touched:?}");
     }
 
     /// The accesses of a whole trace of `lines`, run from `/repo`, without the
