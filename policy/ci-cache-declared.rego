@@ -182,7 +182,10 @@ reads_only(step) if object.get(step, ["with", "save-if"], null) == "false"
 # and never the finding: each rule below emits one refusal per placed line, plus
 # a path-only arm for the case where none could be placed.
 key_line contains [path, number] if {
-	some index, line in input.tree.lines[path]
+	# The path bound by its own `some`: the bytecode compiler does not hoist an
+	# unbound key out of `some … in x[path]` (#1276).
+	some path, lines in input.tree.lines
+	some index, line in lines
 	startswith(trim_space(line), "shared-key:")
 	contains(line, "hashFiles")
 	number := index + 1

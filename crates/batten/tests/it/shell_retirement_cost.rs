@@ -83,8 +83,12 @@ const RUNS: usize = 3;
 const SAME_CLASS_BOUND: usize = 2;
 
 /// Below this, the index build is too small for the per-path term to be told
-/// apart from noise, and every bound would pass over nothing. Measured ~6.17M.
-const MEASURABLE_ALLOCATIONS: usize = 1_000_000;
+/// apart from noise, and every bound would pass over nothing. Measured ~6.17M on
+/// the interpreter; ~722k since `check` decides on bytecode (#1276), which
+/// builds the index in a ninth of the allocations. The unflattened mutation
+/// still re-walks the corpus once per path, ~0.72M each: six paths read ~2.6x
+/// one, above [`SAME_CLASS_BOUND`].
+const MEASURABLE_ALLOCATIONS: usize = 500_000;
 
 // THE WALL-CLOCK BOUND this case used to assert, six deletions against the
 // zero-deletion floor. No longer asserted (CLOUD-2022); kept as the record of why

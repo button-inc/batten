@@ -104,7 +104,9 @@ const ARMS: [(&str, Option<&str>, &[&str], bool); 10] = [
         &["enforce", "--half", "tree", "--keyed-base", "origin/main"],
         false,
     ),
-    ("enforce-live", None, &["enforce", "--half", "live"], false),
+    // `-vv` so the recording also prints the per-rule cost census and the
+    // per-bundle evaluator census on stderr, which samply leaves attached.
+    ("enforce-live", None, &["enforce", "--half", "live", "-vv"], false),
     ("state-record", None, &["state", "record"], false),
 ];
 
