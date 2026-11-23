@@ -4934,17 +4934,16 @@ depends = ["tree-clean"]
 # gates (`config-lint`, `engine-pin-check`, `commit-lint`, `deny`) failed while
 # `ci` — hk's whole suite, `mutant:changed` and `mutant:declared` included — ran
 # on for 41 minutes over a head they had already refused. So the cheap tier
-# still reports first, and a tier starts only once the one before it ended.
+# still reports first, and a tier starts only once every tier before it passed.
 #
-# BUT A RED TIER NO LONGER STOPS THE NEXT (CLOUD-2789). The tiers were one `run`
-# line each, and mise stops a `run` array at its first failing line, so for
-# weeks every lap reported one tier's reds and stopped: the next tier's defects
-# surfaced only on the lap after those were fixed, one tier per lap. The tiers
-# are now the groups of ONE `step graph run`, which runs them in order and lets
-# a failure skip only the rows naming it in `depends_on`, then lists every red
-# row (`step graph: red …`) before exiting with the worst code. A genuine
-# dependency stays one: every tier-1 gate still waits on the record writes. The
-# green path's phases, and so its wall time, are the separate calls'.
+# A RED TIER STOPS EVERY LATER ONE (CLOUD-2853; owner ruling,
+# `.batten/asked.jsonl:223`: the most expensive stage runs only once every cheap
+# stage has passed). The tiers are the groups of ONE `step graph run`, which
+# runs them in order. Within a tier a failure skips only the rows naming it in
+# `depends_on`, so the tier reports every red it holds (CLOUD-2789); after a red
+# tier every later tier's rows are recorded as skipped and never start. Every
+# red row (`step graph: red …`) is listed before the call exits with the worst
+# code. Every tier-1 gate still waits on the record writes.
 #   1. seconds: the lap's commits and config, the diff and pin questions, the
 #      workflow audit, the cfg-gated-test ratchet, cargo-deny, the instruction
 #      budget, the policy modules' own tests, and `batten-check` (the whole

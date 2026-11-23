@@ -97,46 +97,64 @@ fn node_in(group: &str, id: &str, code: u8, after: &[&str]) -> String {
     )
 }
 
-/// Fails by: a red group stopping a later, independent group (the one-tier-
-/// per-lap shape CLOUD-2789 removes), the reds not all listed at the end, or
-/// the run exiting 0 over a red. Tier-1 gate `a` and tier-2 gate `b` are both
-/// red and independent; `c` depends on `b`, so it alone is held.
+/// A LATER TIER STARTS ONLY ONCE EVERY EARLIER ONE PASSED (CLOUD-2853; owner
+/// ruling, `.batten/asked.jsonl:223`). Fails by: a group after a red one
+/// starting (the CLOUD-2789 shape this reverses), a skipped row missing from
+/// the red list, or the run exiting 0 over a red. `t1` holds a red and a green
+/// row; `t2` and `t3` are green and independent of both, and never start.
 #[test]
-fn a_red_group_stops_no_later_group_and_every_red_is_listed() {
+fn a_red_group_stops_every_later_group_and_every_red_is_listed() {
     let rows = [
         node_in("t1", "a", 2, &[]),
         node_in("t1", "a-ok", 0, &[]),
-        node_in("t2", "b", 2, &[]),
-        node_in("t2", "c", 0, &["b"]),
-        node_in("t2", "d", 0, &[]),
+        node_in("t2", "b", 0, &[]),
+        node_in("t3", "c", 0, &[]),
     ]
     .concat();
     let graph = Graph::new("tiers", &rows);
-    let out = graph.run(&["t1", "t2=1"]);
+    let out = graph.run(&["t1", "t2", "t3"]);
     let stderr = common::stderr(&out);
     assert_eq!(out.status.code(), Some(2), "{stderr}");
-    for ran in ["a", "a-ok", "b", "d"] {
+    for ran in ["a", "a-ok"] {
         assert!(graph.started(ran), "{ran} ran: {stderr}");
     }
-    assert!(
-        !graph.started("c"),
-        "a genuine dependency still holds: {stderr}"
-    );
+    for held in ["b", "c"] {
+        assert!(!graph.started(held), "{held} never started: {stderr}");
+    }
     for red in [
         "step graph: red t1 a ran 2",
-        "step graph: red t2 b ran 2",
-        "step graph: red t2 c skipped",
+        "step graph: red t2 b skipped",
+        "step graph: red t3 c skipped",
+        "step graph: t2 skipped (t1 red)",
     ] {
         assert!(stderr.contains(red), "{red}: {stderr}");
     }
     assert!(!stderr.contains("red t1 a-ok"), "{stderr}");
-    assert!(stderr.contains("step graph: t2 peak 1 of 1"), "{stderr}");
-    let events = graph.events();
-    let at = |event: &str| events.iter().position(|e| e == event).unwrap();
-    assert!(
-        at("end a") < at("start b") && at("end a-ok") < at("start b"),
-        "a group starts once the one before it ended: {events:?}"
-    );
+}
+
+/// A TIER STILL REPORTS EVERY RED IT HOLDS (CLOUD-2789, kept by CLOUD-2853).
+/// Fails by: a group stopped at its first red, so `y` or `z` never starts, or
+/// `t2` starting after the red tier.
+#[test]
+fn every_red_in_a_tier_is_reported() {
+    let rows = [
+        node_in("t1", "x", 2, &[]),
+        node_in("t1", "y", 3, &[]),
+        node_in("t1", "z", 0, &[]),
+        node_in("t2", "w", 0, &[]),
+    ]
+    .concat();
+    let graph = Graph::new("tier-reds", &rows);
+    let out = graph.run(&["t1", "t2"]);
+    let stderr = common::stderr(&out);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    for ran in ["x", "y", "z"] {
+        assert!(graph.started(ran), "{ran} ran: {stderr}");
+    }
+    assert!(!graph.started("w"), "w never started: {stderr}");
+    for red in ["step graph: red t1 x ran 2", "step graph: red t1 y ran 3"] {
+        assert!(stderr.contains(red), "{red}: {stderr}");
+    }
 }
 
 #[test]

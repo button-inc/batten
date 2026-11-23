@@ -19605,9 +19605,10 @@ group = "verify-2"
 run = ["mise", "run", "lint:clippy"]
 
 # verify-3 and verify-4 (CLOUD-2789): the suite tier, then `perf-gate` alone.
-# They were lines of `verify:gated`'s `run` array, which a red tier stopped
-# before they started; as groups of the same call, a red tier 1 or 2 no longer
-# hides what the suite would say. `verify-3=1` keeps them one at a time.
+# As groups of one call, each starts only once every earlier tier passed
+# (CLOUD-2853, `.batten/asked.jsonl:223`): the scheduler skips a later group
+# after a red one, so these rows need no `depends_on`. `verify-3=1` keeps them
+# one at a time.
 [[step]]
 id = "gate:ci-suite"
 group = "verify-3"
