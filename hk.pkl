@@ -674,11 +674,13 @@ local gate = new Mapping<String, Step> {
     check = "mise run lint:fmt"
   }
   ["cargo-clippy"] = (Builtins.cargo_clippy) {
-    // AT EVERY COMMIT, NOT THE `slow` TIER. A warning is a defect, and in the slow
-    // tier it was refused only by a land lap, hours after it was written: five
-    // committed and pushed unseen on PR #1276 (census.rs, rules.rs, lib.rs). The
-    // cost is bounded by `lint:clippy`'s per-package step receipts: a package whose
-    // sources did not move is a receipt hit, so a commit pays for what it changed.
+    // `slow` tier: a whole-workspace compile at --all-targets --all-features. A
+    // commit hook is a batten hook and answers to the same 10 ms / 100 ms budget:
+    // it proves a commit WELL-FORMED, on pinned released binaries, and compiles
+    // nothing. Warnings are denied where landing proves the tree (`verify` runs
+    // `lint:clippy` with -D warnings) and CI verifies it; a branch pushed without
+    // a lap is unproven, which is what a draft PR is.
+    profiles = List("slow")
     // ONE JOB, NOT ONE PER CARGO WORKSPACE (CLOUD-2051). The builtin carries
     // `workspace_indicator = "Cargo.toml"`, so hk formed a job for `fuzz/` (its own
     // `[workspace]`) as well as the root — and both ran `lint:clippy`, which ignores
@@ -1065,7 +1067,7 @@ hooks {
   ["commit-msg"] {
     steps {
       ["conventional-commit"] {
-        check = "mise run commit-msg {{commit_msg_file}}"
+        check = "batten commit check --message {{commit_msg_file}}"
       }
       // The commit-time half of the attribution gate (CLOUD-274). Range mode runs
       // from `commit-lint` and catches an offending commit after it exists; this
@@ -1073,7 +1075,7 @@ hooks {
       // the identity git is about to stamp, so refusing here means the commit is
       // never created and there is nothing to amend or rebase away.
       ["commit-attribution"] {
-        check = "mise run commit-attribution-msg {{commit_msg_file}}"
+        check = "batten attribution check --message {{commit_msg_file}}"
       }
     }
   }
@@ -1108,14 +1110,15 @@ hooks {
       // by one ratchet (CLOUD-2821): a worse metric or a record looser than the
       // tree is refused, and `mise run modules-ratchet` tightens it.
       //
-      // THE BRANCH ENGINE, NOT THE PATH ONE, until the pin names a release that
-      // carries `modules ratchet` (plan step 14). The PATH engine is the latest
-      // RELEASE wherever this runs — CI, main, a fresh container — and v0.0.220
-      // has no such verb, so forcing `BATTEN_BIN=batten` refused every commit
-      // touching Rust source everywhere but a machine that had run
-      // `mise run install:local`, which only hid the defect. `vars.batten`'s
-      // default compiles the tree's own engine; step 14 restores the override.
+      // `slow` UNTIL THE PIN CARRIES THE VERB. A commit step runs the pinned
+      // released binary and compiles nothing (the 10 ms / 100 ms hook budget), and
+      // v0.0.220 has no `modules ratchet`, so the only engine that could run it
+      // here is the tree's own, through `cargo run`: a compile on every commit.
+      // Landing still runs it (`verify` reaches the `slow` profile). Plan step 14,
+      // the bump to v0.0.221, puts this back in the default set as
+      // `batten modules ratchet --record modules.lock --check` on the pinned binary.
       ["module-census-pinned"] {
+        profiles = List("slow")
         glob = List("crates/**/src/**/*.rs", "modules.lock")
         check = "env MISE_TASK_TIMINGS=0 mise run -q modules-ratchet:check"
       }
