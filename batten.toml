@@ -7710,10 +7710,9 @@ line_sources = [
   "tests/**/*.bats",
   "mise-tasks/**",
   "mise.toml",
-  "crates/batten/src/**/*.rs",
-  "crates/batten-facts/src/**/*.rs",
-  "crates/batten-base/src/**/*.rs",
-  "crates/batten-core/src/**/*.rs",
+  # Every package's source, not a list of them (#1276): the list missed
+  # `batten-fsio` and `batten-stream`.
+  "crates/*/src/**/*.rs",
   # The crate split's other homes (#1276): `batten-codemods` holds suites the
   # crate-split rows name (`tests/cut_crate.rs`), and `tools/*` its own. Outside
   # these globs an obligation naming one could never bind.
