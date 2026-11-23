@@ -435,3 +435,65 @@ fn a_non_mcp_tool_never_reaches_the_handler_at_all() {
     assert!(!answer.out.contains(r#""deny""#), "{}", answer.out);
     assert!(answer.err.is_empty(), "{}", answer.err);
 }
+
+/// ONE CALL, EVERY SURFACE (CLOUD-2789): the committed guard judges a connector
+/// call made through `batten mcp call` on a shell exactly as it judges the
+/// direct call. A handler selected by the mediated name receives the mediated
+/// call (`tool_name`, `tool_input`), so the committed table's deny refuses it
+/// and its allow pre-approves it, while a plain shell call stays undecided.
+///
+/// Fails by: the handler receiving the host's shell payload, whose `tool_name`
+/// the guard cannot resolve, so the mediated route escapes the deny.
+#[test]
+fn the_committed_guard_judges_a_mediated_call_as_the_direct_one() {
+    use std::io::Write as _;
+
+    let bench = bench("cad-mediated");
+    let shell = |command: &str| {
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        })
+        .to_string();
+        let mut child = common::batten()
+            .current_dir(&bench.repo)
+            .args(["adjudicate", "--harness", "claude-code"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("the binary runs");
+        child
+            .stdin
+            .take()
+            .expect("stdin is piped")
+            .write_all(payload.as_bytes())
+            .expect("write stdin");
+        stdout(&child.streamed_wait().expect("wait for batten"))
+    };
+    let server = RESOLVABLE.trim_start_matches("mcp__");
+    let direct = bench.door(&format!("{RESOLVABLE}__archive_session"));
+    assert!(
+        direct.out.contains(r#""permissionDecision":"deny""#),
+        "the premise: the direct call is denied: {}",
+        direct.out
+    );
+    let denied = shell(&format!("batten mcp call {server} archive_session '{{}}'"));
+    assert!(
+        denied.contains(r#""permissionDecision":"deny""#)
+            && denied.contains("hook.handler.connector-allow-guard"),
+        "the mediated call is denied as the direct one is: {denied}"
+    );
+    let allowed = shell(&format!("batten mcp call {server} create_session '{{}}'"));
+    assert!(
+        allowed.contains(r#""permissionDecision":"allow""#),
+        "the mediated call is pre-approved as the direct one is: {allowed}"
+    );
+    // NEGATIVE CONTROL: a shell call mediating nothing is not the guard's.
+    let plain = shell("ls");
+    assert!(
+        !plain.contains("connector-allow-guard"),
+        "a plain shell call never reaches the guard: {plain}"
+    );
+}
