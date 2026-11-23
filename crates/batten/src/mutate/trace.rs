@@ -490,21 +490,59 @@ pub(crate) fn await_trace(path: &Path) -> Option<String> {
 }
 
 /// A strace string argument up to its closing quote, with the text after it,
-/// or `None` for an escape other than `\"` and `\\`, or a string strace cut
-/// short.
+/// or `None` for a string strace cut short, an escape it never writes, or
+/// bytes that are not UTF-8.
+///
+/// STRACE'S C ESCAPES DECODE (CLOUD-2835): `\"`, `\\`, the named controls
+/// (`\n`, `\t`, `\r`, `\v`, `\f`, `\a`, `\b`), `\xHH` and up to three octal
+/// digits. Refusing all but the first two left `darwin-link` unrecorded on
+/// every lap: Python probes `python3.13\n._pth`, and one such line made the
+/// whole trace unreadable.
 fn quoted_arg(text: &str) -> Option<(String, &str)> {
-    let mut out = String::new();
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => {
-                let rest = chars.as_str();
-                return (!rest.starts_with("...")).then_some((out, rest));
+    let bytes = text.as_bytes();
+    let octal = |at: usize| {
+        bytes
+            .get(at)
+            .is_some_and(|byte| (b'0'..b'8').contains(byte))
+    };
+    let mut out: Vec<u8> = Vec::new();
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        at += 1;
+        match byte {
+            b'"' => {
+                let rest = text.get(at..)?;
+                if rest.starts_with("...") {
+                    return None;
+                }
+                return String::from_utf8(out).ok().map(|out| (out, rest));
             }
-            '\\' => match chars.next()? {
-                escaped @ ('"' | '\\') => out.push(escaped),
-                _ => return None,
-            },
+            b'\\' => {
+                let escaped = *bytes.get(at)?;
+                at += 1;
+                match escaped {
+                    b'"' | b'\\' => out.push(escaped),
+                    b'n' => out.push(b'\n'),
+                    b't' => out.push(b'\t'),
+                    b'r' => out.push(b'\r'),
+                    b'v' => out.push(0x0b),
+                    b'f' => out.push(0x0c),
+                    b'a' => out.push(0x07),
+                    b'b' => out.push(0x08),
+                    b'x' => {
+                        out.push(u8::from_str_radix(text.get(at..at + 2)?, 16).ok()?);
+                        at += 2;
+                    }
+                    b'0'..=b'7' => {
+                        let start = at - 1;
+                        while at < start + 3 && octal(at) {
+                            at += 1;
+                        }
+                        out.push(u8::from_str_radix(text.get(start..at)?, 8).ok()?);
+                    }
+                    _ => return None,
+                }
+            }
             other => out.push(other),
         }
     }
@@ -674,6 +712,42 @@ mod tests {
             accessed(&["7     readlink(\"c\", \"x\", 4095) = 1"]),
             vec![(PathBuf::from("/repo/c"), Read)],
             "a link's target is its bytes"
+        );
+    }
+
+    // STRACE'S C ESCAPES DECODE (CLOUD-2835): `darwin-link`'s trace never read
+    // whole because Python probes `python3.13\n._pth`, a path holding a
+    // newline, and any escape but `\"` and `\\` refused the whole trace.
+    #[test]
+    fn a_path_spelled_with_a_c_escape_decodes() {
+        use super::Access::Read;
+        assert_eq!(
+            accessed(&[
+                "7     openat(AT_FDCWD</repo>, \"/bin/py3\\n._pth\", O_RDONLY) = -1 ENOENT (No such \
+                 file or directory)"
+            ]),
+            vec![(PathBuf::from("/bin/py3\n._pth"), Read)]
+        );
+        for (spelled, meant) in [
+            ("a\\tb", "a\tb"),
+            ("a\\x41b", "aAb"),
+            ("a\\101b", "aAb"),
+            ("a\\0", "a\0"),
+            ("q\\\"\\\\", "q\"\\"),
+        ] {
+            assert_eq!(
+                super::quoted_arg(&format!("{spelled}\", 0")).map(|(arg, _)| arg),
+                Some(meant.to_owned()),
+                "{spelled}"
+            );
+        }
+        // NOT UTF-8 IS STILL UNREAD: a path that cannot be held as text is not
+        // guessed at.
+        assert_eq!(super::quoted_arg("\\377\", 0"), None);
+        assert_eq!(
+            super::quoted_arg("\\q\", 0"),
+            None,
+            "an escape strace never writes"
         );
     }
 
