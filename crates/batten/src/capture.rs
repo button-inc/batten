@@ -1878,13 +1878,13 @@ pub fn is_view(repo_root: &Path, path: &Path) -> bool {
     let Ok(dir) = captures_dir(repo_root) else {
         return false;
     };
-    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir().map_or_else(|_| path.to_path_buf(), |here| here.join(path))
     };
-    absolute.starts_with(&dir) || canonical(&absolute).starts_with(canonical(&dir))
+    absolute.starts_with(&dir)
+        || crate::git::canonical(&absolute).starts_with(crate::git::canonical(&dir))
 }
 
 // --- navigation (CLOUD-121) --------------------------------------------------
