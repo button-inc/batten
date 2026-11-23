@@ -20068,7 +20068,7 @@ fn boundary_prologue(
         return Ok(Some(HookDispatch::undenied(ExitCode::Success)));
     }
     rearm_unlanded(envelope);
-    record_directive(envelope);
+    record_directive(&harness.capabilities(), envelope);
     Ok(None)
 }
 
@@ -25200,15 +25200,16 @@ const CORRECTIONS: &str = "corrections";
 /// operator. One JSON line per message, so a prompt spanning lines stays one
 /// entry. Fail-silent like every hook-path write: a journal that will not take
 /// an entry must never cost the prompt.
-fn record_directive(envelope: &hook::Envelope) {
+fn record_directive(capabilities: &hook::Capabilities, envelope: &hook::Envelope) {
     if envelope.event != crate::config_model::Event::UserPromptSubmit {
         return;
     }
+    // The host's own text in the user role is not a directive (CLOUD-2825).
     let Some(prompt) = envelope
         .input
         .get("prompt")
         .and_then(serde_json::Value::as_str)
-        .filter(|prompt| !prompt.trim().is_empty())
+        .filter(|prompt| !prompt.trim().is_empty() && !capabilities.injected(prompt))
     else {
         return;
     };
