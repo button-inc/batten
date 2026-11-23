@@ -14,6 +14,10 @@ use std::process::Output;
 /// <name>`, and exits with `$2` (0 when absent).
 const NODE: &str = "#!/bin/sh\necho \"start $1\" >>\"$GRAPH_LOG\"\nsleep 0.3\necho \"end $1\" >>\"$GRAPH_LOG\"\nexit \"${2:-0}\"\n";
 
+/// A slow node: [`NODE`] holding long enough that a line written when another
+/// node ends is plainly read while this one still runs.
+const SLOW: &str = "#!/bin/sh\necho \"start $1\" >>\"$GRAPH_LOG\"\nsleep 3\necho \"end $1\" >>\"$GRAPH_LOG\"\nexit 0\n";
+
 struct Graph {
     dir: PathBuf,
     log: PathBuf,
@@ -24,9 +28,10 @@ impl Graph {
     fn new(name: &str, rows: &str) -> Self {
         let dir = common::scratch(&format!("step-graph-{name}"));
         common::write(&dir, "bin/node", NODE);
-        {
+        common::write(&dir, "bin/slow", SLOW);
+        for script in ["bin/node", "bin/slow"] {
             use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(dir.join("bin/node"), std::fs::Permissions::from_mode(0o755))
+            std::fs::set_permissions(dir.join(script), std::fs::Permissions::from_mode(0o755))
                 .expect("chmod");
         }
         common::write(&dir, ".gitignore", "bin/\ngraph.log\n");
@@ -49,6 +54,35 @@ impl Graph {
             .env_remove("BATTEN_TASK_PID")
             .streamed_output()
             .expect("run batten")
+    }
+
+    /// Run the graph, reading its stderr as it arrives: the events the node log
+    /// held when the first line starting `line` arrived, and every line read.
+    fn events_when(&self, args: &[&str], line: &str) -> (Option<Vec<String>>, Vec<String>) {
+        use std::io::BufRead as _;
+        let mut all = vec!["step", "graph", "run"];
+        all.extend_from_slice(args);
+        let mut command = common::batten();
+        command
+            .args(&all)
+            .current_dir(&self.dir)
+            .env("GRAPH_LOG", &self.log)
+            .env_remove("CI")
+            .env_remove("BATTEN_TASK_PID")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped());
+        let mut child = command.spawn().expect("spawn batten");
+        let stderr = child.stderr.take().expect("piped stderr");
+        let (mut seen, mut lines) = (None, Vec::new());
+        for read in std::io::BufReader::new(stderr).lines() {
+            let read = read.expect("read stderr");
+            if seen.is_none() && read.starts_with(line) {
+                seen = Some(self.events());
+            }
+            lines.push(read);
+        }
+        child.wait().expect("wait for batten");
+        (seen, lines)
     }
 
     fn events(&self) -> Vec<String> {
@@ -95,6 +129,82 @@ fn node_in(group: &str, id: &str, code: u8, after: &[&str]) -> String {
     format!(
         "[[step]]\nid = \"{id}\"\ngroup = \"{group}\"\nrun = [\"bin/node\", \"{id}\", \"{code}\"]\ndepends_on = [{after}]\n\n"
     )
+}
+
+/// A [`SLOW`] node of group `group`, depending on nothing.
+fn slow_in(group: &str, id: &str) -> String {
+    format!(
+        "[[step]]\nid = \"{id}\"\ngroup = \"{group}\"\nrun = [\"bin/slow\", \"{id}\"]\ndepends_on = []\n\n"
+    )
+}
+
+/// The fields of a `step graph: <ok|red> <group> <id> <exit> <secs> <pointer>`
+/// line, after `step graph: `, checked for shape: six of them, a code, a
+/// decimal second count and a one-token pointer.
+fn verdict_fields(line: &str) -> Vec<String> {
+    let fields: Vec<String> = line
+        .strip_prefix("step graph: ")
+        .unwrap_or_default()
+        .split(' ')
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(fields.len(), 6, "{line}");
+    assert!(fields[3].parse::<i32>().is_ok(), "{line}");
+    assert!(fields[4].parse::<f64>().is_ok(), "{line}");
+    assert!(!fields[5].is_empty(), "{line}");
+    fields
+}
+
+/// A FINISHED STEP'S VERDICT IS WRITTEN WHEN IT FINISHES (CLOUD-2838), and a
+/// red tier stops every later one (CLOUD-2853). Group 1 holds a red and a
+/// green step; group 2's slow step never starts. Fails by: no six-field
+/// verdict line for either group-1 step, or group 2 running after the red.
+/// The timing of the line is the sibling case's to show.
+#[test]
+fn a_red_step_in_an_earlier_group_is_read_before_a_later_group_ends() {
+    let rows = [
+        node_in("t1", "a", 2, &[]),
+        node_in("t1", "b", 0, &[]),
+        slow_in("t2", "slow"),
+    ]
+    .concat();
+    let graph = Graph::new("live-groups", &rows);
+    let (seen, lines) = graph.events_when(&["t1", "t2"], "step graph: red t1 a ");
+    let seen = seen.unwrap_or_else(|| panic!("no red line for a: {lines:#?}"));
+    assert!(
+        !seen.iter().any(|event| event == "start slow"),
+        "group 2 started after group 1's red: {seen:?}"
+    );
+    let red = lines
+        .iter()
+        .find(|line| line.starts_with("step graph: red t1 a "))
+        .expect("the red line");
+    assert_eq!(verdict_fields(red)[..4], ["red", "t1", "a", "2"], "{red}");
+    let ok = lines
+        .iter()
+        .find(|line| line.starts_with("step graph: ok t1 b "))
+        .unwrap_or_else(|| panic!("no ok line for b: {lines:#?}"));
+    assert_eq!(verdict_fields(ok)[..4], ["ok", "t1", "b", "0"], "{ok}");
+    assert!(
+        lines.iter().any(|line| line.starts_with("step graph: t2 skipped")),
+        "group 2 is reported skipped: {lines:#?}"
+    );
+    assert!(!graph.started("slow"), "group 2's step never ran");
+}
+
+/// The same within one group: a fast red sibling is read while a slow sibling
+/// still runs, which is where #1276's tier-2 `test-replay` red waited.
+#[test]
+fn a_red_step_is_read_while_its_slow_sibling_still_runs() {
+    let rows = [node("a", 2, &[]), slow_in("g", "slow")].concat();
+    let graph = Graph::new("live-siblings", &rows);
+    let (seen, lines) = graph.events_when(&["g"], "step graph: red g a ");
+    let seen = seen.unwrap_or_else(|| panic!("no red line for a: {lines:#?}"));
+    assert!(
+        seen.iter().any(|event| event == "start slow")
+            && !seen.iter().any(|event| event == "end slow"),
+        "the red line waited for its sibling to end: {seen:?}"
+    );
 }
 
 /// A LATER TIER STARTS ONLY ONCE EVERY EARLIER ONE PASSED (CLOUD-2853; owner
