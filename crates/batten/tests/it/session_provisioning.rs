@@ -62,7 +62,7 @@
 //!
 // carried: "doctor runs inside the synchronous window — after install, before the preflight" crates/batten/tests/it/session_provisioning.rs
 // carried: "mise install runs — the step whose absence was the defect" crates/batten/tests/it/session_provisioning.rs
-// carried: "the install is lockfile-free — provisioning must not dirty the tracked lock" crates/batten/tests/it/session_provisioning.rs
+// carried: "the install is lockfile-free — provisioning must not dirty the tracked lock" crates/batten/tests/it/session_provisioning.rs carried by `the_install_step_is_declared_locked`: the invariant is unchanged and the mechanism is a LOCKED install (CLOUD-2688), which reads `mise.lock` and never writes it
 // carried: "a failed step exits non-zero — absence must never be silent" crates/batten/tests/it/session_provisioning.rs
 // carried: "the hook is registered as a SessionStart hook" crates/batten/tests/it/session_provisioning.rs
 //!
@@ -86,8 +86,10 @@
 //!   end-to-end half of the CLOUD-223 residue check. `[settings] lockfile = false`
 //!   in `mise.toml` is the authority and `mise run lock-complete` is the standing
 //!   gate; what is lost is the observation that THIS provisioning path honours it,
-//!   and `session:install` carrying `MISE_LOCKFILE=false` is asserted below as the
-//!   declaration rather than as the effect.
+//!   and `session:install` carrying `MISE_LOCKED=true` and `MISE_LOCKFILE=true` (a
+//!   locked install reads the lock and never writes it, CLOUD-2688) is asserted
+//!   below by `the_install_step_is_declared_locked`, as the declaration rather
+//!   than as the effect.
 //! * `"the git hooks are installed — the per-clone step that was absent"` ran the
 //!   hook and then stat-ed two symlinks. `doctor` decides that same state on every
 //!   later run — which the retired case's own comment already named as its
@@ -95,7 +97,7 @@
 //!   is lost is the end-to-end pairing of the step with its effect in one case.
 //!
 // changed: "the hook runs green on this checkout" crates/batten/tests/it/session_provisioning.rs the exit-0-and-silent half survives as `a_step_that_passes_says_nothing`, against stubs; the END-TO-END half is withdrawn, because dispatching the real rows provisions a container inside `test:cargo` — 141s measured cold — which is the cost CLOUD-1268 exists to stop moving between lanes. What covers it instead is the session itself: a failed step reports on the advisory channel at the moment it fails
-// changed: "running the hook leaves the tracked lockfile untouched" crates/batten/tests/it/session_provisioning.rs narrowed from the EFFECT to the DECLARATION: `the_install_step_is_declared_lockfile_free` asserts `session:install` carries MISE_LOCKFILE=false, where the retired case ran the hook and diffed `git status -- mise.lock`. `[settings] lockfile = false` in mise.toml is the standing authority and `lock cover partial` the standing gate; what is lost is the observation that this particular path honours it
+// changed: "running the hook leaves the tracked lockfile untouched" crates/batten/tests/it/session_provisioning.rs narrowed from the EFFECT to the DECLARATION: `the_install_step_is_declared_locked` asserts `session:install` carries MISE_LOCKED=true and MISE_LOCKFILE=true (CLOUD-2688: a locked install reads `mise.lock` and never writes it), where the retired case ran the hook and diffed `git status -- mise.lock`. `lock cover partial` is the standing gate; what is lost is the observation that this particular path honours it
 // changed: "the session-start hook calls it — the whole point is WHEN it runs" crates/batten/tests/it/session_provisioning.rs from `tests/container-preflight.bats`. The case grepped the retired script for `container-preflight`; the property — that a preflight nothing runs at startup is worthless — is now a declared row, and its POSITION is asserted too, which the grep could not say. CLOUD-1753 retired the subject as well and split that row into `session-container-preflight` and `session-credential`, so the property is now carried by both and the position clause covers their order
 // changed: "the hook passes --degraded when provisioning failed" batten.toml the capability is gone rather than moved, and this is the one real loss in this retirement. `--degraded` told the preflight not to trust toolchain-dependent probes when an earlier step had failed, and it worked because the script carried a `fail` variable across its steps. Handlers share no state — each is its own process with its own outcome — so nothing can compute the flag. The consequence is bounded: a container whose install failed now gets the full probe set, so it may report a second symptom of one cause, and both refusals arrive in the same reply. Recovering it needs a fact the door does not carry; filed rather than papered over
 // changed: "the fixer is wired: session-start runs it, so a clone is compliant before it commits" crates/batten/tests/it/session_provisioning.rs from `tests/commit-attribution.bats`, whose own subject (hk.pkl, mise.toml) survives. The case grepped the retired script for its `step attribution-identity` line; the property — that the identity fixer runs before a clone commits — is now the `session-attribution-identity` row, asserted by `the_committed_provisioning_declares_every_step_in_order`. It is CHANGED rather than CARRIED because the retired case pinned the invocation's exact spelling inside a program and this pins a row's presence and position in a list
