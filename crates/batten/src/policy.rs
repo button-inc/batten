@@ -458,10 +458,47 @@ impl Bundle {
             .map(Vec::as_slice)
     }
 
-    /// Whether this bundle evaluates as cached bytecode (CLOUD-2236).
+    /// Whether this bundle evaluates as bytecode (CLOUD-2236).
     #[must_use]
     pub fn is_bytecode(&self) -> bool {
-        matches!(self.evaluator, Evaluator::Compiled(_))
+        matches!(self.evaluator, Evaluator::Compiled(..))
+    }
+
+    /// Which evaluator decides this bundle's verdicts, and why where it is the
+    /// interpreter (#1276).
+    #[must_use]
+    pub fn execution(&self) -> Execution {
+        match &self.evaluator {
+            Evaluator::Compiled(compiled, _) => Execution::Bytecode {
+                cached: compiled.cached,
+            },
+            Evaluator::Interpreted { why, .. } => Execution::Interpreted(*why),
+        }
+    }
+
+    /// What the bytecode compiler said when it refused this bundle, if it did.
+    #[must_use]
+    pub fn fallback_detail(&self) -> Option<&str> {
+        match &self.evaluator {
+            Evaluator::Interpreted { detail, .. } => detail.as_deref(),
+            Evaluator::Compiled(..) => None,
+        }
+    }
+
+    /// This bundle evaluating on its interpreter, where it holds one: what a
+    /// parity check compares bytecode against. `None` for a hot-path bundle
+    /// read from the cache, which carries no interpreter.
+    #[must_use]
+    pub fn as_interpreted(&self) -> Option<Self> {
+        let engine = self.evaluator.engine()?.clone();
+        Some(Self {
+            evaluator: Evaluator::Interpreted {
+                engine: Box::new(engine),
+                why: Fallback::NotOffered,
+                detail: None,
+            },
+            ..self.clone()
+        })
     }
 
     /// The enabling rule's id.
@@ -507,8 +544,9 @@ impl Bundle {
     #[must_use]
     pub fn session_start_facts(&self) -> BTreeSet<&'static str> {
         // Bytecode carries no AST, so its reading was taken when the cache
-        // entry was written, from the same source this would describe.
-        if let Evaluator::Compiled(compiled) = &self.evaluator {
+        // entry was written, from the same source this would describe. A
+        // checked load keeps its interpreter, and reads its own full text.
+        if let Evaluator::Compiled(compiled, None) = &self.evaluator {
             return compiled
                 .facts
                 .iter()
@@ -553,7 +591,7 @@ impl Bundle {
     /// is the side an undeterminable answer must fall on.
     #[must_use]
     pub fn tree_reads(&self) -> Reads {
-        if let Evaluator::Compiled(compiled) = &self.evaluator {
+        if let Evaluator::Compiled(compiled, None) = &self.evaluator {
             return compiled.reads.as_ref().map_or(Reads::Opaque, |keys| {
                 Reads::Known(keys.iter().cloned().collect())
             });
@@ -1230,6 +1268,16 @@ fn check_loaded(
     (emitted, per_rule): Raised<'_>,
 ) -> Result<()> {
     check_tree_paths_are_emittable(rule, bundle, source)?;
+    // A `:=` the bytecode guard cannot cover would decide differently on the
+    // hook path than under `policy test` (#1276), so it is a config fault here.
+    if let Some(at) = bundle.evaluator.engine().and_then(unguardable_assignment) {
+        return Err(UsageError::raise(format!(
+            "rule `{}`: `{at}` binds `:=` to a pattern naming no variable, which the bytecode \
+             cannot guard against an undefined right side; bind a named variable, or test \
+             definedness with `_ := e`",
+            rule.id
+        )));
+    }
     // A module row's sources may be copies `batten preset eject` wrote
     // (CLOUD-2290); a preset arm passes none and takes the plain check.
     match sources {
@@ -1256,12 +1304,12 @@ fn compile_for(
     (pattern_data, pattern_text): (&serde_json::Value, &PatternText),
     checks: ModuleChecks,
 ) -> Result<Bundle> {
+    let (text, digest) = pattern_text.get_or_init(|| {
+        let text = pattern_data.to_string();
+        let digest = *blake3::hash(text.as_bytes()).as_bytes();
+        (text, digest)
+    });
     if checks == ModuleChecks::SkipOnHotPath {
-        let (text, digest) = pattern_text.get_or_init(|| {
-            let text = pattern_data.to_string();
-            let digest = *blake3::hash(text.as_bytes()).as_bytes();
-            (text, digest)
-        });
         compile_cached(root, id, sources, pattern_data, (text, digest))
     } else {
         compile(id, sources, pattern_data)
@@ -1445,10 +1493,11 @@ fn read_sources(
 /// line starting `test_` at column zero opens a test rule, and everything up to
 /// the next column-zero line that opens something else belongs to it.
 ///
-/// **`ModuleChecks::SkipOnHotPath` is the only caller**, which is what keeps this
-/// from being a way to lose a test: `policy test` compiles the full text, and so
-/// does every load that runs the module checks. A stripped module is never the
-/// one anything is graded against.
+/// **Only verdict programs are compiled from its output**, which is what keeps
+/// this from being a way to lose a test: the hot path's sources, and the
+/// bytecode a checked load decides on (#1276). `policy test` compiles the full
+/// text, and so does every load's interpreter that runs the module checks. A
+/// stripped module is never the one anything is graded against.
 fn without_test_rules(source: &str) -> String {
     let mut kept = String::with_capacity(source.len());
     let mut dropping = false;
@@ -1601,7 +1650,11 @@ pub fn compile(
         // for the value that decides whether a refusal refuses.
         severity: crate::severity::RuleSeverity::Deny,
         predicate_severity: BTreeMap::new(),
-        evaluator: Evaluator::Interpreted(Box::new(engine)),
+        evaluator: Evaluator::Interpreted {
+            engine: Box::new(engine),
+            why: Fallback::NotOffered,
+            detail: None,
+        },
         described: std::sync::OnceLock::new(),
         reads: std::sync::OnceLock::new(),
     })
@@ -1849,22 +1902,135 @@ impl Answer {
 /// How a bundle evaluates (CLOUD-2236).
 #[derive(Clone)]
 enum Evaluator {
-    /// The interpreter, compiled from source in this process. Boxed: an
-    /// engine is several times the size of the shared bytecode handle.
-    Interpreted(Box<regorus::Engine>),
-    /// Bytecode a previous call compiled and cached.
-    Compiled(std::sync::Arc<Compiled>),
+    /// The interpreter, compiled from source in this process, and WHY it is not
+    /// bytecode (#1276). Boxed: an engine is several times the size of the
+    /// shared bytecode handle.
+    Interpreted {
+        engine: Box<regorus::Engine>,
+        why: Fallback,
+        /// What the bytecode compiler said, where it refused.
+        detail: Option<std::sync::Arc<str>>,
+    },
+    /// Bytecode, read from the cache or compiled by this process. The
+    /// interpreter rides along where a surface that reports config faults
+    /// loaded it: its checks, `policy test` and the sweeps read the AST, which
+    /// bytecode does not carry. It never decides a verdict here. Shared, so a
+    /// bundle clone stays a refcount.
+    Compiled(
+        std::sync::Arc<Compiled>,
+        Option<std::sync::Arc<regorus::Engine>>,
+    ),
 }
 
 impl Evaluator {
-    /// The interpreter, where this bundle has one. Bytecode is loaded only on
-    /// the hot path, whose bundles nothing describes, tests or sweeps.
+    /// The interpreter, where this bundle has one: always for an interpreted
+    /// bundle, and for bytecode loaded off the hot path.
     fn engine(&self) -> Option<&regorus::Engine> {
         match self {
-            Self::Interpreted(engine) => Some(engine.as_ref()),
-            Self::Compiled(_) => None,
+            Self::Interpreted { engine, .. } => Some(engine.as_ref()),
+            Self::Compiled(_, engine) => engine.as_deref(),
         }
     }
+}
+
+/// Why a bundle evaluates on the tree-walking interpreter rather than on
+/// bytecode (#1276).
+///
+/// **A CLOSED SET, AND EVERY INTERPRETED BUNDLE CARRIES ONE.** `enforce` and
+/// `check` once loaded every bundle interpreted with nothing recording it — the
+/// bytecode cache served only the hook path — and the lap's live half spent
+/// most of its 824 s in the interpreter unnoticed. A fallback is now a value the
+/// type requires, read by `-vv`'s census and by the gate that holds every
+/// shipped module on bytecode (`policy_execution`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Fallback {
+    /// Built by [`compile`] alone and never offered to the bytecode compiler:
+    /// a test, analysis or lint surface that asked for the interpreter.
+    NotOffered,
+    /// The `:=` guard could not be spliced into the source
+    /// ([`guarded_sources`]): the AST would not serialise, or an offset is not
+    /// a character boundary.
+    GuardUnavailable,
+    /// A guarded module would not parse again.
+    GuardedSourceRefused,
+    /// The bundle defines none of the [`ANSWERED_RULES`], so no entry point
+    /// exists to compile.
+    NoAnsweredRule,
+    /// The bytecode compiler refused a construct the bundle uses.
+    CompileRefused,
+    /// A partial set under an indexed reference (`f[k] contains v`), which the
+    /// bytecode compiler accepts and answers wrongly ([`keyed_partial_set`]).
+    KeyedPartialSet,
+    /// A rule with an `else` body, which the bytecode drops after a body that
+    /// iterates nothing ([`rule_else`]).
+    RuleElse,
+}
+
+impl Fallback {
+    /// The reason's stable token.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotOffered => "not-offered",
+            Self::GuardUnavailable => "guard-unavailable",
+            Self::GuardedSourceRefused => "guarded-source-refused",
+            Self::NoAnsweredRule => "no-answered-rule",
+            Self::CompileRefused => "compile-refused",
+            Self::KeyedPartialSet => "keyed-partial-set",
+            Self::RuleElse => "rule-else",
+        }
+    }
+}
+
+/// Which evaluator a bundle's verdicts run on (#1276).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Execution {
+    /// Bytecode: `cached` when the program was read from the `.rvm` entry
+    /// rather than compiled by this process.
+    Bytecode {
+        /// Read from the cache, not compiled here.
+        cached: bool,
+    },
+    /// The interpreter, for this reason.
+    Interpreted(Fallback),
+}
+
+impl std::fmt::Display for Execution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bytecode { cached: true } => f.write_str("bytecode cached"),
+            Self::Bytecode { cached: false } => f.write_str("bytecode compiled"),
+            Self::Interpreted(why) => write!(f, "interpreter {}", why.as_str()),
+        }
+    }
+}
+
+/// Every verdict evaluation this process ran, per bundle and evaluator: the
+/// census `-vv` prints and `policy_execution` gates. A counter, never a clock.
+static EXECUTIONS: std::sync::Mutex<BTreeMap<(String, Execution), usize>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// Count one verdict evaluation of `bundle`.
+fn record_execution(bundle: &Bundle) {
+    if let Ok(mut held) = EXECUTIONS.lock() {
+        *held
+            .entry((bundle.id.clone(), bundle.execution()))
+            .or_insert(0) += 1;
+    }
+}
+
+/// Every verdict evaluation this process has run: `(bundle id, evaluator,
+/// count)`, by id (#1276).
+#[must_use]
+pub fn execution_census() -> Vec<(String, Execution, usize)> {
+    EXECUTIONS.lock().map_or_else(
+        |_| Vec::new(),
+        |held| {
+            held.iter()
+                .map(|((id, how), count)| (id.clone(), *how, *count))
+                .collect()
+        },
+    )
 }
 
 /// Evaluate `bundle` over `input`, reading only the rules named (CLOUD-2236).
@@ -1875,14 +2041,15 @@ impl Evaluator {
 ///
 /// `None` is could-not-look: the input will not parse or the bundle faults.
 fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
+    record_execution(bundle);
     match &bundle.evaluator {
-        Evaluator::Interpreted(engine) => {
+        Evaluator::Interpreted { engine, .. } => {
             let mut engine = engine.clone();
             engine.set_input_json(input).ok()?;
             let results = engine.eval_query(PACKAGE_QUERY.to_owned(), false).ok()?;
             Some(Answer::of(&results))
         }
-        Evaluator::Compiled(compiled) => {
+        Evaluator::Compiled(compiled, _) => {
             if !Answers::open() {
                 return compiled.answer(&regorus::Value::from_json_str(input).ok()?, rules);
             }
@@ -2095,6 +2262,8 @@ pub(crate) struct Compiled {
     /// [`Reads::Opaque`] (step 13a). Bytecode carries no AST, so the reading is
     /// taken when the entry is written, as `facts` is.
     reads: Option<Vec<String>>,
+    /// Read from the `.rvm` entry rather than compiled by this process.
+    cached: bool,
 }
 
 /// The text bytecode is compiled from: each module as written, with every `:=`
@@ -2130,25 +2299,45 @@ fn guarded_sources(engine: &regorus::Engine) -> Option<Vec<(String, String)>> {
         let mut text = source.get("contents")?.as_str()?.to_owned();
         let mut guards = Vec::new();
         colon_assignments(policy.get("ast")?, &mut guards);
-        // Spliced from the end, so each offset still holds when it is used.
-        guards.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
-        for (at, guard) in guards {
-            if !text.is_char_boundary(at) {
-                return None;
-            }
+        // Every guard as text edits `(offset, bytes replaced, text)`.
+        let mut edits: Vec<(usize, usize, String)> = Vec::new();
+        for guard in guards {
             // A STRING LITERAL'S SPAN STOPS BEFORE ITS CLOSING DELIMITER (#1276):
             // regorus's span of `"x"` ends before the closing quote, so a
             // statement ending `p := "x"` ended one byte early and the guard
-            // landed INSIDE the string — `p` bound `"x; p == p"`, so every
-            // comparison against `"x"` failed on bytecode while the interpreter,
-            // which never sees the guard, held. `rules-drift.rego`'s
-            // `authority_needed` answered `[".claude/settings.json; path ==
-            // path"]`, measured.
-            let at = match text.as_bytes().get(at) {
-                Some(b'"' | b'`') => at + 1,
-                _ => at,
+            // landed INSIDE the string — `p` bound `"x; p == p"`. The
+            // interpreter never saw it; the bytecode did, and
+            // `rules-drift.rego` answered differently.
+            let end = match text.as_bytes().get(guard.end) {
+                Some(b'"' | b'`') => guard.end + 1,
+                _ => guard.end,
             };
-            text.insert_str(at, &guard);
+            // A BRACELESS BODY (`p if x := e`) TAKES ONE EXPRESSION, so the
+            // statement and its guard are braced to stay one body.
+            let braceless = text
+                .get(..guard.start)?
+                .trim_end()
+                .strip_suffix("if")
+                .is_some_and(|head| head.ends_with(|c: char| c.is_whitespace() || c == ')'));
+            if braceless {
+                edits.push((guard.start, 0, String::from("{ ")));
+                edits.push((end, 0, format!("{} }}", guard.checks)));
+            } else {
+                edits.push((end, 0, guard.checks));
+            }
+            if let Some((at, name)) = guard.wildcard {
+                edits.push((at, 1, name));
+            }
+        }
+        // Spliced from the end, so each offset still holds when it is used; at
+        // one offset the replacement first, so an insertion there (a brace
+        // before a renamed wildcard) lands in front of it, not inside it.
+        edits.sort_by_key(|(at, replaced, _)| std::cmp::Reverse((*at, *replaced)));
+        for (at, replaced, insert) in edits {
+            if !text.is_char_boundary(at) || !text.is_char_boundary(at + replaced) {
+                return None;
+            }
+            text.replace_range(at..at + replaced, &insert);
         }
         out.push((path, text));
     }
@@ -2251,7 +2440,7 @@ fn expr_text<'t>(expr: &serde_json::Value, text: &'t str) -> Option<&'t str> {
 
 /// Every `:=` statement under `node`: the byte offset its statement ends at,
 /// with the guard that goes there.
-fn colon_assignments(node: &serde_json::Value, found: &mut Vec<(usize, String)>) {
+fn colon_assignments(node: &serde_json::Value, found: &mut Vec<Guard>) {
     match node {
         serde_json::Value::Object(map) => {
             if let Some(stmts) = map.get("stmts").and_then(serde_json::Value::as_array) {
@@ -2270,10 +2459,11 @@ fn colon_assignments(node: &serde_json::Value, found: &mut Vec<(usize, String)>)
     }
 }
 
-/// A statement's guard, when it is a `:=` binding at least one named variable:
+/// A statement's guard, when it is a `:=` binding at least one named variable
+/// or a bare `_` (renamed so the guard can name it):
 /// `; v == v` per variable, at the statement's end — after any `with` modifier,
 /// which the statement's span covers.
-fn statement_guard(stmt: &serde_json::Value) -> Option<(usize, String)> {
+fn statement_guard(stmt: &serde_json::Value) -> Option<Guard> {
     let assign = stmt
         .get("literal")?
         .get("Expr")?
@@ -2282,21 +2472,53 @@ fn statement_guard(stmt: &serde_json::Value) -> Option<(usize, String)> {
     if assign.get("op")?.as_str()? != "ColEq" {
         return None;
     }
+    let lhs = assign.get("lhs")?;
+    let span = |node: &serde_json::Value, edge: &str| -> Option<usize> {
+        usize::try_from(node.get("span")?.get(edge)?.as_u64()?).ok()
+    };
     let mut vars = BTreeSet::new();
-    bound_vars(assign.get("lhs")?, &mut vars);
+    bound_vars(lhs, &mut vars);
     vars.remove("_");
+    // A BARE `_ := e` BINDS NOTHING A GUARD CAN NAME (#1276), and it is the
+    // spelling of "e is defined" — `on_pull_request(path) if _ :=
+    // triggers(path).pull_request`. Unguarded, the bytecode binds `Undefined`
+    // and the rule holds for every path. The wildcard is renamed to a variable
+    // the guard can test, which binds exactly what `_` did.
+    let mut wildcard = None;
     if vars.is_empty() {
-        return None;
+        let bare = lhs.get("Var")?;
+        if bare.get("value")?.as_str()? != "_" {
+            return None;
+        }
+        let at = span(bare, "start")?;
+        let name = format!("__batten_defined_{at}");
+        vars.insert(name.clone());
+        wildcard = Some((at, name));
     }
-    let end = usize::try_from(stmt.get("span")?.get("end")?.as_u64()?).ok()?;
-    let mut guard = String::new();
+    let mut checks = String::new();
     for var in &vars {
-        guard.push_str("; ");
-        guard.push_str(var);
-        guard.push_str(" == ");
-        guard.push_str(var);
+        checks.push_str("; ");
+        checks.push_str(var);
+        checks.push_str(" == ");
+        checks.push_str(var);
     }
-    Some((end, guard))
+    Some(Guard {
+        start: span(stmt, "start")?,
+        end: span(stmt, "end")?,
+        checks,
+        wildcard,
+    })
+}
+
+/// One `:=` statement's guard ([`statement_guard`]).
+struct Guard {
+    /// Where the statement starts and ends, in its module's bytes.
+    start: usize,
+    end: usize,
+    /// `; v == v` for each variable it binds.
+    checks: String,
+    /// A bare `_` on the left, renamed: its offset and the name it takes.
+    wildcard: Option<(usize, String)>,
 }
 
 /// The variables a binding pattern names: a bare variable, or each one inside
@@ -2344,22 +2566,83 @@ fn compile_cached(
     (text, digest): (&str, &[u8; 32]),
 ) -> Result<Bundle> {
     let key = cache_key(id, sources, digest);
-    let path = cache_path(root, id);
-    if let Some(bundle) = path
+    if let Some(bundle) = cache_path(root, id)
         .as_deref()
         .and_then(|path| read_cached(path, &key, id, sources, text))
     {
         return Ok(bundle);
     }
     let bundle = compile(id, sources, data)?;
-    let Some(compiled) = Compiled::from_bundle(&bundle, data) else {
-        if let Some(path) = path.as_deref() {
-            remember_reads(path, &key, &bundle);
+    Ok(with_bytecode(
+        root,
+        (id, sources),
+        (data, text, digest),
+        bundle,
+        false,
+    ))
+}
+
+/// `bundle`, freshly compiled from source, deciding on bytecode: the cached
+/// program where the entry under its key holds one, else compiled here and
+/// written for the next load. Where the bytecode compiler refuses, the bundle
+/// stays interpreted and says why ([`Fallback`]).
+///
+/// `keep_ast` keeps the interpreter beside the program, for a surface whose
+/// checks read the AST. The hot path drops it, so a miss and a hit hand the
+/// mediated call the same shape of bundle.
+fn with_bytecode(
+    root: &Path,
+    (id, sources): (&str, &[(String, String)]),
+    (data, text, digest): (&serde_json::Value, &str, &[u8; 32]),
+    bundle: Bundle,
+    keep_ast: bool,
+) -> Bundle {
+    // ONE ENTRY PER ROW, WHOEVER LOADS IT. The hot path strips `test_` rules
+    // before it keys ([`without_test_rules`]), so a checked load keys and
+    // compiles its program from the same stripped text: otherwise the two
+    // overwrite each other's entry and every load after a hook call is a miss.
+    // The checked bundle keeps its full-text interpreter for `policy test`
+    // and the checks; only the verdict program is the stripped one, which the
+    // hot path already proves answers alike.
+    let stripped: Vec<(String, String)>;
+    let sources = if keep_ast {
+        stripped = sources
+            .iter()
+            .map(|(path, text)| (path.clone(), without_test_rules(text)))
+            .collect();
+        &stripped[..]
+    } else {
+        sources
+    };
+    let key = cache_key(id, sources, digest);
+    let path = cache_path(root, id);
+    if keep_ast
+        && let Some((_, compiled)) = path
+            .as_deref()
+            .and_then(|path| read_program(path, &key, text))
+    {
+        return compiled.into_bundle(bundle, keep_ast);
+    }
+    let program = if keep_ast {
+        match compile(id, sources, data) {
+            Ok(program) => Some(program),
+            Err(err) => return interpreted_because(bundle, Fallback::CompileRefused, &err),
         }
-        return Ok(bundle);
+    } else {
+        None
+    };
+    let program = program.as_ref().unwrap_or(&bundle);
+    let compiled = match Compiled::from_bundle(program, data) {
+        Ok(compiled) => compiled,
+        Err((why, detail)) => {
+            if let Some(path) = path.as_deref() {
+                remember_reads(path, &key, program);
+            }
+            return interpreted_because(bundle, why, &detail);
+        }
     };
     if let Some(path) = path {
-        write_cached(&path, &key, &bundle, &compiled);
+        write_cached(&path, &key, program, &compiled);
         // THE RETIRED LOCATION GOES ON A MISS (CLOUD-2315): format 1 wrote
         // beside the state rather than under `cache/`, and nothing reads it now.
         // Here, never on a hit, so the warm path pays nothing for the move.
@@ -2367,7 +2650,278 @@ fn compile_cached(
             let _ = std::fs::remove_dir_all(dir.join("policy"));
         }
     }
-    Ok(compiled.into_bundle(bundle))
+    compiled.into_bundle(bundle, keep_ast)
+}
+
+/// Every rule of `bundle` whose value over `input` differs between bytecode and
+/// the interpreter, as `rule: bytecode <v> interpreter <v>` (#1276).
+///
+/// A diagnostic for localising a split the parity gate reports to the rule
+/// that introduces it: every non-test rule becomes an entry point, so an
+/// intermediate set that diverges is named rather than only the `violation`
+/// it feeds. Empty where there is no interpreter or nothing compiles.
+#[doc(hidden)]
+#[must_use]
+pub fn rule_splits(bundle: &Bundle, data: &serde_json::Value, input: &str) -> Vec<String> {
+    use regorus::languages::rego::compiler::Compiler;
+    let Some(source) = bundle.evaluator.engine() else {
+        return Vec::new();
+    };
+    let Some(guarded) = guarded_sources(source) else {
+        return Vec::new();
+    };
+    let mut engine = new_engine();
+    let Ok(value) = regorus::Value::from_json_str(&data.to_string()) else {
+        return Vec::new();
+    };
+    if engine.add_data(value.clone()).is_err() {
+        return Vec::new();
+    }
+    for (path, text) in guarded {
+        if engine.add_policy(path, text).is_err() {
+            return Vec::new();
+        }
+    }
+    let Some(first) = bundle.packages.iter().find_map(|package| {
+        ANSWERED_RULES.iter().find_map(|rule| {
+            engine
+                .compile_with_entrypoint(&entry_point(package, rule).as_str().into())
+                .ok()
+        })
+    }) else {
+        return Vec::new();
+    };
+    let names: Vec<String> = first
+        .get_rules()
+        .keys()
+        .map(ToString::to_string)
+        .filter(|name| !name.rsplit('.').next().unwrap_or("").starts_with("test_"))
+        .collect();
+    let mut splits = Vec::new();
+    let Ok(parsed) = regorus::Value::from_json_str(input) else {
+        return Vec::new();
+    };
+    let mut engine = source.clone();
+    if engine.set_input_json(input).is_err() {
+        return Vec::new();
+    }
+    for name in names {
+        let Ok(program) = Compiler::compile_from_policy(&first, &[name.as_str()]) else {
+            splits.push(format!("{name}: bytecode refused"));
+            continue;
+        };
+        let mut vm = regorus::rvm::vm::RegoVM::new();
+        vm.load_program(program);
+        vm.set_strict_builtin_errors(true);
+        vm.set_max_instructions(usize::MAX);
+        if vm.set_data(value.clone()).is_err() {
+            continue;
+        }
+        vm.set_input(parsed.clone());
+        let bytecode = vm.execute_entry_point_by_name(&name);
+        let interpreted = engine.eval_rule(name.clone());
+        let shown = |v: &regorus::Value| format!("{v}");
+        let (left, right) = (
+            bytecode
+                .as_ref()
+                .map_or_else(|err| format!("fault {err:?}"), shown),
+            interpreted
+                .as_ref()
+                .map_or_else(|err| format!("fault {err:?}"), shown),
+        );
+        if left == right {
+            continue;
+        }
+        // Sets and arrays as their difference, so a long answer names what
+        // differs rather than a prefix the two share.
+        let members = |v: &regorus::Value| -> Option<BTreeSet<String>> {
+            match v {
+                regorus::Value::Set(items) => Some(items.iter().map(shown).collect()),
+                regorus::Value::Array(items) => Some(items.iter().map(shown).collect()),
+                _ => None,
+            }
+        };
+        let cut = |s: &str| s.chars().take(600).collect::<String>();
+        if let (Ok(a), Ok(b)) = (&bytecode, &interpreted)
+            && let (Some(a), Some(b)) = (members(a), members(b))
+        {
+            let only = |x: &BTreeSet<String>, y: &BTreeSet<String>| {
+                cut(&x.difference(y).cloned().collect::<Vec<_>>().join(" | "))
+            };
+            splits.push(format!(
+                "{name}: only bytecode [{}] only interpreter [{}]",
+                only(&a, &b),
+                only(&b, &a)
+            ));
+        } else {
+            splits.push(format!(
+                "{name}: bytecode {} interpreter {}",
+                cut(&left),
+                cut(&right)
+            ));
+        }
+    }
+    splits
+}
+
+/// The first rule whose head is a partial SET under an indexed reference —
+/// `f[k] contains v` — as `path:line`, or `None` (#1276).
+///
+/// regorus 0.15's bytecode compiler accepts the head and answers it as the
+/// flat set of every `v`, dropping the keys
+/// (`a_keyed_partial_set_is_refused_bytecode_rather_than_flattened`). A
+/// miscompile it does not refuse, so batten refuses it: the bundle stays on
+/// the interpreter with [`Fallback::KeyedPartialSet`]. Also `None` where the AST
+/// will not serialise, which [`guarded_sources`] then reports.
+fn keyed_partial_set(engine: &regorus::Engine) -> Option<String> {
+    first_construct(engine, &|map| {
+        let head = map.get("Set")?;
+        head.get("refr")?.get("RefBrack")?;
+        head.get("span")?.get("line")?.as_u64()
+    })
+}
+
+/// The first `else` following a body that can ITERATE, as `path:line`, or
+/// `None` (#1276).
+///
+/// regorus 0.15's bytecode drops an `else` after a body that fails by
+/// iterating nothing — `release-tracking.rego`'s `first_job(path)` answered
+/// `""` interpreted and undefined on bytecode, so a finding vanished. A body
+/// failing on a comparison or an undefined call keeps it
+/// (`a_rule_else_after_an_empty_iteration_is_lost_on_bytecode` pins both).
+/// So an `else` is refused when a body before it holds a `some`, an `every`,
+/// or a bracket index by a variable — every spelling of iteration, and some
+/// that only look up, which costs the interpreter's speed and never a verdict.
+fn rule_else(engine: &regorus::Engine) -> Option<String> {
+    fn iterates(node: &serde_json::Value) -> bool {
+        match node {
+            serde_json::Value::Object(map) => {
+                ["SomeIn", "SomeVars", "Every"]
+                    .iter()
+                    .any(|key| map.contains_key(*key))
+                    || map
+                        .get("RefBrack")
+                        .and_then(|brack| brack.get("index"))
+                        .is_some_and(|index| index.get("Var").is_some())
+                    || map.values().any(iterates)
+            }
+            serde_json::Value::Array(items) => items.iter().any(iterates),
+            _ => false,
+        }
+    }
+    first_construct(engine, &|map| {
+        let bodies = map.get("bodies")?.as_array()?;
+        let is_else =
+            |body: &serde_json::Value| body.get("is_else").and_then(serde_json::Value::as_bool);
+        let at = bodies.iter().position(|body| is_else(body) == Some(true))?;
+        bodies[..at]
+            .iter()
+            .any(|body| body.get("query").is_some_and(iterates))
+            .then(|| bodies[at].get("span")?.get("line")?.as_u64())?
+    })
+}
+
+/// The first `:=` the guard splice cannot cover, as `path:line`, or `None`
+/// (#1276): a left side binding no variable the guard can name and not a bare
+/// `_` — `[_, _] := e`, `{"k": _} := e`.
+///
+/// Every other `:=` is guarded ([`statement_guard`]), which is what makes the
+/// bytecode fail its body over an undefined right side as the interpreter does
+/// (CLOUD-2696). This shape would bind `Undefined` unguarded, so a module using
+/// it is refused at load ([`check_loaded`]) rather than decided differently on
+/// the hook path, and never compiled to bytecode.
+fn unguardable_assignment(engine: &regorus::Engine) -> Option<String> {
+    first_construct(engine, &|map| {
+        let assign = map
+            .get("literal")?
+            .get("Expr")?
+            .get("expr")?
+            .get("AssignExpr")?;
+        if assign.get("op")?.as_str()? != "ColEq" {
+            return None;
+        }
+        let lhs = assign.get("lhs")?;
+        if lhs
+            .get("Var")
+            .and_then(|var| var.get("value"))
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+        {
+            return None;
+        }
+        let mut vars = BTreeSet::new();
+        bound_vars(lhs, &mut vars);
+        vars.remove("_");
+        if !vars.is_empty() {
+            return None;
+        }
+        map.get("span")?.get("line")?.as_u64()
+    })
+}
+
+/// The first AST object `matches` answers a line for, as `path:line`.
+fn first_construct(
+    engine: &regorus::Engine,
+    matches: &dyn Fn(&serde_json::Map<String, serde_json::Value>) -> Option<u64>,
+) -> Option<String> {
+    fn found(
+        node: &serde_json::Value,
+        matches: &dyn Fn(&serde_json::Map<String, serde_json::Value>) -> Option<u64>,
+    ) -> Option<u64> {
+        match node {
+            serde_json::Value::Object(map) => {
+                matches(map).or_else(|| map.values().find_map(|value| found(value, matches)))
+            }
+            serde_json::Value::Array(items) => items.iter().find_map(|item| found(item, matches)),
+            _ => None,
+        }
+    }
+    let json = engine.get_ast_as_json().ok()?;
+    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
+    policies.iter().find_map(|policy| {
+        let line = found(policy.get("ast")?, matches)?;
+        let path = policy.get("source")?.get("file")?.as_str()?;
+        Some(format!("{path}:{line}"))
+    })
+}
+
+/// Every `input` path `bundle`'s non-test rules read, dotted (`facts.land-live`,
+/// `call.command`), from the [`describe`] reading; empty without an
+/// interpreter (#1276).
+///
+/// What the parity gate sets to `null` and removes in each case input: a
+/// builtin over a fact that is null or absent is where the two evaluators part
+/// (a `concat` over a `null` element faults the bytecode's whole bundle where
+/// the interpreter reads the call as undefined), and a module's own cases
+/// rarely pass a null.
+#[doc(hidden)]
+#[must_use]
+pub fn input_paths(bundle: &Bundle) -> Vec<String> {
+    let Some(described) = bundle.described() else {
+        return Vec::new();
+    };
+    let paths: BTreeSet<String> = described
+        .iter()
+        .flat_map(|module| &module.rules)
+        .filter(|rule| !rule.name.starts_with("test_"))
+        .flat_map(|rule| rule.input_paths.iter().cloned())
+        .collect();
+    paths.into_iter().collect()
+}
+
+/// `bundle`, still on its interpreter, recording why.
+fn interpreted_because(bundle: Bundle, why: Fallback, detail: &dyn std::fmt::Display) -> Bundle {
+    let Evaluator::Interpreted { engine, .. } = bundle.evaluator else {
+        return bundle;
+    };
+    Bundle {
+        evaluator: Evaluator::Interpreted {
+            engine,
+            why,
+            detail: Some(detail.to_string().into()),
+        },
+        ..bundle
+    }
 }
 
 /// What an entry's body records beside the bytecode, on its first line.
@@ -2466,15 +3020,9 @@ fn data_value(text: &str) -> Option<regorus::Value> {
     })
 }
 
-/// The cached bundle for `id`, when the entry at `path` was written from
-/// exactly these inputs.
-fn read_cached(
-    path: &Path,
-    key: &str,
-    id: &str,
-    sources: &[(String, String)],
-    data: &str,
-) -> Option<Bundle> {
+/// The program the entry at `path` holds under `key`, with its header: `None`
+/// for a miss, an unreadable entry, or one holding only a read set.
+fn read_program(path: &Path, key: &str, data: &str) -> Option<(CacheHeader, Compiled)> {
     let bytes = crate::cache::read(path, key)?;
     let split = bytes.iter().position(|byte| *byte == b'\n')?;
     let (head, body) = bytes.split_at(split);
@@ -2490,10 +3038,24 @@ fn read_cached(
     let compiled = Compiled {
         program: std::sync::Arc::new(program),
         data: data_value(data)?,
-        entries: header.entries,
-        facts: header.facts,
-        reads: header.reads,
+        entries: header.entries.clone(),
+        facts: header.facts.clone(),
+        reads: header.reads.clone(),
+        cached: true,
     };
+    Some((header, compiled))
+}
+
+/// The cached bundle for `id`, when the entry at `path` was written from
+/// exactly these inputs.
+fn read_cached(
+    path: &Path,
+    key: &str,
+    id: &str,
+    sources: &[(String, String)],
+    data: &str,
+) -> Option<Bundle> {
+    let (header, compiled) = read_program(path, key, data)?;
     Some(Bundle {
         id: id.to_owned(),
         modules: sources
@@ -2504,7 +3066,7 @@ fn read_cached(
         packages: header.packages,
         severity: crate::severity::RuleSeverity::Deny,
         predicate_severity: BTreeMap::new(),
-        evaluator: Evaluator::Compiled(std::sync::Arc::new(compiled)),
+        evaluator: Evaluator::Compiled(std::sync::Arc::new(compiled), None),
         described: std::sync::OnceLock::new(),
         reads: std::sync::OnceLock::new(),
     })
@@ -2591,18 +3153,56 @@ fn entry_point(package: &[String], rule: &str) -> String {
 }
 
 impl Compiled {
-    /// Compile `bundle`'s interpreter to bytecode, or `None` where the bytecode
-    /// compiler cannot express a rule it defines.
-    fn from_bundle(bundle: &Bundle, data: &serde_json::Value) -> Option<Self> {
+    /// Compile `bundle`'s interpreter to bytecode, or say why the bytecode
+    /// compiler cannot express it: the [`Fallback`] and the compiler's words.
+    fn from_bundle(
+        bundle: &Bundle,
+        data: &serde_json::Value,
+    ) -> std::result::Result<Self, (Fallback, String)> {
+        // The constructs regorus 0.15 compiles WRONGLY rather than refusing:
+        // batten refuses them, so a bundle using one decides on the
+        // interpreter, which answers as OPA does (#1276).
+        if let Some(source) = bundle.evaluator.engine() {
+            if let Some(at) = unguardable_assignment(source) {
+                return Err((Fallback::GuardUnavailable, at));
+            }
+            if let Some(at) = keyed_partial_set(source) {
+                return Err((Fallback::KeyedPartialSet, at));
+            }
+            if let Some(at) = rule_else(source) {
+                return Err((Fallback::RuleElse, at));
+            }
+        }
+        Self::compile_unchecked(bundle, data)
+    }
+
+    /// [`Self::from_bundle`] without batten's refusals of known miscompiles.
+    fn compile_unchecked(
+        bundle: &Bundle,
+        data: &serde_json::Value,
+    ) -> std::result::Result<Self, (Fallback, String)> {
         use regorus::languages::rego::compiler::Compiler;
+        // `Debug`, not `Display`: the compiler's errors can render empty.
+        let refused = |err: &dyn std::fmt::Debug| (Fallback::CompileRefused, format!("{err:?}"));
         // The program is compiled from the guarded text ([`guarded_sources`]),
-        // over the same data the interpreter holds.
+        // over the same data the interpreter holds. `compile` already refused
+        // a data document that will not load, so those two arms do not fire.
+        let value = regorus::Value::from_json_str(&data.to_string()).map_err(|e| refused(&e))?;
         let mut engine = new_engine();
-        engine
-            .add_data(regorus::Value::from_json_str(&data.to_string()).ok()?)
-            .ok()?;
-        for (path, text) in guarded_sources(bundle.evaluator.engine()?)? {
-            engine.add_policy(path, text).ok()?;
+        engine.add_data(value.clone()).map_err(|e| refused(&e))?;
+        let Some(source) = bundle.evaluator.engine() else {
+            return Err((Fallback::GuardUnavailable, String::from("no interpreter")));
+        };
+        let Some(guarded) = guarded_sources(source) else {
+            return Err((
+                Fallback::GuardUnavailable,
+                String::from("the AST would not serialise, or an offset is not a boundary"),
+            ));
+        };
+        for (path, text) in guarded {
+            engine
+                .add_policy(path.clone(), text)
+                .map_err(|e| (Fallback::GuardedSourceRefused, format!("{path}: {e}")))?;
         }
         let mut candidates = Vec::new();
         for package in &bundle.packages {
@@ -2613,11 +3213,26 @@ impl Compiled {
         // regorus prepares the whole rule set whichever entry point it is
         // handed, but refuses one the bundle does not define, so the first
         // defined candidate stands in for all of them.
+        let mut last = None;
         let policy = candidates.iter().find_map(|(package, rule)| {
             engine
                 .compile_with_entrypoint(&entry_point(package, rule).as_str().into())
+                .map_err(|err| last = Some(format!("{err:?}")))
                 .ok()
-        })?;
+        });
+        let Some(policy) = policy else {
+            return Err(match last {
+                // Every candidate refused for being undefined is a bundle with
+                // nothing to answer; anything else is the compiler's refusal.
+                Some(err) if !err.contains("not found") && !err.contains("undefined") => {
+                    (Fallback::CompileRefused, err)
+                }
+                other => (
+                    Fallback::NoAnsweredRule,
+                    other.unwrap_or_else(|| String::from("no package")),
+                ),
+            });
+        };
         let rules = policy.get_rules();
         let entries: BTreeSet<(Vec<String>, String)> = candidates
             .into_iter()
@@ -2625,10 +3240,11 @@ impl Compiled {
             .collect();
         let names: Vec<String> = entries.iter().map(|(p, r)| entry_point(p, r)).collect();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        let program = Compiler::compile_from_policy(&policy, &names).ok()?;
-        Some(Self {
+        let program = Compiler::compile_from_policy(&policy, &names).map_err(|e| refused(&e))?;
+        Ok(Self {
             program,
-            data: regorus::Value::from_json_str(&data.to_string()).ok()?,
+            data: value,
+            cached: false,
             entries,
             facts: bundle
                 .session_start_facts()
@@ -2642,11 +3258,21 @@ impl Compiled {
         })
     }
 
-    /// `bundle` evaluating through this bytecode rather than its interpreter.
-    fn into_bundle(self, bundle: Bundle) -> Bundle {
+    /// `bundle` evaluating through this bytecode rather than its interpreter,
+    /// which it keeps for its AST readers where `keep_ast`.
+    fn into_bundle(self, bundle: Bundle, keep_ast: bool) -> Bundle {
+        let ast = match bundle.evaluator {
+            Evaluator::Interpreted { engine, .. } if keep_ast => Some(std::sync::Arc::new(*engine)),
+            Evaluator::Compiled(_, engine) if keep_ast => engine,
+            _ => None,
+        };
         Bundle {
-            evaluator: Evaluator::Compiled(std::sync::Arc::new(self)),
-            described: std::sync::OnceLock::new(),
+            evaluator: Evaluator::Compiled(std::sync::Arc::new(self), ast),
+            described: if keep_ast {
+                bundle.described
+            } else {
+                std::sync::OnceLock::new()
+            },
             ..bundle
         }
     }
@@ -2903,7 +3529,8 @@ pub fn rewrite(bundle: &Bundle, input: &str) -> Look<Vec<Rewrite>> {
 #[must_use]
 pub fn strings(bundle: &Bundle, input: &str, rule: &str) -> Look<Vec<String>> {
     // An arbitrary rule name has no entry point, so this reads the interpreter
-    // only — its callers load with every check, never from the cache.
+    // only — its callers load with every check, never from the cache. Not a
+    // verdict evaluation, so it is not counted in [`execution_census`].
     let Some(engine) = bundle.evaluator.engine() else {
         return Look::CouldNotLook;
     };
@@ -5589,7 +6216,15 @@ rules contains not_quoted\n";
     fn bytecode(bundle: Bundle) -> Bundle {
         Compiled::from_bundle(&bundle, &serde_json::json!({}))
             .expect("the fixture compiles to bytecode")
-            .into_bundle(bundle)
+            .into_bundle(bundle, false)
+    }
+
+    /// [`bytecode`] past batten's own refusals of known miscompiles, to show
+    /// what regorus would answer.
+    fn bytecode_unchecked(bundle: Bundle) -> Bundle {
+        Compiled::compile_unchecked(&bundle, &serde_json::json!({}))
+            .expect("regorus compiles the fixture")
+            .into_bundle(bundle, false)
     }
 
     /// CLOUD-2696's shape: a helper function undefined for the call, bound with
@@ -5682,6 +6317,127 @@ violation contains {"rule": "commit name refused", "verdict": "commit name refus
             );
             assert_eq!(verdicts(bundle, STOP), Some(Vec::new()), "{evaluator}");
         }
+    }
+
+    /// `_ := e` as a braceless body, the spelling of "e is defined" (#1276):
+    /// `ci-parity.rego`'s `on_pull_request(path) if _ :=
+    /// triggers(path).pull_request`. Fails by: the wildcard left unguarded, so
+    /// the bytecode binds `Undefined` and `on("b")` holds where the interpreter
+    /// — and OPA — say it does not.
+    const WILDCARD_BINDING: &str = "package batten.w\nimport rego.v1\n\n\
+        on(x) if _ := input.triggers[x]\n\n\
+        deny contains x if {\n\tsome x in [\"a\", \"b\"]\n\ton(x)\n}\n";
+
+    #[test]
+    fn a_wildcard_binding_decides_alike_in_both_evaluators() {
+        let input = r#"{"triggers":{"a":{}}}"#;
+        let interpreted = bundle_of("row", &[("policy/w.rego", WILDCARD_BINDING)]);
+        let compiled = bytecode(bundle_of("row", &[("policy/w.rego", WILDCARD_BINDING)]));
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(
+                verdicts(bundle, input),
+                Some(vec!["a".to_owned()]),
+                "{evaluator}: only the defined trigger holds"
+            );
+        }
+    }
+
+    /// A `:=` whose pattern names no variable cannot be guarded (#1276).
+    /// Fails by: the shape reaching bytecode, where it binds `Undefined`
+    /// unguarded and the body holds over a missing pair.
+    const UNGUARDABLE: &str = "package batten.u\nimport rego.v1\n\n\
+        deny contains \"pair\" if {\n\t[_, _] := input.pair\n}\n";
+
+    #[test]
+    fn a_binding_naming_no_variable_is_refused_bytecode() {
+        let interpreted = bundle_of("row", &[("policy/u.rego", UNGUARDABLE)]);
+        assert_eq!(verdicts(&interpreted, "{}"), Some(Vec::new()), "no pair");
+        let refused = Compiled::from_bundle(&interpreted, &serde_json::json!({}))
+            .err()
+            .expect("the shape is not compiled");
+        assert_eq!(refused.0, Fallback::GuardUnavailable, "{refused:?}");
+        assert_eq!(refused.1, "policy/u.rego:5", "names the statement");
+        let named = bundle_of("row", &[("policy/n.rego", LITERAL_BINDING)]);
+        assert!(
+            named
+                .evaluator
+                .engine()
+                .and_then(unguardable_assignment)
+                .is_none(),
+            "a named binding is guardable"
+        );
+    }
+
+    /// A function's `else` after a body that fails, three ways (#1276):
+    /// `release-tracking.rego`'s `first_job(path)` answered `""` interpreted and
+    /// undefined on bytecode, over a path with no calls.
+    const FUNCTION_ELSE: &str = "package batten.e\nimport rego.v1\n\n\
+        f(x) := \"body\" if { x == 1 } else := \"else\"\n\n\
+        g(x) := m if { m := min({v | some v in x}) } else := \"else\"\n\n\
+        h(x) := c if {\n\ts := {v | some v in x}\n\tsome c in x\n\tc == min(s)\n} else := \"else\"\n\n\
+        i(x) := c if { some c in x } else := \"else\"\n\n\
+        j(x) := c if { c := x[_] } else := \"else\"\n\n\
+        k := c if { some c in input.none } else := \"else\"\n\n\
+        deny contains \"f\" if f(2) == \"else\"\n\n\
+        deny contains \"g\" if g([]) == \"else\"\n\n\
+        deny contains \"h\" if h([]) == \"else\"\n\n\
+        deny contains \"i\" if i([]) == \"else\"\n\n\
+        deny contains \"j\" if j([]) == \"else\"\n\n\
+        deny contains \"k\" if k == \"else\"\n";
+
+    /// The upstream defect, pinned: regorus 0.15's bytecode drops an `else`
+    /// after a body that fails by ITERATING NOTHING (`some c in []`, `x[_]`
+    /// over `[]`), where a body failing on a comparison or an undefined call
+    /// takes it. Batten therefore keeps every bundle with an `else` on the
+    /// interpreter ([`Fallback::RuleElse`]); this case says which spellings the
+    /// bytecode gets wrong, so the refusal can narrow when regorus is fixed.
+    #[test]
+    fn a_rule_else_after_an_empty_iteration_is_lost_on_bytecode() {
+        let interpreted = bundle_of("row", &[("policy/e.rego", FUNCTION_ELSE)]);
+        let all: Vec<String> = ["f", "g", "h", "i", "j", "k"].map(str::to_owned).into();
+        assert_eq!(verdicts(&interpreted, "{}"), Some(all), "interpreted");
+        let refused = Compiled::from_bundle(&interpreted, &serde_json::json!({}))
+            .err()
+            .expect("a bundle with an `else` is not compiled");
+        assert_eq!(refused.0, Fallback::RuleElse, "{refused:?}");
+        // What regorus's bytecode answers past the refusal: the `else` kept
+        // after a failing comparison (`f`) or an undefined call (`g`), and
+        // lost after every body that iterates nothing (`h` to `k`). When this
+        // fails, regorus changed: narrow `rule_else` to what it still drops.
+        let forced = bytecode_unchecked(bundle_of("row", &[("policy/e.rego", FUNCTION_ELSE)]));
+        assert_eq!(
+            verdicts(&forced, "{}"),
+            Some(vec!["f".to_owned(), "g".to_owned()]),
+            "the upstream defect, as regorus 0.15 has it"
+        );
+    }
+
+    /// A partial SET under a variable key, `f[k] contains v` (#1276): regorus
+    /// 0.15's bytecode answers it as the flat set of every `v`, dropping the
+    /// keys, where the interpreter (and OPA) answer `{k: {v, …}}`. Measured on
+    /// `module-layering.rego`'s `forbidden[from] contains to`. The upstream
+    /// repro is this module over `{}`: `data.batten.k.f` is `{"a": {"x"},
+    /// "b": {"y"}}` interpreted and `{"x", "y"}` on bytecode.
+    const KEYED_SET: &str = "package batten.k\nimport rego.v1\n\n\
+        f[k] contains v if {\n\tsome k, vs in {\"a\": {\"x\"}, \"b\": {\"y\"}}\n\tsome v in vs\n}\n\n\
+        deny contains \"keyed\" if f.b == {\"y\"}\n";
+
+    #[test]
+    fn a_keyed_partial_set_is_refused_bytecode_rather_than_flattened() {
+        let interpreted = bundle_of("row", &[("policy/k.rego", KEYED_SET)]);
+        assert_eq!(
+            verdicts(&interpreted, "{}"),
+            Some(vec!["keyed".to_owned()]),
+            "the interpreter answers the keyed set"
+        );
+        let refused = Compiled::from_bundle(&interpreted, &serde_json::json!({}))
+            .err()
+            .expect("the bytecode would flatten it, so it is not compiled");
+        assert_eq!(refused.0, Fallback::KeyedPartialSet, "{refused:?}");
+        assert!(
+            refused.1.contains("policy/k.rego"),
+            "names the module: {refused:?}"
+        );
     }
 
     /// The same undefined helper behind an ARRAY pattern, so the guard covers
@@ -6243,7 +6999,8 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
         let bundle = compile("row", &sources, &data).expect("the fixture compiles");
         let compiled =
             Compiled::from_bundle(&bundle, &data).expect("the fixture compiles to bytecode");
-        let carried = compiled.into_bundle(compile("row", &sources, &data).expect("compiles"));
+        let carried =
+            compiled.into_bundle(compile("row", &sources, &data).expect("compiles"), false);
         assert!(carried.is_bytecode());
         assert_eq!(carried.tree_reads(), known(&["lines"]));
         // An entry written before the read set existed deserialises with none.
@@ -6256,7 +7013,7 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
             reads: header.reads,
             ..old
         }
-        .into_bundle(bundle);
+        .into_bundle(bundle, false);
         assert_eq!(old.tree_reads(), Reads::Opaque);
     }
 
