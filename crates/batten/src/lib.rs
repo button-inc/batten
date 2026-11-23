@@ -25965,6 +25965,17 @@ fn write_records_for(
     input: &serde_json::Value,
     raw: &serde_json::Value,
 ) {
+    // A MEDIATED CALL IS THE CALL IT MEDIATES (CLOUD-2789): `batten mcp call
+    // <server> <method> <params>` on a shell presents the tool name, the input
+    // and the answer the direct connector call would, so every row selects
+    // both alike. The answer is the command's stdout, where the verb prints the
+    // payload; a stdout that is no JSON is an answer with no members, which a
+    // row's `requires` reads as could-not-look.
+    let mediated = input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .and_then(hook::mediated_mcp_call);
+    let selected_tool = mediated.as_ref().map_or(raw_tool, |(tool, _)| tool.as_str());
     let Some(result) = facts::payload_in(raw) else {
         return;
     };
@@ -25976,10 +25987,10 @@ fn write_records_for(
     // reasoning: `append_all` and `defer_backgrounded` both select on this same
     // tool selector, so a call no row names compiled every `[[pattern]]` and
     // resolved the branch for nothing.
-    if !recorders
-        .iter()
-        .any(|row| crate::facts::selects_tool_name(&row.tool, raw_tool))
-    {
+    if !recorders.iter().any(|row| {
+        crate::facts::selects_tool_name(&row.tool, raw_tool)
+            || crate::facts::selects_tool_name(&row.tool, selected_tool)
+    }) {
         return;
     }
     // A BACKGROUNDED RESULT NAMES ITS TASK, NOT ITS OUTPUT (CLOUD-2214). Its
@@ -26007,28 +26018,43 @@ fn write_records_for(
     // refusing to write its records because a vocabulary it never asked for is
     // incomplete would make an unrelated table's gap look like this one's verdict.
     let grammar = ready::Grammar::from_compiled(&patterns).ok();
-    let context = crate::recorder::Context {
-        result: &result,
-        input,
-        programs: policy.declared_programs(),
-        patterns: &patterns,
-        grammar: grammar.as_ref(),
-        root,
-        branch: Some(&branch),
-        // Read HERE, at the boundary, for the reason every other clock read in
-        // this crate is: `evaluate` stays a pure function of its inputs, and one
-        // instant per invocation is what makes two columns grading the same
-        // lease agree with each other.
-        now: i64::try_from(now_unix()).unwrap_or(i64::MAX),
+    // Read HERE, at the boundary, for the reason every other clock read in this
+    // crate is: `evaluate` stays a pure function of its inputs, and one instant
+    // per invocation is what makes two columns grading the same lease agree with
+    // each other.
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    let append = |tool: &str, input: &serde_json::Value, result: &serde_json::Value| {
+        let context = crate::recorder::Context {
+            result,
+            input,
+            programs: policy.declared_programs(),
+            patterns: &patterns,
+            grammar: grammar.as_ref(),
+            root,
+            branch: Some(&branch),
+            now,
+        };
+        crate::recorder::append_all(
+            recorders,
+            &git_dir,
+            &branch,
+            &context,
+            crate::facts::selects_tool_name,
+            tool,
+        );
     };
-    crate::recorder::append_all(
-        recorders,
-        &git_dir,
-        &branch,
-        &context,
-        crate::facts::selects_tool_name,
-        raw_tool,
-    );
+    append(raw_tool, input, &result);
+    // THE SHELL CALL STAYS A SHELL CALL TOO: a row over the shell still reads
+    // it, and the mediated pass is the connector call's rows reading the same
+    // call under the name the host gives the direct one.
+    if let Some((tool, params)) = &mediated {
+        let answer = result
+            .get("stdout")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|stdout| serde_json::from_str(stdout).ok())
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+        append(tool, params, &answer);
+    }
 }
 
 /// Keep a backgrounded call for [`resolve_backgrounded`] when some row selects

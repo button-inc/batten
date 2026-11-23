@@ -9703,6 +9703,54 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
     (!ids.is_empty()).then_some(ids)
 }
 
+/// The connector call a shell command MEDIATES, as the host would have named
+/// it: `batten mcp call <server> <method> [<params>]` is the tool
+/// `mcp__<server>__<method>` handed `<params>` (CLOUD-2789).
+///
+/// ONE CALL, EVERY SURFACE. A body set through the mediated route recorded
+/// nothing while the raw connector tool's recorded its closing set, so the
+/// record a gate reads went stale (measured: `closes 0` over a body closing 77
+/// keys). Naming the mediated call as the host names the direct one lets every
+/// `[[recorder]]` row select both, with no row of its own.
+///
+/// Exactly one such program, with only `cd` beside it: the result a recorder
+/// reads is the command's stdout, which is the call's answer only when nothing
+/// else in the command printed. Params that are not a JSON object are no call
+/// the verb would have dispatched, so they name none here either.
+#[must_use]
+pub fn mediated_mcp_call(command: &str) -> Option<(String, Value)> {
+    let crate::facts::Look::Is(parsed) = segments(command) else {
+        return None;
+    };
+    let mut found = None;
+    for (_, _, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+        if is_cd_segment(handed) {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        let index = effective_program(handed)?;
+        if program_name(program_token(handed[index])) != "batten" {
+            return None;
+        }
+        let [_, "mcp", "call", server, method, rest @ ..] = &handed[index..] else {
+            return None;
+        };
+        let params = match rest {
+            [] => Value::Object(serde_json::Map::new()),
+            [raw] => serde_json::from_str::<Value>(raw)
+                .ok()
+                .filter(Value::is_object)?,
+            _ => return None,
+        };
+        found = Some((format!("mcp__{server}__{method}"), params));
+    }
+    found
+}
+
 /// The longest background `timeout` the host honours, in milliseconds
 /// (CLOUD-2365), from its two variables' raw values.
 ///
