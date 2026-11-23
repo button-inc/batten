@@ -111,17 +111,23 @@ const SUBJECT: &str = "the release binary hyperfine measured\n";
 /// satisfy.
 fn pattern_rows() -> String {
     let committed = common::committed_patterns();
-    let row = committed
-        .iter()
-        .find(|pattern| pattern.id == "published-budget-value")
-        .expect("the committed table declares the row the module resolves");
-    format!(
-        "[[pattern]]\nid = \"{}\"\nregex = '{}'\n",
-        row.id, row.regex
-    )
+    let mut rows = String::new();
+    // The budget cell's row and, since CLOUD-2852, the measured p95 cell's.
+    for id in ["published-budget-value", "published-measure-value"] {
+        let row = committed
+            .iter()
+            .find(|pattern| pattern.id == id)
+            .expect("the committed table declares the row the module resolves");
+        let _ = write!(
+            rows,
+            "[[pattern]]\nid = \"{}\"\nregex = '{}'\n\n",
+            row.id, row.regex
+        );
+    }
+    rows
 }
 
-/// Exactly the four classes `policy/perf-assert.rego` raises.
+/// Exactly the classes `policy/perf-assert.rego` raises.
 ///
 /// **NAMED, NEVER PREFIX-MATCHED, and that is a measured correction** (CLOUD-1321).
 /// This selected on `starts_with("path measure")`, `("prose state")` and
@@ -130,10 +136,11 @@ fn pattern_rows() -> String {
 /// raised by an unrelated `review state other` row; the prefix swept it into a
 /// bundle that enables ONE module, nothing there raises it, and the registry's own
 /// both-directions check failed the config LOAD. The fixture cannot grow a class
-/// its module does not raise, so the list is the four ids and the coupling to
+/// its module does not raise, so the list is the ids it raises and the coupling to
 /// somebody else's naming is gone.
-const RAISED: [&str; 4] = [
+const RAISED: [&str; 5] = [
     "path measure late",
+    "path measure absent",
     "path measure partial",
     "prose state wrong",
     "source read missing",
@@ -211,7 +218,7 @@ pub(crate) fn agreeing_readme() -> String {
                 [
                     "| `",
                     *step,
-                    "` | a commit-time hook step | — | — | ≤ 100 ms |\n",
+                    "` | a commit-time hook step | 8.0 ms | 9.0 ms | ≤ 100 ms |\n",
                 ]
             })
             .collect::<String>()
