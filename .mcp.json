@@ -19,7 +19,8 @@
         "."
       ],
       "env": {
-        "MISE_ENV": "agent"
+        "MISE_ENV": "agent",
+        "MISE_EXEC_AUTO_INSTALL": "false"
       }
     }
   }

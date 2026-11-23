@@ -512,3 +512,58 @@ fn a_host_that_cannot_replace_a_process_refuses_the_launch() {
         "{output:?}"
     );
 }
+
+/// The argv of `field` on `row`, as strings.
+fn argv(row: &toml::Value, field: &str) -> Vec<String> {
+    row.get(field)
+        .and_then(toml::Value::as_array)
+        .map(|words| {
+            words
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// THE AGENT TOOLCHAIN IS INSTALLED BEFORE ANY CLIENT LAUNCHES (CLOUD-2859).
+/// Serena is pinned only under `MISE_ENV=agent`; the base toolchain row installs
+/// without it, so a container came up with Serena absent and `mise exec`
+/// installed it inside the MCP start window. Fails by: no `[[startup]]` row
+/// whose check and repair both carry `MISE_ENV=agent` and whose repair runs
+/// `mise install` (mutant `agent-toolchain-unprovisioned`).
+#[test]
+fn the_agent_toolchain_is_installed_before_any_client_launches() {
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(at_root("batten.toml")).unwrap()).unwrap();
+    let rows = config
+        .get("startup")
+        .and_then(toml::Value::as_array)
+        .expect("batten.toml declares [[startup]] rows");
+    let agent = "MISE_ENV=agent".to_owned();
+    let provisions = rows.iter().any(|row| {
+        let (check, repair) = (argv(row, "check"), argv(row, "repair"));
+        let installs = repair
+            .windows(2)
+            .any(|pair| pair[0] == "mise" && pair[1] == "install");
+        check.contains(&agent) && repair.contains(&agent) && installs
+    });
+    assert!(
+        provisions,
+        "no [[startup]] row checks and installs the agent environment"
+    );
+}
+
+/// THE COMMITTED LAUNCH NEVER INSTALLS ON DEMAND (CLOUD-2859). With
+/// `MISE_EXEC_AUTO_INSTALL` unset, a missing Serena made `mise exec` install it
+/// past the host's MCP start timeout, a silent failure. Fails by: the setting
+/// absent from Serena's `env`, or the agent environment dropped beside it.
+#[test]
+fn the_committed_launch_never_installs_on_demand() {
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(at_root(".mcp.json")).unwrap()).unwrap();
+    let env = &config["mcpServers"]["serena"]["env"];
+    assert_eq!(env["MISE_EXEC_AUTO_INSTALL"], "false", "{env}");
+    assert_eq!(env["MISE_ENV"], "agent", "{env}");
+}
