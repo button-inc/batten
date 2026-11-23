@@ -2213,4 +2213,41 @@ mod tests {
             Some((1, String::new()))
         );
     }
+
+    /// The words of a `step base` line after [`BASE`].
+    fn base_words(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    /// CLOUD-2787's `a_base_without_inputs_is_refused`, under the tool-line
+    /// design: a `step base` line naming no path is no declaration, so the row
+    /// keys nothing and runs, and the verb refuses it as a usage error.
+    ///
+    /// Fails by: a base of no paths read as a declaration, which keys an empty
+    /// base and hits across every trunk move.
+    #[test]
+    fn a_base_without_inputs_is_refused() {
+        assert_eq!(base_ask(&base_words(&["--ref", "origin/main", "--"])), None);
+        assert!(base_ask(&base_words(&["--ref", "origin/main", "--", "src"])).is_some());
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(
+            run_base("origin/main", None, &[], &mut out, &mut err).unwrap(),
+            ExitCode::Usage
+        );
+    }
+
+    /// CLOUD-2787's `a_base_with_an_empty_ref_is_refused`, under the tool-line
+    /// design.
+    ///
+    /// Fails by: an empty ref read as a declaration, which resolves nothing and
+    /// would key whatever an empty revision happens to answer.
+    #[test]
+    fn a_base_with_an_empty_ref_is_refused() {
+        assert_eq!(base_ask(&base_words(&["--ref", "", "--", "src"])), None);
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(
+            run_base("", None, &[String::from("src")], &mut out, &mut err).unwrap(),
+            ExitCode::Usage
+        );
+    }
 }
