@@ -1244,3 +1244,67 @@ fn filing_and_body_edits_are_held_while_a_lap_is_live() {
     );
     batten::task::singleton_release(&git_dir, "land");
 }
+
+/// **A LIVE LAP HOLDS EXACTLY ITS OWN CHECKOUT** (CLOUD-2832): with a lap live
+/// in A and the session's directory in A,
+/// (a) a write into another clone B is admitted — `cd B && git commit`,
+///     `git -C B cherry-pick`, an `Edit` of `B/x` — and so is the same write
+///     into a clone nested inside A's directory, which is B's checkout, not A's;
+/// (b) from B, `git -C A commit` is refused;
+/// (c) an `Edit` or a `Write` of `A/x` is refused, from A or from B.
+#[test]
+fn a_live_lap_holds_exactly_its_own_checkout() {
+    let a = lap_tree_bench("land-lap-exact-a");
+    let b = lap_tree_bench("land-lap-exact-b");
+    let nested = a.join("nested-clone");
+    std::fs::create_dir_all(&nested).expect("a nested directory");
+    common::init_repo(&nested);
+    common::git_in(&nested, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    let git_dir = batten::git::git_dir(&a).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    let edit = |path: &std::path::Path| serde_json::json!({"file_path": path.to_string_lossy(), "old_string": "a", "new_string": "b"});
+    let write = |path: &std::path::Path| serde_json::json!({"file_path": path.to_string_lossy(), "content": "x"});
+    for clone in [&b, &nested] {
+        let dir = clone.to_string_lossy();
+        for command in [
+            format!("cd {dir} && git commit -m wip"),
+            format!("git -C {dir} cherry-pick HEAD"),
+            format!("echo x > {dir}/x"),
+        ] {
+            assert!(
+                !bash_held(&a, &command),
+                "(a) `{command}` from A writes {dir}, so it is admitted"
+            );
+        }
+        assert!(
+            !tool_held(&a, "Edit", &edit(&clone.join("x"))),
+            "(a) an Edit of {dir}/x from A is admitted"
+        );
+        assert!(
+            !tool_held(&a, "Write", &write(&clone.join("x"))),
+            "(a) a Write of {dir}/x from A is admitted"
+        );
+    }
+    let a_dir = a.to_string_lossy();
+    assert!(
+        bash_held(&b, &format!("git -C {a_dir} commit -m wip")),
+        "(b) `git -C A commit` from B is held"
+    );
+    for from in [&a, &b] {
+        assert!(
+            tool_held(from, "Edit", &edit(&a.join("x"))),
+            "(c) an Edit of A/x from {} is held",
+            from.display()
+        );
+        assert!(
+            tool_held(from, "Write", &write(&a.join("x"))),
+            "(c) a Write of A/x from {} is held",
+            from.display()
+        );
+    }
+    batten::task::singleton_release(&git_dir, "land");
+}

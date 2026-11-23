@@ -19942,6 +19942,36 @@ fn land_live_for(policy: &hook::Policy, envelope: &hook::Envelope) -> Option<Str
     })
 }
 
+/// The call's writes that land in the live lap's checkout `root` (CLOUD-2832):
+/// each [`hook::write_sites`] entry whose own checkout is `root`. `None` where
+/// the writes could not be placed, so the module keeps its path reading.
+///
+/// THE CHECKOUT, NEVER THE PATH PREFIX: a clone nested inside the lap's
+/// directory is its own checkout, so `echo x > <root>/nested-clone/f` writes
+/// that clone and is not held, and `git -C <B> commit` run from the lap's
+/// checkout writes B. Asked only while a lap is live.
+fn lap_held_for(envelope: &hook::Envelope, root: &str) -> Option<Vec<serde_json::Value>> {
+    let start = envelope
+        .cwd
+        .clone()
+        .filter(|dir| dir.is_dir())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let root = Path::new(root);
+    let held = hook::write_sites(envelope, &start)?
+        .into_iter()
+        .filter(|(_, at)| {
+            // A target not yet written: the nearest directory that exists.
+            at.ancestors()
+                .find(|ancestor| ancestor.is_dir())
+                .and_then(|dir| git::worktree_root(dir).ok())
+                .is_some_and(|checkout| checkout == root)
+        })
+        .map(|(subject, _)| subject)
+        .collect();
+    Some(held)
+}
+
 /// The live lap a call is held for, or `None` (CLOUD-2783).
 ///
 /// A CALL MADE FROM INSIDE THE LAP'S OWN GATE IS THE LAP. The gate runs under
@@ -19964,6 +19994,7 @@ struct CallFacts {
     discards: facts::Look<Vec<String>>,
     singleton: Option<(String, String)>,
     land_live: Option<String>,
+    lap_held: Option<Vec<serde_json::Value>>,
     unread_history: facts::Look<Vec<String>>,
     dispatch: facts::Look<()>,
     pinned: facts::Look<std::collections::BTreeSet<String>>,
@@ -19975,10 +20006,15 @@ struct CallFacts {
 
 fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
     let (discards, singleton) = destructive_call_facts(envelope);
+    let land_live = land_live_for(policy, envelope);
+    let lap_held = land_live
+        .as_deref()
+        .and_then(|root| lap_held_for(envelope, root));
     CallFacts {
         discards,
         singleton,
-        land_live: land_live_for(policy, envelope),
+        land_live,
+        lap_held,
         unread_history: unread_history(envelope),
         dispatch: dispatch_facts(envelope),
         pinned: pinned_for(policy, envelope),
@@ -20580,6 +20616,7 @@ fn dispatch_envelope(
     let facts = hook::Facts {
         singleton: &call.singleton,
         land_live: &call.land_live,
+        lap_held: &call.lap_held,
         discards: &call.discards,
         unread_history: &call.unread_history,
         commit_subject: &call.commit_subject,
