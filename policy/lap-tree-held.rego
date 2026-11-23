@@ -82,8 +82,10 @@ held contains sprintf("git %s", [program.subcommand]) if {
 # FILED and the PR body edited while the lap ran: the gate read the board before
 # the body closed the new row. So, while a lap is live, an issue creation (a
 # `save_issue` with no `id`) and a pull-request edit carrying a `body` are held.
-# A comment is not: no gate reads one. STATED GAP: the same writes made through
-# `batten mcp call` on a shell are not seen here.
+# A comment is not: no gate reads one. The same writes made through `batten mcp
+# call` on a shell are held too (CLOUD-2789): the engine presents a mediated call
+# as the tool it mediates, so `input.call.tool` and `input.call.arguments` read
+# alike on both routes.
 held contains "tracker issue create" if {
 	endswith(input.call.tool, "__save_issue")
 	not input.call.arguments.id
