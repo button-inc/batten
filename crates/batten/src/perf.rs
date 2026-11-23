@@ -1531,10 +1531,10 @@ fn stage_commit(repo: &Path, out: &Path, toml: &str) -> Result<PathBuf> {
 /// (CLOUD-2789), each as hk runs it, with `batten` the binary under measurement.
 ///
 /// **READ OFF `hk run pre-commit --plan`, NOT GUESSED**: on that commit the plan
-/// includes exactly `cargo-fmt`, `taplo`, `taplo-format` and
-/// `merge-conflict-markers`; `commit-msg` runs both of its steps on every
-/// commit. `config-lint-pinned` and `cfg-gated-test-pinned` were in it until
-/// they measured 29x and 5x the ceiling and moved to `slow` (CLOUD-2852).
+/// includes exactly `cargo-fmt`, `taplo` and `taplo-format`; `commit-msg` runs
+/// both of its steps on every commit. `config-lint-pinned`,
+/// `cfg-gated-test-pinned` and `merge-conflict-markers` were in it until they
+/// measured 29x, 5x and 1.2x the ceiling and moved to `slow` (CLOUD-2852).
 /// `taplo`'s two are hk builtins whose argv is `taplo lint {{files}}` /
 /// `taplo format --check --diff {{files}}` under `RUST_LOG=warn`. A commit hook
 /// is a batten hook and answers to the same 100 ms ceiling, which `perf-assert`
@@ -1586,10 +1586,6 @@ fn commit_arms(bin: &str, toml: &str) -> Vec<(&'static str, Vec<String>)> {
                 "--diff",
                 toml,
             ]),
-        ),
-        (
-            "merge-conflict-markers",
-            batten(&["enforce", "--rule", "source carry broken"]),
         ),
         (
             "conventional-commit",

@@ -1104,6 +1104,11 @@ hooks {
   //   mise run commit-msg, body resolving the binary      ~300ms
   //   batten commit check --message                       121-130ms
   //   batten attribution check --message                  16-18ms
+  //
+  //   The current figures are README's Performance rows, measured in `perf`'s
+  //   commit fixture: `commit check --message` was 124 ms p95 there, all of it
+  //   two parses of a staged `batten.toml`, and is 64 ms since the arm diff
+  //   skips them when no arm-shaped line moved (CLOUD-2852).
   //   mise --version, the process alone, no task          105-125ms
   //
   // So both steps run the pinned engine on PATH (the hook runs under `mise exec
@@ -1187,7 +1192,13 @@ hooks {
       // and was pushed before `source carry broken` ever ran. The step runs that
       // row rather than restating its command, so the marker check has one
       // definition (plan item 4c; the row keeps `--assume-in-merge`).
+      //
+      // `slow` UNTIL `enforce` TAKES `--staged` (CLOUD-2852). `enforce` has no
+      // staged scope, so the row's `**` glob judged every tracked file on every
+      // commit: 101 ms p50 / 121 ms p95 in `perf`'s commit fixture, over the
+      // 100 ms ceiling. `verify` still runs it before anything lands.
       ["merge-conflict-markers"] {
+        profiles = List("slow")
         glob = List("**")
         check = "batten enforce --rule 'source carry broken'"
       }

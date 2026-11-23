@@ -111,14 +111,19 @@ const SUBJECT: &str = "the release binary hyperfine measured\n";
 /// satisfy.
 fn pattern_rows() -> String {
     let committed = common::committed_patterns();
-    let row = committed
-        .iter()
-        .find(|pattern| pattern.id == "published-budget-value")
-        .expect("the committed table declares the row the module resolves");
-    format!(
-        "[[pattern]]\nid = \"{}\"\nregex = '{}'\n",
-        row.id, row.regex
-    )
+    let mut rows = String::new();
+    for id in ["published-budget-value", "published-measure-value"] {
+        let row = committed
+            .iter()
+            .find(|pattern| pattern.id == id)
+            .expect("the committed table declares the row the module resolves");
+        let _ = writeln!(
+            rows,
+            "[[pattern]]\nid = \"{}\"\nregex = '{}'",
+            row.id, row.regex
+        );
+    }
+    rows
 }
 
 /// Exactly the four classes `policy/perf-assert.rego` raises.
@@ -132,7 +137,8 @@ fn pattern_rows() -> String {
 /// both-directions check failed the config LOAD. The fixture cannot grow a class
 /// its module does not raise, so the list is the four ids and the coupling to
 /// somebody else's naming is gone.
-const RAISED: [&str; 4] = [
+const RAISED: [&str; 5] = [
+    "path measure absent",
     "path measure late",
     "path measure partial",
     "prose state wrong",
@@ -210,7 +216,7 @@ pub(crate) fn agreeing_readme() -> String {
                 [
                     "| `",
                     *step,
-                    "` | a commit-time hook step | — | — | ≤ 100 ms |\n",
+                    "` | a commit-time hook step | 9.0 ms | 12.0 ms | ≤ 100 ms |\n",
                 ]
             })
             .collect::<String>()
@@ -218,11 +224,10 @@ pub(crate) fn agreeing_readme() -> String {
 
 /// The default commit-time hook steps `perf measure` times in its commit fixture
 /// (CLOUD-2789), each budgeted like any other path.
-pub(crate) const COMMIT_STEPS: [&str; 6] = [
+pub(crate) const COMMIT_STEPS: [&str; 5] = [
     "cargo-fmt",
     "taplo",
     "taplo-format",
-    "merge-conflict-markers",
     "conventional-commit",
     "commit-attribution",
 ];
