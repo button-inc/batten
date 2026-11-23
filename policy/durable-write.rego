@@ -29,6 +29,7 @@
 #MUTANT test-boundary-ignored|s@^\tnot after_test_boundary(lines, i)$@\ttrue@|a_write_inside_a_test_module_is_not_refused
 #MUTANT module-never-closes|s@^\tline == "}"$@\tfalse@|production_after_a_closed_test_module_is_refused
 #MUTANT stream-mark-ignored|s@^\tnot contains(line, "// stream:")$@\ttrue@|a_line_marked_as_a_stream_is_not_refused
+#MUTANT production-one-crate|s@^\tparts\[0\] == "crates"$@\tstartswith(path, "crates/batten/src/")@|a_raw_write_in_another_crate_is_refused
 
 # METADATA
 # description: |
