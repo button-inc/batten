@@ -38,9 +38,34 @@ fn bash_payload(command: &str, background: bool) -> String {
     )
 }
 
-/// The repository root, with its task receipt minted as a session start mints it.
+/// A copy of the committed tree, with its task receipt minted as a session start
+/// mints it.
+///
+/// NEVER THE LIVE CHECKOUT (CLOUD-2253). Minting there rewrote the receipt of
+/// the clone running the suite, so a run of this file flipped how the session's
+/// next `mise run test:filter …` was read: followed into its body while fresh,
+/// fail-closed while stale. The copy also keeps the live lap's singleton locks
+/// out of the reading, so a `mise run land` row is refused by this row alone.
+/// Of `crates/`, three quarters of the tree, only what names a binary is kept:
+/// the manifests and binary roots a `cargo run` naming none resolves through
+/// (`hook::manifest_binary`). One copy per test process, named by its pid, as
+/// nextest runs each case in a process of its own.
 fn root() -> std::path::PathBuf {
-    let root = common::at_root(".");
+    let live = common::at_root(".");
+    let root = common::scratch(&format!("land-stage-direct-{}", std::process::id()));
+    for path in common::git_in(&live, &["ls-files", "-z"]).split('\0') {
+        let names_a_binary = path.ends_with("/Cargo.toml")
+            || path.ends_with("/src/main.rs")
+            || path.contains("/src/bin/");
+        if path.is_empty() || (path.starts_with("crates/") && !names_a_binary) {
+            continue;
+        }
+        let target = root.join(path);
+        std::fs::create_dir_all(target.parent().expect("a tracked path has a parent"))
+            .expect("create the copy's directory");
+        std::fs::copy(live.join(path), &target).expect("copy a tracked file");
+    }
+    common::init_repo(&root);
     let minted = batten::taskset::refresh(
         &root,
         &[batten::facts::TaskQuery {
@@ -64,24 +89,13 @@ fn decision(root: &std::path::Path, command: &str, background: bool) -> String {
 }
 
 /// Every command in `table` is refused by THIS row.
-///
-/// THE ROOT IS THE REAL CLONE, so its singleton locks are real too: run under
-/// `mise run land`, a `mise run land` row meets the live lap's lock first and
-/// is refused as `task run twice`, the gate before this one (#1276). That is
-/// the same command refused harder, and is accepted only while a live process
-/// holds `land`'s lock.
 fn all_refused(table: &[(&str, bool)]) {
     let root = root();
-    let land_held = batten::git::git_dir(&root)
-        .ok()
-        .and_then(|git_dir| batten::task::singleton_holder(&git_dir, "land"))
-        .is_some();
     let escaped: Vec<String> = table
         .iter()
         .filter_map(|(command, background)| {
             let out = decision(&root, command, *background);
-            let held_first = land_held && out.contains("task run twice");
-            (!(out.contains("\"deny\"") && (out.contains(VERDICT) || held_first)))
+            (!(out.contains("\"deny\"") && out.contains(VERDICT)))
                 .then(|| format!("{command} (background: {background})\n{out}"))
         })
         .collect();
@@ -423,6 +437,28 @@ fn a_task_handed_a_filter_is_selection_not_the_stage() {
     all_refused(&[
         ("mise run test:filter", true),
         ("mise run test:filter -- -p batten", true),
+    ]);
+}
+
+/// A PARTITION IS A SUBSET (CLOUD-2253). `--partition hash:k/n` runs one shard
+/// of the suite, which keeps no receipt, so it is selection like a filterset,
+/// through the task or bare, in either spelling. Fails by: `--partition` read
+/// only as an option taking a value, so a sharded run read as the whole suite.
+#[test]
+fn a_partitioned_run_is_selection_not_the_stage() {
+    none_refused(&[
+        ("mise run test:filter -- --partition hash:3/4", true),
+        ("mise run test:filter -- --partition=hash:3/4", true),
+        ("cargo nextest run --workspace --partition hash:1/2", true),
+        ("cargo nextest run --workspace --partition=hash:1/2", true),
+        (
+            "mise exec -- cargo nextest run --workspace --partition hash:1/2",
+            true,
+        ),
+        (
+            "mise exec -- cargo nextest run --workspace --partition=hash:1/2",
+            true,
+        ),
     ]);
 }
 
