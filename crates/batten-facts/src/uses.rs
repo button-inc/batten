@@ -306,13 +306,6 @@ fn insert_root_name(
     table.insert(name.to_owned(), module);
 }
 
-/// The 1-based line `offset` falls on in `source`.
-fn line_of(source: &str, offset: usize) -> usize {
-    source.get(..offset).map_or(1, |head| {
-        head.bytes().filter(|byte| *byte == b'\n').count() + 1
-    })
-}
-
 /// Every `use` edge in a Rust source text, or the reason there are none.
 ///
 /// [`Look::CouldNotLook`] when the text does not parse — **never an empty list**.
@@ -334,9 +327,10 @@ pub fn use_edges(source: &str) -> Look<Vec<UseEdge>> {
 
 /// [`use_edges`] over an already-parsed file.
 fn edges_of(source: &str, file: &ast::SourceFile) -> Vec<UseEdge> {
+    let lines = crate::source::LineIndex::new(source);
     let mut found = Vec::new();
     for item_use in file.syntax().descendants().filter_map(ast::Use::cast) {
-        let line = line_of(source, usize::from(item_use.syntax().text_range().start()));
+        let line = lines.line(usize::from(item_use.syntax().text_range().start()));
         if let Some(tree) = item_use.use_tree() {
             collect_edges(&tree, None, line, &mut found);
         }
@@ -360,7 +354,7 @@ fn edges_of(source: &str, file: &ast::SourceFile) -> Vec<UseEdge> {
         if names.len() < 2 || names[0] != "crate" {
             continue;
         }
-        let line = line_of(source, usize::from(path.syntax().text_range().start()));
+        let line = lines.line(usize::from(path.syntax().text_range().start()));
         let second = names[1].clone();
         let edge = if names.len() == 2 {
             // `crate::Item`: through the root's table, exactly as a `use`.
