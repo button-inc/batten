@@ -227,7 +227,7 @@ same_stage(program, step) if {
 selected(program) := {pick |
 	some at, word in program.arguments
 	some option in {"--target", "--profile", "--package", "--manifest-path"}
-	pick := choice(program.arguments, at, package_spelled(word), option)
+	pick = choice(program.arguments, at, package_spelled(word), option)
 }
 
 # A MANIFEST OTHER THAN THE ROOT'S IS SELECTION, as a package is (CLOUD-2813).
@@ -314,7 +314,7 @@ earlier_verb(words, at, verb) if {
 # ONE `--test <target>` names a single test target, which is selection rather
 # than the suite; two, or `--tests`, select every target again.
 filtered(program) if {
-	words := tail(program)
+	words = tail(program)
 	count([at | some at, _ in words; single_target(words, at)]) == 1
 	not "--tests" in words
 }
@@ -343,7 +343,7 @@ filtered(program) if {
 }
 
 filtered(program) if {
-	words := tail(program)
+	words = tail(program)
 	some at, word in words
 	not startswith(word, "-")
 	not valued(words, at)
@@ -351,7 +351,7 @@ filtered(program) if {
 }
 
 filtered(program) if {
-	words := tail(program)
+	words = tail(program)
 	some at, word in words
 	after_separator(words, at)
 	not startswith(word, "-")
@@ -601,5 +601,5 @@ test_an_unparseable_line_naming_a_stage_is_refused if {
 
 deny contains message if {
 	some v in violation
-	message := v.verdict
+	message = v.verdict
 }

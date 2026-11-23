@@ -141,7 +141,7 @@ owned := "perf-p95"
 # the honest answer and not a pass.
 judged := measurements if {
 	is_object(input.tree["tool-verdict"])
-	measurements := input.tree["tool-verdict"][owned]
+	measurements = input.tree["tool-verdict"][owned]
 }
 
 # --- the measurement half ----------------------------------------------------

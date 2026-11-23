@@ -111,7 +111,7 @@ violation contains {
 
 	# A reference, not `some … in x[range]`: the bytecode compiler does not
 	# hoist an unbound key out of the latter (#1276).
-	signer_commit := input.tree["commit-meta"][_][_]
+	signer_commit = input.tree["commit-meta"][_][_]
 	signer_commit.signed == true
 }
 

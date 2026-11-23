@@ -2548,6 +2548,21 @@ scope = "tree"
 preset = "engine-hygiene"
 severity = "deny"
 
+# #1276's lint half of CLOUD-2777: no Rego `:=` binds a right side that can be
+# undefined — a lookup, a call to a helper with no `default` and no `else`, or
+# `_ := e` — because regorus's bytecode binds `Undefined` there where the
+# interpreter fails the body. `guarded_sources` splices the guard back in as the
+# backstop; this row keeps the source from needing it. Over every module this
+# repository evaluates: its own and the presets it ships.
+[[rule]]
+id = "module bind partial"
+no_fix_reason = "class 2 (a fix verb over a Rego rewrite): `:=` to `=` is mechanical, but no verb rewrites Rego and a helper's `default` is a decision about its value"
+kind = "policy"
+scope = "tree"
+preset = "rego-hygiene"
+unit_sources = ["policy/**/*.rego", "crates/batten/src/policy/presets/**/*.rego"]
+severity = "deny"
+
 # CLOUD-266's three forge reads (CLOUD-843, retiring the body of
 # `[tasks.timeout-drift-record]`): every workflow, each one's last successful
 # runs, and each run's jobs with their durations measured by the producer. The
@@ -12040,6 +12055,7 @@ gates = [
   ".github/workflows/release-artifacts.yml",
   ".github/workflows/renovate.yml",
   "engine-hygiene",
+  "rego-hygiene",
   "admit-ask",
   "script-spawn-opaque",
   "lap-tree-held",

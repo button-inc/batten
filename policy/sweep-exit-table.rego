@@ -118,9 +118,9 @@ commands(body) := [trimmed |
 engine_table(row) if row.run[0] == "batten"
 
 engine_table(row) if {
-	task := mise_task(row)
-	body := input.tree.documents["mise.toml"].tasks[task]
-	lines := commands(body)
+	task = mise_task(row)
+	body = input.tree.documents["mise.toml"].tasks[task]
+	lines = commands(body)
 	count(lines) > 0
 	every line in lines {
 		regex.match(data.batten.patterns["engine-invocation"], line)
@@ -128,8 +128,8 @@ engine_table(row) if {
 }
 
 corpus_table(row) if {
-	task := mise_task(row)
-	body := input.tree.documents["mise.toml"].tasks[task]
+	task = mise_task(row)
+	body = input.tree.documents["mise.toml"].tasks[task]
 	some line in commands(body)
 	not regex.match(data.batten.patterns["engine-invocation"], line)
 }
@@ -191,7 +191,7 @@ violation contains {
 	some name in wrong
 	some placement in row_line
 	placement[0] == name
-	number := placement[1]
+	number = placement[1]
 }
 
 violation contains {

@@ -437,7 +437,7 @@ pub const MANIFESTS: &[Manifest] = &[
     // rows over one preset collide on its predicate ids at load.
     Manifest {
         name: "check-verdict",
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         install: None,
         modules: &[PresetModule {
@@ -500,7 +500,7 @@ writing the family, and re-mint the record from the query.",
     },
     Manifest {
         name: "ci-hygiene",
-        version: semver::Version::new(0, 1, 1),
+        version: semver::Version::new(0, 1, 2),
         suggested: true,
         install: None,
         modules: &[
@@ -703,7 +703,7 @@ value is what does the work, and it is a boolean rather than the string `true`."
     // module is silent.
     Manifest {
         name: "ci-signal",
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         install: None,
         modules: &[
@@ -943,7 +943,7 @@ than its producer, which writes whole or removes, and reads the same way.",
     // rewritten to the host's maximum.
     Manifest {
         name: "claude-code-cloud",
-        version: semver::Version::new(0, 0, 3),
+        version: semver::Version::new(0, 0, 4),
         suggested: true,
         install: None,
         modules: &[
@@ -1129,7 +1129,7 @@ the pipeline.",
     },
     Manifest {
         name: "landing-loop",
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         install: None,
         modules: &[
@@ -1320,7 +1320,7 @@ abandon the other unread.",
     // a regex.
     Manifest {
         name: "mise",
-        version: semver::Version::new(0, 0, 2),
+        version: semver::Version::new(0, 0, 3),
         suggested: true,
         // THE TOOL'S VOCABULARY, NONE OF THE CONSUMER'S (CLOUD-2633). The base
         // configuration always loads; `MISE_ENV` adds exactly the listed
@@ -1432,7 +1432,7 @@ could not, which is a gate reporting on a surface it never saw.",
     },
     Manifest {
         name: "pinned-toolchain",
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         install: None,
         modules: &[
@@ -1502,7 +1502,7 @@ declares, and a probe inside the pin's environment is already correct",
     // consumer's own build workflow, so that half stays in the consumer's module.
     Manifest {
         name: "release-hygiene",
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         install: None,
         modules: &[PresetModule {
@@ -1578,6 +1578,45 @@ step.",
         }],
         patterns: &[],
     },
+    // #1276's lint half of CLOUD-2777: a `:=` whose right side can be undefined,
+    // which regorus's bytecode binds as `Undefined` where the interpreter fails
+    // the body. Reads `Fact::Units` over the Rego the row declares; names no
+    // consumer path (rule 1).
+    Manifest {
+        name: "rego-hygiene",
+        version: semver::Version::new(0, 0, 1),
+        suggested: true,
+        install: None,
+        modules: &[PresetModule {
+            scope: RuleScope::Tree,
+            provider: None,
+            pointer: "<preset:rego-hygiene>/binding-is-defined.rego",
+            embedded_source: include_str!("policy/presets/rego-hygiene/binding-is-defined.rego"),
+        }],
+        verdicts: &[VendoredVerdict {
+            id: "module bind partial",
+            gloss: "a Rego `:=` binds a right side that can be undefined",
+            class: "Rego fails a body at a `:=` whose right side is undefined, and so do OPA and \
+regorus's interpreter; regorus's bytecode compiler drops that guard after `:=` alone, so the \
+statement binds `Undefined` and the body runs on. The two evaluators then decide differently over \
+the same input, and a `_ := e` written to assert that `e` is defined asserts nothing. The right \
+side here is a lookup, a call to a helper of the same module with no `default` and no `else`, or \
+the left side is `_`.",
+            routes: &[
+                run(
+                    "source edit first",
+                    "bind with `=` (unification keeps the guard on both evaluators, `_ = e` \
+included)",
+                ),
+                run(
+                    "default add first",
+                    "give the helper a `default` or an `else` body, so every call has a value",
+                ),
+            ],
+            applicability: Applicability::Advice,
+        }],
+        patterns: &[],
+    },
     // Version 2 (CLOUD-1994) adds the line-unit ban, lifted out of the consumer
     // module it was written as. Its facts — which manifests, keys, unit headers,
     // workflow globs and exempt files — are the consumer's `[census.shell]`
@@ -1601,7 +1640,7 @@ step.",
         // write that authors shell over the `shell-introduced` fact the hook
         // decides with the same detector. A second row at `mediated_call`
         // enables it.
-        version: semver::Version::new(0, 0, 3),
+        version: semver::Version::new(0, 0, 4),
         suggested: true,
         install: None,
         modules: &[
@@ -1815,7 +1854,7 @@ commit.",
     // consumer fact either.
     Manifest {
         name: "tracker-hygiene",
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         install: None,
         modules: &[
@@ -2140,7 +2179,7 @@ one. Fetch the cited issue and pipe the set again.",
     // consumer fact travels inside one.
     Manifest {
         name: "supply-chain",
-        version: semver::Version::new(0, 0, 2),
+        version: semver::Version::new(0, 0, 3),
         suggested: true,
         install: None,
         modules: &[
@@ -2439,7 +2478,7 @@ and remove it, move the item down, or inject it",
     // row. No crate name is compiled here (rule 1).
     Manifest {
         name: "rust",
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         install: None,
         modules: &[PresetModule {
@@ -2499,7 +2538,7 @@ workspace packages it may reach, `^$` for none",
     // enabling it names the one class it raises.
     Manifest {
         name: RED_HEAD,
-        version: semver::Version::new(0, 1, 0),
+        version: semver::Version::new(0, 1, 1),
         suggested: true,
         install: None,
         modules: &[PresetModule {
@@ -2536,7 +2575,7 @@ look at again. Read each named failed job's log first; reading is what admits th
     // the engine already allowed. Destructive calls are left to the host.
     Manifest {
         name: "git",
-        version: semver::Version::new(0, 0, 1),
+        version: semver::Version::new(0, 0, 2),
         suggested: true,
         install: None,
         modules: &[PresetModule {

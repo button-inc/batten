@@ -104,7 +104,7 @@ violation contains {
 	],
 } if {
 	some claim in board_claims
-	actual := board_row[claim.cited]
+	actual = board_row[claim.cited]
 	actual.status != claim.column
 }
 

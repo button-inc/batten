@@ -86,7 +86,7 @@ verdict_passing := {"success", "neutral"}
 # whole bundle down rather than missing quietly.
 verdict_lines := lines if {
 	is_object(input.tree.records)
-	lines := input.tree.records[verdict_family]
+	lines = input.tree.records[verdict_family]
 	is_array(lines)
 }
 
@@ -107,7 +107,7 @@ verdict_row_object(text) if {
 
 verdict_rows contains row if {
 	some line in verdict_lines
-	text := verdict_row_text(line)
+	text = verdict_row_text(line)
 	verdict_row_object(text)
 	row := json.unmarshal(text)
 }
@@ -116,7 +116,7 @@ verdict_rows contains row if {
 # other than the producer: never dropped quietly, never judged as the whole.
 verdict_torn_row if {
 	some line in verdict_lines
-	text := verdict_row_text(line)
+	text = verdict_row_text(line)
 	not verdict_row_object(text)
 }
 

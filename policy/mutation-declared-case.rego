@@ -89,14 +89,14 @@ suite_above(path, i) if {
 declared_suite(path, i) := suite if {
 	above := [header | some header in suite_headers(path); header[0] < i]
 	count(above) > 0
-	suite := above[count(above) - 1][1]
+	suite = above[count(above) - 1][1]
 }
 
 declared_suite(path, i) := suite if {
 	not suite_above(path, i)
-	headers := suite_headers(path)
+	headers = suite_headers(path)
 	count(headers) > 0
-	suite := headers[0][1]
+	suite = headers[0][1]
 }
 
 # Every declaration whose file names a suite, as `{path, suite, case}`.

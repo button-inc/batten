@@ -60,7 +60,7 @@ rules contains "spawn add other"
 # the delta is bound through a rule that holds only for an object, and every
 # predicate below is undefined without it rather than vacuously clean.
 delta := d if {
-	d := input.tree["base-delta"]
+	d = input.tree["base-delta"]
 	is_object(d)
 }
 
@@ -122,7 +122,7 @@ placements_module := "policy/spawn-adapters.rego"
 # for, which is what leaves the added-file arm below to answer and leaves an
 # unchanged file answered by neither.
 added_lines(path) := added if {
-	base_lines := delta["base-lines"][path]
+	base_lines = delta["base-lines"][path]
 	base := {line | some line in base_lines}
 	added := {line |
 		some line in input.tree.lines[path]
@@ -187,7 +187,7 @@ violation contains {
 } if {
 	some path, base_lines in delta["base-lines"]
 	engine_source(path)
-	head_lines := input.tree.lines[path]
+	head_lines = input.tree.lines[path]
 	some line in {l | some l in head_lines}
 	escapes(line)
 	count([l | some l in head_lines; l == line]) > count([l | some l in base_lines; l == line])

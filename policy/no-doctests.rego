@@ -72,7 +72,7 @@ fence_info(body) := info if {
 fences contains [path, index, info] if {
 	some path, file_lines in input.tree.lines
 	some index, line in file_lines
-	info := fence_info(doc_body(line))
+	info = fence_info(doc_body(line))
 }
 
 # How many fences precede this one in the same file.

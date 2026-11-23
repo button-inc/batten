@@ -87,7 +87,7 @@ recorded if {
 # A family's rows, read only when it closed exactly once: `record query` writes a
 # family whole or removes it, so a torn one contributes nothing rather than half.
 rows(family) := [row |
-	lines := input.tree.records[family]
+	lines = input.tree.records[family]
 	count([line | some line in lines; startswith(line, "window\t")]) == 1
 	some line in lines
 	startswith(line, "row\t")
@@ -113,7 +113,7 @@ age_of := {row.tip: row.age |
 refs contains {"name": name, "age": age_of[row["commit.sha"]]} if {
 	recorded
 	some row in rows("branch-heads")
-	name := row.name
+	name = row.name
 	name != trunk
 }
 
@@ -165,7 +165,7 @@ violation contains {
 	"subjects": [{"artifact": reused}, {"count": merge_count(reused)}],
 } if {
 	some pair in merged_heads
-	reused := pair[1]
+	reused = pair[1]
 	merge_count(reused) > 1
 	reused in on_remote
 }

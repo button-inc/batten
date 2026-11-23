@@ -57,7 +57,7 @@ manifest := "mise.toml"
 reports := {"coverage", "scorecard"}
 
 verify := task if {
-	task := input.tree.documents[manifest].tasks.verify
+	task = input.tree.documents[manifest].tasks.verify
 }
 
 # THE COULD-NOT-LOOK ARM. No `[tasks.verify]` means there is nothing to judge a

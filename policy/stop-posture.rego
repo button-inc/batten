@@ -76,7 +76,7 @@ rules contains "prose report duplicate"
 default message := ""
 
 message := text if {
-	text := input.call["final-message"]
+	text = input.call["final-message"]
 	is_string(text)
 }
 

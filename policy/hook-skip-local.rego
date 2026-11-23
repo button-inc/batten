@@ -177,5 +177,5 @@ test_a_quoted_mention_is_not_an_invocation if {
 
 deny contains message if {
 	some v in violation
-	message := v.verdict
+	message = v.verdict
 }

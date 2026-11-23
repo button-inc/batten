@@ -59,7 +59,7 @@ rules contains "pin probe bare"
 # hold and the preset is silent. The only safe direction for a fact that names
 # every program in a project.
 provided contains name if {
-	names := input.facts["pinned-programs"]
+	names = input.facts["pinned-programs"]
 	is_array(names)
 	some name in names
 }

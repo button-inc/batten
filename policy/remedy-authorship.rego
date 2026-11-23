@@ -188,7 +188,7 @@ emitted(line) := text if {
 # carries no prose this gate can judge — the prose is wherever the variable was
 # assigned, which is not this line's fact — and a bare `echo` is a blank line.
 emits_a_literal(line) if {
-	text := emitted(line)
+	text = emitted(line)
 	text != ""
 	not startswith(text, "$")
 }
@@ -209,7 +209,7 @@ violation contains {
 
 task_bodies[name] := body if {
 	some name, task in input.tree.documents["mise.toml"].tasks
-	body := task_run(task)
+	body = task_run(task)
 }
 
 # A task's body is `run`, which is a string or a list of strings.

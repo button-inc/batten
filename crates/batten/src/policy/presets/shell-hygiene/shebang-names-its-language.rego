@@ -44,7 +44,7 @@ shell_interpreters := {"sh", "bash", "dash", "zsh", "ksh"}
 # A first line that declares a shell. Read from the LINES fact, so this decides
 # over files no parser knows — which is the whole reason the fact exists.
 declares_shell(path) if {
-	line := input.tree.lines[path][0]
+	line = input.tree.lines[path][0]
 	startswith(line, "#!")
 	some interpreter in shell_interpreters
 	contains(line, interpreter)

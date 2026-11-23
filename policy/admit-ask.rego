@@ -165,7 +165,7 @@ test_an_option_not_labelled_admit_is_refused if {
 
 # The #1276 first round: a shortened path never matches the finding's pair.
 test_a_shortened_path_is_refused if {
-	found := judged(
+	found = judged(
 		"Admit? test-removed session_provisioning.rs::a_local_release_build and crates/batten/src/x.rs",
 		["Admit", "Refuse"],
 	)
