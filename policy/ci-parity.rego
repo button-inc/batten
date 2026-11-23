@@ -172,11 +172,26 @@ verify_named := concat("\n", [
 # for the reason above: a `step graph run <group>` fragment in the text verify
 # runs names a group, and each row of that group contributes its `run` argv. A
 # row in a group no such line names contributes nothing.
+#
+# A LINE NAMES SEVERAL GROUPS SINCE CLOUD-2789 (`step graph run verify-1
+# verify-2=2 …`): every word before the first flag is a group, a `NAME=N`
+# bound read as its NAME.
 graph_groups contains group if {
 	some at in indexof_n(verify_named, "step graph run ")
 	line := split(substring(verify_named, at + count("step graph run "), -1), "\n")[0]
-	group := trim(split(line, " ")[0], "\"")
-	group != ""
+	words := [trim(word, "\"") | some word in split(line, " ")]
+	some i, word in words
+	word != ""
+	not startswith(word, "-")
+	not flag_before(words, i)
+	group := split(word, "=")[0]
+}
+
+# Whether a flag comes before word `i` of a `step graph run` line.
+flag_before(words, i) if {
+	some j, earlier in words
+	j < i
+	startswith(earlier, "-")
 }
 
 graph_runs := [concat(" ", row.run) |

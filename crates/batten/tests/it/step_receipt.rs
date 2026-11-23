@@ -876,16 +876,7 @@ fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
     let groups: Vec<String> = manifest
         .lines()
         .filter(|line| !line.trim_start().starts_with('#'))
-        .flat_map(|line| {
-            line.match_indices("step graph run ")
-                .map(|(at, verb)| {
-                    line[at + verb.len()..]
-                        .chars()
-                        .take_while(|c| !c.is_whitespace() && *c != '"')
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-        })
+        .flat_map(common::graph_groups)
         .collect();
     let reached = |id: &str| {
         declared["step"]
@@ -909,9 +900,10 @@ fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
     }
     assert!(!named.is_empty(), "the scan must find the call sites");
     assert!(
-        groups.iter().any(|group| group == "verify-1")
-            && groups.iter().any(|group| group == "verify-2"),
-        "the lap runs both graph groups: {groups:?}"
+        ["verify-1", "verify-2", "verify-3", "verify-4"]
+            .iter()
+            .all(|tier| groups.iter().any(|group| group == tier)),
+        "the lap runs every graph group: {groups:?}"
     );
 }
 
