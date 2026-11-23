@@ -1409,8 +1409,41 @@ const COMMIT_SOURCE: &str = "crates/batten/src/hookcost.rs";
 /// budget is a ceiling on the typical commit, not a description of this one.
 const COMMIT_WORST: &str = "crates/batten/src/lib.rs";
 
-/// The unbound TOML the commit fixture stages beside `batten.toml`.
-const COMMIT_TOML: &str = "mise.toml";
+/// The unbound TOML the commit fixture stages beside `batten.toml`, CHOSEN FROM
+/// THE TREE, never named: the largest tracked root-level `.toml` that is neither
+/// Batten's own config (`batten.*`, schema-bound and linted at landing) nor the
+/// Cargo manifest. Which TOML a consumer edits most is a fact about their
+/// repository (non-negotiable rule 1); the largest is the one whose commit-time
+/// `taplo` costs most, so the arm prices the expensive commit, not a toy file.
+///
+/// # Errors
+///
+/// A checkout whose index cannot be read, or that tracks no such file.
+fn commit_toml(repo: &Path) -> Result<String> {
+    let mut best: Option<(u64, String)> = None;
+    for path in crate::git::tracked_paths(repo)? {
+        let own = path.starts_with("batten.") || path == "Cargo.toml";
+        let toml = Path::new(&path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"));
+        if path.contains('/') || !toml || own {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(repo.join(&path)) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(size, _)| meta.len() > *size) {
+            best = Some((meta.len(), path));
+        }
+    }
+    best.map(|(_, path)| path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "perf: the commit fixture needs a tracked root-level TOML other than `batten.*` \
+             and `Cargo.toml` in {}, and there is none",
+            repo.display()
+        )
+    })
+}
 
 /// The trunk ref the commit fixture's branch-relative steps judge against, which
 /// [`stage_commit`] refuses to stage without.
@@ -1434,7 +1467,7 @@ const COMMIT_EMAIL: &str = "perf@example.invalid";
 /// workspace for `cargo fmt`, its whole index. A smaller tree would price a
 /// commit nobody makes. In-process, as `git clone --shared` (objects borrowed
 /// through alternates), because this module spawns no `git`.
-fn stage_commit(repo: &Path, out: &Path) -> Result<PathBuf> {
+fn stage_commit(repo: &Path, out: &Path, toml: &str) -> Result<PathBuf> {
     // THE TRUNK REF IS A PRECONDITION, refused here rather than discovered by
     // hyperfine (CLOUD-2789). `cfg-gated-test-pinned` judges the branch against
     // `origin/main`, which the clone carries only where the checkout resolves it;
@@ -1454,9 +1487,9 @@ fn stage_commit(repo: &Path, out: &Path) -> Result<PathBuf> {
     let line = [
         (COMMIT_SOURCE, "// perf: one staged line\n"),
         ("batten.toml", "# perf: one staged line\n"),
-        // The most-edited TOML that `.taplo.toml` binds to no schema, so the
-        // commit-time `taplo` step (which skips the bound ones) has a subject.
-        (COMMIT_TOML, "# perf: one staged line\n"),
+        // An unbound TOML ([`commit_toml`]), so the commit-time `taplo` step
+        // (which skips the schema-bound ones) has a subject.
+        (toml, "# perf: one staged line\n"),
     ];
     for (path, added) in line {
         let at = commit.join(path);
@@ -1485,7 +1518,7 @@ fn stage_commit(repo: &Path, out: &Path) -> Result<PathBuf> {
     Ok(commit)
 }
 
-/// The default commit-time hk steps a `.rs`, `batten.toml` and `mise.toml` commit fires
+/// The default commit-time hk steps a `.rs`, `batten.toml` and unbound-TOML commit fires
 /// (CLOUD-2789), each as hk runs it, with `batten` the binary under measurement.
 ///
 /// **READ OFF `hk run pre-commit --plan`, NOT GUESSED**: on that commit the plan
@@ -1498,7 +1531,7 @@ fn stage_commit(repo: &Path, out: &Path) -> Result<PathBuf> {
 ///
 /// `cargo-fmt-worst` is no step: it is `cargo-fmt` over [`COMMIT_WORST`], so the
 /// cost of the commit that stages the largest file is on the record, unbudgeted.
-fn commit_arms(bin: &str) -> Vec<(&'static str, Vec<String>)> {
+fn commit_arms(bin: &str, toml: &str) -> Vec<(&'static str, Vec<String>)> {
     let words = |words: &[&str]| {
         words
             .iter()
@@ -1529,7 +1562,7 @@ fn commit_arms(bin: &str) -> Vec<(&'static str, Vec<String>)> {
         // unbound TOML; `taplo-format` formats every staged TOML in one process.
         (
             "taplo",
-            words(&["env", "RUST_LOG=warn", "taplo", "lint", COMMIT_TOML]),
+            words(&["env", "RUST_LOG=warn", "taplo", "lint", toml]),
         ),
         (
             "taplo-format",
@@ -1541,7 +1574,7 @@ fn commit_arms(bin: &str) -> Vec<(&'static str, Vec<String>)> {
                 "--check",
                 "--diff",
                 "batten.toml",
-                COMMIT_TOML,
+                toml,
             ]),
         ),
         ("config-lint-pinned", batten(&["config", "lint"])),
@@ -1665,7 +1698,8 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).context("perf: could not create the output directory")?;
     let (check_repo, hooks) = stage(repo, &out)?;
-    let commit_repo = stage_commit(repo, &out)?;
+    let toml = commit_toml(repo)?;
+    let commit_repo = stage_commit(repo, &out, &toml)?;
     let state = out.join("state");
     let state_text = state.to_string_lossy().into_owned();
 
@@ -1737,7 +1771,7 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
     // THE COMMIT-TIME HOOK STEPS (CLOUD-2789), in the commit fixture, each with
     // no stdin: hk hands a step its files on the command line.
     plan.extend(
-        commit_arms(&head)
+        commit_arms(&head, &toml)
             .into_iter()
             .map(|(id, cmd)| (id, None, cmd, commit_repo.as_path())),
     );
@@ -4703,6 +4737,66 @@ mod tests {
         Ok(())
     }
 
+    /// The commit fixture's TOML is read off the tree: the largest tracked
+    /// root-level `.toml` that is not Batten's own config or the Cargo manifest.
+    ///
+    /// Fails by: a hardcoded name (picks nothing here, or the wrong one), size
+    /// ignored (`small.toml` sorts first), a nested file admitted (`deep/huge.toml`
+    /// is the largest), an untracked file admitted, or `batten.*`/`Cargo.toml`
+    /// admitted (each is larger than the winner).
+    #[test]
+    fn the_commit_toml_is_the_largest_unbound_root_toml_the_tree_tracks() -> Result<()> {
+        let repo = perf_scratch("commit-toml");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::create_dir_all(repo.join("deep"))?;
+        let big = "# line\n".repeat(50);
+        let bigger = "# line\n".repeat(100);
+        let biggest = "# line\n".repeat(200);
+        for (path, body) in [
+            ("small.toml", "a = 1\n"),
+            ("tools.toml", big.as_str()),
+            ("batten.toml", bigger.as_str()),
+            ("batten.example.toml", bigger.as_str()),
+            ("Cargo.toml", bigger.as_str()),
+            ("deep/huge.toml", biggest.as_str()),
+            ("notes.txt", biggest.as_str()),
+        ] {
+            std::fs::write(repo.join(path), body)?;
+        }
+        let tracked = [
+            "small.toml",
+            "tools.toml",
+            "batten.toml",
+            "batten.example.toml",
+            "Cargo.toml",
+            "deep/huge.toml",
+            "notes.txt",
+        ]
+        .map(str::to_owned);
+        crate::gitwrite::commit_paths(&repo, &tracked, "base\n")?;
+        std::fs::write(repo.join("untracked.toml"), &biggest)?;
+        assert_eq!(commit_toml(&repo)?, "tools.toml");
+        Ok(())
+    }
+
+    /// With no candidate the fixture is refused, naming what it needed.
+    ///
+    /// Fails by: an empty name returned, which stages nothing and prices a
+    /// `taplo` over no file.
+    #[test]
+    fn a_tree_tracking_no_unbound_root_toml_is_refused() -> Result<()> {
+        let repo = perf_scratch("commit-toml-none");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
+        crate::gitwrite::commit_paths(&repo, &[String::from("batten.toml")], "base\n")?;
+        let Err(refusal) = commit_toml(&repo) else {
+            bail!("a tree with no candidate TOML chose one");
+        };
+        let refusal = refusal.to_string();
+        assert!(refusal.contains("root-level TOML"), "{refusal}");
+        Ok(())
+    }
+
     /// The commit fixture is a shared clone of the checkout carrying exactly one
     /// staged one-line change to a Rust source and to the config, a commit
     /// message where `commit-msg` reads it, and an identity of its own.
@@ -4712,6 +4806,7 @@ mod tests {
     /// (whose own may be one the attribution gate refuses).
     #[test]
     fn the_commit_fixture_is_a_clone_with_one_staged_line_per_subject() -> Result<()> {
+        const COMMIT_TOML: &str = "tools.toml";
         let repo = perf_scratch("commit-source");
         crate::gitwrite::init_on_main(&repo)?;
         std::fs::create_dir_all(repo.join("crates/batten/src"))?;
@@ -4731,7 +4826,7 @@ mod tests {
         )?;
         pin_trunk(&repo)?;
         let out = perf_scratch("commit-out");
-        let commit = stage_commit(&repo, &out)?;
+        let commit = stage_commit(&repo, &out, COMMIT_TOML)?;
         assert_eq!(commit, out.join("commit-repo"));
         let staged: Vec<String> = crate::git::staged_paths(&commit)?.into_iter().collect();
         assert_eq!(staged, ["batten.toml", COMMIT_SOURCE, COMMIT_TOML]);
@@ -4777,7 +4872,7 @@ mod tests {
         std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
         crate::gitwrite::commit_paths(&repo, &[String::from("batten.toml")], "base\n")?;
         let out = perf_scratch("commit-no-trunk-out");
-        let Err(refusal) = stage_commit(&repo, &out) else {
+        let Err(refusal) = stage_commit(&repo, &out, "tools.toml") else {
             bail!("no origin/main, no fixture");
         };
         let refusal = refusal.to_string();
