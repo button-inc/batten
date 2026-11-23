@@ -2804,7 +2804,12 @@ fn run_suite(
         CAPTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let _ = fs::remove_file(&junit);
-    if cargo && reuse.is_none() {
+    // A REUSE AFTER A REBUILD REBUILDS CLEAN FIRST. The previous rebuild wrote
+    // its mutant into the very binaries the record names; the staged tree is
+    // restored (or carries only this row's unembedded mutation), so one build
+    // here puts back binaries that see no other row's mutant.
+    let dirty = reuse.is_some_and(|built| built.dirty.get());
+    if cargo && (reuse.is_none() || dirty) {
         // AN EMBEDDED SUBJECT ONLY: BUILT UNDER THE BUILD BOUND FIRST, THEN TIMED
         // (review of #962). A mutated embedded source must be recompiled, and
         // paying that inside the per-case bound is how a slow compile reads as
@@ -2813,6 +2818,9 @@ fn run_suite(
         let mut build = vec![String::from("test"), String::from("--no-run")];
         build.extend(overlay_features(root));
         let _ = spawn(dir, Program::Cargo, &build, &env, build_bound());
+    }
+    if let Some(built) = prebuilt.filter(|_| cargo) {
+        built.dirty.set(reuse.is_none());
     }
     if let Suite::Tofu { path } = suite {
         // INITIALISED UNDER THE BUILD BOUND FIRST, THEN TIMED (CLOUD-2190). The
@@ -4079,6 +4087,12 @@ struct Prebuilt {
     metadata: PathBuf,
     /// Staged-tree paths the build read, and directories a build script watches.
     embedded: Vec<String>,
+    /// Whether a row since the last clean build rebuilt the suite. A rebuild
+    /// writes the binaries at the SAME uplifted paths the record names, so after
+    /// an embedded row's mutated run they hold that row's mutant, and a later row
+    /// reusing them would be judged against it. Set by every rebuild, cleared by
+    /// the clean rebuild [`run_suite`] owes before the next reuse.
+    dirty: std::cell::Cell<bool>,
 }
 
 impl Prebuilt {
@@ -4228,6 +4242,7 @@ fn build_if_owed(
         binaries: dir.join("binaries.json"),
         metadata: dir.join("cargo-metadata.json"),
         embedded: Vec::new(),
+        dirty: std::cell::Cell::new(false),
     };
     let mut list = [
         "nextest",
