@@ -70,7 +70,7 @@ rules contains "plan read missing"
 # the id would make `plan-unacquired` unwritable: the id nobody could acquire is
 # exactly the id the refusal has to name.
 declared := plan if {
-	plan := input.tree.plan
+	plan = input.tree.plan
 	is_object(plan)
 }
 
@@ -113,7 +113,7 @@ violation contains {
 # A required step the plan does not include: either absent from it entirely, or
 # present with a status that is not inclusion.
 missing_in(id) := names if {
-	plan := acquired[id]
+	plan = acquired[id]
 	names := {name |
 		some name in plan.required
 		not included(plan, name)

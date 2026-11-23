@@ -69,11 +69,11 @@ lock_path := "Cargo.lock"
 crypto_crates := {"hmac", "sha2"}
 
 manifest_lines := lines if {
-	lines := input.tree.lines[manifest_path]
+	lines = input.tree.lines[manifest_path]
 }
 
 lock_lines := lines if {
-	lines := input.tree.lines[lock_path]
+	lines = input.tree.lines[lock_path]
 }
 
 unquoted(text) := replace(text, "\"", "")
@@ -113,7 +113,7 @@ declared contains name if {
 	j > deps_start
 	j < deps_end
 	contains(line, "=")
-	name := unquoted(trim_space(substring(line, 0, indexof(line, "="))))
+	name = unquoted(trim_space(substring(line, 0, indexof(line, "="))))
 	name != ""
 }
 
@@ -145,7 +145,7 @@ another_package_after(i) if {
 field(i, key) := value if {
 	some j in numbers.range(i, package_end(i) - 1)
 	startswith(lock_lines[j], concat("", [key, " = "]))
-	value := unquoted(substring(lock_lines[j], count(key) + 3, -1))
+	value = unquoted(substring(lock_lines[j], count(key) + 3, -1))
 }
 
 # The major.minor of a semver string, which is what "major" means for a

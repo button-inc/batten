@@ -177,19 +177,19 @@ test_board_an_unmarked_absent_path_is_refused if {
 }
 
 test_board_a_marked_absent_path_is_prospective_not_refused if {
-	tree := board_cites_tree(["path\tA-1\tsrc/x.rs\tno\tyes\tno"])
+	tree = board_cites_tree(["path\tA-1\tsrc/x.rs\tno\tyes\tno"])
 	count(violation) == 0 with input as tree
 	board_notes == {"A-1 src/x.rs prospective-cited-path"} with input as tree
 }
 
 test_board_a_marker_on_a_deleted_path_is_refused_not_believed if {
-	tree := board_cites_tree(["path\tA-1\tsrc/x.rs\tno\tyes\tyes"])
+	tree = board_cites_tree(["path\tA-1\tsrc/x.rs\tno\tyes\tyes"])
 	board_rendered(violation) == {"A-1 src/x.rs stale-cited-path"} with input as tree
 	count(board_notes) == 0 with input as tree
 }
 
 test_board_a_shallow_clone_leaves_the_marker_believed if {
-	tree := board_cites_tree(["path\tA-1\tsrc/x.rs\tno\tyes\tunknown"])
+	tree = board_cites_tree(["path\tA-1\tsrc/x.rs\tno\tyes\tunknown"])
 	count(violation) == 0 with input as tree
 	count(board_notes) == 1 with input as tree
 }

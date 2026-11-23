@@ -86,7 +86,7 @@ violation contains {
 directory_of(path) := segment if {
 	segments := split(path, "/")
 	count(segments) > 1
-	segment := segments[count(segments) - 2]
+	segment = segments[count(segments) - 2]
 }
 
 # Read and refused, or carrying no frontmatter at all. Both are a skill this

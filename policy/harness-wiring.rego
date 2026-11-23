@@ -136,7 +136,7 @@ merged_ids := {
 # document where it does not is `WiringFile`'s own Key/Whole split, and a module
 # that only read `.hooks` would be silently clean over every hooks-only host.
 event_map(doc) := m if {
-	m := doc.hooks
+	m = doc.hooks
 } else := doc
 
 # Every command registered on a committed surface, with the file it is in.
@@ -150,7 +150,7 @@ commands contains {"path": path, "command": command} if {
 	some _, entries in event_map(input.tree.documents[path])
 	some entry in entries
 	some hook in entry.hooks
-	command := hook.command
+	command = hook.command
 }
 
 # Every command on a MERGED surface, reduced to its BASENAME.
@@ -164,7 +164,7 @@ merged_commands contains basename(command) if {
 	some _, entries in event_map(input.tree.external[id])
 	some entry in entries
 	some hook in entry.hooks
-	command := hook.command
+	command = hook.command
 }
 
 basename(command) := parts[count(parts) - 1] if {
@@ -201,7 +201,7 @@ violation contains {
 strays_in(path) := {command |
 	some entry in commands
 	entry.path == path
-	command := entry.command
+	command = entry.command
 	stray(command)
 }
 

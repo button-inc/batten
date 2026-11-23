@@ -163,5 +163,5 @@ test_a_gh_call_at_stop_is_not_selected if {
 
 deny contains message if {
 	some v in violation
-	message := v.verdict
+	message = v.verdict
 }

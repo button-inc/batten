@@ -34,7 +34,7 @@ rules contains "pin reach loose"
 # names every program in a project: a refusal on a failure to look would refuse
 # the project.
 provided contains name if {
-	names := input.facts["pinned-programs"]
+	names = input.facts["pinned-programs"]
 	is_array(names)
 	some name in names
 }

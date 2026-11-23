@@ -106,7 +106,7 @@ call_surfaces contains path if {
 # `undefined`: the engine emits `null` where the base would not resolve, and
 # `not input.tree["base-delta"]` is dead for exactly that value.
 delta := d if {
-	d := input.tree["base-delta"]
+	d = input.tree["base-delta"]
 	is_object(d)
 }
 
@@ -134,13 +134,13 @@ touched contains path if {
 # than unreadable: a new surface file declaring a verb nothing reaches is the
 # same defect arriving in one commit instead of two.
 base_lines := lines if {
-	lines := delta["base-lines"][SURFACE]
+	lines = delta["base-lines"][SURFACE]
 }
 
 # A base from before the table moved holds it at its former path.
 base_lines := lines if {
 	not delta["base-lines"][SURFACE]
-	lines := delta["base-lines"][FORMER_SURFACE]
+	lines = delta["base-lines"][FORMER_SURFACE]
 }
 
 base_lines := [] if {
@@ -157,13 +157,13 @@ decl_path(line) := verb if {
 	trimmed := trim_space(line)
 	startswith(trimmed, "path: \"")
 	rest := trim_prefix(trimmed, "path: \"")
-	verb := split(rest, "\"")[0]
+	verb = split(rest, "\"")[0]
 	verb != ""
 }
 
 verbs_in(lines) := {verb |
 	some line in lines
-	verb := decl_path(line)
+	verb = decl_path(line)
 }
 
 declared_verbs := verbs_in(input.tree.lines[SURFACE])
@@ -263,7 +263,7 @@ invokes(text, verb) if {
 
 reached(verb) if {
 	some path in call_surfaces
-	text := code_text(path)
+	text = code_text(path)
 	contains(text, "batten")
 	invokes(text, verb)
 }

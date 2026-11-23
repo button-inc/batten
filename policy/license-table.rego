@@ -61,7 +61,7 @@ cells(line) := parts if {
 # enforces it elsewhere: `path:line`, never a file and a guess.
 row contains [index + 1, tool, license, compat] if {
 	some index, line in input.tree.lines[doc]
-	parts := cells(line)
+	parts = cells(line)
 	count(parts) > 5
 	tool := trim_space(parts[1])
 	tool != ""

@@ -81,7 +81,7 @@ policy_path := "batten.toml"
 rules contains "tool pin wrong"
 
 manifest_lines := lines if {
-	lines := input.tree.lines[manifest_path]
+	lines = input.tree.lines[manifest_path]
 }
 
 workflow_paths contains path if {
@@ -258,7 +258,7 @@ both_auto_installs_bound(path) if {
 spawned contains tool if {
 	some line in input.tree.lines[policy_path]
 	some hit in regex.find_n(data.batten.patterns["mise-exec-spawn"], line, -1)
-	tool := split(hit, " ")[count(split(hit, " ")) - 1]
+	tool = split(hit, " ")[count(split(hit, " ")) - 1]
 	tool in owned
 }
 

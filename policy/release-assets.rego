@@ -97,7 +97,7 @@ of(kind) := {columns[1] |
 assets := of("release-asset")
 
 tag := name if {
-	tags := of("release-tag")
+	tags = of("release-tag")
 	count(tags) == 1
 	some name in tags
 }
@@ -114,13 +114,13 @@ tag := name if {
 # schema's and checksums' uploads. The expectations are the union of both.
 workflows contains document if {
 	path := ".github/workflows/release-artifacts.yml"
-	document := input.tree.documents[path]
+	document = input.tree.documents[path]
 	is_object(document.jobs)
 }
 
 workflows contains document if {
 	some path in called
-	document := input.tree.documents[path]
+	document = input.tree.documents[path]
 	is_object(document.jobs)
 }
 
@@ -171,7 +171,7 @@ literal contains name if {
 	some token in upload_operand
 	regex.match(data.batten.patterns["release-upload-operand"], token)
 	parts := split(trim(token, "\""), "/")
-	name := parts[count(parts) - 1]
+	name = parts[count(parts) - 1]
 }
 
 reference := input.tree.documents["mise.toml"].env.BATTEN_CLI_REFERENCE
@@ -180,7 +180,7 @@ reference := input.tree.documents["mise.toml"].env.BATTEN_CLI_REFERENCE
 # (CLOUD-2554: `dist.yml`), as the key its document is held under.
 called contains callee if {
 	some job in input.tree.documents[".github/workflows/release-artifacts.yml"].jobs
-	ref := job.uses
+	ref = job.uses
 	startswith(ref, "./")
 	callee := substring(ref, 2, -1)
 }

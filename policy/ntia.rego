@@ -67,9 +67,9 @@ rows(kind, width) := [columns |
 standards := [{"name": columns[1], "exit": columns[2]} | some columns in rows("standard", 4)]
 
 single(kind) := value if {
-	found := rows(kind, 2)
-	count(found) == 1
-	value := found[0][1]
+	matched = rows(kind, 2)
+	count(matched) == 1
+	value = matched[0][1]
 }
 
 document_name := single("document")
@@ -151,24 +151,27 @@ record(spdx_version, entries) := {"tree": {"records": {"ntia": array.concat(
 	entries,
 )}}}
 
-found(given) := {sprintf("%s %s", [v.verdict, v.subjects[0].path]) |
-	some v in violation with input as given
-}
+# The case binds `violation` under its own `with` and hands the set over, so no
+# helper writes a `with` and every case compiles to bytecode (#1276).
+pointers(found) := {sprintf("%s %s", [v.verdict, v.subjects[0].path]) | some v in found}
 
 test_a_conforming_document_is_clean if {
 	count(violation) == 0 with input as record("SPDX-2.3", ["standard\tntia\t0\t-"])
 }
 
 test_a_refused_standard_is_partial if {
-	found(record("SPDX-2.3", ["standard\tntia\t1\tcomponents=3"])) == {"manifest cover partial batten.spdx.json#ntia"}
+	found := violation with input as record("SPDX-2.3", ["standard\tntia\t1\tcomponents=3"])
+	pointers(found) == {"manifest cover partial batten.spdx.json#ntia"}
 }
 
 test_the_exit_code_decides_not_the_counts if {
-	found(record("SPDX-2.3", ["standard\tntia\t1\tcomponents=3 no-supplier=0 no-license=0 no-copyright=0"])) == {"manifest cover partial batten.spdx.json#ntia"}
+	found := violation with input as record("SPDX-2.3", ["standard\tntia\t1\tcomponents=3 no-supplier=0 no-license=0 no-copyright=0"])
+	pointers(found) == {"manifest cover partial batten.spdx.json#ntia"}
 }
 
 test_an_spdx3_only_standard_over_spdx2_is_unread if {
-	found(record("SPDX-2.3", ["standard\tntia\t0\t-", "standard\tfsct3-min\t0\t-"])) == {"manifest check unread batten.spdx.json#fsct3-min-needs-spdx3"}
+	found := violation with input as record("SPDX-2.3", ["standard\tntia\t0\t-", "standard\tfsct3-min\t0\t-"])
+	pointers(found) == {"manifest check unread batten.spdx.json#fsct3-min-needs-spdx3"}
 }
 
 test_the_same_standard_over_spdx3_is_askable if {
@@ -176,11 +179,13 @@ test_the_same_standard_over_spdx3_is_askable if {
 }
 
 test_an_absent_spdx_version_is_unread if {
-	found(record("", ["standard\tntia\t0\t-"])) == {"manifest check unread batten.spdx.json#spdx-version-absent"}
+	found := violation with input as record("", ["standard\tntia\t0\t-"])
+	pointers(found) == {"manifest check unread batten.spdx.json#spdx-version-absent"}
 }
 
 test_an_unclassifiable_spdx_version_is_unread if {
-	found(record("SPDX-9.9", ["standard\tntia\t0\t-"])) == {"manifest check unread batten.spdx.json#spdx-version-unknown"}
+	found := violation with input as record("SPDX-9.9", ["standard\tntia\t0\t-"])
+	pointers(found) == {"manifest check unread batten.spdx.json#spdx-version-unknown"}
 }
 
 test_a_record_with_no_standard_is_torn if {

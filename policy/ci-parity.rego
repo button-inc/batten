@@ -178,13 +178,13 @@ verify_named := concat("\n", [
 # bound read as its NAME.
 graph_groups contains group if {
 	some at in indexof_n(verify_named, "step graph run ")
-	line := split(substring(verify_named, at + count("step graph run "), -1), "\n")[0]
+	line = split(substring(verify_named, at + count("step graph run "), -1), "\n")[0]
 	words := [trim(word, "\"") | some word in split(line, " ")]
 	some i, word in words
 	word != ""
 	not startswith(word, "-")
 	not flag_before(words, i)
-	group := split(word, "=")[0]
+	group = split(word, "=")[0]
 }
 
 # Whether a flag comes before word `i` of a `step graph run` line.
@@ -210,11 +210,11 @@ workflow[path] := doc if {
 }
 
 triggers(path) := t if {
-	t := workflow[path].on
+	t = workflow[path].on
 	is_object(t)
 }
 
-on_pull_request(path) if _ := triggers(path).pull_request
+on_pull_request(path) if _ = triggers(path).pull_request
 
 # A check-run's name is the job's `name:`; a matrix leg gets the leg appended in
 # parentheses, which no committed text can expand. Comparison is therefore over
@@ -226,7 +226,7 @@ base_name(name) := trim_space(split(name, "(")[0])
 # document is held under (CLOUD-2554). Such a job has no steps of its own: its
 # runs are the called workflow's jobs, named `<caller> / <callee job>`.
 calls(path, name) := callee if {
-	ref := workflow[path].jobs[name].uses
+	ref = workflow[path].jobs[name].uses
 	startswith(ref, "./")
 	callee := substring(ref, 2, -1)
 }
@@ -265,7 +265,7 @@ ci_task_used contains [path, task] if {
 	judged_job(path, name)
 	some step in workflow[path].jobs[name].steps
 	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], step.run, -1)
-	task := split(fragment, " ")[2]
+	task = split(fragment, " ")[2]
 }
 
 violation contains {
@@ -364,8 +364,8 @@ body_text(run) := text if {
 # generalise this into an undeclared prefix rule over every task — that would
 # silently admit the widening case.
 covering_holds(task, covering) if {
-	narrowed := task_run(task)
-	full := task_run(covering)
+	narrowed = task_run(task)
+	full = task_run(covering)
 	narrowed != ""
 	full != ""
 	startswith(narrowed, full)
@@ -385,7 +385,7 @@ lane_reaches(lane) if {
 }
 
 covered_by_a_lane_verify_runs(task) if {
-	covering := covering_lane[task]
+	covering = covering_lane[task]
 	covering_holds(task, covering)
 	lane_reaches(covering)
 }
@@ -421,7 +421,7 @@ violation contains {
 	governed
 	some task, covering in covering_lane
 	some caller in ["verify", "verify:gated"]
-	list := depends_of(caller)
+	list = depends_of(caller)
 	task in list
 	names_the_covering_lane(list, covering)
 }
@@ -501,7 +501,7 @@ approximated_task_runs_in_ci(task) if {
 # for a reason that has nothing to do with the gate. `rules/policy-modules.md`
 # names that trap: choose a mutation that discriminates.
 approximated_by_a_lane_verify_runs(task) if {
-	entry := approximated_lane[task]
+	entry = approximated_lane[task]
 	approximation_holds(task, entry)
 	lane_reaches(entry.by)
 }
@@ -568,7 +568,7 @@ job_display_names contains base_name(sprintf("%s / %s", [caller, called])) if {
 	some path, _ in workflow
 	on_pull_request(path)
 	some key, job in workflow[path].jobs
-	callee := calls(path, key)
+	callee = calls(path, key)
 	caller := object.get(job, "name", key)
 	some ckey, cjob in workflow[callee].jobs
 	called := object.get(cjob, "name", ckey)
@@ -855,7 +855,7 @@ violation contains {
 # in that argument position at all, so the two mechanisms hold the same join
 # from opposite ends.
 abandon_reads_declaration if {
-	lines := input.tree.lines["crates/batten/src/lib.rs"]
+	lines = input.tree.lines["crates/batten/src/lib.rs"]
 	some i, j
 	contains(lines[i], "FanIn::from_workflow_path")
 	j >= i
@@ -920,7 +920,7 @@ starts_with_the_lease(path, name) if {
 # A CALLING JOB SPENDS THROUGH ITS CALLEE (CLOUD-2554), so the lease must open
 # every job the called workflow runs; a caller has no steps of its own to carry it.
 starts_with_the_lease(path, name) if {
-	callee := calls(path, name)
+	callee = calls(path, name)
 	count(workflow[callee].jobs) > 0
 	every _, job in workflow[callee].jobs {
 		job.steps[0].name == lease_step_name
@@ -1272,13 +1272,13 @@ release_path_poster := {
 }
 
 posts_release_path(step) if {
-	text := step_text(step)
+	text = step_text(step)
 	contains(text, "release path")
 	contains(text, "--post")
 }
 
 posts_release_path(step) if {
-	text := step_text(step)
+	text = step_text(step)
 	contains(text, "statuses/")
 	contains(text, "release-path")
 }
@@ -1506,7 +1506,7 @@ violation contains {
 	"subjects": [{"path": release_land}, {"artifact": "land checks out something other than main"}],
 } if {
 	release_path_adopted
-	job := workflow[release_land].jobs.land
+	job = workflow[release_land].jobs.land
 	not checks_out_main(job)
 }
 
@@ -1614,7 +1614,7 @@ violation contains {
 # before the server requires `release-path` no head pinning an unverified
 # release passes the one check it does require.
 final_sealed if {
-	ci := workflow[".github/workflows/ci.yml"]
+	ci = workflow[".github/workflows/ci.yml"]
 	some name in needs_of(ci.jobs.final)
 	some step in object.get(ci.jobs[name], "steps", [])
 	contains(step_text(step), "release path")
@@ -1740,7 +1740,7 @@ task_cargo contains cmd if {
 	some raw in split(task_run("test:cargo"), "\n")
 	parts := split(trim_space(raw), " step run test:cargo -- ")
 	count(parts) == 2
-	cmd := parts[1]
+	cmd = parts[1]
 	startswith(cmd, "cargo ")
 }
 
@@ -1986,7 +1986,7 @@ test_a_release_leg_that_installs_everything_is_refused if {
 # ANTI-VACUITY. Without this the arm is satisfied by a clause refusing every
 # release leg, which is a gate that never passes.
 test_a_release_leg_that_names_its_tools_is_clean if {
-	narrowed := release_leg({"with": {"version": "2026.9.1", "install_args": "rust zig"}})
+	narrowed = release_leg({"with": {"version": "2026.9.1", "install_args": "rust zig"}})
 	found := violation with input as swap(".github/workflows/release-artifacts.yml", narrowed)
 	every f in found {
 		f.verdict != "job list loose"
@@ -1996,7 +1996,7 @@ test_a_release_leg_that_names_its_tools_is_clean if {
 # AN EMPTY STRING IS NOT A LIST. `mise-action` reads it as "install everything",
 # so a half-finished narrowing must not read as a finished one.
 test_an_empty_provisioning_list_is_refused if {
-	empty := release_leg({"with": {"version": "2026.9.1", "install_args": ""}})
+	empty = release_leg({"with": {"version": "2026.9.1", "install_args": ""}})
 	found := violation with input as swap(".github/workflows/release-artifacts.yml", empty)
 	some f in found
 	f.verdict == "job list loose"
@@ -2117,7 +2117,7 @@ hooked(hk_lines) := out if {
 		"on": {"pull_request": {"types": ["opened"]}},
 		"jobs": {"ci": {"name": "ci", "runs-on": "ubuntu-latest", "steps": [lease_first, {"run": "mise run smoke"}]}},
 	}
-	base := swap(".github/workflows/ci.yml", wf)
+	base = swap(".github/workflows/ci.yml", wf)
 	out := {"tree": object.union(base.tree, {"lines": object.union(base.tree.lines, {"hk.pkl": hk_lines})})}
 }
 
@@ -2156,8 +2156,8 @@ graph_reached(group) := out if {
 		"on": {"pull_request": {"types": ["opened"]}},
 		"jobs": {"ci": {"name": "ci", "runs-on": "ubuntu-latest", "steps": [lease_first, {"run": "mise run smoke"}]}},
 	}
-	base := swap(".github/workflows/ci.yml", wf)
-	manifest := base.tree.documents["mise.toml"]
+	base = swap(".github/workflows/ci.yml", wf)
+	manifest = base.tree.documents["mise.toml"]
 	gated := object.union(object.get(manifest.tasks, "verify:gated", {}), {"run": ["batten step graph run g"]})
 	tasks := object.union(manifest.tasks, {"verify:gated": gated})
 	config := object.union(

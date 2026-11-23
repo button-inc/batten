@@ -99,12 +99,12 @@ rules contains "pin declare wrong"
 # ---------------------------------------------------------------------------
 
 manifest := doc if {
-	doc := input.tree.documents[".mcp.json"]
+	doc = input.tree.documents[".mcp.json"]
 	is_object(doc)
 }
 
 pins := object.union(tools, agent_pins) if {
-	tools := input.tree.documents["mise.toml"].tools
+	tools = input.tree.documents["mise.toml"].tools
 	is_object(tools)
 }
 
@@ -115,12 +115,12 @@ pins := object.union(tools, agent_pins) if {
 default agent_pins := {}
 
 agent_pins := tools if {
-	tools := input.tree.documents["mise.agent.toml"].tools
+	tools = input.tree.documents["mise.agent.toml"].tools
 	is_object(tools)
 }
 
 servers := s if {
-	s := manifest.mcpServers
+	s = manifest.mcpServers
 	is_object(s)
 }
 
@@ -142,7 +142,7 @@ reference contains {"server": server, "ref": arg, "tool": tool, "want": want} if
 	# pair does. A version can carry no `@`; a tool name can, and joining the head
 	# back together is what keeps such a name whole.
 	parts := split(arg, "@")
-	want := parts[count(parts) - 1]
+	want = parts[count(parts) - 1]
 	tool := concat("@", array.slice(parts, 0, count(parts) - 1))
 }
 
@@ -156,7 +156,7 @@ violation contains {
 	"subjects": [{"path": ".mcp.json"}, {"artifact": entry.server}, {"artifact": entry.ref}],
 } if {
 	some entry in reference
-	have := pins[entry.tool]
+	have = pins[entry.tool]
 	is_string(have)
 	have != entry.want
 }
@@ -171,7 +171,7 @@ violation contains {
 	"subjects": [{"path": ".mcp.json"}, {"artifact": entry.server}, {"artifact": entry.ref}],
 } if {
 	some entry in reference
-	tool := entry.tool
+	tool = entry.tool
 
 	# A table-valued entry is not a pin this rule can compare, and it is spelled
 	# the same way an absent one is. See the header: preserved from the bash
@@ -192,7 +192,7 @@ violation contains {
 	"subjects": [{"path": ".mcp.json"}, {"artifact": server}],
 } if {
 	some server, body in servers
-	args := body.args
+	args = body.args
 	some at in exec_starts(args)
 	scoped_operands(args, at) == 0
 }
