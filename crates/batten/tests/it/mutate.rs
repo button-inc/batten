@@ -1334,7 +1334,6 @@ fn a_filter_that_selects_more_than_one_case_names_no_case_like_one_that_selects_
 /// A SIBLING WHOSE NAME CONTAINS THE CASE'S IS NEVER CREDITED. `limit_case`
 /// does not see the mutation and `limit_case_over` does. Fails by: selecting by
 /// containment, which ran both and read the sibling's redness as the row's catch.
-#[cfg(unix)]
 #[test]
 fn a_case_is_selected_by_its_whole_name_and_a_longer_sibling_is_not_credited() {
     let root = toy_repo(
@@ -2334,6 +2333,57 @@ fn a_deleted_preset_module_sweeps_its_gate() {
     let (code, out, err) = sweep_since(&root, "toy,demo", "HEAD");
     assert_ne!(code, 0, "{out}{err}");
     assert!(out.contains("demo/package-renamed SURVIVED"), "{out}");
+}
+
+/// A PRESET A TEST TARGET EMBEDS IS NEVER JUDGED THROUGH THE OVERLAY. The
+/// overlay reaches only the readers built to consult it; this case
+/// `include_str!`s the module itself, so a mutated copy in the overlay is
+/// invisible to it. Fails by: writing the mutation to the overlay and reusing
+/// the binaries, which reads a mutation the case would catch as SURVIVED.
+#[test]
+fn a_preset_a_test_embeds_is_mutated_in_place_and_rebuilt() {
+    let root = toy("overlay-embedded");
+    write(
+        &root,
+        "Cargo.toml",
+        &format!("{TOY_MANIFEST}\n[features]\noverlay = []\n"),
+    );
+    write(&root, "src/lib.rs", "");
+    write(
+        &root,
+        &format!("{PRESETS}/demo/a.rego"),
+        "#MUTANT-SUITE tests/preset.rs\n\
+         #MUTANT limit-moved|s/^limit := 10$/limit := 99/|demo_limit_is_ten\n\
+         package batten.demo\n\
+         \n\
+         limit := 10\n",
+    );
+    write(
+        &root,
+        "tests/preset.rs",
+        &format!(
+            "{}{}",
+            case(
+                "demo_limit_is_ten",
+                &format!(
+                    "assert!(include_str!(\"../{PRESETS}/demo/a.rego\").contains(\"\\nlimit := 10\\n\"));"
+                ),
+            ),
+            case("demo_other_case", "assert!(true);"),
+        ),
+    );
+    track(&root);
+    let (code, out, err) = run_with(
+        &root,
+        "sweep",
+        "demo",
+        &[
+            ("MUTANT_OVERLAY_ENV", Path::new("TOY_OVERLAY")),
+            ("MUTANT_OVERLAY_FEATURES", Path::new("overlay")),
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}{err}");
 }
 
 #[cfg(unix)]
