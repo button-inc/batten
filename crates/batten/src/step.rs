@@ -2021,11 +2021,9 @@ fn verdict_line(group: &str, id: &str, code: i32, seconds: f64, log: Option<&str
         .unwrap_or_default()
         .split_whitespace()
         .filter(|field| {
-            field
-                .split_once(':')
-                .is_some_and(|(stream, handle)| {
-                    matches!(stream, "stdout" | "stderr") && !handle.is_empty()
-                })
+            field.split_once(':').is_some_and(|(stream, handle)| {
+                matches!(stream, "stdout" | "stderr") && !handle.is_empty()
+            })
         })
         .collect();
     let pointer = if handles.is_empty() {
