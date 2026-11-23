@@ -1408,7 +1408,7 @@ fn stage(repo: &Path, out: &Path) -> Result<(PathBuf, PathBuf)> {
 fn stage_session(out: &Path) -> Result<PathBuf> {
     let session = out.join("session-repo");
     std::fs::create_dir_all(&session).context("perf: could not stage the session fixture")?;
-    std::fs::write(
+    crate::durable::replace(
         session.join("batten.toml"),
         "version = 1\n\n[[hook.handler]]\nid = \"perf\"\non = \"session-start\"\nrun = [\"true\"]\ntimeout_ms = 1000\n",
     )
