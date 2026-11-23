@@ -1770,16 +1770,16 @@ pub fn run_graph(groups: &[String], jobs: Option<&str>, err: &mut dyn Write) -> 
     for spelled in groups {
         let (group, bound) = match spelled.split_once('=') {
             None => (spelled.as_str(), jobs),
-            Some((group, bound)) => match positive(bound) {
-                Some(bound) => (group, Some(bound)),
-                None => {
+            Some((group, bound)) => {
+                let Some(bound) = positive(bound) else {
                     writeln!(
                         err,
                         "step graph: {spelled}: a group's bound is a positive integer"
                     )?;
                     return Ok(ExitCode::Usage);
-                }
-            },
+                };
+                (group, Some(bound))
+            }
         };
         let rows: Vec<&Step> = steps
             .iter()

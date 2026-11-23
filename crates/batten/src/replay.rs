@@ -711,6 +711,23 @@ pub fn run(
         findings.extend(replay(root, &base_lines(&before), &after, &splices)?);
     }
 
+    admit(root, base, &findings, (json, structural), out)
+}
+
+/// `findings` written with what the `asked` ledger since `base` admits of
+/// each, and a pointer at each union log a failed build or run kept: exit 0
+/// when every finding is admitted, 2 when one is not.
+///
+/// # Errors
+///
+/// The ledger or the state directory cannot be read, or `out` written.
+fn admit(
+    root: &Path,
+    base: &str,
+    findings: &[Finding],
+    (json, structural): (bool, bool),
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
     let smells: Vec<crate::lint::Smell> = findings
         .iter()
         .map(|finding| crate::lint::Smell {
@@ -721,7 +738,7 @@ pub fn run(
     let ledger = crate::asked::added_since(root, base)?;
     let admitted = crate::lint::admissions(&smells, &ledger);
     let verdicts: Vec<crate::lint::Admission> = admitted.iter().map(|(_, a)| *a).collect();
-    write_rows(&findings, &verdicts, json, out)?;
+    write_rows(findings, &verdicts, json, out)?;
     let kept = crate::state::repo_state_dir(root)?
         .join("replay")
         .join(BUILD_LOG);

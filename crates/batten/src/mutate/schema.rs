@@ -4689,22 +4689,7 @@ pub fn sweep(
     // below replaces.
     keep_leftovers(&state, out)?;
     sync(root, &work, &package_sources(root, mutants))?;
-    // THE SOURCES AS THE SWEEP FOUND THEM: every rendering, key and case file
-    // is read from this snapshot, never the live checkout, which an edit during
-    // an hour-long sweep would move under the listing's spans.
-    //
-    // AND THE SNAPSHOT IS OF THE TREE THE LISTING READ: `listed_over` is the
-    // checkout's source digest taken before the change was written, and the
-    // copy is compared by the bytes it copied. On #1276 a `cargo fmt` landed
-    // between the listing and this copy, every span after it pointed into the
-    // wrong text, and five builds refused delimiters no mutant owned.
-    let snapshot = state.join("pristine");
-    let copied = super::cover::pristine(root, &snapshot)?;
-    anyhow::ensure!(
-        copied == listed_over,
-        "the checkout's Rust sources changed while the mutants were listed, so no span would \
-         point where it was listed; run the sweep again once the tree is still"
-    );
+    let snapshot = snapshot_as_listed(root, &state, listed_over)?;
     let resources = resource_digest(root)?;
     let resource_ids = resource_ids(root)?;
     let live = root;
@@ -4727,14 +4712,8 @@ pub fn sweep(
         out,
     )?;
     let classic = schema.classic(handed);
-    writeln!(
-        out,
-        "mutate schema: {} mutant(s), {} unviable, {} classic, built in {}s",
-        mutants.len(),
-        unviable.len(),
-        classic.len(),
-        started.elapsed().as_secs()
-    )?;
+    let built = (mutants.len(), unviable.len(), classic.len());
+    announce_built(out, built, started.elapsed().as_secs())?;
     let trees = (work.as_path(), target.as_path(), state.as_path());
     let ids = (&resource_ids, resources.as_str());
     let format = sweep_format(live, mutants, &schema, unprobed);
@@ -4749,16 +4728,7 @@ pub fn sweep(
     // RECORDED ONCE, AFTER THE BUILD AND THE REACH RUN THAT USED IT: nothing
     // after this point changes a source the binaries were built from, so every
     // judging run reuses them rather than asking cargo again.
-    let reuse = record_reuse(&work, &target, mutants, &state);
-    writeln!(
-        out,
-        "mutate schema: judging runs {} the clean build's binaries",
-        if reuse.is_some() {
-            "reuse"
-        } else {
-            "rebuild-check"
-        }
-    )?;
+    let reuse = announce_reuse(&work, &target, mutants, &state, out)?;
     let todo = judged_by_switch(mutants.len(), &unviable, &classic)?;
     let judging = Judging {
         work: &work,
@@ -4777,20 +4747,13 @@ pub fn sweep(
     let red = control_red(&judging, out)?;
     let judging = judging.with_red(&red);
     let mut verdicts = judge_all(&judging, &todo, jobs, out);
-    let (names, handed_unviable) = match handback {
-        Some(handback) => {
-            let (judged, unviable) = judge_handbacks(
-                &judging,
-                (handback, live, listed_over, &state),
-                &classic,
-                (&schema, &reach),
-                out,
-            )?;
-            verdicts.extend(judged);
-            (Vec::new(), unviable)
-        }
-        None => (handed_back(out, mutants, &classic)?, 0),
-    };
+    let (names, handed_unviable) = settle_handed(
+        &judging,
+        handback.map(|handback| (handback, live, listed_over, state.as_path())),
+        (&classic, &schema, &reach),
+        &mut verdicts,
+        out,
+    )?;
     let code = report(
         out,
         mutants,
@@ -4807,6 +4770,104 @@ pub fn sweep(
         code,
         classic: names,
     })
+}
+
+/// The build's line: how many mutants, how many it found unviable and how
+/// many it hands to the classic runner, and how long it took.
+///
+/// # Errors
+///
+/// `out` cannot be written.
+fn announce_built(
+    out: &mut dyn std::io::Write,
+    (mutants, unviable, classic): (usize, usize, usize),
+    seconds: u64,
+) -> anyhow::Result<()> {
+    writeln!(
+        out,
+        "mutate schema: {mutants} mutant(s), {unviable} unviable, {classic} classic, built in \
+         {seconds}s"
+    )?;
+    Ok(())
+}
+
+/// The mutants the schema build handed back: judged here through `handback`
+/// when there is one, their verdicts joining `verdicts`, else listed on `out`
+/// for the classic runner. Answers the names listed and how many handed-back
+/// builds were unviable.
+///
+/// # Errors
+///
+/// [`judge_handbacks`]' or [`handed_back`]'s.
+fn settle_handed(
+    judging: &Judging<'_>,
+    handback: Option<(&Handback<'_>, &std::path::Path, &str, &std::path::Path)>,
+    (classic, schema, reach): (&BTreeSet<u32>, &Schema, &Reach),
+    verdicts: &mut Vec<(u32, Verdict)>,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<(Vec<String>, usize)> {
+    let Some(handback) = handback else {
+        return Ok((handed_back(out, judging.mutants, classic)?, 0));
+    };
+    let (judged, unviable) = judge_handbacks(judging, handback, classic, (schema, reach), out)?;
+    verdicts.extend(judged);
+    Ok((Vec::new(), unviable))
+}
+
+/// The checkout at `root` copied to `state`'s `pristine`, refused unless the
+/// copy is of the tree `listed_over` digested.
+///
+/// # Errors
+///
+/// The copy fails, or the sources changed since the listing.
+fn snapshot_as_listed(
+    root: &std::path::Path,
+    state: &std::path::Path,
+    listed_over: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    // THE SOURCES AS THE SWEEP FOUND THEM: every rendering, key and case file
+    // is read from this snapshot, never the live checkout, which an edit during
+    // an hour-long sweep would move under the listing's spans.
+    //
+    // AND THE SNAPSHOT IS OF THE TREE THE LISTING READ: `listed_over` is the
+    // checkout's source digest taken before the change was written, and the
+    // copy is compared by the bytes it copied. On #1276 a `cargo fmt` landed
+    // between the listing and this copy, every span after it pointed into the
+    // wrong text, and five builds refused delimiters no mutant owned.
+    let snapshot = state.join("pristine");
+    let copied = super::cover::pristine(root, &snapshot)?;
+    anyhow::ensure!(
+        copied == listed_over,
+        "the checkout's Rust sources changed while the mutants were listed, so no span would \
+         point where it was listed; run the sweep again once the tree is still"
+    );
+    Ok(snapshot)
+}
+
+/// [`record_reuse`], and a line saying whether judging runs reuse what it
+/// recorded.
+///
+/// # Errors
+///
+/// `out` cannot be written.
+fn announce_reuse(
+    work: &std::path::Path,
+    target: &std::path::Path,
+    mutants: &[Listed],
+    state: &std::path::Path,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<Option<Reuse>> {
+    let reuse = record_reuse(work, target, mutants, state);
+    writeln!(
+        out,
+        "mutate schema: judging runs {} the clean build's binaries",
+        if reuse.is_some() {
+            "reuse"
+        } else {
+            "rebuild-check"
+        }
+    )?;
+    Ok(reuse)
 }
 
 /// [`build`] seeded with what the journal already knows a build refuses, and
