@@ -11,7 +11,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{scratch, write};
+use common::{StateHome as _, scratch, write};
 
 /// One handler on `user-prompt-submit`, and no `[[rule]]`, so nothing but the
 /// handler can produce a verdict. Run through `sh` so the stub needs no mode bit.
@@ -29,6 +29,13 @@ expires = "2027-03-31"
 struct Bench {
     repo: PathBuf,
     ran: PathBuf,
+    /// This bench's own state root and home. A session's home is recorded in
+    /// the state root under its session id, and a `UserPromptSubmit` names no
+    /// target, so it is judged by that home: two benches sharing a store and a
+    /// session id are one session, and the second is judged by the first's
+    /// repository and handler.
+    home: PathBuf,
+    session: String,
 }
 
 /// A repository whose handler records that it ran, then exits `code` after
@@ -48,19 +55,29 @@ fn bench(name: &str, code: i32, say: &str) -> Bench {
             ran.to_string_lossy()
         ),
     );
-    Bench { repo, ran }
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).expect("create the fixture's home");
+    Bench {
+        repo,
+        ran,
+        home,
+        session: format!("session-{name}"),
+    }
 }
 
 /// Pipe one `UserPromptSubmit` envelope to `adjudicate --harness exit-code`.
 fn submit(bench: &Bench) -> std::process::Output {
     let payload = serde_json::json!({
         "hook_event_name": "UserPromptSubmit",
-        "session_id": "s1",
+        "session_id": bench.session,
         "prompt": "hi",
         "cwd": bench.repo,
     })
     .to_string();
-    common::run_with_stdin(
+    let mut invocation = common::batten();
+    invocation.state_home(&bench.home);
+    common::stdin_run(
+        &mut invocation,
         &bench.repo,
         &["adjudicate", "--harness", "exit-code"],
         &payload,
