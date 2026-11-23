@@ -274,30 +274,6 @@ fn verify_declares_no_depends() {
     );
 }
 
-/// The `mise run …` a step runs: the step itself, or the statement a
-/// receipted `step run <id> -- mise run …` wraps (CLOUD-2788).
-fn mise_run(step: &str) -> Option<&str> {
-    if step.starts_with("mise run ") {
-        return Some(step);
-    }
-    step.split_once("step run ")
-        .and_then(|(_, rest)| rest.split_once(" -- "))
-        .map(|(_, statement)| statement)
-        .filter(|statement| statement.starts_with("mise run "))
-}
-
-/// The tasks one `mise run` step reaches: each `:::` member's first word.
-fn members(step: &str) -> Vec<String> {
-    mise_run(step)
-        .unwrap_or(step)
-        .trim_start_matches("mise run ")
-        .trim_start_matches("--continue-on-error ")
-        .split(" ::: ")
-        .filter_map(|task| task.split_whitespace().next())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
 /// THE GATES RUN IN TIERS, CHEAPEST FIRST, AND A TIER GATES THE NEXT (owner
 /// rulings, 2026-11-11). `ci`, `cross-check`, `darwin-link`, `zizmor` and
 /// `semver` were `depends`, which ran before the body; one fan then started them

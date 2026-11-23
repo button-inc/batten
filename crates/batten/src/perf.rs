@@ -4784,9 +4784,10 @@ mod tests {
         std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
         crate::gitwrite::commit_paths(&repo, &[String::from("batten.toml")], "base\n")?;
         let out = perf_scratch("commit-no-trunk-out");
-        let refusal = stage_commit(&repo, &out)
-            .expect_err("no origin/main, no fixture")
-            .to_string();
+        let Err(refusal) = stage_commit(&repo, &out) else {
+            bail!("no origin/main, no fixture");
+        };
+        let refusal = refusal.to_string();
         assert!(
             refusal.contains(TRUNK_REF) && refusal.contains("git fetch origin main"),
             "{refusal}"
