@@ -396,6 +396,29 @@ fn a_staged_run_reads_only_the_staged_files_lines() {
     );
 }
 
+/// A STAGED MOVE IS STILL A MOVE (CLOUD-2789). The staged change-set names the
+/// file's new home and never its old one, since a deletion leaves no index
+/// entry; the narrowed delta keeps the whole branch's deletions so the new home
+/// is paired with its base lines. Without that, moving a pre-existing
+/// platform-gated test between crates is refused at the commit as an addition.
+///
+/// Fails by: the narrowed delta dropping deletions (the move reads as an added
+/// file carrying one gated test, and is refused).
+#[test]
+fn a_staged_move_of_a_gated_test_is_not_an_addition() {
+    let gated = ["#[cfg(unix)]", "#[test]", "fn a() {}"];
+    let root = repo("cfg-gated-staged-move", &gated, &gated);
+    fs::remove_file(root.join("crates/batten/src/subject.rs")).expect("move: delete");
+    let moved = root.join("crates/batten-base/src/subject.rs");
+    fs::create_dir_all(moved.parent().expect("a parent")).expect("move: new home");
+    fs::write(&moved, join(&gated)).expect("move: write");
+    assert_eq!(
+        verdicts_scoped(&root, &["crates/batten-base/src/subject.rs"]),
+        Vec::<String>::new(),
+        "the moved file carries its base lines, so nothing grew"
+    );
+}
+
 /// COULD NOT LOOK IS REPORTED, NEVER PASSED. With no `origin/main` the engine
 /// resolves no delta, and a rule that refused nothing there would be
 /// byte-identical to a clean tree on the decision surface — over a branch it
