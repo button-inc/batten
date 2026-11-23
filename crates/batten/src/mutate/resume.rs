@@ -259,6 +259,8 @@ fn select(
     let expect = state.join(EXPECT);
     let _ = std::fs::remove_dir_all(&expect);
     let _ = std::fs::remove_dir_all(state.join(PENDING));
+    let _ = std::fs::remove_dir_all(state.join(RAN));
+    let _ = std::fs::remove_file(state.join(ENV));
     std::fs::create_dir_all(&expect)?;
     std::fs::create_dir_all(state.join(PENDING))?;
     collect_passes(&state.join(PASS), PASS_LIFETIME)?;
@@ -266,11 +268,11 @@ fn select(
     if !builds_as_swept(command) {
         return Ok(0);
     }
-    let held = held_cases(
-        root,
-        resources,
-        &env_digest(std::env::vars_os(), &journal_env(root)),
-    )?;
+    let env = env_digest(std::env::vars_os(), &journal_env(root));
+    // THE RUN'S ENVIRONMENT, for a seed that runs under its own to key the
+    // passes this run leaves on ([`seed_passes`]).
+    crate::durable::replace(state.join(ENV), &env)?;
+    let held = held_cases(root, resources, &env)?;
     for ((name, binary), key) in &held {
         crate::durable::replace(expect.join(expect_name(name, binary)), key)?;
     }
@@ -724,7 +726,7 @@ fn retire_legacy(state: &Path) -> Result<()> {
         let ours = path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| [BIN, EXPECT, PASS, PENDING].contains(&name));
+            .is_some_and(|name| [BIN, EXPECT, PASS, PENDING, RAN].contains(&name));
         if path.is_dir() && !ours {
             std::fs::remove_dir_all(&path).with_context(|| format!("prune {}", path.display()))?;
         }
@@ -1134,10 +1136,13 @@ fn case(args: &[String]) -> Result<u8> {
     let (program, rest) = test.split_first().context("no case to run")?;
     let target = case_target(program, &std::env::current_dir()?)?;
     let marker = journal.join(case_key(Key::Target(&target), test));
+    let state = journal.parent().and_then(Path::parent);
     if marker.is_file() {
+        if let Some(state) = state {
+            note_ran(state, program, test);
+        }
         return Ok(0);
     }
-    let state = journal.parent().and_then(Path::parent);
     let dependency = state.and_then(|state| dependency_key(state, program, test));
     if let (Some(state), Some(key)) = (state, dependency.as_deref()) {
         let pass = state.join(PASS).join(key);
@@ -1159,8 +1164,88 @@ fn case(args: &[String]) -> Result<u8> {
         if let (Some(state), Some(key)) = (state, dependency.as_deref()) {
             let _ = crate::durable::replace(state.join(PENDING).join(key), "");
         }
+        if let Some(state) = state {
+            note_ran(state, program, test);
+        }
     }
     Ok(code)
+}
+
+/// Under the run state: each case this run passed, by [`expect_name`], with
+/// the tree the run started on and its argv past the binary ([`note_ran`]).
+const RAN: &str = "ran";
+
+/// Under the run state: the environment digest the run's selection keyed on.
+const ENV: &str = "env";
+
+/// Note that the case `test` of `program` passed over the run's tree, so a
+/// seed sealing that tree can key its pass ([`seed_passes`]). An economy: a
+/// note that cannot be written costs the next head a rerun.
+fn note_ran(state: &Path, program: &str, test: &[String]) {
+    let (Some(name), Ok(cwd), Ok(over)) = (
+        super::cover::test_name(test),
+        std::env::current_dir(),
+        crate::fsio::read_to_string(state.join(RUN)),
+    ) else {
+        return;
+    };
+    let binary = super::cover::binary_id(program, &cwd);
+    if binary.is_empty() {
+        return;
+    }
+    let args = test.get(1..).unwrap_or_default().join("\x1f");
+    let _ = std::fs::create_dir_all(state.join(RAN));
+    let _ = crate::durable::replace(
+        state.join(RAN).join(expect_name(name, &binary)),
+        format!("{over}\n{args}"),
+    );
+}
+
+/// After a seed sealed reach over the checkout at `root`: key a dependency
+/// pass for every case the store now holds whose last journaled run passed it
+/// over this same tree, so the next head selects it at once rather than
+/// re-running it to earn the pass (CLOUD-2842). How many it keyed.
+///
+/// THE PASS IS THE RUN'S, NEVER THE SEED'S: the seed's reach run is the probed
+/// build, and only a pass of the suite as the step builds it is reused. It is
+/// keyed as the run itself would have keyed it ([`case_key`] over
+/// [`expected`], under the run's own environment digest), and only where the
+/// tree the run passed it over is the tree the seed's record was sealed on.
+///
+/// # Errors
+///
+/// The tree cannot be read or a pass cannot be written.
+pub fn seed_passes(root: &Path) -> Result<usize> {
+    let state = crate::state::repo_state_dir(root)?.join("test-run");
+    let Ok(env) = crate::fsio::read_to_string(state.join(ENV)) else {
+        return Ok(0);
+    };
+    let resources = schema::resource_ids(root)?;
+    let tree = schema::tree_ids_digest(&resources);
+    let held = held_cases(root, &resources, env.trim())?;
+    let pass = state.join(PASS);
+    std::fs::create_dir_all(&pass)?;
+    let mut keyed = 0;
+    for ((name, binary), expected) in &held {
+        let Ok(ran) = crate::fsio::read_to_string(state.join(RAN).join(expect_name(name, binary)))
+        else {
+            continue;
+        };
+        let Some((over, args)) = ran.split_once('\n') else {
+            continue;
+        };
+        if over != tree {
+            continue;
+        }
+        // `case_key` skips the binary's path, so its slot is held empty.
+        let mut test = vec![String::new()];
+        if !args.is_empty() {
+            test.extend(args.split('\x1f').map(str::to_owned));
+        }
+        crate::durable::replace(pass.join(case_key(Key::Dep(expected), &test)), "")?;
+        keyed += 1;
+    }
+    Ok(keyed)
 }
 
 /// The dependency key of the case `test` of `program`, where the run selected
