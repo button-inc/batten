@@ -190,3 +190,39 @@ fn a_record_that_does_not_parse_is_could_not_look() {
     let out = ratchet(&dir, &[]);
     assert_eq!(out.status.code(), Some(3), "{}", common::stderr(&out));
 }
+
+/// THE WORKSPACE'S OWN RECORD HOLDS NO SPLIT IMPL AND NO SHIM (CLOUD-2793):
+/// every crate line of the committed `modules.lock`, `crates/batten/src`
+/// among them, reads `impls=0 shims=0`, and every `crates/*/src` root has a
+/// line. `modules-ratchet:check` holds the record to the tree, so this pins
+/// the tree at zero. Fails by: a line recording a split impl or a shim, or a
+/// crate absent from the record and so ungated.
+#[test]
+fn the_workspace_records_no_split_impl_and_no_shim() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let text = std::fs::read_to_string(workspace.join("modules.lock")).expect("read modules.lock");
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .collect();
+    let roots: Vec<&str> = lines
+        .iter()
+        .map(|line| line.split_whitespace().next().unwrap_or_default())
+        .collect();
+    assert!(roots.contains(&"crates/batten/src"), "{text}");
+    for line in &lines {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        assert!(
+            words.contains(&"impls=0") && words.contains(&"shims=0"),
+            "{line}"
+        );
+    }
+    let crates = std::fs::read_dir(workspace.join("crates")).expect("read crates/");
+    for entry in crates {
+        let name = entry.expect("a crates/ entry").file_name();
+        let root = format!("crates/{}/src", name.to_string_lossy());
+        if workspace.join(&root).is_dir() {
+            assert!(roots.contains(&root.as_str()), "{root} has no line: {text}");
+        }
+    }
+}
