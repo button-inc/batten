@@ -1536,6 +1536,16 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["add unconnected files to lift the number; M-score does not reward it"],
     },
     VendoredDoc {
+        id: "module bind partial",
+        why: Some(
+            "regorus's bytecode binds `Undefined` at such a `:=` where the interpreter fails the body, so the two decide differently",
+        ),
+        act: &[
+            "bind with `=`, or give the helper a `default` or an `else` so every call has a value",
+        ],
+        dont: &["write `_ := e` to assert that `e` is defined"],
+    },
+    VendoredDoc {
         id: "crate reach unknown",
         why: Some(
             "One unreviewed `Cargo.toml` edge can turn a wide crate graph back into a deep one",
