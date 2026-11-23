@@ -219,16 +219,14 @@ the launcher's own share is attributable.
 | `stop`                   | an end of turn — decode, state record, drain detached     | —      | —      | ≤ 100 ms |
 | `session-start`          | a session start — payload write, setup task spawned       | —      | —      | ≤ 100 ms |
 | `wired`                  | the hook as `.claude/settings.json` invokes it            | 8.0 ms | 8.4 ms | ≤ 100 ms |
-| `cargo-fmt`              | pre-commit: `rustfmt --check` over the staged `.rs` files | —      | —      | ≤ 100 ms |
-| `taplo`                  | pre-commit: `taplo lint` over the staged unbound TOML     | —      | —      | ≤ 100 ms |
-| `taplo-format`           | pre-commit: `taplo format --check` over the staged TOML   | —      | —      | ≤ 100 ms |
-| `config-lint-pinned`     | pre-commit: `batten config lint`                          | —      | —      | ≤ 100 ms |
-| `cfg-gated-test-pinned`  | pre-commit: `batten check --staged --rule '…'`            | —      | —      | ≤ 100 ms |
-| `merge-conflict-markers` | pre-commit: `batten enforce --rule 'source carry broken'` | —      | —      | ≤ 100 ms |
-| `conventional-commit`    | commit-msg: `batten commit check --message`               | —      | —      | ≤ 100 ms |
-| `commit-attribution`     | commit-msg: `batten attribution check --message`          | —      | —      | ≤ 100 ms |
+| `cargo-fmt`              | pre-commit: `rustfmt --check` over the staged `.rs` files | 21 ms  | 29 ms  | ≤ 100 ms |
+| `taplo`                  | pre-commit: `taplo lint` over the staged unbound TOML     | 14 ms  | 21 ms  | ≤ 100 ms |
+| `taplo-format`           | pre-commit: `taplo format --check` over the staged TOML   | 17 ms  | 23 ms  | ≤ 100 ms |
+| `merge-conflict-markers` | pre-commit: `batten enforce --rule 'source carry broken'` | 74 ms  | 84 ms  | ≤ 100 ms |
+| `conventional-commit`    | commit-msg: `batten commit check --message`               | 35 ms  | 46 ms  | ≤ 100 ms |
+| `commit-attribution`     | commit-msg: `batten attribution check --message`          | 21 ms  | 26 ms  | ≤ 100 ms |
 
-A commit hook is a batten hook and answers to the same ceiling: the last eight
+A commit hook is a batten hook and answers to the same ceiling: the last six
 rows are every default `pre-commit` and `commit-msg` step a commit touching a
 `.rs` file, `batten.toml` and `mise.toml` fires, each run as hk runs it in
 `perf`'s commit fixture (`target/perf/commit-repo`, a shared clone carrying that
@@ -236,8 +234,12 @@ staged change). The `.rs` file is the median one a commit touches
 (`hookcost.rs`, 1,168 lines); `perf` also records `cargo-fmt-worst`, the
 formatter over the 33,775-line `lib.rs`, unbudgeted, so the worst case is on the
 record rather than hidden by the median.
-Their cells are `—` for `posttool`'s reason below: they have not been measured
-on the machine the series above comes from.
+`config-lint-pinned` and `cfg-gated-test-pinned` left commit time for the `slow`
+tier at 29x and 5x the ceiling (CLOUD-2852), so they carry no row or budget here.
+Their cells do NOT come from the machine the series above comes from, for
+`posttool`'s reason below: they are `mise run perf` at f8fc77c6 (release, 300
+runs) on a 4-core cloud container whose own `noop` read 3.4 ms / 4.2 ms and `hook`
+17.2 ms / 28.1 ms, so read them against those figures, not the rows above.
 
 `posttool` is the same envelope decode plus the response capture, and its cells
 are `—` for `passthrough`'s reason: the series above comes from a quieter
