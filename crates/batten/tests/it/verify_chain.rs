@@ -278,15 +278,14 @@ fn verify_declares_no_depends() {
 /// rulings, 2026-11-11). `ci`, `cross-check`, `darwin-link`, `zizmor` and
 /// `semver` were `depends`, which ran before the body; one fan then started them
 /// all at once, so seconds-long gates refused a head while the suite and its
-/// mutants ran on for 41 minutes. Each tier is its own `--continue-on-error`
-/// fan, so it reports every failure it holds, and the `run` array stops at the
-/// first failing tier. Fails by: a build or the suite moved into a cheaper tier,
-/// or the tiers collapsed back into one step.
+/// mutants ran on for 41 minutes. A tier reports every failure it holds, and a
+/// tier starts only once every earlier tier passed. Fails by: a build or the
+/// suite moved into a cheaper tier, or the tiers collapsed back into one step.
 ///
 /// THE TIERS ARE GRAPH GROUPS SINCE CLOUD-2785, AND ONE CALL'S GROUPS SINCE
 /// CLOUD-2789: `batten step graph run <group>...` runs its groups in order, so
-/// a task's tier is the position of the group holding a row running it. One
-/// call, so a red tier no longer stops the `run` array before the next starts.
+/// a task's tier is the position of the group holding a row running it. A red
+/// group skips every later group (CLOUD-2853, `.batten/asked.jsonl:223`).
 #[test]
 fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
     let gated = steps("verify:gated");
