@@ -636,3 +636,64 @@ expires = "2027-03-31"
     assert_eq!(output.status.code(), Some(2), "{err}");
     assert!(err.contains("hook.handler.prompt-guard"), "{err}");
 }
+
+/// A pre-tool row selecting a connector tool by its final segment.
+const SAVE_ISSUE_ROW: &str = r#"version = 1
+
+[[hook.handler]]
+id = "save-issue-seen"
+on = "pre-tool"
+run = ["./mediator-advise.sh"]
+matcher = "__save_issue$"
+timeout_ms = 5000
+owner = "CLOUD-2789"
+expires = "2027-03-31"
+"#;
+
+/// ONE CALL, EVERY SURFACE (CLOUD-2789): a handler's matcher selects the
+/// connector call made through `batten mcp call` on a shell exactly as it
+/// selects the direct `mcp__<server>__<method>` call.
+///
+/// Fails by: `handler::selects` and `dispatch_writing` matching `raw_tool`
+/// alone, which is `Bash` on the mediated route.
+#[test]
+fn a_handler_runs_for_a_mediated_call_as_for_the_direct_one() {
+    let input = serde_json::json!({"id": "CLOUD-1", "title": "t"});
+    let ran = |name: &str, payload: serde_json::Value| {
+        let bench = bench_with(name, SAVE_ISSUE_ROW, "");
+        let _ = bench.send(&payload);
+        bench.spawned()
+    };
+    let mediated = |method: &str| {
+        serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": format!("batten mcp call Linear {method} '{input}'")},
+        })
+    };
+    assert!(
+        ran(
+            "handler-mediated-direct",
+            serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "mcp__Linear__save_issue",
+                "tool_input": input,
+            })
+        ),
+        "the direct call selects the row"
+    );
+    assert!(
+        ran("handler-mediated-save", mediated("save_issue")),
+        "the mediated call selects it as the direct one does"
+    );
+    // NEGATIVE CONTROLS: another mediated method, and a plain shell call.
+    assert!(!ran("handler-mediated-get", mediated("get_issue")));
+    assert!(!ran(
+        "handler-mediated-shell",
+        serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+        })
+    ));
+}
