@@ -14723,6 +14723,14 @@ id = "module read first"
 kind = "document"
 target = "policy/agent-spawn.rego"
 
+# CLOUD-2847. Refusing the worktree with no route pushed a subagent onto
+# `commit-tree`/`update-ref`, and 18 commits reached pushed branches unjudged.
+# The refusal names the sanctioned route, so the next one is never improvised.
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "to build a branch without switching this checkout: `git clone` the repository into the scratchpad, run `batten wiring gate .claude/hooks/git-hook.sh` there, and commit with `git commit` or `git cherry-pick` — never `git commit-tree` or `git update-ref`"
+
 [[verdict]]
 id = "hook skip unseen"
 gloss = "a gate is switched off for this call by an environment assignment nothing recorded"
@@ -14744,7 +14752,7 @@ names instead.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "read the step's own refusal and fix what it names — `batten wiring reclaim -y` is the one for `hooks-wiring-check`"
+target = "read the step's own refusal and fix what it names — `batten wiring reclaim -y` is the one for `hooks-wiring-check`; for a plumbing commit (CLOUD-2847), build the branch in a scratchpad clone with `batten wiring gate .claude/hooks/git-hook.sh` run there, and commit with `git commit` or `git cherry-pick`"
 
 [[verdict.route]]
 id = "module read first"
