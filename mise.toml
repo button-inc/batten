@@ -4956,12 +4956,11 @@ depends = ["tree-clean"]
 #
 # A RED TIER STOPS EVERY LATER ONE (CLOUD-2853; owner ruling,
 # `.batten/asked.jsonl:223`: the most expensive stage runs only once every cheap
-# stage has passed). The tiers are the groups of ONE `step graph run`, which
-# runs them in order. Within a tier a failure skips only the rows naming it in
-# `depends_on`, so the tier reports every red it holds (CLOUD-2789); after a red
-# tier every later tier's rows are recorded as skipped and never start. Every
-# red row (`step graph: red …`) is listed before the call exits with the worst
-# code. Every tier-1 gate still waits on the record writes.
+# stage has passed). Each tier is ONE `mise run --continue-on-error` fan, so a
+# tier reports every red it holds in one pass (CLOUD-2789), and the `run` array
+# stops at the first failing entry, so no later tier starts over a red one.
+# Every tier-1 gate still waits on the record writes, which run as their own
+# entries ahead of it, in order.
 #   1. seconds: the lap's commits and config, the diff and pin questions, the
 #      workflow audit, the cfg-gated-test ratchet, cargo-deny, the instruction
 #      budget, the policy modules' own tests, and `batten-check` (the whole
@@ -4979,17 +4978,22 @@ depends = ["tree-clean"]
 # `modules-ratchet:check` is a tier-1 row: a seconds read that sat alone
 # between the tiers.
 #
-# TIERS 1 AND 2 ARE STEP GRAPHS (CLOUD-2785): their order and fan width were
-# positions in this array, which the engine could not bound, time or report.
-# They are now the `group = "verify-1"` and `group = "verify-2"` rows of
-# `batten.toml`'s step table: the five sequential writes and checks chained by
-# `depends_on` ahead of every tier-1 gate, and tier 2 run at most two at once
-# until the disk admission is sized from the measured fan (CLOUD-2781). Each
-# node is `mise run <task>`, so every template stays in its task and CI's jobs
-# call the same tasks. A failure skips only what depends on it, and each node
-# prints its code and seconds.
+# THE TIERS ARE ARRAY ENTRIES, NOT A STEP GRAPH, UNTIL THE ENGINE PIN READS
+# `group` (CLOUD-2785's graph rows are withheld: the pinned v0.0.220 cannot read
+# them, and `engine gate` refuses a config the pin cannot read). The pin bump
+# that brings a reader restores `step graph run verify-1 verify-2=2 verify-3=1
+# verify-4` and the `gate:*` rows together. Until then tier 2 keeps the graph's
+# fan width with `--jobs 2` and tier 3 its one-at-a-time with `--jobs 1`.
 run = [
-  "{{vars.batten}} step graph run verify-1 verify-2=2 verify-3=1 verify-4",
+  "mise run tree-clean",
+  "mise run record-verdicts",
+  "mise run evaluator-io-record",
+  "mise run signing-posture-record",
+  "{{vars.batten}} record validate config-validator",
+  "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: ci:quick ::: verify:test-replay-structural ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny ::: policy-budget ::: policy-test ::: batten-check ::: modules-ratchet:check",
+  "mise run --continue-on-error --jobs 2 semver ::: verify:test-replay ::: ci:checks ::: cross-check ::: darwin-link ::: lint:clippy",
+  "mise run --continue-on-error --jobs 1 verify:ci-suite ::: verify:ci-slow-needed",
+  "mise run perf-gate",
   "{{vars.batten}} step cover",
   "{{vars.batten}} receipt record verify",
 ]
