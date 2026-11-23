@@ -1910,6 +1910,14 @@ impl Scope {
     /// Borrowing in the unnarrowed case is what keeps the ordinary run allocating
     /// nothing: the flag is absent on every invocation that does not pass it, and
     /// §4 asks a feature to be cheap when it is irrelevant.
+    /// The change-set this scope narrows to, or `None` for the whole tree.
+    fn changed(&self) -> Option<&BTreeSet<String>> {
+        match self {
+            Scope::Tree => None,
+            Scope::Changed(changed) => Some(changed),
+        }
+    }
+
     fn apply<'a>(&self, files: &'a [String]) -> std::borrow::Cow<'a, [String]> {
         match self {
             Scope::Tree => std::borrow::Cow::Borrowed(files),
@@ -2382,7 +2390,7 @@ fn run(
     // Every failure is could-not-look and yields `None`, which the projection
     // writes as `null`: outside a checkout there is no answer to give, and a
     // fabricated one is worse than none.
-    let git = git_facts(rules, root);
+    let git = git_facts_within(rules, root, scope.changed());
     // The one acquisition of the `Cost::Effect` fact (CLOUD-760), beside the git
     // family and for the same reason: a projection must not spawn, so the spend
     // happens once here and only when a row declared it.
@@ -4293,7 +4301,19 @@ pub(crate) fn acquire_declared(
 /// A read that fails leaves its member `None` — could-not-look, projected as
 /// `null`. Outside a checkout there is no answer to give, and the alternative is
 /// a fabricated one that a module cannot tell from a real answer.
+#[cfg(test)]
 fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
+    git_facts_within(rules, root, None)
+}
+
+/// [`git_facts`] for a run narrowed to a change-set: the base delta compares
+/// only `within`'s paths on the working side (CLOUD-2789,
+/// [`crate::git::base_delta_within`]).
+fn git_facts_within(
+    rules: &[Rule],
+    root: &Path,
+    within: Option<&BTreeSet<String>>,
+) -> crate::git::GitFacts {
     let mut declared_reads: BTreeSet<GitRead> = BTreeSet::new();
     let mut declared_refs: BTreeSet<String> = BTreeSet::new();
     let mut declared_ranges: BTreeSet<String> = BTreeSet::new();
@@ -4420,7 +4440,9 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
                 // `check` declaring any `delta_sources`. Gating it honestly needs a
                 // column that says WHICH FACTS a row reads, which is a bigger
                 // change than this row and does not belong inside it.
-                .and_then(|base| crate::git::base_delta(root, base, &deltas, true).ok())
+                .and_then(|base| {
+                    crate::git::base_delta_within(root, base, &deltas, true, within).ok()
+                })
                 .flatten(),
             _ => None,
         },

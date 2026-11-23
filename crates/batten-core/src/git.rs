@@ -4147,6 +4147,34 @@ pub fn base_delta(
     globs: &[String],
     wants_patch_id: bool,
 ) -> Result<Option<BaseDelta>> {
+    base_delta_within(dir, base, globs, wants_patch_id, None)
+}
+
+/// [`base_delta`] over a CHANGE-SET: only the paths in `within` are read, hashed
+/// and compared on the working side (CLOUD-2789).
+///
+/// `check --staged` judges a commit, and the commit is what is staged. The
+/// unnarrowed delta reads and hashes every selected working file to find the
+/// handful that moved, which under `delta_sources = ["**"]` is the whole tree:
+/// 60% of the commit-time cfg-gated-test step. Narrowed, `added`, `edited`,
+/// `base-lines` and `code_changed` name only change-set paths.
+///
+/// **The base side is still walked whole, and `deleted` still answers for the
+/// whole branch**, on purpose: a staged deletion is in no index entry, so the
+/// change-set cannot name it, and a moved file's new home is paired with its
+/// old one through `deleted` — without it a moved platform-gated test reads as
+/// born whole and the commit that moves it is refused.
+///
+/// # Errors
+///
+/// As [`base_delta`].
+pub fn base_delta_within(
+    dir: &Path,
+    base: &str,
+    globs: &[String],
+    wants_patch_id: bool,
+    within: Option<&BTreeSet<String>>,
+) -> Result<Option<BaseDelta>> {
     let repository = open(dir)?;
     let hash = repository.object_hash();
 
@@ -4199,6 +4227,10 @@ pub fn base_delta(
             continue;
         }
         present.insert(path.clone());
+        // Outside the change-set: present, so not deleted, and not read.
+        if within.is_some_and(|within| !within.contains(&path)) {
+            continue;
+        }
         let was = at_base.get(&path).copied();
 
         // CLASSIFY BY BLOB ID, and read nothing further when it matches.

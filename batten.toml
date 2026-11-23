@@ -7738,6 +7738,9 @@ line_sources = [
   # undeclared however plainly the row was written (CLOUD-2827's
   # `waiver-ratchet-four-crates`).
   "batten.toml",
+  # The hook config is a sweep route (CLOUD-2828): its `//MUTANT` rows bind the
+  # commit-time obligations, and an obligation naming it must read them.
+  "hk.pkl",
   # Every package's source, not a list of them (#1276): the list missed
   # `batten-fsio` and `batten-stream`.
   "crates/*/src/**/*.rs",
