@@ -10189,6 +10189,24 @@ mod tests {
         // `read_dir` order is filesystem-defined; a gate's failure message must
         // not depend on it.
         sources.sort_by(|a, b| a.0.cmp(&b.0));
+        // EVERY MEMBER CONTRIBUTES (CLOUD-2789): `pending.len() > 1` passes a
+        // walk that dropped all but two crates. The expected members are read
+        // again, independently of the walk above, so a filter introduced there
+        // is caught here rather than agreed with.
+        let silent: Vec<std::path::PathBuf> = std::fs::read_dir(crates)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|member| member.join("Cargo.toml").is_file() && member.join("src").is_dir())
+            .filter(|member| {
+                !sources
+                    .iter()
+                    .any(|(path, _)| path.starts_with(member.join("src")))
+            })
+            .collect();
+        assert!(
+            silent.is_empty(),
+            "the workspace walk read no `src/` file of {silent:?}"
+        );
         sources
     }
 
