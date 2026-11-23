@@ -222,6 +222,44 @@ fn an_edited_module_is_not_answered_from_stale_bytecode() {
     );
 }
 
+/// A mediated module whose decision rides a `:=` bound to a string literal
+/// (#1276). The `:=` guard (CLOUD-2696) was spliced one byte early, inside the
+/// literal, so the hook path's bytecode bound `"read; op == op"` and let the
+/// read through while the interpreter — and `policy test` — refused it.
+const LITERAL_DECIDES: &str = r#"
+package batten.cached
+
+import rego.v1
+
+rules contains "write refused probe"
+
+refused_operation := op if {
+	op := "read"
+}
+
+violation contains {"rule": "write refused probe", "verdict": "write refused probe"} if {
+	input.call.operation == refused_operation
+}
+"#;
+
+#[test]
+fn a_hook_call_decides_a_literal_binding_as_the_interpreter_does() {
+    let root = root_with("literal", LITERAL_DECIDES);
+    let interpreted = load(&root, policy::ModuleChecks::RunOverSelection);
+    let compiled = load(&root, policy::ModuleChecks::SkipOnHotPath);
+    assert!(compiled.is_bytecode(), "the hook path decides on bytecode");
+    let read = r#"{"call":{"operation":"read"}}"#;
+    let Look::Is(expected) = policy::deny(&interpreted, read) else {
+        panic!("the interpreter answers");
+    };
+    assert_eq!(expected.len(), 1, "the interpreter refuses the read");
+    assert_eq!(
+        policy::deny(&compiled, read),
+        Look::Is(expected),
+        "the hook call refuses it too"
+    );
+}
+
 #[test]
 fn bytecode_answers_as_the_interpreter_does() {
     let root = root_with("agree", ANSWERS_EVERY_RULE);
