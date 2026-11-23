@@ -1939,22 +1939,40 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
 
     // Staged: the index against `HEAD`'s tree. An unborn HEAD has no tree, so
     // every index entry is staged — which is what it is.
-    let head_tree = repo
+    //
+    // HEAD'S TREE IS WALKED ONCE, into a map, never looked up per index entry
+    // (CLOUD-2789). `peel_to_entry_by_path` re-decodes every tree on the path
+    // from the root for each of the index's entries, and that was 72% of the
+    // `commit-msg` step's 235 ms p50; one recorded walk decodes each tree once.
+    let committed_ids: BTreeMap<gix::bstr::BString, gix::ObjectId> = match repo
         .head_commit()
         .ok()
-        .and_then(|commit| commit.tree().ok());
+        .and_then(|commit| commit.tree().ok())
+    {
+        Some(tree) => {
+            let mut recorder = gix::traverse::tree::Recorder::default();
+            tree.traverse()
+                .breadthfirst(&mut recorder)
+                .map_err(|_| refusal())?;
+            recorder
+                .records
+                .into_iter()
+                .filter(|entry| !entry.mode.is_tree())
+                .map(|entry| (entry.filepath, entry.oid))
+                .collect()
+        }
+        None => BTreeMap::new(),
+    };
     let mut tracked = BTreeSet::new();
     for entry in index.entries() {
         // A path is bytes; one that is not UTF-8 is dropped rather than lossily
         // converted, as the `-z` reading this replaces already did.
-        let Ok(path) = std::str::from_utf8(entry.path(&index)) else {
+        let raw = entry.path(&index);
+        let Ok(path) = std::str::from_utf8(raw) else {
             continue;
         };
         tracked.insert(path.to_owned());
-        let committed = head_tree
-            .as_ref()
-            .and_then(|tree| tree.clone().peel_to_entry_by_path(path).ok().flatten())
-            .map(|found| found.object_id());
+        let committed = committed_ids.get(raw).copied();
         if committed != Some(entry.id) {
             changed.insert(path.to_owned());
             continue;
