@@ -2005,7 +2005,7 @@ regex = '[A-Za-z0-9_./-]+\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z
 # the id apart binds nothing; measured on #1276 for `rule[layer place wrong]`.
 [[pattern]]
 id = "ledger-pair"
-regex = '\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_]+\[[^\]]+\](?:\.[A-Za-z0-9_]+)*)'
+regex = '\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_][A-Za-z0-9_.]*\[[^\]]+\](?:\.[A-Za-z0-9_]+)*)'
 
 # CLOUD-2241: work promised to a later branch in a final message, which the turn
 # must file before it ends. The literals are the three witnessed on PR #1132

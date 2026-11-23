@@ -104,7 +104,7 @@ asked_regex := `(?i)\badmit(s|ted|ting)?\b(?:[^.!?]|[.!?]\S)*\?`
 
 path_regex := `[A-Za-z0-9_./-]+\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z0-9_:]+)?`
 
-pair_regex := `\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_]+\[[^\]]+\](?:\.[A-Za-z0-9_]+)*)`
+pair_regex := `\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_][A-Za-z0-9_.]*\[[^\]]+\](?:\.[A-Za-z0-9_]+)*)`
 
 ask(question, labels) := {"call": {
 	"tool": "AskUserQuestion",
@@ -127,6 +127,21 @@ test_a_path_without_the_pair_is_refused if {
 		"Admit the change to layer place wrong's use_sources key in batten.toml?",
 		["Admit the change", "Refuse"],
 	)) == 1
+}
+
+# A dotted config key binds too: `mcp.permission_aliases[<alias>]` and
+# `census.shell.generated[<path>]` are whole keys the ledger reads (#1276: a
+# question naming only `mcp-permission-alias-removed mcp.permission_aliases[…]`
+# was refused while it bound exactly).
+test_a_dotted_key_pair_is_clean if {
+	count(judged(
+		"Admit mcp-permission-alias-removed mcp.permission_aliases[Claude_Code_Remote]?",
+		["Admit the change", "Refuse"],
+	)) == 0
+	count(judged(
+		"Admit shell-census-narrowed census.shell.generated[completions/batten.bash]?",
+		["Admit", "Refuse"],
+	)) == 0
 }
 
 # A config key's pair is `rule[<id>].<key>`, spaces inside the brackets.
