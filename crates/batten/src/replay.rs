@@ -615,6 +615,10 @@ pub fn run(
     let base_index = crate::item_index::Index::new(&before, &manifests(root, &fork)?);
     let head_index = crate::item_index::Index::new(&after, &manifests(root, "HEAD")?);
     let mut item_moves = crate::item_index::moved_with_files(&base_index, &head_index, &moves);
+    item_moves.extend(crate::item_index::moved_through_uses(
+        &base_index,
+        &head_index,
+    ));
     item_moves.extend(crate::item_index::moved_items(&base_index, &head_index));
     let cuts = cuts(&moves, &base_index, &head_index);
     let no_moves = BTreeMap::new();
