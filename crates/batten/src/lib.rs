@@ -11335,6 +11335,10 @@ fn run_policy_test(
     // one the engine would build — including the one-read-per-path property
     // (CLOUD-850).
     let documents = rules::acquire_declared(&config.rules, root, &tracked, &tracked)?;
+    // ONE PROJECTION PER DISTINCT DECLARATION (CLOUD-2830): rows declaring the
+    // same paths are handed the same input, so it is built once for them.
+    let mut inputs: std::collections::HashMap<policy::SuiteDeclared, policy::SuiteInput> =
+        std::collections::HashMap::new();
 
     let mut reports = Vec::new();
     for rule in config
@@ -11353,7 +11357,11 @@ fn run_policy_test(
         // mediated-call row declares no documents, so its tests run against `{}`
         // and supply their own input with `with input as` — OPA and Conftest's
         // own shape, and the reason neither surface needs a fixture key.
-        let (input, not_acquired) = policy::suite_input(rule, &documents, &tracked)?;
+        let declared = policy::SuiteDeclared::of(rule, &tracked)?;
+        let (input, not_acquired) = inputs
+            .entry(declared)
+            .or_insert_with_key(|declared| policy::suite_input_of(declared, &documents, &tracked))
+            .clone();
         if !not_acquired.is_empty() {
             // Pointer-only (rule 4): the PATH and its stated cause, never a byte
             // of the document. The cause is CLOUD-849's — before it, all four
