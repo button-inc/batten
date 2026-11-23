@@ -912,7 +912,8 @@ fn calls(text: &str, items: &BTreeSet<String>) -> BTreeMap<Option<usize>, bool> 
         if !called {
             continue;
         }
-        let in_test = token.parent_ancestors().any(|node| cfg_test(&node));
+        // `cfg_test` already walks every ancestor: asked of the parent once.
+        let in_test = token.parent().is_some_and(|parent| cfg_test(&parent));
         let scope = token
             .parent_ancestors()
             .find_map(ast::ItemList::cast)
@@ -2008,27 +2009,36 @@ fn from_root(segments: &[String], module: &[String]) -> Option<String> {
 }
 
 /// Whether `node` sits inside an item carrying `#[cfg(test)]`.
+///
+/// Walks every ancestor, so `node.ancestors().any(cfg_test)` is this answer at
+/// depth-squared cost: ask it of the nearest node once, or prune a top-down
+/// walk with [`carries_cfg_test`].
 #[must_use]
 pub fn cfg_test(node: &SyntaxNode) -> bool {
-    node.ancestors().any(|ancestor| {
-        ast::AnyHasAttrs::cast(ancestor).is_some_and(|item| {
-            // READ OFF THE ATTRIBUTE'S STRUCTURE, not its text: the path is
-            // `cfg` and the argument token tree holds exactly the one word
-            // `test`, however it is spaced. `cfg(all(test, …))` is not `test`
-            // alone and is not read as it, as before.
-            // `cfg(…)` is its own typed `Meta` kind in this parser
-            // (`CfgMeta`, `cfg` a keyword token), so the predicate is read as
-            // a bare `CfgAtom` naming `test` with no `= "value"`.
-            item.attrs().any(|attr| {
-                let Some(ast::Meta::CfgMeta(meta)) = attr.meta() else {
-                    return false;
-                };
-                let Some(ast::CfgPredicate::CfgAtom(atom)) = meta.cfg_predicate() else {
-                    return false;
-                };
-                atom.eq_token().is_none()
-                    && atom.ident_token().is_some_and(|word| word.text() == "test")
-            })
+    node.ancestors().any(|ancestor| carries_cfg_test(&ancestor))
+}
+
+/// Whether `node` ITSELF carries `#[cfg(test)]`, its ancestors unread: the
+/// per-node half of [`cfg_test`], for a walk that skips a marked subtree.
+#[must_use]
+pub fn carries_cfg_test(node: &SyntaxNode) -> bool {
+    ast::AnyHasAttrs::cast(node.clone()).is_some_and(|item| {
+        // READ OFF THE ATTRIBUTE'S STRUCTURE, not its text: the path is
+        // `cfg` and the argument token tree holds exactly the one word
+        // `test`, however it is spaced. `cfg(all(test, …))` is not `test`
+        // alone and is not read as it, as before.
+        // `cfg(…)` is its own typed `Meta` kind in this parser
+        // (`CfgMeta`, `cfg` a keyword token), so the predicate is read as
+        // a bare `CfgAtom` naming `test` with no `= "value"`.
+        item.attrs().any(|attr| {
+            let Some(ast::Meta::CfgMeta(meta)) = attr.meta() else {
+                return false;
+            };
+            let Some(ast::CfgPredicate::CfgAtom(atom)) = meta.cfg_predicate() else {
+                return false;
+            };
+            atom.eq_token().is_none()
+                && atom.ident_token().is_some_and(|word| word.text() == "test")
         })
     })
 }
