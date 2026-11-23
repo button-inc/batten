@@ -596,6 +596,7 @@ mod tests {
         name: "fixture",
         version: 3,
         suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,

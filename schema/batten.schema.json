@@ -5130,6 +5130,17 @@
             "maxLength": 1536
           }
         },
+        "environments": {
+          "description": "The tool environments the enabled preset installs at startup, by name\n(CLOUD-2633). Only a preset declaring an install takes it.\n\n**A consumer fact, passed rather than discovered**: an agent environment\nis not a CI one is not a dev one, so the install loads the base\nconfiguration plus exactly these, never every environment file present.\nA `[[startup]]` row naming the same `preset` places the install in the\nstartup sequence. `Some(empty)` is refused at load rather than read as\n\"base only\", and so is a name the repository configures nothing for.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "except": {
           "description": "Modules of the enabled preset this row does NOT compile, by name — the\nfile stem, as `plan-mode-refuses-writes` (CLOUD-2290).\n\nThe half of ejecting a module that the binary owns: a local copy declares\nthe ids the vendored module did, and `claim_ids` refuses one id from two\nbundles, so the vendored module has to step aside for the copy to load.\n`batten preset eject` writes this key; it is ordinary config, so a\nconsumer may write it by hand too.\n\nA name the preset does not ship is refused at load (exit `1`), never\nignored: an `except` that excepts nothing would leave the vendored module\nrunning beside the copy that was meant to replace it.",
           "type": "array",
@@ -5262,6 +5273,14 @@
         },
         "index": {
           "description": "The PATHSPECS this policy row reads the index under, **declared**\n(CLOUD-843).\n\nEach becomes an entry of `input.tree[\"git-index\"]` under the spec as\nwritten, carrying the index entries it selects (path, mode, oid, stage),\nthe selected tracked paths the working tree has diverged from, and the\nuntracked paths beneath it. git's pathspec rules without magic; a\n`:`-magic spec is refused at load rather than read as a literal that\nselects nothing.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "install_env": {
+          "description": "`NAME=VALUE` assignments the derived install runs under (CLOUD-2633) —\nhow this repository's tool must install, such as from its lockfile.\nRequires `environments`; it may not set the preset's own selector, which\n`environments` owns.",
           "type": "array",
           "items": {
             "type": "string",
@@ -6399,7 +6418,7 @@
       "type": "object",
       "properties": {
         "check": {
-          "description": "The command deciding whether the environment is right, as argv.\n\nExit `0` is provisioned; anything else is not. argv rather than a shell\nstring for `[[hook.action]]`'s reason — there is then no quoting layer\nbetween what an operator wrote and what runs: no word splitting, no glob\nexpansion, no `$(…)`.",
+          "description": "The command deciding whether the environment is right, as argv.\n\nExit `0` is provisioned; anything else is not. argv rather than a shell\nstring for `[[hook.action]]`'s reason — there is then no quoting layer\nbetween what an operator wrote and what runs: no word splitting, no glob\nexpansion, no `$(…)`.\n\nOmitted exactly when [`Startup::preset`] is set, which derives it.",
           "type": "array",
           "items": {
             "type": "string",
@@ -6420,6 +6439,36 @@
           "type": "string",
           "maxLength": 1536
         },
+        "preset": {
+          "description": "The enabled preset whose install this row runs (CLOUD-2633), in place\nof a hand-written `check` and `repair`.\n\nThe row's position is the consumer's — it runs once the rows above it\nhave bootstrapped the tool — and its argv is derived from the preset's\ndeclared install and the enabling `[[rule]]`'s `environments` and\n`install_env`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "check-verdict",
+            "ci-hygiene",
+            "ci-signal",
+            "claude-code-cloud",
+            "commit-hygiene",
+            "landing-loop",
+            "mise",
+            "pinned-toolchain",
+            "release-hygiene",
+            "engine-hygiene",
+            "shell-hygiene",
+            "tracker-hygiene",
+            "supply-chain",
+            "lease-asserted",
+            "trunk-based",
+            "linear-history",
+            "rust-quality",
+            "rust",
+            "red-head",
+            "git",
+            "claude-code-plan"
+          ]
+        },
         "repair": {
           "description": "The command that fixes it, as argv. Absent means diagnose-only.\n\nA row with no repair is not a lesser row: some preconditions genuinely\ncannot be fixed from inside the container, and a row saying so is more\nuse than a repair that silently does nothing.",
           "type": [
@@ -6435,8 +6484,7 @@
       "additionalProperties": false,
       "required": [
         "id",
-        "gloss",
-        "check"
+        "gloss"
       ]
     },
     "Step": {

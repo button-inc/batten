@@ -1223,6 +1223,17 @@
             "maxLength": 1536
           }
         },
+        "environments": {
+          "description": "The tool environments the enabled preset installs at startup, by name\n(CLOUD-2633). Only a preset declaring an install takes it.\n\n**A consumer fact, passed rather than discovered**: an agent environment\nis not a CI one is not a dev one, so the install loads the base\nconfiguration plus exactly these, never every environment file present.\nA `[[startup]]` row naming the same `preset` places the install in the\nstartup sequence. `Some(empty)` is refused at load rather than read as\n\"base only\", and so is a name the repository configures nothing for.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "except": {
           "description": "Modules of the enabled preset this row does NOT compile, by name — the\nfile stem, as `plan-mode-refuses-writes` (CLOUD-2290).\n\nThe half of ejecting a module that the binary owns: a local copy declares\nthe ids the vendored module did, and `claim_ids` refuses one id from two\nbundles, so the vendored module has to step aside for the copy to load.\n`batten preset eject` writes this key; it is ordinary config, so a\nconsumer may write it by hand too.\n\nA name the preset does not ship is refused at load (exit `1`), never\nignored: an `except` that excepts nothing would leave the vendored module\nrunning beside the copy that was meant to replace it.",
           "type": "array",
@@ -1355,6 +1366,14 @@
         },
         "index": {
           "description": "The PATHSPECS this policy row reads the index under, **declared**\n(CLOUD-843).\n\nEach becomes an entry of `input.tree[\"git-index\"]` under the spec as\nwritten, carrying the index entries it selects (path, mode, oid, stage),\nthe selected tracked paths the working tree has diverged from, and the\nuntracked paths beneath it. git's pathspec rules without magic; a\n`:`-magic spec is refused at load rather than read as a literal that\nselects nothing.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "install_env": {
+          "description": "`NAME=VALUE` assignments the derived install runs under (CLOUD-2633) —\nhow this repository's tool must install, such as from its lockfile.\nRequires `environments`; it may not set the preset's own selector, which\n`environments` owns.",
           "type": "array",
           "items": {
             "type": "string",
