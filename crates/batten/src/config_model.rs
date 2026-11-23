@@ -2163,8 +2163,10 @@ pub struct ExecConfig {
     #[serde(default)]
     pub continue_on_error: bool,
     /// Echo the child's PROGRESS lines to stderr even when its bytes are not
-    /// teed (#1276): `stage <step> ran|hit <s>` and the mutant sweep's per-row
-    /// and schema lines ([`is_progress_line`]). A stored gate log is a pointer
+    /// teed (#1276): `stage <step> ran|hit <s>`, a graph node's verdict
+    /// `step graph: ok|red <group> <id> <exit> <secs> <pointer>` (CLOUD-2838),
+    /// and the mutant sweep's per-row and schema lines ([`is_progress_line`]).
+    /// A stored gate log is a pointer
     /// at its end (CLOUD-2223), so without this a lap that ran for an hour said
     /// nothing about which stage it was in. Never configuration: a caller's
     /// own choice, so it is skipped by serde and absent from the schema.
@@ -2269,7 +2271,8 @@ pub enum ExecProgress {
     /// Nothing but what the tee setting shows.
     #[default]
     Silent,
-    /// Each [`is_progress_line`] reaches stderr as it arrives.
+    /// Each [`is_progress_line`] — a stage's line, a graph node's `step graph:`
+    /// verdict, a mutant sweep's line — reaches stderr as it arrives.
     Echo,
 }
 

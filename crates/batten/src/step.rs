@@ -2014,10 +2014,25 @@ fn graph_phase(
 /// node's capture handles joined by `,`, so it stays one field, or `-`.
 fn verdict_line(group: &str, id: &str, code: i32, seconds: f64, log: Option<&str>) -> String {
     let verdict = if code == 0 { "ok" } else { "red" };
-    let pointer = log.map_or_else(
-        || String::from("-"),
-        |handles| handles.split_whitespace().collect::<Vec<_>>().join(","),
-    );
+    // ONLY `<stream>:<handle>` FIELDS (CLOUD-2838): `logged` takes the last
+    // field of any `exec: … byte(s) …` line, and a held pipe's line ends in
+    // `open`, which is no handle and must never reach the pointer.
+    let handles: Vec<&str> = log
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter(|field| {
+            field
+                .split_once(':')
+                .is_some_and(|(stream, handle)| {
+                    matches!(stream, "stdout" | "stderr") && !handle.is_empty()
+                })
+        })
+        .collect();
+    let pointer = if handles.is_empty() {
+        String::from("-")
+    } else {
+        handles.join(",")
+    };
     format!("{verdict} {group} {id} {code} {seconds:.3} {pointer}")
 }
 

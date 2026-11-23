@@ -696,12 +696,26 @@ struct ChildSink {
 }
 
 /// Whether `line` reports progress: a step's `stage <name> ran|hit <seconds>`,
-/// or a mutant sweep's `mutate sweep: row …` / `mutate schema: …` line. One line
-/// each, a pointer-sized summary, never the payload.
+/// a graph node's verdict `step graph: ok|red <group> <id> <exit> <secs>
+/// <pointer>` (CLOUD-2838), or a mutant sweep's `mutate sweep: row …` /
+/// `mutate schema: …` line. One line each, a pointer-sized summary, never the
+/// payload.
 #[must_use]
 pub fn is_progress_line(line: &str) -> bool {
     if line.contains("mutate sweep: row ") || line.contains("mutate schema: ") {
         return true;
+    }
+    // A graph node's verdict, the moment it ends (CLOUD-2838): exactly
+    // `ok|red <group> <id> <exit> <secs> <pointer>`. The `peak` line, the
+    // per-group `ran`/`skipped` lines and the end-of-lap red list are other
+    // shapes, and stay in the stored log.
+    if let Some((_, rest)) = line.split_once("step graph: ") {
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        return matches!(
+            words.as_slice(),
+            ["ok" | "red", _, _, exit, seconds, _]
+                if exit.parse::<i32>().is_ok() && seconds.parse::<f64>().is_ok()
+        );
     }
     line.split_once("stage ").is_some_and(|(_, rest)| {
         let words: Vec<&str> = rest.split_whitespace().collect();
@@ -3089,6 +3103,9 @@ mod tests {
             "[hooks]   cargo-clippy – stage lint:clippy hit 663.809\n",
             "[hooks]   mutant:changed – mutate sweep: row 24/351 branch-age reuse caught 1s\n",
             "mutate schema: build 1 clean, 857 unviable\n",
+            // A graph node's verdict (CLOUD-2838), behind a runner prefix and bare.
+            "[verify:gated] step graph: red verify-2 test-replay 1 1118.004 stdout:ab12,stderr:cd34\n",
+            "step graph: ok verify-1 deny 0 34.413 -\n",
         ] {
             assert!(is_progress_line(line), "{line}");
         }
@@ -3097,6 +3114,12 @@ mod tests {
             "the stage is set\n",
             "stage left ran away\n",
             "test result: ok. 1 passed\n",
+            // The other `step graph:` shapes stay in the stored log.
+            "step graph: verify-2 peak 2 of 2\n",
+            "step graph: test-replay ran 1 1118.004\n",
+            "step graph: hk-checks skipped (hk-quick failed)\n",
+            "step graph: red verify-2 test-replay ran 1\n",
+            "step graph: red verify-2 hk-checks skipped\n",
         ] {
             assert!(!is_progress_line(line), "{line}");
         }
