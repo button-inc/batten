@@ -768,13 +768,15 @@ fn a_step_run_with_no_sweep_seeds_the_next_heads_selection() {
 
 /// [`SELECTED`] with a case that lists the package's `fixtures/` directory.
 fn globbing_source() -> String {
-    SELECTED.replace(
-        "    #[test]\n    fn unrecorded()",
-        "    #[test]\n    fn lists_fixtures() {\n        log(\"lists_fixtures\");\n        \
+    let globbing = SELECTED.replace(
+        "fn unrecorded()",
+        "fn lists_fixtures() {\n        log(\"lists_fixtures\");\n        \
          let dir = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"fixtures\");\n        \
          assert!(std::fs::read_dir(dir).unwrap().count() > 0);\n    }\n    \
          #[test]\n    fn unrecorded()",
-    )
+    );
+    assert_ne!(globbing, SELECTED, "the listing case is added");
+    globbing
 }
 
 /// A seeded case that lists a directory keys on that listing: an edit it
