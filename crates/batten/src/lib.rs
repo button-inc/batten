@@ -30663,6 +30663,7 @@ fn announce_config(mode: Mode, err: &mut dyn Write, config: &resolve::Resolved) 
 /// Pointer-only (non-negotiable rule 4): an id, two counts and a duration. Never
 /// a path, never a scanned byte.
 fn report_rule_costs(mode: Mode, err: &mut dyn Write) -> Result<()> {
+    report_policy_executions(mode, err)?;
     let costs = rules::rule_costs();
     if costs.is_empty() {
         return Ok(());
@@ -30707,6 +30708,46 @@ fn report_rule_costs(mode: Mode, err: &mut dyn Write) -> Result<()> {
         &format!(
             "rule cost: {rules_counted} rule(s) {}ms {files} file(s) {bytes} byte(s)",
             elapsed.as_millis()
+        ),
+    )?;
+    Ok(())
+}
+
+/// Report which evaluator decided each policy bundle's verdicts, on the `-vv`
+/// rung (#1276).
+///
+/// `enforce` interpreted every bundle for as long as the bytecode cache existed,
+/// and nothing said so: the lap's live half was 84% regorus's tree walker. This
+/// line makes the evaluator visible beside the cost it explains — one line per
+/// bundle that ran on the interpreter, with its [`policy::Fallback`], and one
+/// total. Pointer-only: an id, a reason token and counts.
+fn report_policy_executions(mode: Mode, err: &mut dyn Write) -> Result<()> {
+    // The total prints even over nothing evaluated: "no verdict ran on the
+    // interpreter" is the line a reader looks for, and its absence must not
+    // read the same as a run that never got here.
+    let census = policy::execution_census();
+    let (mut bytecode, mut interpreted) = (0usize, 0usize);
+    for (id, how, count) in &census {
+        match how {
+            policy::Execution::Bytecode { .. } => bytecode += count,
+            policy::Execution::Interpreted(_) => {
+                interpreted += count;
+                output::message(
+                    mode,
+                    Verbosity::Debug,
+                    err,
+                    &format!("policy evaluator: {id} {how} {count} evaluation(s)"),
+                )?;
+            }
+        }
+    }
+    output::message(
+        mode,
+        Verbosity::Debug,
+        err,
+        &format!(
+            "policy evaluator: {bytecode} bytecode evaluation(s) {interpreted} interpreted \
+             evaluation(s)"
         ),
     )?;
     Ok(())
