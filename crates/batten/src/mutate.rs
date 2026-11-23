@@ -530,8 +530,10 @@ pub enum Verdict {
     /// The case was already red before the mutation, so its redness afterwards
     /// is not evidence.
     CaseAlreadyRed { want: String },
-    /// The filter selected the whole suite, so redness could come from anywhere
-    /// in it and the row stops naming a case.
+    /// The filter selected more than the case it names — the whole suite under
+    /// a substring filter, or a second case of the same name in a Cargo suite's
+    /// binary — so redness could come from elsewhere and the row stops naming a
+    /// case.
     FilterNamesEveryCase { want: String },
     /// The script would not apply.
     UnappliableMutation,
@@ -2888,7 +2890,12 @@ fn run_suite(
         let init = ["init", "-backend=false", "-input=false", "-no-color"].map(String::from);
         let _ = spawn(&module, Program::Suite("tofu"), &init, &env, build_bound());
     }
-    let (cwd, mut argv) = invocation(dir, suite, want, &junit);
+    // THE DECLARED SUITE'S OWN BINARY, read off the recorded `cargo metadata`,
+    // so a case of the same name in another target is never selected.
+    let binary = prebuilt
+        .filter(|_| cargo)
+        .and_then(|built| suite_binary(&built.metadata, dir, suite.path()));
+    let (cwd, mut argv) = invocation(dir, suite, want, binary.as_deref(), &junit);
     if let Some(built) = reuse {
         argv.extend(built.reuse_args());
     } else if cargo {
@@ -3016,7 +3023,13 @@ fn pointer(words: &[&str]) -> String {
 
 /// Where each harness runs and what it is handed: the working directory and
 /// the argv, program first.
-fn invocation(dir: &Path, suite: &Suite, want: &str, junit: &Path) -> (PathBuf, Vec<String>) {
+fn invocation(
+    dir: &Path,
+    suite: &Suite,
+    want: &str,
+    binary: Option<&str>,
+    junit: &Path,
+) -> (PathBuf, Vec<String>) {
     let argv = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
     match suite {
         // NO `--test`, for `Suite::declared`'s reason: nothing in the declared
@@ -3037,8 +3050,18 @@ fn invocation(dir: &Path, suite: &Suite, want: &str, junit: &Path) -> (PathBuf, 
         // read `case-already-red`. `test(<want>)` matches by containment, the
         // filter libtest applied; `--no-tests=pass` leaves an empty selection
         // to `names-no-case` rather than to nextest's own error.
+        //
+        // ANCHORED, AND SCOPED TO THE SUITE'S BINARY. `test(<want>)` matched by
+        // containment across every binary, so a sibling whose name merely
+        // CONTAINS the case's was selected beside it and its redness credited
+        // to the row: `a_worktree_spawn_is_refused` also ran `…_in_auto`. The
+        // case now matches as a whole name or the last `::` segments of one,
+        // in the declared suite's binary only, and the caller requires exactly
+        // one ([`judge_row`]).
         Suite::Cargo { .. } => {
-            let filter = format!("test({want})");
+            let case = format!("test(/(^|::){}$/)", regex::escape(want));
+            let filter =
+                binary.map_or_else(|| case.clone(), |id| format!("binary_id(={id}) & {case}"));
             let mut words = vec![
                 "cargo",
                 "nextest",
@@ -3390,17 +3413,21 @@ fn pytest_verdict(report: &str) -> Selection {
     }
 }
 
-/// How many cases a suite declares in total — for the two arms whose `want` is
-/// a substring filter. The others match `want` exactly, select at most one case,
-/// and so cannot select every case of a suite holding more than one.
+/// How many cases a suite declares in total — for pytest, the one arm whose
+/// `want` is a substring filter. The others match `want` exactly; a Cargo row's
+/// filter is an exact name in its suite's binary, so its bound is "exactly one
+/// selected" ([`judge_row`]), never a count of `#[test]` lines in one file
+/// that its selection, spanning the binary, would not match.
 fn total_cases(root: &Path, suite: &Suite) -> usize {
     let Some(lines) = lines_of(root, suite.path()) else {
         return 0;
     };
     let marker = match suite {
-        Suite::Cargo { .. } => "#[test]",
         Suite::Pytest { .. } => "def test_",
-        Suite::Tofu { .. } | Suite::Kyverno { .. } | Suite::Conftest { .. } => return 0,
+        Suite::Cargo { .. }
+        | Suite::Tofu { .. }
+        | Suite::Kyverno { .. }
+        | Suite::Conftest { .. } => return 0,
     };
     lines
         .iter()
@@ -3702,8 +3729,16 @@ fn judge_row(
     // The other side of `names-no-case`: a filter matching EVERY case is the
     // same vacuity, because the row stops naming a case and redness under
     // mutation can then come from anywhere in the suite.
+    //
+    // A CARGO ROW NAMES EXACTLY ONE CASE. Its filter is an exact name in the
+    // suite's binary ([`invocation`]), so a second selected case is another
+    // module's case of the same name, and redness could come from it.
     let total = total_cases(root, suite);
-    if total > 1 && clean.selected >= total {
+    let wide = match suite {
+        Suite::Cargo { .. } => clean.selected > 1,
+        _ => total > 1 && clean.selected >= total,
+    };
+    if wide {
         return Ok(Verdict::FilterNamesEveryCase {
             want: row.want.clone(),
         });
@@ -4168,6 +4203,71 @@ impl Prebuilt {
             self.metadata.to_string_lossy().into_owned(),
         ]
     }
+}
+
+/// The nextest binary id of the target that compiles `suite`, read off the
+/// recorded `cargo metadata` (`metadata`), whose source paths are `staged`'s.
+///
+/// A target's root file is the suite itself (`tests/toy.rs`), or a `main.rs`,
+/// `lib.rs` or `mod.rs` whose directory holds it (`tests/it/mutate.rs` in the
+/// `it` target, `src/x.rs` in the library): the deepest such directory wins.
+/// `None` where nothing matches, and the filter then runs unscoped.
+fn suite_binary(metadata: &Path, staged: &Path, suite: &str) -> Option<String> {
+    let text = crate::fsio::read_to_string(metadata).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let canonical = crate::git::canonical(staged);
+    let suite = Path::new(suite);
+    let mut best: Option<(usize, String)> = None;
+    for package in doc["packages"].as_array()? {
+        let Some(name) = package["name"].as_str() else {
+            continue;
+        };
+        for target in package["targets"].as_array().into_iter().flatten() {
+            let (Some(src), Some(target_name)) =
+                (target["src_path"].as_str(), target["name"].as_str())
+            else {
+                continue;
+            };
+            let src = Path::new(src);
+            let Some(src) = src
+                .strip_prefix(&canonical)
+                .or_else(|_| src.strip_prefix(staged))
+                .ok()
+            else {
+                continue;
+            };
+            let kind = |want: &str| {
+                target["kind"]
+                    .as_array()
+                    .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some(want)))
+            };
+            let id = if kind("lib") || kind("proc-macro") {
+                name.to_owned()
+            } else if kind("test") {
+                format!("{name}::{target_name}")
+            } else if kind("bin") {
+                format!("{name}::bin/{target_name}")
+            } else {
+                continue;
+            };
+            let depth = if src == suite {
+                usize::MAX
+            } else {
+                let root_file = matches!(
+                    src.file_name().and_then(|file| file.to_str()),
+                    Some("main.rs" | "lib.rs" | "mod.rs")
+                );
+                match src.parent() {
+                    Some(dir) if root_file && suite.starts_with(dir) => dir.components().count(),
+                    _ => continue,
+                }
+            };
+            if best.as_ref().is_none_or(|(deepest, _)| depth > *deepest) {
+                best = Some((depth, id));
+            }
+        }
+    }
+    best.map(|(_, id)| id)
 }
 
 /// Where [`Prebuilt`]'s documents live: beside the binaries they describe.
