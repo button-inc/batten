@@ -1814,14 +1814,136 @@ fn reuse_ids(document: &str) -> Option<BTreeSet<String>> {
     )
 }
 
+/// The file under the reuse directory naming the rendered tree ([`tree_digest`])
+/// its packed binaries were built from. Written last, so a pack cut short is
+/// never trusted.
+const PACKED_TREE: &str = "tree";
+
+/// The directory under the reuse directory holding the packed binaries, each
+/// at its path relative to the target it was built in.
+const PACKED: &str = "packed";
+
+/// The target a nextest `binaries-only` document was built in, and every file
+/// a reused run needs from it, relative to it: each test binary, and each
+/// binary a case launches through `CARGO_BIN_EXE_*`. `None` when the document
+/// cannot be read or names a binary outside that target.
+fn packed_paths(document: &str) -> Option<(std::path::PathBuf, Vec<std::path::PathBuf>)> {
+    let parsed: serde_json::Value = serde_json::from_str(document).ok()?;
+    let meta = parsed.get("rust-build-meta")?;
+    let target = std::path::PathBuf::from(meta.get("target-directory")?.as_str()?);
+    let mut files = BTreeSet::new();
+    for binary in parsed.get("rust-binaries")?.as_object()?.values() {
+        let path = std::path::Path::new(binary.get("binary-path")?.as_str()?);
+        files.insert(path.strip_prefix(&target).ok()?.to_path_buf());
+    }
+    // THE LAUNCHED BINARIES TOO (#1276): a case reaches `batten` through the
+    // path `CARGO_BIN_EXE_batten` compiled in, and without it every such case
+    // fails to spawn, which a judge would read as a kill.
+    if let Some(launched) = meta.get("non-test-binaries").and_then(|v| v.as_object()) {
+        for binary in launched.values().filter_map(|v| v.as_array()).flatten() {
+            let path = std::path::Path::new(binary.get("path")?.as_str()?);
+            if path.is_absolute() {
+                files.insert(path.strip_prefix(&target).ok()?.to_path_buf());
+            } else {
+                files.insert(path.to_path_buf());
+            }
+        }
+    }
+    Some((target, files.into_iter().collect()))
+}
+
+/// Pack, under `state`'s reuse directory, every file [`packed_paths`] names
+/// from `document`, and record `tree` as the rendering they were built from.
+/// Hard links where the filesystem allows, so a pack costs no disk.
+///
+/// THE BUILD SHARDS NEED, AND NOTHING ELSE (CLOUD-2789): the whole mirror
+/// target, 6 GB on #1276, was more than half the repository's 10 GB cache
+/// store, and saved once per run it evicted the Rust caches every other job
+/// restores. A reused run reads the test binaries and what they launch.
+fn pack(state: &std::path::Path, document: &str, tree: &str) -> Option<()> {
+    let (target, files) = packed_paths(document)?;
+    let dir = state.join("reuse");
+    let into = dir.join(PACKED);
+    let _ = std::fs::remove_dir_all(&into);
+    for file in &files {
+        let (from, to) = (target.join(file), into.join(file));
+        std::fs::create_dir_all(to.parent()?).ok()?;
+        if std::fs::hard_link(&from, &to).is_err() {
+            std::fs::copy(&from, &to).ok()?;
+        }
+    }
+    crate::durable::replace(dir.join(PACKED_TREE), tree).ok()
+}
+
+/// The reuse record under `state`, its packed binaries put back where they
+/// were built, when it was packed over the rendering `tree`. `None` over any
+/// other rendering, or when anything packed cannot be put back, which leaves
+/// the run to record afresh.
+fn restore(state: &std::path::Path, tree: &str) -> Option<Reuse> {
+    let dir = state.join("reuse");
+    if crate::fsio::read_to_string(dir.join(PACKED_TREE)).ok()? != tree {
+        return None;
+    }
+    let binaries = dir.join("binaries.json");
+    let document = crate::fsio::read_to_string(&binaries).ok()?;
+    let (target, files) = packed_paths(&document)?;
+    for file in &files {
+        let to = target.join(file);
+        if to.exists() {
+            continue;
+        }
+        std::fs::create_dir_all(to.parent()?).ok()?;
+        // A COPY, NEVER A LINK: a later build writing its output in place
+        // would otherwise rewrite the pack as well.
+        std::fs::copy(dir.join(PACKED).join(file), &to).ok()?;
+    }
+    let metadata = dir.join("cargo-metadata.json");
+    metadata.is_file().then_some(())?;
+    Some(Reuse {
+        binaries,
+        metadata,
+        ids: reuse_ids(&document)?,
+    })
+}
+
+/// The build a packed reuse record under `state` already made, when the
+/// rendering of `mutants` with what `known` skips is the one it was packed
+/// over: taken as built with no cargo run. `None` without a record or over any
+/// other rendering, and the build runs as always.
+///
+/// # Errors
+///
+/// The schema cannot be rendered, or the rendered tree cannot be read.
+fn prebuilt(
+    root: &std::path::Path,
+    work: &std::path::Path,
+    state: &std::path::Path,
+    mutants: &[Listed],
+    known: &Known,
+) -> anyhow::Result<Option<Built>> {
+    let Ok(packed) = crate::fsio::read_to_string(state.join("reuse").join(PACKED_TREE)) else {
+        return Ok(None);
+    };
+    let skip: BTreeSet<u32> = known.unviable.union(&known.handed).copied().collect();
+    let schema = write_schema(root, work, mutants, &skip, &known.unprobed)?;
+    if tree_digest(work)? != packed {
+        return Ok(None);
+    }
+    Ok(Some(Built {
+        unviable: known.unviable.difference(&known.handed).copied().collect(),
+        handed: known.handed.clone(),
+        schema,
+        unprobed: known.unprobed.clone(),
+    }))
+}
+
 /// Record the clean schema build's binaries under `state` for every judging
 /// run to reuse. Best effort: `None` leaves each run to build as it always did,
 /// which is slower and never wrong.
 fn record_reuse(
-    work: &std::path::Path,
-    target: &std::path::Path,
+    (work, target, state): (&std::path::Path, &std::path::Path, &std::path::Path),
     mutants: &[Listed],
-    state: &std::path::Path,
+    tree: &str,
 ) -> Option<Reuse> {
     let dir = state.join("reuse");
     // A record from an earlier sweep names binaries this build may not have.
@@ -1859,12 +1981,16 @@ fn record_reuse(
     }
     list.extend(cargo_dirs(target));
     let binaries = dir.join("binaries.json");
-    let ids = reuse_ids(&document(&list, &binaries)?)?;
+    let listed = document(&list, &binaries)?;
+    let ids = reuse_ids(&listed)?;
     let metadata = dir.join("cargo-metadata.json");
     document(
         &["metadata", "--format-version", "1", "--no-deps"].map(String::from),
         &metadata,
     )?;
+    // PACKED FOR THE NEXT RUN OVER THIS RENDERING, a shard above all: best
+    // effort, since a pack that fails costs that run a build and nothing else.
+    let _ = pack(state, &listed, tree);
     Some(Reuse {
         binaries,
         metadata,
@@ -5020,13 +5146,14 @@ pub fn sweep(
         ids,
         out,
     )?;
+    // RECORDED ONCE, AFTER THE BUILD AND THE REACH RUN THAT USED IT: nothing
+    // after this point changes a source the binaries were built from, so every
+    // judging run reuses them rather than asking cargo again. Before the reach
+    // phase returns, so its pack is what the shards restore.
+    let reuse = announce_reuse(&work, &target, mutants, &state, out)?;
     if scope.phase == Phase::Reach {
         return reach_sealed(out, &reach);
     }
-    // RECORDED ONCE, AFTER THE BUILD AND THE REACH RUN THAT USED IT: nothing
-    // after this point changes a source the binaries were built from, so every
-    // judging run reuses them rather than asking cargo again.
-    let reuse = announce_reuse(&work, &target, mutants, &state, out)?;
     let (todo, classic, unviable) = scope.slice(
         judged_by_switch(mutants.len(), &unviable, &classic)?,
         &classic,
@@ -5196,16 +5323,18 @@ fn announce_reuse(
     state: &std::path::Path,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Option<Reuse>> {
-    let reuse = record_reuse(work, target, mutants, state);
-    writeln!(
-        out,
-        "mutate schema: judging runs {} the clean build's binaries",
-        if reuse.is_some() {
-            "reuse"
-        } else {
-            "rebuild-check"
-        }
-    )?;
+    // A PACK OVER THIS VERY RENDERING IS PUT BACK, NOT RECORDED AGAIN: a shard
+    // restored it from the reach job, and recording asks cargo to list a build
+    // whose fingerprints the shard never had, which rebuilds it all.
+    let tree = tree_digest(work)?;
+    let (reuse, how) = match restore(state, &tree) {
+        Some(reuse) => (Some(reuse), "reuse the packed build's binaries"),
+        None => match record_reuse((work, target, state), mutants, &tree) {
+            Some(reuse) => (Some(reuse), "reuse the clean build's binaries"),
+            None => (None, "rebuild-check the clean build's binaries"),
+        },
+    };
+    writeln!(out, "mutate schema: judging runs {how}")?;
     Ok(reuse)
 }
 
@@ -5242,6 +5371,18 @@ fn build_journaled(
         known.handed.len(),
         known.unprobed.len()
     )?;
+    // THE REACH JOB'S BUILD, WHEN THIS RENDERING IS THE ONE IT PACKED: taken
+    // as built, with no cargo run, which would rebuild it all for want of the
+    // fingerprints a shard never restores (CLOUD-2789).
+    if let Some(state) = cache_path.parent()
+        && let Some(built) = prebuilt(root, work, state, mutants, &known)?
+    {
+        writeln!(
+            out,
+            "mutate schema: the rendered tree is the packed build's; not built again"
+        )?;
+        return Ok(built);
+    }
     let mut keep = |refused: &Refused| {
         let mut lines = newly_unviable(&refused.owned, site_keys, mutants, cache);
         for id in &refused.reconst {
@@ -9224,6 +9365,104 @@ mod tests {
             moved,
             "a source is the probes'"
         );
+    }
+
+    /// The files a reused run needs from the build: every test binary the
+    /// nextest document lists and every binary a case launches through
+    /// `CARGO_BIN_EXE_*`, each relative to the target it lives in; none when
+    /// one lies outside that target, which a pack could not put back.
+    ///
+    /// Fails by: a launched binary left out (a case spawns a path that is not
+    /// there and fails, read as a kill), a test binary left out (its cases
+    /// select nothing and pass vacuously), or a path outside the target packed
+    /// where a restore would write it somewhere else.
+    #[test]
+    fn the_packed_binaries_are_the_tests_and_what_they_launch() {
+        let document = r#"{"rust-build-meta":{"target-directory":"/t","non-test-binaries":{"batten":[{"name":"batten","kind":"bin","path":"debug/batten"}]}},"rust-binaries":{"batten":{"binary-path":"/t/debug/deps/batten-1"},"batten::it":{"binary-path":"/t/debug/deps/it-2"}}}"#;
+        let (target, files) = packed_paths(document).unwrap();
+        assert_eq!(target, std::path::PathBuf::from("/t"));
+        assert_eq!(
+            files,
+            ["debug/batten", "debug/deps/batten-1", "debug/deps/it-2"]
+                .map(std::path::PathBuf::from)
+        );
+        let outside = r#"{"rust-build-meta":{"target-directory":"/t"},"rust-binaries":{"x":{"binary-path":"/elsewhere/x-1"}}}"#;
+        assert_eq!(packed_paths(outside), None);
+        assert_eq!(packed_paths("not json"), None);
+    }
+
+    /// A packed build is put back and reused only over the rendered tree it
+    /// was built from; over any other tree nothing is restored and the run
+    /// records afresh.
+    ///
+    /// Fails by: binaries of another rendering trusted (every mutant judged
+    /// against switches the tree no longer has), or a matching pack not put
+    /// back (every shard rebuilds, which the reach job exists to spare).
+    #[test]
+    fn a_packed_build_is_restored_only_over_the_tree_it_was_built_from() {
+        let state = crate::scratch::scratch("schema-reuse-pack");
+        let target = state.join("tree").join("target");
+        std::fs::create_dir_all(target.join("debug").join("deps")).unwrap();
+        std::fs::write(target.join("debug/deps/batten-1"), "test binary").unwrap();
+        std::fs::write(target.join("debug/batten"), "launched").unwrap();
+        let document = format!(
+            r#"{{"rust-build-meta":{{"target-directory":"{}","non-test-binaries":{{"batten":[{{"name":"batten","kind":"bin","path":"debug/batten"}}]}}}},"rust-binaries":{{"batten":{{"binary-path":"{}"}}}}}}"#,
+            target.display(),
+            target.join("debug/deps/batten-1").display()
+        );
+        let dir = state.join("reuse");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("binaries.json"), &document).unwrap();
+        std::fs::write(dir.join("cargo-metadata.json"), "{}").unwrap();
+        pack(&state, &document, "tree-1").unwrap();
+        std::fs::remove_dir_all(&target).unwrap();
+        assert!(restore(&state, "tree-2").is_none(), "another rendering");
+        assert!(!target.join("debug/batten").exists(), "nothing put back");
+        let reuse = restore(&state, "tree-1").expect("its own rendering");
+        assert_eq!(reuse.ids, BTreeSet::from([String::from("batten")]));
+        assert_eq!(
+            std::fs::read_to_string(target.join("debug/deps/batten-1")).unwrap(),
+            "test binary"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("debug/batten")).unwrap(),
+            "launched"
+        );
+    }
+
+    /// A rendered tree the recorded build was made from is taken as built,
+    /// with no cargo run; any other tree, or no record, is built as always.
+    ///
+    /// Fails by: a build skipped over a rendering that differs (binaries of
+    /// another switch set judged), or a matching one built again (every shard
+    /// pays the build the reach job paid).
+    #[test]
+    fn a_rendered_tree_the_reach_job_built_is_not_built_again() {
+        let root = crate::scratch::scratch("schema-prebuilt-root");
+        let work = crate::scratch::scratch("schema-prebuilt-work");
+        let state = crate::scratch::scratch("schema-prebuilt-state");
+        let known = Known::default();
+        assert!(
+            prebuilt(&root, &work, &state, &[], &known)
+                .unwrap()
+                .is_none(),
+            "no record"
+        );
+        write_schema(&root, &work, &[], &BTreeSet::new(), &BTreeSet::new()).unwrap();
+        let rendered = tree_digest(&work).unwrap();
+        std::fs::create_dir_all(state.join("reuse")).unwrap();
+        std::fs::write(state.join("reuse").join(PACKED_TREE), "another").unwrap();
+        assert!(
+            prebuilt(&root, &work, &state, &[], &known)
+                .unwrap()
+                .is_none(),
+            "another rendering"
+        );
+        std::fs::write(state.join("reuse").join(PACKED_TREE), &rendered).unwrap();
+        let built = prebuilt(&root, &work, &state, &[], &known)
+            .unwrap()
+            .expect("its own rendering");
+        assert!(built.unviable.is_empty() && built.handed.is_empty());
     }
 
     /// A shard judges only its own ids, from the whole listing's build: its
