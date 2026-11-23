@@ -1312,7 +1312,21 @@ fn compile_for(
     if checks == ModuleChecks::SkipOnHotPath {
         compile_cached(root, id, sources, pattern_data, (text, digest))
     } else {
-        compile(id, sources, pattern_data)
+        // EVERY LOAD DECIDES ON BYTECODE (#1276). A surface that reports
+        // config faults still compiles from source, because its checks read
+        // the interpreter's AST; the interpreter rides along for them and the
+        // verdicts run on the program the hot path runs, from the same entry.
+        // It used to stop here, so `check` and `enforce` interpreted every
+        // bundle and the lap's live half spent most of its time in regorus's
+        // tree walker with nothing recording it.
+        let bundle = compile(id, sources, pattern_data)?;
+        Ok(with_bytecode(
+            root,
+            (id, sources),
+            (pattern_data, text, digest),
+            bundle,
+            true,
+        ))
     }
 }
 
