@@ -259,30 +259,78 @@ fn respell_file(
         }
         return None;
     };
-    let mut splices: Vec<std::ops::Range<usize>> = Vec::new();
-    for reach in reaches(&tree, root) {
-        let moving = reach
-            .children
-            .iter()
-            .filter(|child| names.modules.contains(child.as_str()))
-            .count();
-        if moving == reach.children.len() && moving > 0 {
-            splices.push(reach.root);
-        } else if moving > 0 {
-            plan.remainder
-                .push(format!("{path}:{}", line_of(&edited, reach.offset)));
-        }
+    let (splices, mixed) = root_splices(&tree, root, &names.modules);
+    for offset in mixed {
+        plan.remainder
+            .push(format!("{path}:{}", line_of(&edited, offset)));
     }
     if splices.is_empty() && edited == text {
         return None;
     }
+    let respelled = !splices.is_empty();
+    replace_roots(&mut edited, splices, &names.new_ident);
+    Some((edited, respelled))
+}
+
+/// The byte range of each `root` whose reach names only moved `modules`, and
+/// the offset of each reach mixing moved and unmoved ones (the remainder).
+fn root_splices(
+    tree: &ast::SourceFile,
+    root: &str,
+    modules: &BTreeSet<&str>,
+) -> (Vec<std::ops::Range<usize>>, Vec<usize>) {
+    let (mut splices, mut mixed) = (Vec::new(), Vec::new());
+    for reach in reaches(tree, root) {
+        let moving = reach
+            .children
+            .iter()
+            .filter(|child| modules.contains(child.as_str()))
+            .count();
+        if moving == reach.children.len() && moving > 0 {
+            splices.push(reach.root);
+        } else if moving > 0 {
+            mixed.push(reach.offset);
+        }
+    }
+    (splices, mixed)
+}
+
+/// `text` with each range in `splices` replaced by `ident`, last first.
+fn replace_roots(text: &mut String, mut splices: Vec<std::ops::Range<usize>>, ident: &str) {
     splices.sort_by_key(|range| std::cmp::Reverse(range.start));
     splices.dedup();
-    let respelled = !splices.is_empty();
     for range in splices {
-        edited.replace_range(range, &names.new_ident);
+        text.replace_range(range, ident);
     }
-    Some((edited, respelled))
+}
+
+/// One function BODY (`{ … }`) respelled exactly as the cut respells a file
+/// it leaves behind: each `root::m…` whose `m` is in `modules` becomes
+/// `new_ident::m…`, macro token trees included, comments and strings never.
+/// `root` is `crate` for a body read inside the crate cut from, else that
+/// crate's identifier.
+///
+/// What `batten test replay` translates a base test body through before it
+/// splices it into HEAD (CLOUD-2789), so a test the cut respelled is compared
+/// and run in the spelling the cut gave it, not a second table's. `None` when
+/// the body does not parse, or a reach mixes moved and unmoved modules — the
+/// shape the cut itself leaves as remainder.
+#[must_use]
+pub fn respell_body(
+    body: &str,
+    root: &str,
+    modules: &BTreeSet<&str>,
+    new_ident: &str,
+) -> Option<String> {
+    const OPEN: &str = "fn f() ";
+    let mut wrapped = format!("{OPEN}{body}");
+    let tree = parsed(&wrapped)?;
+    let (splices, mixed) = root_splices(&tree, root, modules);
+    if !mixed.is_empty() || splices.iter().any(|range| range.start < OPEN.len()) {
+        return None;
+    }
+    replace_roots(&mut wrapped, splices, new_ident);
+    Some(wrapped.split_off(OPEN.len()))
 }
 
 /// Each package naming the new crate gains its dependency; the new crate gets
