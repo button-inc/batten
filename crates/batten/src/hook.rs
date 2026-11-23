@@ -672,6 +672,14 @@ impl HarnessExt for Harness {
                     spill_path: crate::capture::Fidelity::Unavailable,
                     transcript: crate::capture::Fidelity::Unavailable,
                 },
+                // Measured on this session's own transcript (2026-11-22): of 126
+                // user-role records, 82 were background-task notifications
+                // (`origin.kind = task-notification`) and 4 were subagent
+                // hand-backs (`origin.kind = peer`), and the `UserPromptSubmit`
+                // payload carries the same text with no authorship field. Each
+                // opens with the host's own envelope, which is what
+                // `batten_base::background` already keys on.
+                injected_prompts: &["<task-notification>", "<agent-message "],
             },
             Harness::Cursor => Capabilities {
                 // Searched 2026-09-01 and NOT fetched: the host has a Todos
@@ -714,6 +722,9 @@ impl HarnessExt for Harness {
                 reason_travels_in_band: true,
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
+                // Unsurveyed: no envelope is known, so every prompt is the
+                // operator's, which was the behaviour before this column.
+                injected_prompts: &[],
             },
             Harness::CopilotCli => Capabilities {
                 // Not fetched, like the rest of this host's tool surface — the
@@ -748,6 +759,9 @@ impl HarnessExt for Harness {
                 reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
+                // Unsurveyed: no envelope is known, so every prompt is the
+                // operator's, which was the behaviour before this column.
+                injected_prompts: &[],
             },
             Harness::GeminiCli => Capabilities {
                 // Fetched 2026-09-01 from the vendor docs: `write_todos`, on by
@@ -814,6 +828,9 @@ impl HarnessExt for Harness {
                 reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
+                // Unsurveyed: no envelope is known, so every prompt is the
+                // operator's, which was the behaviour before this column.
+                injected_prompts: &[],
             },
             Harness::CodexCli => Capabilities {
                 // Fetched 2026-09-01: `update_plan`, the built-in plan tool.
@@ -839,6 +856,9 @@ impl HarnessExt for Harness {
                 reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
+                // Unsurveyed: no envelope is known, so every prompt is the
+                // operator's, which was the behaviour before this column.
+                injected_prompts: &[],
             },
             Harness::ExitCode => Capabilities {
                 // The neutral contract carries no host tool surface of its own.
@@ -895,6 +915,9 @@ impl HarnessExt for Harness {
                     spill_path: crate::capture::Fidelity::Unavailable,
                     transcript: crate::capture::Fidelity::Unavailable,
                 },
+                // Unsurveyed: no envelope is known, so every prompt is the
+                // operator's, which was the behaviour before this column.
+                injected_prompts: &[],
             },
         }
     }
@@ -1188,6 +1211,15 @@ pub struct Capabilities {
     /// [`Capabilities::events`] is, and [`Capabilities::fidelity`] is its
     /// projection. See [`Capability`]'s own doc: the scalar columns only.
     pub capture: CaptureCapabilities,
+    /// The envelopes this host wraps around text it injects in the user role:
+    /// a background task's completion, a subagent's hand-back (CLOUD-2825).
+    ///
+    /// The host delivers that text through the same prompt event as a message
+    /// the operator typed, so without this column the directives journal
+    /// (CLOUD-2811) recorded a task notification as an operator directive. A
+    /// prompt starting with one of these prefixes is the host speaking, never
+    /// the operator. Empty for a host whose envelopes nobody surveyed.
+    pub injected_prompts: &'static [&'static str],
 }
 
 /// How faithfully one host's responses can be captured, per response shape
@@ -1635,6 +1667,15 @@ impl PreapproveReach {
 }
 
 impl Capabilities {
+    /// Whether `prompt` is text this host injected, rather than the operator's.
+    #[must_use]
+    pub fn injected(&self, prompt: &str) -> bool {
+        let prompt = prompt.trim_start();
+        self.injected_prompts
+            .iter()
+            .any(|envelope| prompt.starts_with(envelope))
+    }
+
     /// Whether this host emits `event`.
     #[must_use]
     pub fn emits(&self, event: Event) -> bool {
