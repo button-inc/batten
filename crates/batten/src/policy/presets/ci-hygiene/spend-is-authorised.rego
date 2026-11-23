@@ -1,5 +1,7 @@
 #MUTANT-SUITE crates/batten/tests/it/ci_hygiene.rs
 #MUTANT draft-gate-unread|s@^\tnot job_is_draft_gated(path, name)$@\tfalse@|a_job_that_runs_on_a_draft_is_refused_and_named
+#MUTANT aggregator-exempt-dropped|s@^\tnot aggregator(path, name)$@\ttrue@|a_pure_aggregator_under_always_is_not_a_spend
+#MUTANT aggregator-action-unread|s@^\tnot step.uses$@\ttrue@|an_aggregator_that_checks_out_is_still_refused
 # CI spends nothing the author could have spent for free (CLOUD-1161).
 #
 # Four properties about what a hosted-CI run COSTS, each computable over the
@@ -119,6 +121,38 @@ violation contains {
 	on_pull_request(path)
 	some name, _ in workflow[path].jobs
 	not job_is_draft_gated(path, name)
+	not aggregator(path, name)
+}
+
+# A PURE AGGREGATOR SPENDS NOTHING, so it is not this rule's business (#1276).
+# A fan-in that only reads its dependencies' results and exits — `ci.yml`'s
+# `final` — must run on a draft: skipped by its own `if:`, the host reports it
+# as success, which once let a push with no CI reach `main` (CLOUD-2317), and
+# `ci-parity` refuses any guard there. Read STRUCTURALLY, never by name: it
+# `needs:` something, and every step it has neither `uses:` an action (no
+# checkout, no setup), nor runs anything but an exit code, nor reads any
+# context but `needs`. One checkout or one build makes it a spend again.
+aggregator(path, name) if {
+	workflow[path].jobs[name].needs
+	not spends(path, name)
+}
+
+spends(path, name) if {
+	some step in workflow[path].jobs[name].steps
+	not aggregating_step(step)
+}
+
+aggregating_step(step) if {
+	not step.uses
+	regex.match(`^\s*(exit\s+[0-9]+)?\s*$`, object.get(step, "run", ""))
+	reads_only_needs(object.get(step, "if", ""))
+}
+
+# No context but `needs` (`needs.*.result`, `needs.ci.result`): a condition
+# reading `github`, `steps`, `env` or any other is deciding something else.
+reads_only_needs(condition) if {
+	is_string(condition)
+	not regex.match(`(github|env|steps|inputs|vars|secrets|matrix|runner|job|strategy)\.`, condition)
 }
 
 # --- 2. a pull-request workflow supersedes its own runs -----------------------
@@ -274,6 +308,48 @@ test_an_ungated_job_is_refused_and_named if {
 	f.verdict == "job run early"
 	some s in f.subjects
 	s.artifact == "build"
+}
+
+# A PURE AGGREGATOR UNDER `always()` IS CLEAN: it reads its dependencies'
+# results and exits, and spends nothing (#1276). `ci.yml`'s `final`, verbatim.
+aggregator_doc(steps) := {
+	"on": {"pull_request": {"types": ["opened", "ready_for_review"]}},
+	"concurrency": {"group": "ci", "cancel-in-progress": true},
+	"jobs": {"final": {
+		"needs": ["ci", "perf"],
+		"if": "${{ always() }}",
+		"steps": steps,
+	}},
+}
+
+aggregating := [{
+	"if": "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') }}",
+	"run": "exit 1",
+}]
+
+test_a_pure_aggregator_under_always_is_clean if {
+	count(violation) == 0 with input as with_workflow(aggregator_doc(aggregating))
+}
+
+# AN AGGREGATOR THAT ALSO CHECKS OUT is a spend again, and still refused.
+test_an_aggregator_that_checks_out_is_still_refused if {
+	doc := aggregator_doc(array.concat([{"uses": "actions/checkout@v4"}], aggregating))
+	some f in violation with input as with_workflow(doc)
+	f.verdict == "job run early"
+}
+
+# AN AGGREGATOR THAT ALSO BUILDS is a spend again, and still refused.
+test_an_aggregator_that_builds_is_still_refused if {
+	doc := aggregator_doc(array.concat(aggregating, [{"run": "cargo build"}]))
+	some f in violation with input as with_workflow(doc)
+	f.verdict == "job run early"
+}
+
+# A CONDITION READING ANOTHER CONTEXT decides something else, and is refused.
+test_an_aggregator_reading_another_context_is_still_refused if {
+	doc := aggregator_doc([{"if": "${{ github.event_name == 'push' }}", "run": "exit 1"}])
+	some f in violation with input as with_workflow(doc)
+	f.verdict == "job run early"
 }
 
 # A STEP-LEVEL GUARD COUNTS. Reading only the job level would refuse a workflow
