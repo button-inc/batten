@@ -101,6 +101,55 @@ fn the_check_is_still_target_scoped_so_the_flag_widened_coverage() {
         unchecked.is_empty(),
         "excluded from the workspace row and checked by no package row: {unchecked:?}"
     );
+    // AND THE UNION IS THE WORKSPACE, read from the workspace and not the task
+    // (CLOUD-2789): the `--workspace` row checks every member it does not
+    // exclude, so what the checks cover is `(members - excluded) ∪ packages`,
+    // and it must be exactly the members — no member dropped, and no `-p` or
+    // `--exclude` naming a package that is not one.
+    let root: toml::Table = toml::from_str(
+        &std::fs::read_to_string(common::at_root("Cargo.toml")).expect("the root manifest"),
+    )
+    .expect("the root manifest parses");
+    let workspace = root.get("workspace").expect("a workspace");
+    // The members ARE the `crates/*` directories only while the workspace says
+    // so and excludes none: `cargo metadata`'s own membership, read without a
+    // spawn.
+    assert_eq!(
+        workspace.get("members"),
+        Some(&toml::Value::Array(vec![toml::Value::from("crates/*")])),
+        "the workspace's membership moved: read it here as cargo does"
+    );
+    assert!(
+        workspace.get("exclude").is_none(),
+        "the workspace excludes a member"
+    );
+    let members: std::collections::BTreeSet<String> = common::workspace_members()
+        .iter()
+        .map(|dir| {
+            let manifest: toml::Table = toml::from_str(
+                &std::fs::read_to_string(dir.join("Cargo.toml")).expect("a member manifest"),
+            )
+            .expect("a member manifest parses");
+            manifest["package"]["name"]
+                .as_str()
+                .expect("a member names its package")
+                .to_owned()
+        })
+        .collect();
+    let covered: std::collections::BTreeSet<String> = members
+        .difference(&excluded)
+        .cloned()
+        .chain(packages.iter().cloned())
+        .collect();
+    assert_eq!(
+        covered, members,
+        "the cross-check covers exactly the workspace's members"
+    );
+    let strangers: Vec<&String> = excluded.difference(&members).collect();
+    assert!(
+        strangers.is_empty(),
+        "excluded but not a workspace member: {strangers:?}"
+    );
 }
 
 #[test]
