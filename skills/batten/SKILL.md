@@ -268,10 +268,11 @@ startup: 2 row(s), 0 failed
 every session is a row whose check is wrong, and the two renderings are what let
 you see that.
 
-The declared repairs also run on their own at session start — writing a `repair`
-in the committed authority is the authorisation to run it — so `--repair` is for
-provisioning a container out of band, which is what the committed `setup.sh`
-does. A row with no `repair` is reported and never acted on.
+The declared repairs also run on their own at session start, in the session's
+setup task — writing a `repair` in the committed authority is the authorisation
+to run it — so `--repair` is for provisioning a container out of band, which is
+what an environment's setup script does after `install.sh`. A row with no
+`repair` is reported and never acted on.
 
 What a row means is its `gloss` in `batten.toml`: the report is pointer-only, so
 the id is all it carries.
