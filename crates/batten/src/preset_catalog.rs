@@ -419,6 +419,17 @@ pub fn version_drift(lock: &str, manifests: &[Manifest]) -> Vec<String> {
     drift
 }
 
+/// The git calls the host decides (CLOUD-2768): ONE module in TWO bundles. The
+/// `git` preset's grant withholds itself from these calls, and the
+/// `claude-code-cloud` mode grant yields on them; a bundle compiles only its own
+/// preset's modules, so each ships this one rather than a copy of the predicate.
+const GIT_HOST_DECIDED: PresetModule = PresetModule {
+    scope: RuleScope::MediatedCall,
+    provider: None,
+    pointer: "<preset:git>/host-decided.rego",
+    embedded_source: include_str!("policy/presets/git/host-decided.rego"),
+};
+
 /// Every vendored preset, in a stable order.
 ///
 /// The ONE authority. `preset_names`, the modules a preset ships, and the
@@ -1019,6 +1030,9 @@ than its producer, which writes whole or removes, and reads the same way.",
                     "policy/presets/claude-code-cloud/read-only-is-preapproved.rego"
                 ),
             },
+            // The git calls the mode grant below yields on (CLOUD-2768), the
+            // same module the `git` preset ships.
+            GIT_HOST_DECIDED,
             // LAST, so a call a narrower module also grants is named by that
             // module: the first grant found is the one the host is told.
             PresetModule {
@@ -2579,12 +2593,17 @@ look at again. Read each named failed job's log first; reading is what admits th
         version: semver::Version::new(0, 0, 2),
         suggested: true,
         install: None,
-        modules: &[PresetModule {
-            scope: RuleScope::MediatedCall,
-            provider: None,
-            pointer: "<preset:git>/git-call-is-preapproved.rego",
-            embedded_source: include_str!("policy/presets/git/git-call-is-preapproved.rego"),
-        }],
+        modules: &[
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
+                pointer: "<preset:git>/git-call-is-preapproved.rego",
+                embedded_source: include_str!("policy/presets/git/git-call-is-preapproved.rego"),
+            },
+            // WHICH git calls the host decides (CLOUD-2768): shipped here and in
+            // `claude-code-cloud`, so both grants read one predicate.
+            GIT_HOST_DECIDED,
+        ],
         verdicts: &[],
         patterns: &[],
     },
