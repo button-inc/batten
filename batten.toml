@@ -6867,6 +6867,36 @@ kind = "policy"
 scope = "mediated_call"
 preset = "mise"
 severity = "warn"
+# THE AGENT TOOLSET, AND ONLY IT (CLOUD-2633): an agent env is not a CI env is not
+# a dev env is not a prod env. The `[[startup]]` row `toolchain-is-provisioned`
+# places this install; the base configuration always loads, so this is base plus
+# `agent`. Install dependencies come with it — `pipx:serena-agent` needs `uv`,
+# which the base declares.
+environments = ["agent"]
+# INSTALL FROM THE LOCK, NEVER THROUGH THE API (measured 2026-10-06). With
+# `[settings] lockfile = false` mise does not READ `mise.lock` either, so a bare
+# `mise install` resolved every `github:` tool through api.github.com and 401'd
+# (`cargo-auditable`, then `nextest`) — the repair failed, and with it the two
+# startup rows after it whose repairs auto-install. `mise.lock` already pins each
+# platform's release-download URL and checksum; locked mode fetches exactly
+# those, needs no API and no credential, and left `mise.lock` byte-identical.
+#
+# AND NO ATTESTATION READ, because that one is not a download (CLOUD-2395).
+# Verifying `github-attestations` provenance reads api.github.com for the
+# upstream repo, which a cloud session's proxy refuses for a third party: measured
+# on `aqua:taiki-e/cargo-llvm-cov`, which downloaded and then 403'd at "verify
+# GitHub artifact attestations". The bytes stay pinned by the lock's sha256; the
+# lock records no attestation provenance, so mise has no downgrade to refuse.
+# Its case lives in `lock_installable.rs`, not `source_scope.rs`, the suite the
+# nearest header above declared (#1276): a row judged under the wrong suite is
+# a `names-no-case` nobody runs, so this header is the row's own.
+#MUTANT-SUITE crates/batten/tests/it/lock_installable.rs
+#MUTANT repair-verifies-attestations|s@^  "MISE_AQUA_GITHUB_ATTESTATIONS=false",$@@|the_lock_installs_without_an_attestation_read
+install_env = [
+  "MISE_LOCKFILE=true",
+  "MISE_LOCKED=1",
+  "MISE_AQUA_GITHUB_ATTESTATIONS=false",
+]
 
 # THE SAME PRESET AT THE OTHER SURFACE (CLOUD-1672), and two rows rather than one
 # because a rule row carries ONE scope. The `mise` manifest declares a scope per
@@ -18594,40 +18624,18 @@ repair = ["batten", "provision", "apply"]
 # install state, and an engine-side reader of it would put a specific tool's
 # output format in `crates/batten` — non-negotiable rule 1. The generic thing the
 # engine gained is "silence is the pass", which names nobody.
+#
+# THE ARGV IS THE `mise` PRESET'S NOW (CLOUD-2633), placed here because this is
+# where the runner exists and the rows below still need the toolchain. The
+# check (`mise ls --current --missing`, silence is the pass) and the repair
+# (`mise install --yes`) are derived from the preset's install, run under
+# `MISE_ENV` set to exactly the `environments` the `task reach loose` row lists
+# and the `install_env` flags beside them — so an environment nobody listed is
+# never installed. The lock and attestation reasoning moved with the flags.
 [[startup]]
 id = "toolchain-is-provisioned"
-gloss = "every tool this repository pins is installed, so a gate does not install one inside its own timeout"
-check = ["mise", "ls", "--current", "--missing"]
-decided_by = "silent-exit"
-# INSTALL FROM THE LOCK, NEVER THROUGH THE API (measured 2026-10-06). With
-# `[settings] lockfile = false` mise does not READ `mise.lock` either, so a bare
-# `mise install` resolved every `github:` tool through api.github.com and 401'd
-# (`cargo-auditable`, then `nextest`) — this repair failed, and with it the two
-# rows below whose repairs auto-install. `mise.lock` already pins each platform's
-# release-download URL and checksum; locked mode fetches exactly those, needs no
-# API and no credential, and left `mise.lock` byte-identical. `env` because a
-# repair is an argv, the shape `host-dependencies-present` already uses.
-#
-# AND NO ATTESTATION READ, because that one is not a download (CLOUD-2395).
-# Verifying `github-attestations` provenance reads api.github.com for the
-# upstream repo, which a cloud session's proxy refuses for a third party: measured
-# on `aqua:taiki-e/cargo-llvm-cov`, which downloaded and then 403'd at "verify
-# GitHub artifact attestations". The bytes stay pinned by the lock's sha256; the
-# lock records no attestation provenance, so mise has no downgrade to refuse.
-# Its case lives in `lock_installable.rs`, not `target_prune.rs`, the suite the
-# nearest header above declared (#1276): a row judged under the wrong suite is
-# a `names-no-case` nobody runs, so this header is the row's own.
-#MUTANT-SUITE crates/batten/tests/it/lock_installable.rs
-#MUTANT repair-verifies-attestations|s@^  "MISE_AQUA_GITHUB_ATTESTATIONS=false",$@@|the_lock_installs_without_an_attestation_read
-repair = [
-  "env",
-  "MISE_LOCKFILE=true",
-  "MISE_LOCKED=1",
-  "MISE_AQUA_GITHUB_ATTESTATIONS=false",
-  "mise",
-  "install",
-  "--yes",
-]
+gloss = "every tool this repository pins for an agent session is installed, so a gate does not install one inside its own timeout"
+preset = "mise"
 
 # AND THIS ROW ASKED THE RUNNER A QUESTION ABOUT BATTEN (CLOUD-1454, same report).
 #

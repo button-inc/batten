@@ -474,17 +474,32 @@ fn field(id: &str, key: &str) -> String {
 /// which flags it passes.
 #[test]
 fn the_toolchain_row_does_not_read_a_reporter_as_a_gate() {
-    let id = "toolchain-is-provisioned";
+    // DERIVED FROM THE `mise` PRESET SINCE CLOUD-2633, so read as the engine
+    // derives it rather than as committed text.
+    let config = batten::config::load(&common::at_root("batten.toml"))
+        .expect("the committed config loads");
+    let row = batten::config_model::derive_startup(&config.startup, &config.rules)
+        .into_iter()
+        .find(|row| row.id == "toolchain-is-provisioned")
+        .expect("the committed config declares toolchain-is-provisioned");
     assert_eq!(
-        field(id, "decided_by"),
-        "\"silent-exit\"",
+        row.decided_by,
+        batten::config_model::Decided::SilentExit,
         "this row's check exits 0 whether or not a tool is missing, so its exit \
          status cannot be the verdict — the row must declare that silence is the pass"
     );
     assert!(
-        field(id, "check").contains("--missing"),
+        row.check.iter().any(|arg| arg == "--missing"),
         "silence is only an answer for the spelling that says nothing when \
          nothing is outstanding"
+    );
+    // The agent toolset is base plus `agent` and nothing else.
+    assert!(
+        row.repair
+            .as_deref()
+            .is_some_and(|argv| argv.iter().any(|arg| arg == "MISE_ENV=agent")),
+        "agent sessions install the agent environment: {:?}",
+        row.repair
     );
 }
 
