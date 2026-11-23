@@ -2815,7 +2815,7 @@ run = "{{vars.batten}} perf measure"
 # behind a guard that restores `perf_event_paranoid`, and print ranked rows.
 # A diagnostic, never a gate: `perf-gate` and `perf-assert` decide.
 [tasks."profile"]
-description = "Diagnose: sample one perf arm (noop, check, hook, passthrough, posttool, stop) and print where its time goes"
+description = "Diagnose: sample one perf arm (noop, check, hook, passthrough, posttool, stop, or a commit-time batten step) and print where its time goes"
 run = "mise exec -- cargo run --release -q --manifest-path tools/batten-profile/Cargo.toml --target-dir target/profile-tool -- record"
 
 [tasks."semantic"]
