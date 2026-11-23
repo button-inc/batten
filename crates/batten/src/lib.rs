@@ -202,6 +202,8 @@ pub mod selfwrite;
 /// longer resolve one.
 pub mod semver;
 pub mod session;
+/// A parent session's children, followed to done or dead (CLOUD-2826).
+pub mod session_watch;
 pub use batten_core::severity;
 pub use batten_core::shell;
 pub use batten_core::shell_logic;
@@ -523,6 +525,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // the caller supplies, and the verdict is the predicate's alone.
         Some(Command::Landed { command }) => run_landed(command, mode, &overrides, out, err),
         Some(Command::Claim { command }) => run_claim(command, mode, &overrides, out, err),
+        Some(Command::Session { command }) => run_session(&command, &overrides, out, err),
         // The adopted runner's surface contract (CLOUD-947). No config chain and
         // no rule set: the subject is the pinned binary's own answer about
         // itself, and a `batten.toml` row could only say where the artifact is —
@@ -4876,6 +4879,77 @@ fn run_mcp(
         out,
         err,
     )
+}
+
+/// `session watch` (CLOUD-2826): poll the session toolbox until a child is done
+/// (exit 0), dead or never started (2), or the toolbox cannot be read (3).
+///
+/// Pointer-only: one line per child, then the path of the full inventory.
+fn run_session(
+    command: &cli::SessionCommand,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cli::SessionCommand::Watch { server, sessions } = command;
+    let repo = git::repo_root(Path::new("."))?;
+    let resolved = resolve::resolve(Path::new("."), overrides)?;
+    let config = resolved.mcp.clone().unwrap_or_default();
+    // The same two exit classes `mcp call` keeps apart: a repository declaring
+    // nowhere to dispatch is a statement about the invocation (1); a root this
+    // host does not set or a wiring file that will not parse is could-not-look (3).
+    let wiring = match mcp::wiring(&config, &repo, server) {
+        Ok(wiring) => wiring,
+        Err(mcp::Unresolved::Undeclared) => {
+            return Err(UsageError::raise(format!(
+                "session watch: {server} cannot be dispatched — {}",
+                mcp::Unresolved::Undeclared.pointer()
+            )));
+        }
+        Err(unresolved) => {
+            return Err(anyhow::anyhow!(
+                "session watch: {server} cannot be dispatched — {}",
+                unresolved.pointer()
+            ));
+        }
+    };
+    let dir = session_watch::state_dir(&repo)?;
+    let cache = session_watch::Cache::new(dir.join("cache"));
+    let mut source = session_watch::Mcp::new(wiring);
+    let mut watch = session_watch::Watch::new(sessions.clone());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a poll bounded by a real terminal state (CLOUD-1177): each child's `done`, `dead` or `unstarted` across `UNSTARTED_POLLS`, and could-not-look ends it; the delay backs off to `MAX_DELAY`"
+    )]
+    let mut wait = |delay| std::thread::sleep(delay);
+    let Some((reports, ending)) = session_watch::run(&mut watch, &mut source, &cache, &mut wait)
+    else {
+        writeln!(
+            err,
+            "batten: session watch: the session toolbox on {server} could not be read; nothing is concluded"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    for report in &reports {
+        writeln!(out, "{}", report.line())?;
+    }
+    let inventory = dir.join("inventory.json");
+    durable::replace(
+        &inventory,
+        serde_json::to_vec_pretty(&session_watch::inventory_document(&reports))?,
+    )?;
+    writeln!(out, "inventory {}", inventory.display())?;
+    Ok(match ending {
+        session_watch::Ending::Nothing => {
+            writeln!(
+                err,
+                "batten: session watch: no unarchived child or named session to watch"
+            )?;
+            ExitCode::Usage
+        }
+        session_watch::Ending::Done => ExitCode::Success,
+        session_watch::Ending::Dead => ExitCode::Violation,
+    })
 }
 
 /// What `mcp grant` was asked, as the surface parsed it.
