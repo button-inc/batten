@@ -699,6 +699,38 @@ pub(crate) const ENGINE_OUTDATED_MAX_DAYS: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `session watch --server`: the declared MCP server the session toolbox answers
+/// on. A consumer fact, so a flag rather than a constant (rule 1).
+pub(crate) const SESSION_WATCH_SERVER: FlagDecl = FlagDecl {
+    id: "server",
+    long: Some("server"),
+    short: None,
+    help: "The `[[mcp.source]]` server that answers the session toolbox's methods",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `session watch --session`: watch these sessions rather than the caller's
+/// unarchived children.
+pub(crate) const SESSION_WATCH_SESSION: FlagDecl = FlagDecl {
+    id: "session",
+    long: Some("session"),
+    short: None,
+    help: "A session to watch instead of this session's unarchived children (repeatable)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
 /// `engine gate --lane`: a workflow whose command lines run the released binary.
 pub(crate) const ENGINE_LANE: FlagDecl = FlagDecl {
     id: "lane",
@@ -5665,6 +5697,32 @@ pub const SURFACE: &[CommandDecl] = &[
     // these start" versus "what is running" — while sharing one owner in
     // `task.rs`, which is what removed the hand-rolled registry reader the shell
     // carried.
+    // CLOUD-2826: a parent session's children, followed to done or dead. A noun
+    // of its own because the subject is another SESSION, not this checkout's
+    // tree, and the leaf below is the first of the harness-lifecycle reads.
+    CommandDecl {
+        path: "session",
+        id: "session",
+        about: "Read other agent sessions this one dispatched",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `Unclassified` for `mcp call`'s reason: it makes outbound calls and WRITES
+    // its per-child cache under the state directory, so it must not land on the
+    // derived read-only allowlist. A verdict's exits: 0 a child is done, 2 one is
+    // dead or never started, 3 the source could not be read — could-not-look is
+    // never done.
+    CommandDecl {
+        path: "session watch",
+        id: "session.watch",
+        about: "Wait until a child session is done, dead or never started, from its transcript alone",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
+        flags: &[SESSION_WATCH_SERVER, SESSION_WATCH_SESSION],
+    },
     CommandDecl {
         path: "singleton",
         id: "singleton",

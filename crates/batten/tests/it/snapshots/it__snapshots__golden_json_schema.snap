@@ -4781,6 +4781,42 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "session",
+      "id": "session",
+      "about": "Read other agent sessions this one dispatched",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "session watch",
+          "id": "session.watch",
+          "about": "Wait until a child session is done, dead or never started, from its transcript alone",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "server",
+              "short": null,
+              "long": "server",
+              "takes_value": true,
+              "positional": false,
+              "help": "The `[[mcp.source]]` server that answers the session toolbox's methods"
+            },
+            {
+              "name": "session",
+              "short": null,
+              "long": "session",
+              "takes_value": true,
+              "positional": false,
+              "help": "A session to watch instead of this session's unarchived children (repeatable)"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "show",
       "id": "show",
       "about": "Report what something is, without changing it",

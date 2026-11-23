@@ -1,0 +1,8 @@
+{"ccr":{"data":[
+{"created_at":"2026-11-23T18:33:55.882221Z","system":{"uuid":"deef6e7e-7725-41c0-823f-3adf0e03bf66","internal_anthropic_catchall":{"session_id":"8dcb7c1c","subtype":"turn_handoff_available"}}},
+{"created_at":"2026-11-23T18:34:02.000000Z","user":{"internal_anthropic_catchall":{"message":{"role":"user","content":"Run shard 2 of 4."},"session_id":"8dcb7c1c"}}},
+{"created_at":"2026-11-23T20:40:24.172269Z","system":{"internal_anthropic_catchall":{"description":"Run the shard","is_backgrounded":true,"run_id":"0mwtqcnd2-6861e0ae","session_id":"8dcb7c1c","subtype":"task_started","task_id":"bgwg3bqcd","task_type":"local_bash","tool_use_id":"toolu_01AKqNS4JV2U5wjKSNURqYGt"}}},
+{"created_at":"2026-11-23T20:40:25.000000Z","system":{"internal_anthropic_catchall":{"description":"Run clippy","is_backgrounded":true,"run_id":"0mwtq2s1t-420d1887","session_id":"8dcb7c1c","subtype":"task_started","task_id":"bt0h7b90r","task_type":"local_bash","tool_use_id":"toolu_01CnpxakzMEQNTY43nnuyHoL"}}},
+{"created_at":"2026-11-23T20:41:02.039375Z","system":{"internal_anthropic_catchall":{"output_file":"/tmp/tasks/bt0h7b90r.output","run_id":"0mwtq2s1t-420d1887","session_id":"8dcb7c1c","status":"completed","subtype":"task_notification","summary":"Background command \"Run clippy\" completed (exit code 0)","task_id":"bt0h7b90r","tool_use_id":"toolu_01CnpxakzMEQNTY43nnuyHoL"}}},
+{"created_at":"2026-11-23T20:41:03.000000Z","result":{"internal_anthropic_catchall":{"is_error":false,"subtype":"success"}}}
+],"first_id":"w0","last_id":"w5","has_more":false}}
