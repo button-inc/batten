@@ -253,7 +253,23 @@ fn a_module_reading_no_provider_loads_with_no_provider_declared() {
 // CLOUD-2812: `rust`, the first preset moved in, carries the crate-reach
 // module (CLOUD-2798) and its executable remedy as a verdict route.
 /// The vendored module, as the binary carries it.
-const MODULE: &str = include_str!("../../src/policy/presets/rust/crate-reach.rego");
+///
+/// READ THROUGH `PresetModuleExt::text`, NOT `include_str!`: the mutation sweep
+/// mutates a preset in its overlay (`BATTEN_PRESET_OVERLAY`), never in place,
+/// and only `text` reads the overlay. A compile-time copy is the unmutated
+/// module whatever the sweep wrote, so `#MUTANT unlisted-admitted` survived
+/// this case by construction.
+fn module() -> String {
+    use batten::preset::PresetModuleExt as _;
+    batten::preset_catalog::find("rust")
+        .expect("the rust preset ships")
+        .modules
+        .iter()
+        .find(|module| module.pointer.ends_with("/crate-reach.rego"))
+        .expect("the rust preset carries crate-reach")
+        .text()
+        .into_owned()
+}
 
 /// Run the binary at `dir` with `args`; stdout and stderr together.
 fn said_by(dir: &std::path::Path, args: &[&str]) -> String {
@@ -279,7 +295,7 @@ fn the_rust_preset_suite_passes() {
     let config = "version = 1\n\n[[rule]]\nid = \"crate reach wrong\"\nkind = \"policy\"\n\
          scope = \"tree\"\nmodule = \"policy/crate-reach.rego\"\nseverity = \"deny\"\n";
     common::write(&dir, "batten.toml", config);
-    common::write(&dir, "policy/crate-reach.rego", MODULE);
+    common::write(&dir, "policy/crate-reach.rego", &module());
     common::init_repo(&dir);
     let out = said_by(&dir, &["policy", "test"]);
     assert!(out.contains("3 passed, 0 failed"), "{out}");
