@@ -274,6 +274,11 @@ fn run_with(
     let answer = common::batten()
         .args(["mutate", verb])
         .current_dir(root)
+        // A forge runner's own `$CI`, and the step cache's bypass, either of
+        // which turns the row record off (`step::bypassed`): a case that wants
+        // one names it in `extra`, so its verdict does not depend on where it ran.
+        .env_remove("CI")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
         .envs(extra.iter().copied())
         .env("MUTANT_GATES", gates)
         // Declared explicitly rather than inherited, so a case's verdict does not
@@ -1078,7 +1083,10 @@ fn a_caught_row_is_not_run_again_until_its_inputs_change() {
         err.contains("caught (recorded)"),
         "the second sweep skips the recorded row: {err}"
     );
-    assert!(out.contains("every one caught"), "{out}");
+    assert!(
+        out.contains("every one caught (1 recorded)"),
+        "the summary says how much of it was replayed: {out}"
+    );
 
     let manifest = root.join("mise.toml");
     let text = std::fs::read_to_string(&manifest).expect("read the manifest");
@@ -1088,6 +1096,31 @@ fn a_caught_row_is_not_run_again_until_its_inputs_change() {
         !err.contains("(recorded)"),
         "a changed source runs its row again: {err}"
     );
+}
+
+/// UNDER CI A RECORDED ROW IS JUDGED AGAIN (#1276), as `ChangePass::of` already
+/// refuses a whole-change pass there: a runner that keeps its workspace would
+/// otherwise answer a confirmation from a record. The first sweep runs without
+/// `$CI` and records the row; the second, under it, must run the row and say
+/// nothing was replayed. Fails by: the row replay reading the record whatever
+/// `step::bypassed` says.
+#[test]
+fn a_recorded_row_is_judged_again_under_ci() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = two_task_repo("task-recorded-ci");
+    let (code, out, err) = sweep(&root, "task-a");
+    assert_eq!(code, 0, "{out}{err}");
+
+    let (code, out, err) = run_with(&root, "sweep", "task-a", &[("CI", Path::new("true"))]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        !err.contains("(recorded)"),
+        "under CI the row is judged, not replayed: {err}"
+    );
+    assert!(out.contains("every one caught"), "{out}");
+    assert!(!out.contains("recorded)"), "nothing replayed: {out}");
 }
 
 /// The census half: a block that declares rows and is absent from the set is

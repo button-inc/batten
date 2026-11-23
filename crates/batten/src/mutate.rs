@@ -665,6 +665,9 @@ pub struct Sweep {
     pub findings: Vec<Finding>,
     /// How many declared mutations this sweep judged.
     pub declared: usize,
+    /// How many of `declared` were answered from the row record rather than
+    /// run ([`sweep_shard`]); always 0 where [`crate::step::bypassed`] holds.
+    pub recorded: usize,
     /// How many gates this sweep answered for: a gate-level finding reported,
     /// or a row judged ([`sweep_shard`]).
     pub gates: usize,
@@ -4692,11 +4695,20 @@ pub fn sweep_shard(
         return Ok(Sweep {
             findings,
             declared: 0,
+            recorded: 0,
             gates,
         });
     }
+    // NOT UNDER CI (#1276), for `ChangePass::of`'s reason: a runner that keeps
+    // its workspace would otherwise answer a confirmation from a record. Nothing
+    // is replayed and nothing is recorded, so the run judges every row itself.
+    let bypassed = crate::step::bypassed();
     let record = record_dir(root).join(CAUGHT_RECORD);
-    let recorded = rows_recorded_for(&record, &work);
+    let recorded = if bypassed {
+        std::collections::HashMap::new()
+    } else {
+        rows_recorded_for(&record, &work)
+    };
     let caught: std::collections::HashSet<String> = recorded
         .iter()
         .filter(|(_, verdict)| **verdict == Verdict::Caught)
@@ -4705,10 +4717,12 @@ pub fn sweep_shard(
     let mut staged = Staged::new(root, work)?;
     let prebuilt = build_if_owed(root, &holding, registry, &caught, &staged, progress);
     let mut declared = 0;
+    let mut replayed = 0;
     for (name, gate, row) in mine {
         declared += 1;
         let key = row_key(root, gate, row);
         if let Some(verdict) = recorded.get(&key) {
+            replayed += 1;
             let _ = writeln!(
                 progress,
                 "mutate sweep: row {declared}/{total} {name} {} {verdict} (recorded) 0s",
@@ -4719,7 +4733,9 @@ pub fn sweep_shard(
         }
         let started = std::time::Instant::now();
         let verdict = judge_row(root, &mut staged, gate, row, prebuilt.as_ref())?;
-        record_row(&record, &key, &verdict);
+        if !bypassed {
+            record_row(&record, &key, &verdict);
+        }
         let _ = writeln!(
             progress,
             "mutate sweep: row {declared}/{total} {name} {} {verdict} {}s",
@@ -4739,6 +4755,7 @@ pub fn sweep_shard(
     Ok(Sweep {
         findings,
         declared,
+        recorded: replayed,
         gates,
     })
 }
@@ -6661,6 +6678,7 @@ mod tests {
                 }),
             ],
             declared: 3,
+            recorded: 0,
             gates: 1,
         };
         assert_eq!(sweep.unlooked(), 2);
