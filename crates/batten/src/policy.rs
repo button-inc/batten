@@ -2988,9 +2988,7 @@ pub fn input_paths(bundle: &Bundle) -> Vec<String> {
 /// names the code reads, not what they evaluate to.
 pub(crate) fn module_input_paths(path: &str, source: &str) -> Option<BTreeSet<String>> {
     let mut engine = new_engine();
-    engine
-        .add_policy(path.to_owned(), source.to_owned())
-        .ok()?;
+    engine.add_policy(path.to_owned(), source.to_owned()).ok()?;
     let described = describe(&engine)?;
     Some(
         described
@@ -5106,6 +5104,23 @@ fn opaque_reach_keys(program: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
+/// The call's `lap-held` key (CLOUD-2832): each of the call's writes that lands
+/// in the live lap's checkout, judged by the checkout it lands in.
+fn lap_held_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": ["array", "null"],
+        "description": "Each write of this call that lands in the checkout a live `land` lap holds (`input.facts[\"land-live\"]`): `{\"path\": <target as written>}` for a write tool's or an output redirection's target, `{\"git\": <subcommand>}` for a git program acting there. Judged by the checkout the write lands in, never by its path prefix, so a clone nested inside the lap's directory is not the lap's. NULL while no lap is live, or where the writes could not be placed.",
+        "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "path": {"type": "string"},
+                "git": {"type": ["string", "null"]}
+            }
+        }
+    })
+}
+
 /// The keys `call_input_schema` adds after its `json!` document is built: one
 /// more key inline exceeds the macro's recursion limit.
 ///
@@ -5115,6 +5130,7 @@ fn opaque_reach_keys(program: &mut serde_json::Map<String, serde_json::Value>) {
 ///   past its own value-taking options, and the words before it.
 /// * a program's `via`, `unread`, `nested` and `tasks`, and the call's
 ///   `task-programs` (step 14) and `step-programs` (step 21).
+/// * the call's `lap-held` (CLOUD-2832), from [`lap_held_schema`].
 fn extend_call_schema(document: &mut serde_json::Value) {
     let forge = serde_json::json!({
         "type": ["object", "null"],
@@ -5134,6 +5150,7 @@ fn extend_call_schema(document: &mut serde_json::Value) {
         .and_then(serde_json::Value::as_object_mut)
     {
         call.insert("forge".to_owned(), forge);
+        call.insert("lap-held".to_owned(), lap_held_schema());
         // CLOUD-2709: the kind of machine, as the environment declared it —
         // `disposable` where `BATTEN_ENVIRONMENT` says so, `machine` otherwise.
         call.insert(
@@ -5896,9 +5913,8 @@ fn package_facts(policies: &[serde_json::Value]) -> BTreeMap<String, BTreeMap<St
                 .collect();
             let mut changed = false;
             for (name, fact) in facts.iter_mut() {
-                let reaches = |set: &BTreeSet<String>| {
-                    fact.refs.iter().any(|r| r != name && set.contains(r))
-                };
+                let reaches =
+                    |set: &BTreeSet<String>| fact.refs.iter().any(|r| r != name && set.contains(r));
                 if !fact.reads && reaches(&reads) {
                     fact.reads = true;
                     changed = true;
@@ -5965,9 +5981,10 @@ fn plan_case(
         }
         let mut vars = Vec::new();
         referenced_vars(literal, &mut vars);
-        if vars.iter().any(|(var, ..)| {
-            !locals.contains(var) && facts.get(var).is_some_and(|fact| fact.with)
-        }) {
+        if vars
+            .iter()
+            .any(|(var, ..)| !locals.contains(var) && facts.get(var).is_some_and(|fact| fact.with))
+        {
             return Err(refused("a helper that writes its own `with`"));
         }
         let (start, end) = span_of(stmt).ok_or_else(|| refused("no span"))?;
@@ -6056,8 +6073,8 @@ fn plan_case(
                 .and_then(|object| object.values().next())
                 .and_then(span_of)
                 .ok_or_else(|| refused("no span"))?;
-            let term_text =
-                spanned(text, term_start, term_end).ok_or_else(|| refused("a span off its text"))?;
+            let term_text = spanned(text, term_start, term_end)
+                .ok_or_else(|| refused("a span off its text"))?;
             let mut term_vars = Vec::new();
             referenced_vars(term, &mut term_vars);
             let hoisted = term_vars
@@ -6066,7 +6083,9 @@ fn plan_case(
             let rule = format!("__batten_in_{at}_{index}_{term_at}");
             let body = if hoisted {
                 if !plain_before {
-                    return Err(refused("a `with` term reading a variable bound under `with`"));
+                    return Err(refused(
+                        "a `with` term reading a variable bound under `with`",
+                    ));
                 }
                 format!(" if {{\n\t{}\n}}", lines[..index].join("\n\t"))
             } else {
@@ -6318,11 +6337,7 @@ impl SuiteProgram {
     }
 
     /// A VM over this program, `data` and `input`: one evaluation.
-    fn vm(
-        &self,
-        input: &regorus::Value,
-        data: regorus::Value,
-    ) -> Option<regorus::rvm::vm::RegoVM> {
+    fn vm(&self, input: &regorus::Value, data: regorus::Value) -> Option<regorus::rvm::vm::RegoVM> {
         BYTECODE_EVALUATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut vm = regorus::rvm::vm::RegoVM::new();
         vm.load_program(self.program.clone());
@@ -6355,8 +6370,7 @@ impl SuiteProgram {
                 }
                 let mut with = regorus::Value::new_object();
                 for context in &test.contexts {
-                    let Reading::Values(values) = self.context(context, input, &mut outer)?
-                    else {
+                    let Reading::Values(values) = self.context(context, input, &mut outer)? else {
                         // A `with` term that is undefined: the statement is.
                         return Some(false);
                     };
@@ -6456,9 +6470,12 @@ pub fn suite_splits(bundle: &Bundle, input: &str) -> Vec<String> {
         return vec![format!("{}: no interpreter", bundle.id)];
     };
     let has_cases = describe(engine).is_some_and(|described| {
-        described
-            .iter()
-            .any(|module| module.rules.iter().any(|rule| rule.name.starts_with(TEST_PREFIX)))
+        described.iter().any(|module| {
+            module
+                .rules
+                .iter()
+                .any(|rule| rule.name.starts_with(TEST_PREFIX))
+        })
     });
     if !has_cases {
         return Vec::new();
@@ -6634,25 +6651,26 @@ pub fn test(
     let mut passed = Vec::new();
     let mut failed = Vec::new();
     for (id, path) in &discovered {
-        let verdict = if let Some(Some(verdict)) = decided.get(&(id.module.as_str(), id.name.as_str())) {
-            record_as(&bundle.id, Execution::Bytecode { cached });
-            *verdict
-        } else {
-            record_as(&bundle.id, Execution::Interpreted(why));
-            if interpreter.is_none() {
-                let mut fresh = engine.clone();
-                fresh
-                    .set_input_json(input)
-                    .map_err(|err| unparsable(&err))?;
-                interpreter = Some(fresh);
-            }
-            matches!(
-                interpreter
-                    .as_mut()
-                    .map(|engine| engine.eval_rule(path.clone())),
-                Some(Ok(regorus::Value::Bool(true)))
-            )
-        };
+        let verdict =
+            if let Some(Some(verdict)) = decided.get(&(id.module.as_str(), id.name.as_str())) {
+                record_as(&bundle.id, Execution::Bytecode { cached });
+                *verdict
+            } else {
+                record_as(&bundle.id, Execution::Interpreted(why));
+                if interpreter.is_none() {
+                    let mut fresh = engine.clone();
+                    fresh
+                        .set_input_json(input)
+                        .map_err(|err| unparsable(&err))?;
+                    interpreter = Some(fresh);
+                }
+                matches!(
+                    interpreter
+                        .as_mut()
+                        .map(|engine| engine.eval_rule(path.clone())),
+                    Some(Ok(regorus::Value::Bool(true)))
+                )
+            };
         if verdict {
             passed.push(id.clone());
         } else {
@@ -6671,7 +6689,9 @@ pub fn test(
     if !unexercised.is_empty() && !discovered.is_empty() {
         let mut sweep = engine.clone();
         sweep.set_enable_coverage(true);
-        sweep.set_input_json(input).map_err(|err| unparsable(&err))?;
+        sweep
+            .set_input_json(input)
+            .map_err(|err| unparsable(&err))?;
         let mut swept = 0;
         let mut batch = 1;
         while swept < discovered.len() && !unexercised.is_empty() {
@@ -7613,7 +7633,10 @@ violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects
             bundle.described().is_none(),
             "bytecode carries no AST to describe"
         );
-        assert!(matches!(test(&bundle, "{}", false, None), Ok(Look::CouldNotLook)));
+        assert!(matches!(
+            test(&bundle, "{}", false, None),
+            Ok(Look::CouldNotLook)
+        ));
         let tok = Some(vec!["tok".to_owned()]);
         assert!(!Answers::open());
         let before = bytecode_evaluations();
