@@ -131,6 +131,29 @@ fn only_the_operator_is_journaled() {
     );
 }
 
+/// Fails by: a background task's notification or a subagent's hand-back, which
+/// the host delivers through the same prompt event, journaled as if the operator
+/// had said it (CLOUD-2825), or the operator's own message dropped beside them.
+#[test]
+fn a_host_injected_prompt_is_not_journaled() {
+    let repo = fixture("directives-injected");
+    prompt(
+        &repo,
+        "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>",
+    );
+    prompt(
+        &repo,
+        "<agent-message from=\"a1\">\n[Subagent hand-back] done\n</agent-message>",
+    );
+    prompt(&repo, "land it once every gap is closed");
+    let text = journal(&repo);
+    assert!(text.contains("land it once every gap is closed"), "{text}");
+    assert!(!text.contains("task-notification"), "{text}");
+    assert!(!text.contains("agent-message"), "{text}");
+    let compacted = start(&repo, "compact");
+    assert!(compacted.contains("1 operator message(s)"), "{compacted}");
+}
+
 /// Fails by: the branch's design corrections, recorded through the verb, left
 /// out of the compacted window's pointer, or their text emitted as payload.
 #[test]
