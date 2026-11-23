@@ -23,6 +23,7 @@
 #MUTANT-SUITE crates/batten/tests/it/admit_ask.rs
 #MUTANT admit-label-unchecked|s@^\tnot labelled_admit(question)$@\tfalse@|an_admit_ask_without_the_exact_pair_is_refused
 #MUTANT admit-pair-unchecked|s@^\tnot paired(question)$@\tfalse@|an_admit_ask_naming_no_ledger_pair_is_refused
+#MUTANT single-answer-unchecked|s@^\tone_useful_answer(question)$@\tfalse@|a_question_with_one_useful_answer_is_refused
 
 # METADATA
 # description: |
@@ -92,6 +93,72 @@ violation contains {
 	some token in paths(question)
 	contains(token, "::")
 	not contains(token, "/")
+}
+
+# A QUESTION WITH ONE USEFUL ANSWER IS NOT A QUESTION (owner, 2026-11-23). It
+# marks one option `(Recommended)` and every other option is a non-action —
+# no, leave it, stay blocked, wait, revise, skip, defer. Measured on #1276: the
+# owner was asked to approve a dispatch already approved, and to authorise an
+# unsigned rewrite against "stay blocked", and answered both "why the fuck are
+# you stopping to ask questions where there's only one useful answer". AGENTS.md
+# already authorises the steps of agreed work; this refuses the question so the
+# step is taken instead.
+non_action := `(?i)^\s*(no|not now|leave|keep|stay|wait|revise|skip|defer|hold|cancel|don'?t)\b`
+
+recommended(option) if contains(lower(option.label), "(recommended)")
+
+one_useful_answer(question) if {
+	some pick in question.options
+	recommended(pick)
+	every other in question.options {
+		other_is_inert(pick, other)
+	}
+}
+
+other_is_inert(pick, other) if other == pick
+
+other_is_inert(pick, other) if {
+	other != pick
+	regex.match(non_action, other.label)
+}
+
+violation contains {
+	"rule": "call ask loose",
+	"verdict": "call ask loose",
+	"subjects": [{"artifact": "AskUserQuestion"}],
+} if {
+	input.call.tool == "AskUserQuestion"
+	some question in input.call.arguments.questions
+	count(question.options) > 1
+	one_useful_answer(question)
+}
+
+test_a_question_with_one_useful_answer_is_refused if {
+	some _ in violation with input as {"call": {"tool": "AskUserQuestion", "arguments": {"questions": [{
+		"question": "Rewrite the range unsigned?",
+		"options": [{"label": "Yes, rewrite unsigned (Recommended)"}, {"label": "No"}],
+	}]}}}
+}
+
+test_an_approval_against_revise_is_refused if {
+	some _ in violation with input as {"call": {"tool": "AskUserQuestion", "arguments": {"questions": [{
+		"question": "Send the batch?",
+		"options": [{"label": "Approve dispatch (Recommended)"}, {"label": "Revise first"}],
+	}]}}}
+}
+
+test_two_real_choices_are_asked if {
+	count(violation) == 0 with input as {"call": {"tool": "AskUserQuestion", "arguments": {"questions": [{
+		"question": "Where should the shards run?",
+		"options": [{"label": "Dispatched sessions (Recommended)"}, {"label": "CI matrix legs"}],
+	}]}}}
+}
+
+test_a_question_with_no_recommendation_is_asked if {
+	count(violation) == 0 with input as {"call": {"tool": "AskUserQuestion", "arguments": {"questions": [{
+		"question": "Which crate goes first?",
+		"options": [{"label": "batten-model"}, {"label": "No preference"}],
+	}]}}}
 }
 
 # --- the module's own tier ----------------------------------------------------
