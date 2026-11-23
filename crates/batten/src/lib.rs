@@ -20541,6 +20541,13 @@ fn dispatch_envelope(
     // the load. Cheap when irrelevant (§4): a ruleset declaring no `bypass_env`
     // collects an empty set, reads no environment, and clones no policy.
     let policy = without_set_hatches(policy);
+    // THE PERMISSION EVENTS ANSWER AND RETURN HERE (CLOUD-2768): the host sends
+    // them only for a call batten allowed at pre-tool, so the answer is the
+    // grant that call already had, and nothing below runs again (owner ruling,
+    // 2026-11-23). No rule kind selects them; without this each went unanswered.
+    if hook::is_permission_event(envelope.event) {
+        return answer_permission_event(&policy, &envelope, &advice, out, err);
+    }
     // The receipt facts, resolved HERE because `adjudicate` is contractually
     // pure — no I/O, no environment, no clock — and a receipt predicate reads a
     // file and two git refs. Same split the bypass hatch already uses: the
@@ -20580,11 +20587,7 @@ fn dispatch_envelope(
     // can fail — a clock before the epoch — and that propagates rather than
     // defaulting, because a date nobody could read must not silently become a
     // table where every waiver is live.
-    let waived = if waivers.is_empty() {
-        waiver::Live::new()
-    } else {
-        waiver::live(&waivers, waiver::today()?)
-    };
+    let waived = live_waivers(&waivers)?;
     // The declared side effects (CLOUD-91), fired BEFORE the decision is written
     // and structurally unable to reach it: `action::fire` returns nothing, so
     // there is no value here to branch on even by mistake.
@@ -20927,7 +20930,64 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
         || envelope.event == crate::config_model::Event::Stop
         || envelope.event == crate::config_model::Event::SessionStart
         || (envelope.event == crate::config_model::Event::PreTool && !envelope.raw_tool.is_empty())
+        // A permission event names its call's tool as pre-tool does, and is
+        // answered from the loaded modules' grant (CLOUD-2768): a `Read` or an
+        // MCP call arriving at one would otherwise find no modules and no grant.
+        || (hook::is_permission_event(envelope.event) && !envelope.raw_tool.is_empty())
         || envelope.event == crate::config_model::Event::Forge
+}
+
+/// The waivers live today, read off the clock only where any is declared: an
+/// empty table skips `today()`, so a repository declaring no waiver pays no
+/// clock read on the hottest path in the binary.
+///
+/// # Errors
+///
+/// When the clock cannot be read: a date nobody could read must not become a
+/// table where every waiver is live.
+fn live_waivers(waivers: &[crate::config_model::Waiver]) -> Result<waiver::Live> {
+    if waivers.is_empty() {
+        return Ok(waiver::Live::new());
+    }
+    Ok(waiver::live(waivers, waiver::today()?))
+}
+
+/// [`dispatch_envelope`]'s answer at a permission event (CLOUD-2768): the grant
+/// document where a module grants, counted into `doctor gaps` within the
+/// grant's scope, and nothing else.
+///
+/// No `emit_channel` or `render`: their pre-approval path is pre-tool only.
+/// Advice collected before the branch goes to stderr as pointer lines, the
+/// fallback `emit_channel` itself uses. With no grant, no document and exit 0:
+/// the prompt is the host's and the person's.
+fn answer_permission_event(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    advice: &[advisory::Advice],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<HookDispatch> {
+    let granted = hook::permission_grant(policy, envelope).is_some();
+    if hook::permission_counted(envelope, granted) {
+        doctor::record_permission_event(
+            hook_session_home(),
+            envelope.event.as_str(),
+            &hook::permission_subject(envelope),
+        );
+    }
+    for line in advice {
+        let text = line
+            .finding
+            .as_ref()
+            .map_or(line.text.as_str(), |finding| finding.rule());
+        if !text.is_empty() {
+            writeln!(err, "{text}")?;
+        }
+    }
+    if granted && let Some(answer) = hook::permission_answer(envelope.event) {
+        writeln!(out, "{answer}")?;
+    }
+    Ok(HookDispatch::undenied(ExitCode::Success))
 }
 
 /// The mediated call's bytes off stdin, or `None` where the call must simply
