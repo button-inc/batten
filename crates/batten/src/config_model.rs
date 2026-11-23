@@ -6991,6 +6991,82 @@ impl Decided {
     }
 }
 
+/// Every declared row, with each `preset` row's argv derived from the preset's
+/// install and its enabling rule's parameters (CLOUD-2633).
+///
+/// In declaration order, so the consumer decides where the install runs — after
+/// the rows that bootstrap the tool, before the rows whose repairs need it.
+/// Pure: whether a listed environment is configured is a question about the
+/// tree, decided when the row runs
+/// ([`crate::startup::ENVIRONMENT_UNCONFIGURED`]), so a tree lacking one still
+/// resolves for every other verb. A preset row no rule parameterises is
+/// refused at load, and passes through unchanged here.
+///
+/// BESIDE [`Startup`], NOT IN `startup`: `resolve` calls this, and `startup`
+/// reaches `resolve`, so a call into `startup` closed a larger module cycle
+/// (CLOUD-2789). This reads only the model and the preset catalog.
+#[must_use]
+pub fn derive_startup(rows: &[Startup], rules: &[Rule]) -> Vec<Startup> {
+    rows.iter()
+        .map(|row| {
+            let Some((install, rule)) = row.preset.as_deref().and_then(|name| {
+                install_of(name).zip(rules.iter().find(|rule| {
+                    rule.preset.as_deref() == Some(name) && rule.environments.is_some()
+                }))
+            }) else {
+                return row.clone();
+            };
+            let environments = rule.environments.as_deref().unwrap_or_default();
+            let (check, repair) = install_argv(install, environments, &rule.install_env);
+            Startup {
+                check,
+                repair: Some(repair),
+                decided_by: Decided::SilentExit,
+                ..row.clone()
+            }
+        })
+        .collect()
+}
+
+/// The install the named preset declares, if any.
+#[must_use]
+pub fn install_of(name: &str) -> Option<&'static crate::preset_catalog::Install> {
+    crate::preset_catalog::MANIFESTS
+        .iter()
+        .find(|manifest| manifest.name == name)
+        .and_then(|manifest| manifest.install.as_ref())
+}
+
+/// The derived check and repair argv: one `env` prefix — the selector naming
+/// exactly `environments`, then the consumer's `install_env` — before the
+/// tool's own operands.
+#[must_use]
+pub fn install_argv(
+    install: &crate::preset_catalog::Install,
+    environments: &[String],
+    install_env: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let prefix = || {
+        let mut argv = vec![
+            String::from("env"),
+            format!(
+                "{}={}",
+                install.selector,
+                environments.join(install.separator)
+            ),
+        ];
+        argv.extend(install_env.iter().cloned());
+        argv.push(install.program.to_owned());
+        argv
+    };
+    let tail = |operands: &[&str]| {
+        let mut argv = prefix();
+        argv.extend(operands.iter().map(|operand| (*operand).to_owned()));
+        argv
+    };
+    (tail(install.check), tail(install.repair))
+}
+
 /// The configured transcript, as `batten.toml` declares it: where it is, and
 /// whose dialect it is in.
 ///
