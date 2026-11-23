@@ -1249,6 +1249,41 @@ fn a_row_whose_subject_the_build_embeds_is_rebuilt() {
     assert!(out.contains("every one caught"), "{out}");
 }
 
+/// A REBUILT ROW LEAVES NO MUTANT BEHIND IN THE BINARIES A LATER ROW REUSES.
+/// `user`'s case reads `toy`'s gate through `include_str!`, so `toy`'s row
+/// rebuilds, and its mutated build overwrites the recorded binaries at the same
+/// paths. Gates are judged in name order, so `toy`'s row runs first; `user`'s
+/// subject is not embedded, so its row reuses them. Fails by: reusing a binary
+/// the previous row rebuilt mutated, which reads `user`'s clean case as
+/// `case-already-red`.
+#[test]
+fn a_row_after_a_rebuilt_row_reuses_clean_binaries() {
+    let root = toy_repo("dirty-reuse", &[CAUGHT]);
+    let gate = TOY_GATE
+        .replace("the toy", "the user")
+        .replace("tests/toy.rs", "tests/user.rs");
+    write_program(
+        &root,
+        "mise-tasks/user.sh",
+        &format!("{gate}#MUTANT user-limit|s/^LIMIT=10$/LIMIT=999/|user_refuses_ninety_nine\n"),
+    );
+    let suite = format!(
+        "{}{}{}",
+        runs("user.sh"),
+        case(
+            "user_refuses_ninety_nine",
+            "assert!(include_str!(\"../mise-tasks/toy.sh\").contains(\"\\nLIMIT=10\\n\"));\n    \
+             assert_eq!(gate(\"99\"), Some(1));"
+        ),
+        case("user_passes_one", "assert_eq!(gate(\"1\"), Some(0));"),
+    );
+    write(&root, "tests/user.rs", &suite);
+    track(&root);
+    let (code, out, err) = sweep(&root, "toy,user");
+    assert_eq!(code, 0, "a later row must reuse clean binaries\n{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+}
+
 #[cfg(unix)]
 #[test]
 fn the_defect_a_mutation_the_suite_does_not_catch_fails() {
