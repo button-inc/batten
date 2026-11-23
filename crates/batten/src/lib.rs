@@ -18434,6 +18434,8 @@ fn run_mutate(
 /// The disk floor is the collector's own, so the jobs never spend the room it
 /// exists to keep.
 fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    // AN ORPHANED SWEEP ENDS ITSELF (CLOUD-2854), its suites and its lock too.
+    mutate::watch_parent();
     // A CHANGE OR THE WHOLE WORKSPACE, NEVER BOTH (CLOUD-2849): a schedule that
     // inherited a base would judge only that diff while saying it swept the tree.
     let base = match (mutate::changed_since(), mutate::whole_tree()) {
@@ -18556,6 +18558,8 @@ fn run_mutate_sweep(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    // AN ORPHANED SWEEP ENDS ITSELF (CLOUD-2854), its suites and its lock too.
+    mutate::watch_parent();
     // A DECLARED ROW HAS NO BUILD OR REACH TO SHARE (CLOUD-2789): under the
     // reach phase every row is left to the shards, which judge it as before.
     match mutate::schema::phase_parsed(std::env::var(mutate::schema::PHASE).ok().as_deref()) {
