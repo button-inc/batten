@@ -38,6 +38,7 @@
 #MUTANT spawn-escape-unread|s@patterns\[escape_pattern\]@patterns[placement_pattern]@|an_added_spawn_escape_is_refused
 #MUTANT placement-widening-unread|s@patterns\[placement_pattern\]@patterns[escape_pattern]@|an_added_spawn_placement_is_refused
 #MUTANT escape-indent-is-identity|s@\["base-lines"\]\[path\]; trim_space(l) == trim_space(line)@["base-lines"][path]; l == line@|an_escape_reindented_in_place_is_clean
+#MUTANT engine-source-one-crate|s@^\tparts\[0\] == "crates"$@\tstartswith(path, "crates/batten/src/")@|an_added_spawn_escape_in_another_crate_is_refused
 #MUTANT-SUITE crates/batten/tests/it/spawn_widening.rs
 
 # METADATA
