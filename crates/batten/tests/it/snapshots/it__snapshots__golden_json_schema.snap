@@ -2063,6 +2063,14 @@ expression: stdout_of(&output)
           "data_channel": false,
           "flags": [
             {
+              "name": "discover",
+              "short": null,
+              "long": "discover",
+              "takes_value": false,
+              "positional": false,
+              "help": "Run $LAND_DISCOVER once on HEAD as it stands, keeping no record and never leasing, pushing or readying"
+            },
+            {
               "name": "hold",
               "short": null,
               "long": "hold",
@@ -5168,6 +5176,24 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "step exists",
+          "id": "step.exists",
+          "about": "Print the presence lines a step's probed pathspecs select, the step cache's answer to the tool line",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "specs",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The pathspecs, after `--`: an `exists <path>` line per index path they select, `exists none` where none"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "step graph",
           "id": "step.graph",
           "about": "Schedule the step table's rows as a graph",
@@ -6028,6 +6054,10 @@ expression: stdout_of(&output)
     {
       "id": "step.env",
       "path": "step env"
+    },
+    {
+      "id": "step.exists",
+      "path": "step exists"
     },
     {
       "id": "task.alive",

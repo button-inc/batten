@@ -5157,6 +5157,7 @@ verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from lap" -l hold -d 'Stop after the first verify whose verdict is final, before the lease, push and ready'
+complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from lap" -l discover -d 'Run $LAND_DISCOVER once on HEAD as it stands, keeping no record and never leasing, pushing or readying'
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from lap" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from lap" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from lap" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'

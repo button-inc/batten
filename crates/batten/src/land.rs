@@ -2038,6 +2038,27 @@ pub fn verify(
     published: &[(String, String)],
     environment: &[crate::config_model::OutputPattern],
 ) -> Result<Verified> {
+    let (verified, log) = run_gate(root, command, published, environment)?;
+    let mut lines = vec![verified.line()];
+    if !log.is_empty() {
+        lines.push(format!("{VERIFY_LOG} {} {}", verified.sha(), log.join(" ")));
+    }
+    append(root, branch, &lines)?;
+    Ok(verified)
+}
+
+/// [`verify`]'s run with nothing recorded: the answer and the capture handles
+/// of the gate's streams.
+///
+/// APART FROM THE RECORD so a discovery run (CLOUD-2862) runs the same gate
+/// under the same settings and leaves the lap record as it found it: a
+/// `verify` line there is an answer a lap reads, and discovery proves nothing.
+fn run_gate(
+    root: &Path,
+    command: &[String],
+    published: &[(String, String)],
+    environment: &[crate::config_model::OutputPattern],
+) -> Result<(Verified, Vec<String>)> {
     if command.is_empty() {
         return Err(crate::error::UsageError::raise(String::from(
             "land: no verify command is configured, and this engine does not know what verifying means here",
@@ -2130,12 +2151,7 @@ pub fn verify(
         Some(cause) => Verified::Refused { sha: start, cause },
         None => verified,
     };
-    let mut lines = vec![verified.line()];
-    if !log.is_empty() {
-        lines.push(format!("{VERIFY_LOG} {} {}", verified.sha(), log.join(" ")));
-    }
-    append(root, branch, &lines)?;
-    Ok(verified)
+    Ok((verified, log))
 }
 
 /// How [`verify`] runs the gate: its process group managed, so the race can
@@ -2321,6 +2337,84 @@ pub fn verify_raced(
     trunk: Option<(&crate::main_watch::Config, &str)>,
     stall: Option<&Stall>,
 ) -> Result<Verified> {
+    let gate = Gate {
+        command,
+        published,
+        environment,
+        kept: true,
+    };
+    race(root, branch, &gate, trunk, stall)
+}
+
+/// Run the consumer's DISCOVERY command over this head as it stands, and keep
+/// no record of what it said (CLOUD-2862).
+///
+/// [`verify_raced`]'s gate with three differences, each the point of the mode.
+/// No trunk is raced: the head is fixed, so a base that moved is not this run's
+/// question. No line reaches the lap record, so nothing a lap reads afterwards
+/// can take this run as an answer. And a step that answers red from its receipt
+/// does NOT cancel the run, because the run exists to reach every tier past a
+/// red one: `stall` keeps only its stall bound, its `red` reader set aside.
+///
+/// # Errors
+///
+/// As [`verify`]: an empty command, an unreadable HEAD, or a program that would
+/// not start.
+pub fn discover(
+    root: &Path,
+    branch: &str,
+    command: &[String],
+    published: &[(String, String)],
+    environment: &[crate::config_model::OutputPattern],
+    stall: Option<&Stall>,
+) -> Result<Verified> {
+    let gate = Gate {
+        command,
+        published,
+        environment,
+        kept: false,
+    };
+    let bounded = stall.map(|stall| Stall {
+        red: no_red,
+        ..stall.clone()
+    });
+    race(root, branch, &gate, None, bounded.as_ref())
+}
+
+/// A red reader that never answers: discovery's stall arm (CLOUD-2862).
+const fn no_red(_: &Path, _: u32) -> Option<String> {
+    None
+}
+
+/// The gate a race runs, and whether its answer is kept on the lap record.
+#[derive(Clone, Copy)]
+struct Gate<'a> {
+    command: &'a [String],
+    published: &'a [(String, String)],
+    environment: &'a [crate::config_model::OutputPattern],
+    /// `false` for a discovery run, which leaves the lap record untouched.
+    kept: bool,
+}
+
+impl Gate<'_> {
+    fn run(&self, root: &Path, branch: &str) -> Result<Verified> {
+        if self.kept {
+            verify(root, branch, self.command, self.published, self.environment)
+        } else {
+            run_gate(root, self.command, self.published, self.environment)
+                .map(|(verified, _)| verified)
+        }
+    }
+}
+
+/// [`verify_raced`]'s body, over either kind of [`Gate`].
+fn race(
+    root: &Path,
+    branch: &str,
+    gate: &Gate<'_>,
+    trunk: Option<(&crate::main_watch::Config, &str)>,
+    stall: Option<&Stall>,
+) -> Result<Verified> {
     let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
     let watched = trunk.map(|(trunk, reference)| {
         let replayed_onto = crate::git::resolve_ref(root, &tracking_ref(reference))
@@ -2341,7 +2435,8 @@ pub fn verify_raced(
     if watched.is_none() && stall.is_none() {
         // No trunk to read, so a gate's "main moved" cannot be confirmed — and
         // an unconfirmed `2` is a refusal of the tree (see [`confirmed`]).
-        return verify(root, branch, command, published, environment)
+        return gate
+            .run(root, branch)
             .map(|verified| confirmed(verified, None));
     }
     // The race below MOVES `watched` into the watcher arm; the gate's own answer
@@ -2361,14 +2456,14 @@ pub fn verify_raced(
     // that announces before the arm's first beat still reads as a move.
     let seed = stall.and_then(|stall| still(None, (stall.progress)(&stall.git_dir, stall.pid)));
     let raced = std::thread::scope(|scope| {
-        let gate = tx.clone();
+        let answered = tx.clone();
         drop(scope.spawn(move || {
-            let answer = verify(root, branch, command, published, environment);
+            let answer = gate.run(root, branch);
             // CLAIMED BY THE SAME SWAP AS AN ARM'S `win`, so a gate that finished
             // as an arm fired answers only if it got there first. Set before the
             // send, so the arms' next flag read ends them.
             if !stop.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                drop(gate.send(Raced::Gate(answer)));
+                drop(answered.send(Raced::Gate(answer)));
             }
         }));
 
@@ -2403,6 +2498,7 @@ pub fn verify_raced(
             head,
             confirm_against: confirm_against.as_ref(),
             reclaimed: &reclaimed_rx,
+            kept: gate.kept,
         },
         raced,
     )
@@ -2417,6 +2513,19 @@ struct Settle<'a> {
     confirm_against: Option<&'a (&'a crate::main_watch::Config, String)>,
     /// Whether the cancel actually stopped the gate.
     reclaimed: &'a std::sync::mpsc::Receiver<bool>,
+    /// Whether the answer reaches the lap record: [`Gate::kept`].
+    kept: bool,
+}
+
+impl Settle<'_> {
+    /// Append `lines` to the lap record, unless this race keeps none.
+    fn append(&self, lines: &[String]) -> Result<()> {
+        if self.kept {
+            append(self.root, self.branch, lines)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// The race's answer as this lap's verdict, recorded (CLOUD-318).
@@ -2448,14 +2557,10 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
             // is the pointer; whether the kill landed is the half that says this
             // mechanism is live rather than merely present.
             let reclaimed = settle.reclaimed.try_recv().unwrap_or(false);
-            append(
-                settle.root,
-                settle.branch,
-                &[
-                    verified.line(),
-                    format!("{LAP_RECORD} gate-cancelled {base} {reclaimed}"),
-                ],
-            )?;
+            settle.append(&[
+                verified.line(),
+                format!("{LAP_RECORD} gate-cancelled {base} {reclaimed}"),
+            ])?;
             Ok(verified)
         }
         // THE TASK STOPPED ADVANCING (CLOUD-2369). Recorded like the move, with
@@ -2467,14 +2572,10 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
                 beats,
             };
             let reclaimed = settle.reclaimed.try_recv().unwrap_or(false);
-            append(
-                settle.root,
-                settle.branch,
-                &[
-                    verified.line(),
-                    format!("{LAP_RECORD} gate-stalled {beats} {reclaimed}"),
-                ],
-            )?;
+            settle.append(&[
+                verified.line(),
+                format!("{LAP_RECORD} gate-stalled {beats} {reclaimed}"),
+            ])?;
             Ok(verified)
         }
         // A GATE STEP ANSWERED RED FROM ITS RECEIPT (CLOUD-2253) is a refusal
@@ -2485,14 +2586,10 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
                 cause: Refusal::Tree,
             };
             let reclaimed = settle.reclaimed.try_recv().unwrap_or(false);
-            append(
-                settle.root,
-                settle.branch,
-                &[
-                    verified.line(),
-                    format!("{LAP_RECORD} gate-red {step} {reclaimed}"),
-                ],
-            )?;
+            settle.append(&[
+                verified.line(),
+                format!("{LAP_RECORD} gate-red {step} {reclaimed}"),
+            ])?;
             Ok(verified)
         }
         // BOTH ARMS CLOSED WITHOUT ANSWERING is could-not-look about the RACE,

@@ -4,13 +4,16 @@
 .SH NAME
 batten\-land\-lap \- Drive the whole lap and lap again on any refusal a rebase would clear
 .SH SYNOPSIS
-\fBbatten land lap\fR [\fB\-\-hold\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIreference\fR] 
+\fBbatten land lap\fR [\fB\-\-hold\fR] [\fB\-\-discover\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIreference\fR] 
 .SH DESCRIPTION
 Drive the whole lap and lap again on any refusal a rebase would clear
 .SH OPTIONS
 .TP
 \fB\-\-hold\fR
 Stop after the first verify whose verdict is final, before the lease, push and ready
+.TP
+\fB\-\-discover\fR
+Run $LAND_DISCOVER once on HEAD as it stands, keeping no record and never leasing, pushing or readying
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

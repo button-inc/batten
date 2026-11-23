@@ -12153,7 +12153,22 @@ fn run_land(
             };
             run_land_push(root, &url, &branch, out)
         }
-        cli::LandCommand::Lap { reference, hold } => {
+        // DISCOVERY NEEDS NO REMOTE AND NO TRUNK (CLOUD-2862): it never leases,
+        // pushes or replays, so it resolves neither, and refuses beside `--hold`
+        // before it runs anything.
+        cli::LandCommand::Lap { hold, discover, .. } if *discover => {
+            if *hold {
+                writeln!(
+                    err,
+                    "::error:: land lap: --discover runs no lap to hold; give one or the other"
+                )?;
+                return Ok(ExitCode::Usage);
+            }
+            run_land_discover(root, &branch, out, err)
+        }
+        cli::LandCommand::Lap {
+            reference, hold, ..
+        } => {
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
             };
@@ -15303,6 +15318,69 @@ fn lap_markers() -> [(String, String); 2] {
         (land::LAP_GATE.to_owned(), "1".to_owned()),
         (land::LAP_PID.to_owned(), std::process::id().to_string()),
     ]
+}
+
+/// `land lap --discover` (CLOUD-2862): run `$LAND_DISCOVER` once on HEAD as it
+/// stands and report what it answered.
+///
+/// EVERYTHING A LAP DOES TO PROVE OR PUBLISH IS ABSENT, by construction rather
+/// than by a flag checked at each step: no replay or rebase, no speculation bet,
+/// no singleton, no hook reclaim, no claim, no receipt fast path, no lease,
+/// push or ready, and no line on the lap record. What it shares with a lap is
+/// the gate's own running: the disk pre-check, the lap markers, the declared
+/// environment patterns, and the stall bound, whose cancel is exit 3.
+fn run_land_discover(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let declared = std::env::var("LAND_DISCOVER").unwrap_or_default();
+    let command: Vec<String> = declared.split_whitespace().map(str::to_owned).collect();
+    if command.is_empty() {
+        writeln!(
+            err,
+            "::error:: land discover: $LAND_DISCOVER names no command, and this engine does not know what discovering means in this repository"
+        )?;
+        return Ok(ExitCode::Usage);
+    }
+    if !disk_admits(root, "land discover", err)? {
+        return Ok(ExitCode::Violation);
+    }
+    let published = lap_markers().to_vec();
+    let stall = verify_stall(root, None);
+    let environment = verify_environment(root);
+    let verified = land::discover(
+        root,
+        branch,
+        &command,
+        &published,
+        &environment,
+        stall.as_ref(),
+    )?;
+    match verified {
+        land::Verified::Clean(head) => {
+            writeln!(
+                out,
+                "land: discovery on {head}: every tier passed; nothing recorded"
+            )?;
+            Ok(ExitCode::Success)
+        }
+        land::Verified::Stalled { beats, .. } => {
+            writeln!(
+                out,
+                "land: discovery stalled — no step advanced in {beats} beats; run this again"
+            )?;
+            Ok(ExitCode::Internal)
+        }
+        land::Verified::Refused { sha, .. } => {
+            writeln!(
+                out,
+                "land: discovery on {sha}: at least one tier refused; nothing recorded"
+            )?;
+            Ok(ExitCode::Violation)
+        }
+    }
 }
 
 /// [`run_land_verify`], and whether the gate was cancelled for stalling: the

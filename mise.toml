@@ -549,6 +549,9 @@ LAND_ENTRY_GATES = "?mise run pr-unsubscribed drop|mise run pr-unsubscribed chec
 # lap. The predecessor ran `mise run verify` directly, and this is that call site
 # moved into config rather than a new decision.
 LAND_VERIFY = "mise run verify"
+# `LAND_DISCOVER` is what `land --discover` runs instead (CLOUD-2862): every
+# verify tier on HEAD as it stands, past a red one, with no receipt.
+LAND_DISCOVER = "mise run verify:discover"
 # The receipt `verify` records for HEAD on a pass (`receipt record verify`, the
 # last line of `verify:gated`). A lap whose HEAD already carries a valid one
 # answers from it instead of re-running the whole gate (CLOUD-1891).
@@ -1834,6 +1837,8 @@ run = [
 [tasks."mutant"]
 #MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
 #MUTANT whole-tree-unset|s@MUTANT_WHOLE_TREE = "1"@MUTANT_WHOLE_TREE = ""@|the_scheduled_sweep_judges_the_whole_rust_tree
+#MUTANT discover-member-dropped|s@verify:discover-1 ::: @@|the_discovery_tiers_carry_the_gated_tiers_members
+#MUTANT discover-stops-at-red|s@mise run --jobs 1 --continue-on-error verify:discover-1@mise run --jobs 1 verify:discover-1@|the_discovery_fan_runs_every_tier_in_order_past_a_red_one
 description = "Gate: every declared gate has a mutation its own suite is PROVEN to catch (CLOUD-418), and every mutant cargo-mutants makes of the whole workspace is caught (CLOUD-2849)"
 # CLOUD-418's mechanism, ported off `mise-tasks/mutant.sh` under CLOUD-1267.
 #
@@ -4508,8 +4513,9 @@ description = "Land this branch's PR: rebase, verify, push, wait for CI, /fast-f
 usage = '''
 arg "[reference]" default="" help="the trunk to land onto (default: the declared trunk)"
 flag "--hold" help="stop after the first final verify, never leasing, pushing or readying"
+flag "--discover" help="run every verify tier on HEAD past a red one, recording nothing and never leasing, pushing or readying"
 '''
-run = '{{vars.batten}} land lap "{{usage.reference}}"{% if usage.hold %} --hold{% endif %}'
+run = '{{vars.batten}} land lap "{{usage.reference}}"{% if usage.hold %} --hold{% endif %}{% if usage.discover %} --discover{% endif %}'
 
 # Is HEAD linear on the CURRENT origin/main, so the PR can fast-forward-land?
 # Retired off `mise-tasks/linear-check.sh` under CLOUD-1717; the name and the
@@ -5025,6 +5031,38 @@ run = [
   "{{vars.batten}} step cover",
   "{{vars.batten}} receipt record verify",
 ]
+
+# DISCOVERY: EVERY TIER, EVERY RED, NO RECEIPT (CLOUD-2862). The gated lap above
+# stops at its first red tier, which is right for a lap and leaves the expensive
+# tiers unrun on a red head, so no complete red list exists. `land --discover`
+# runs `$LAND_DISCOVER`, which is this task: each tier is its own task carrying
+# the matching `verify:gated` fan, members, order and `--jobs` unchanged
+# (`verify_chain.rs` holds them equal), and one outer fan runs them in order,
+# one at a time, past a red one. The gated tiers stay inline because the
+# one-hop readers (`ci-parity`, `common::task_reaches`) read them there.
+#
+# NO RECORD WRITE, NO `step cover`, NO `receipt record`: a discovery run proves
+# nothing, so it writes nothing a lap could read as an answer. Per-step receipts
+# its steps write are kept, being keyed by inputs, command and tools.
+[tasks."verify:discover"]
+description = "Every verify tier on HEAD as it stands, past a red one, writing no record and no receipt — run by `land --discover`"
+depends = ["tree-clean"]
+run = [
+  "mise run toolchain-check",
+  "mise run --jobs 1 --continue-on-error verify:discover-1 ::: verify:discover-2 ::: verify:discover-3 ::: perf-gate",
+]
+
+[tasks."verify:discover-1"]
+description = "Discovery tier 1: `verify:gated`'s tier-1 fan, run whatever the earlier tiers answered — invoked through `verify:discover`"
+run = "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: ci:quick ::: verify:test-replay-structural ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny ::: policy-budget ::: policy-test ::: batten-check ::: modules-ratchet:check"
+
+[tasks."verify:discover-2"]
+description = "Discovery tier 2: `verify:gated`'s tier-2 fan, run whatever the earlier tiers answered — invoked through `verify:discover`"
+run = "mise run --continue-on-error --jobs 2 semver ::: verify:test-replay ::: ci:checks ::: cross-check ::: darwin-link ::: lint:clippy"
+
+[tasks."verify:discover-3"]
+description = "Discovery tier 3: `verify:gated`'s tier-3 fan, run whatever the earlier tiers answered — invoked through `verify:discover`"
+run = "mise run --continue-on-error --jobs 1 verify:ci-suite ::: verify:ci-slow-needed"
 
 # THE SUITE TIER'S TWO NODES, as tasks (CLOUD-2789): a `[[step]]` row's argv
 # reaches the tree's engine through `mise run batten`, and mise drops the `--`

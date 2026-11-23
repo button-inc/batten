@@ -256,6 +256,7 @@ mod issue_key;
 mod judge_kind;
 mod junit_wired;
 mod land;
+mod land_discover;
 mod land_divergence;
 mod land_entry_gates;
 mod land_forge_reads;
