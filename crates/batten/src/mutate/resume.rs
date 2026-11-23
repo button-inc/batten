@@ -260,7 +260,7 @@ fn select(
     let _ = std::fs::remove_dir_all(&expect);
     let _ = std::fs::remove_dir_all(state.join(PENDING));
     let _ = std::fs::remove_dir_all(state.join(RAN));
-    let _ = std::fs::remove_file(state.join(ENV));
+    let _ = std::fs::remove_file(state.join(RUN_ENV));
     std::fs::create_dir_all(&expect)?;
     std::fs::create_dir_all(state.join(PENDING))?;
     collect_passes(&state.join(PASS), PASS_LIFETIME)?;
@@ -271,7 +271,7 @@ fn select(
     let env = env_digest(std::env::vars_os(), &journal_env(root));
     // THE RUN'S ENVIRONMENT, for a seed that runs under its own to key the
     // passes this run leaves on ([`seed_passes`]).
-    crate::durable::replace(state.join(ENV), &env)?;
+    crate::durable::replace(state.join(RUN_ENV), &env)?;
     let held = held_cases(root, resources, &env)?;
     for ((name, binary), key) in &held {
         crate::durable::replace(expect.join(expect_name(name, binary)), key)?;
@@ -1176,7 +1176,7 @@ fn case(args: &[String]) -> Result<u8> {
 const RAN: &str = "ran";
 
 /// Under the run state: the environment digest the run's selection keyed on.
-const ENV: &str = "env";
+const RUN_ENV: &str = "env";
 
 /// Note that the case `test` of `program` passed over the run's tree, so a
 /// seed sealing that tree can key its pass ([`seed_passes`]). An economy: a
@@ -1217,7 +1217,7 @@ fn note_ran(state: &Path, program: &str, test: &[String]) {
 /// The tree cannot be read or a pass cannot be written.
 pub fn seed_passes(root: &Path) -> Result<usize> {
     let state = crate::state::repo_state_dir(root)?.join("test-run");
-    let Ok(env) = crate::fsio::read_to_string(state.join(ENV)) else {
+    let Ok(env) = crate::fsio::read_to_string(state.join(RUN_ENV)) else {
         return Ok(0);
     };
     let resources = schema::resource_ids(root)?;
