@@ -206,7 +206,13 @@ pub(crate) fn agreeing_readme() -> String {
         .to_owned()
         + &COMMIT_STEPS
             .iter()
-            .map(|step| format!("| `{step}` | a commit-time hook step | — | — | ≤ 100 ms |\n"))
+            .flat_map(|step| {
+                [
+                    "| `",
+                    *step,
+                    "` | a commit-time hook step | — | — | ≤ 100 ms |\n",
+                ]
+            })
             .collect::<String>()
 }
 
@@ -229,7 +235,7 @@ pub(crate) fn clean_record() -> String {
     "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nstop 2.6\nwired 8.4\n".to_owned()
         + &COMMIT_STEPS
             .iter()
-            .map(|step| format!("{step} 9.0\n"))
+            .flat_map(|step| [*step, " 9.0\n"])
             .collect::<String>()
 }
 
