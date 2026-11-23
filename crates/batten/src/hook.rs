@@ -12580,9 +12580,11 @@ pub(crate) fn protected_changes(
 impl Policy {
     /// The repository root, the protected patterns and their current
     /// [`protected_state`], for a shell call's pre-call snapshot; `None` where
-    /// there is no root or nothing is protected.
+    /// there is no root or nothing is protected. `prior` is the last snapshot's
+    /// reading, whose digests are reused wherever a stat has not moved.
     pub(crate) fn protected_snapshot(
         &self,
+        prior: Option<&std::collections::BTreeMap<String, String>>,
     ) -> Option<(
         std::path::PathBuf,
         Vec<String>,
@@ -12598,7 +12600,7 @@ impl Policy {
             .into_iter()
             .map(ToOwned::to_owned)
             .collect();
-        let state = protected_state(&root, &self.protected, None);
+        let state = protected_state(&root, &self.protected, prior);
         Some((root, patterns, state))
     }
 }
@@ -23734,7 +23736,24 @@ deny contains "refused by themodule" if {
         file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
             .unwrap();
         drop(file);
-        let after = protected_state_of(&root, &patterns, None).unwrap();
+        let after = protected_state_of(&root, &patterns, Some(&before)).unwrap();
         assert_eq!(protected_changes(&before, &after), ["guarded.rego"]);
+    }
+
+    /// Fails by: the post-call reading never reusing a digest, so an untouched
+    /// set is re-read in full after every shell call. The entry is byte-equal
+    /// to the prior one, digest included, whatever the file now holds — proof
+    /// the digest was lent, not recomputed.
+    #[test]
+    fn a_protected_entry_whose_stat_is_unmoved_lends_its_prior_digest() {
+        let root = crate::scratch::scratch("hook-protected-lends");
+        std::fs::write(root.join("guarded.rego"), "package x\n").unwrap();
+        let patterns = [String::from("guarded.rego")];
+        let mut prior = protected_state_of(&root, &patterns, None).unwrap();
+        let entry = prior.get_mut("guarded.rego").unwrap();
+        let identity = entry.split_once('#').unwrap().0.to_owned();
+        *entry = format!("{identity}#lent");
+        let after = protected_state_of(&root, &patterns, Some(&prior)).unwrap();
+        assert_eq!(after["guarded.rego"], format!("{identity}#lent"));
     }
 }
