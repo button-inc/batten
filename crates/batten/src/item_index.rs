@@ -209,6 +209,12 @@ impl Index {
         self.files.get(path).map(|(krate, _)| krate.clone())
     }
 
+    /// The module path a library source this index read is, below its crate.
+    #[must_use]
+    pub fn module_path_of(&self, path: &str) -> Option<&[String]> {
+        self.files.get(path).map(|(_, module)| module.as_slice())
+    }
+
     /// The file a module's items live in: the indexed file whose module path
     /// is the longest prefix of `module` in `krate` (an inline module lives in
     /// its parent's file).
@@ -447,6 +453,64 @@ pub fn moved_items(before: &Index, after: &Index) -> BTreeMap<Key, Key> {
             let (name, (base_file, _), (head_file, _)) = candidates.swap_remove(at);
             moves.insert((base_file, name.clone()), (head_file, name));
         }
+    }
+}
+
+/// The items each MOVED FILE declares, paired with the same name in the same
+/// module of the file it moved to (`files`, base path to HEAD path).
+///
+/// [`moved_items`] pairs by a name declared once in the whole tree, so a file
+/// moved whole between crates (a cut) loses every item whose name it shares
+/// with another file — `run`, `new`, a test helper — and a test naming one
+/// read as modified although only the file's home changed. Measured on #1276:
+/// 750 `test-expectation-changed` refusals. Here the file pairing, which is
+/// `git::pair_moves`' own decision, pairs the file's items too.
+///
+/// A declaration edited in the move is still the same item, as one edited in
+/// place keeps its name: a test is judged by its OWN text, never by what the
+/// items it names now do.
+#[must_use]
+pub fn moved_with_files(
+    before: &Index,
+    after: &Index,
+    files: &BTreeMap<String, String>,
+) -> BTreeMap<Key, Key> {
+    let mut moves = BTreeMap::new();
+    for (old, new) in files {
+        let at_head = after.declared_in(new);
+        for (inside, names) in before.declared_in(old) {
+            let Some(head_names) = at_head.get(&inside) else {
+                continue;
+            };
+            for name in names.intersection(head_names) {
+                moves.insert((old.clone(), name.clone()), (new.clone(), name.clone()));
+            }
+        }
+    }
+    moves
+}
+
+impl Index {
+    /// Every name `file` declares, by the module path below the file's own
+    /// (empty for the file's module, one segment per inline module in it).
+    fn declared_in(&self, file: &str) -> BTreeMap<Vec<String>, std::collections::BTreeSet<String>> {
+        let Some((krate, module)) = self.files.get(file) else {
+            return BTreeMap::new();
+        };
+        self.modules
+            .iter()
+            .filter(|((held_krate, held_module), _)| {
+                held_krate == krate
+                    && held_module.starts_with(module)
+                    && self.file_of(held_krate, held_module).as_deref() == Some(file)
+            })
+            .map(|((_, held_module), held)| {
+                (
+                    held_module[module.len()..].to_vec(),
+                    held.declared.keys().cloned().collect(),
+                )
+            })
+            .collect()
     }
 }
 
@@ -1235,6 +1299,45 @@ mod tests {
         ("src/rules.rs", ""),
         ("src/model.rs", "pub struct Rule;\n"),
     ];
+
+    /// Fails by: a file moved whole between crates, declaring a name another
+    /// file shares, reads as naming a different item at base and HEAD, since
+    /// [`moved_items`] pairs only a name unique in the tree (#1276's 750).
+    #[test]
+    fn a_file_moved_between_crates_moves_every_item_it_declares() {
+        let base_files: &[(&str, &str)] = &[
+            ("Cargo.toml", "[workspace]\n"),
+            ("one/Cargo.toml", "[package]\nname = \"one\"\n"),
+            ("one/src/lib.rs", "pub mod git;\npub mod other;\n"),
+            ("one/src/git.rs", "pub fn run() {}\n"),
+            ("one/src/other.rs", "pub fn run() {}\n"),
+        ];
+        let head_files: &[(&str, &str)] = &[
+            ("Cargo.toml", "[workspace]\n"),
+            ("one/Cargo.toml", "[package]\nname = \"one\"\n"),
+            ("two/Cargo.toml", "[package]\nname = \"two\"\n"),
+            ("one/src/lib.rs", "pub mod other;\n"),
+            ("one/src/other.rs", "pub fn run() {}\n"),
+            ("two/src/lib.rs", "pub mod git;\n"),
+            ("two/src/git.rs", "pub fn run() {}\n"),
+        ];
+        let (base, head) = (index(base_files), index(head_files));
+        let files: BTreeMap<String, String> =
+            [("one/src/git.rs".to_owned(), "two/src/git.rs".to_owned())].into();
+        let moves = moved_with_files(&base, &head, &files);
+        let body = "{ crate::git::run(); }";
+        assert_eq!(
+            canonical(body, "one", &base, &moves),
+            canonical(body, "two", &head, &BTreeMap::new())
+        );
+        // Anti-vacuity: without the file's pairing the two read differently,
+        // and an item the file did not keep is not invented at its new home.
+        assert_ne!(
+            canonical(body, "one", &base, &moved_items(&base, &head)),
+            canonical(body, "two", &head, &BTreeMap::new())
+        );
+        assert_eq!(moves.len(), 1, "{moves:?}");
+    }
 
     /// Fails by: a respelling at a moved item's new home compared as a
     /// modified assertion, which is what made every move cost an admission.
