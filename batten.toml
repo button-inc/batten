@@ -10163,6 +10163,29 @@ line_sources = [
   "policy/spawn-adapters.rego",
 ]
 
+# THE SPAWN CENSUS AS A RATCHET (CLOUD-2778), and the reason `spawn add other`
+# no longer carries an escape clause. That clause compared a file's added lines
+# as a set, so a second escape whose lint line repeated one already there,
+# `    clippy::disallowed_types,` at every site, read as no change. This counts
+# the escapes off the parsed tree (`counts = "lint_escapes"`: `#[expect]` and
+# `#[allow]` attributes naming the lint, never a doc line that mentions it), and
+# the count may only fall against `origin/main`, so whatever `main` carries is
+# the baseline and no site is approved one by one. EVERY PACKAGE'S SOURCE, the
+# glob `spawn add other` reads, for the reason its `delta_sources` states: the
+# crate split moved spawns out of `crates/batten`.
+[[rule]]
+id = "spawn count ahead"
+no_fix_reason = "class 3 (review disposition): a new spawn is retired or ported by reading its site, so the refusal routes the reader there rather than editing it"
+kind = "ratchet"
+scope = "tree"
+severity = "deny"
+glob = "crates/*/src/**/*.rs"
+counts = "lint_escapes"
+pattern = "clippy::disallowed_types"
+direction = "non_increasing"
+base = "origin/main"
+reason = "Engine source carries more `clippy::disallowed_types` escapes than `origin/main`. Spawn through the `exec` adapter, or retire an escape to make room; the count only falls."
+
 # CLOUD-316's gate, ported off `mise-tasks/mise-pin-agreement.sh` under CLOUD-910
 # — the wave's first gate, and the one whose end-to-end cost sizes the rest.
 #
@@ -17731,6 +17754,7 @@ child process that genuinely has to be one. Where a new spawn really is the \
 answer, it is a decision for a groomed row and a human rather than a `reason` \
 string the author writes about their own change.
 """
+withdrawn = "CLOUD-2778 retired `spawn-widening`'s escape clause, the only thing that raised this. The `spawn count ahead` ratchet counts `clippy::disallowed_types` escapes off the parsed tree against `origin/main` and refuses under its own rule id; a new escape of any other lint is no longer refused."
 
 [[verdict.route]]
 id = "source read first"
