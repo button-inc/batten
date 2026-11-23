@@ -29,7 +29,22 @@ fn root() -> PathBuf {
     // `a_refused_call_is_never_preapproved` needs as its refusing row.
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     ROOT.get_or_init(|| {
-        common::committed_fixture_with_substitution(&format!("preapprove-{}", std::process::id()))
+        let dir = common::committed_fixture_with_substitution(&format!(
+            "preapprove-{}",
+            std::process::id()
+        ));
+        // The scripts the shell-write cases run, TRACKED AND CLEAN. Since
+        // CLOUD-2775 (f52167cb) a script absent where it runs is opaque reach,
+        // which `shell reach unread` refuses before any grant is asked, so an
+        // absent `tools/x.py` would assert that refusal instead of the grant.
+        // Reviewed code with no spawn is the write these cases mean.
+        std::fs::create_dir_all(dir.join("tools")).expect("make the tools dir");
+        for script in ["tools/x.py", "x.py"] {
+            std::fs::write(dir.join(script), "print('x')\n").expect("write a reviewed script");
+        }
+        common::git_in(&dir, &["add", "tools/x.py", "x.py"]);
+        common::git_in(&dir, &["commit", "-qm", "review the scripts the cases run"]);
+        dir
     })
     .clone()
 }
