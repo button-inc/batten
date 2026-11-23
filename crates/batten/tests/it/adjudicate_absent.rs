@@ -908,16 +908,23 @@ fn a_plan_mode_write_is_refused_and_a_read_granted_where_no_authority_governs() 
     assert_eq!(decision, "allow", "plan mode grants a read");
 }
 
+/// Owner ruling R1, 2026-11-23 (`.batten/asked.jsonl` 293, CLOUD-2768): batten
+/// grants every call it allows in every permission mode but plan, and in plan
+/// grants only the read-only ones.
+///
+/// Fails by: default mode left to the host's prompt again, or plan mode
+/// granting a write.
 #[test]
-fn default_mode_is_left_to_the_host_where_no_authority_governs() {
+fn default_mode_grants_an_allowed_call_and_plan_mode_does_not() {
     let call = mode_call(
         "default",
         "Bash",
         &serde_json::json!({"command": "touch x"}),
     );
-    assert_eq!(
-        mode_verdict("mode-default-default", &call),
-        None,
-        "a mode the operator chose to be asked in stays the host's"
-    );
+    let (decision, reason) = mode_verdict("mode-default-default", &call).unwrap_or_default();
+    assert_eq!(decision, "allow", "default mode grants what no rule denied");
+    assert!(reason.contains("mode grant now"), "{reason}");
+    let plan = mode_call("plan", "Bash", &serde_json::json!({"command": "touch x"}));
+    let (decision, _) = mode_verdict("mode-default-plan-touch", &plan).unwrap_or_default();
+    assert_ne!(decision, "allow", "plan mode never grants a write");
 }

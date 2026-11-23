@@ -193,9 +193,12 @@ fn a_blocking_handler_holds_nothing_and_is_said_once() {
     );
 }
 
-/// Fails by: a `SessionStart` that runs its rows inline — mutant
-/// `session-start-inline` — which registers no task, so nothing names the setup
-/// the moment the door returns.
+/// Fails by: a `SessionStart` that runs its rows inline, which registers no
+/// task, so nothing names the setup the moment the door returns.
+///
+/// Mutation, stated and applied by hand: `session_setup::detaches` returning
+/// `false` (its comparison replaced with the literal) sends every row back
+/// inline, and this case reddens on its first assertion.
 #[test]
 fn a_session_start_registers_its_task_before_it_returns() {
     let repo = bench("session-start-registers", "exit 0", 5000);
