@@ -119,6 +119,8 @@ pub fn invocations(source: &str) -> crate::facts::Look<Vec<Invocation>> {
     else {
         return crate::facts::Look::CouldNotLook;
     };
+    let lines = crate::source::LineIndex::new(source);
+    let line_of = |offset: ra_ap_syntax::TextSize| lines.line(usize::from(offset));
     let mut found = Vec::new();
     for node in file.syntax().descendants() {
         if let Some(call) = ast::CallExpr::cast(node.clone()) {
@@ -127,8 +129,8 @@ pub fn invocations(source: &str) -> crate::facts::Look<Vec<Invocation>> {
                 .as_ref()
                 .and_then(ast::ArgList::l_paren_token)
                 .map_or_else(
-                    || line_of(source, call.syntax().text_range().start()),
-                    |paren| line_of(source, paren.text_range().start()),
+                    || line_of(call.syntax().text_range().start()),
+                    |paren| line_of(paren.text_range().start()),
                 );
             found.push(Invocation {
                 program: callee(call.expr()),
@@ -146,7 +148,7 @@ pub fn invocations(source: &str) -> crate::facts::Look<Vec<Invocation>> {
             found.push(Invocation {
                 program: name.text().to_string(),
                 arguments: arguments_of(call.arg_list().as_ref()),
-                line: line_of(source, name.syntax().text_range().start()),
+                line: line_of(name.syntax().text_range().start()),
             });
         }
     }
@@ -176,13 +178,6 @@ fn callee(func: Option<ast::Expr>) -> String {
         // different answer from "no call site" and is spelled as one.
         _ => String::new(),
     }
-}
-
-/// 1-indexed source line of a text offset.
-fn line_of(source: &str, offset: ra_ap_syntax::TextSize) -> usize {
-    source.get(..usize::from(offset)).map_or(1, |head| {
-        head.bytes().filter(|byte| *byte == b'\n').count() + 1
-    })
 }
 
 #[cfg(test)]
