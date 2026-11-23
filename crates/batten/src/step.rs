@@ -1042,6 +1042,12 @@ pub fn run_step(
     }
     let elapsed = started.elapsed();
     let passed = matches!(ran, Ok(ExitCode::Success));
+    // A PASSING RUN SEEDS THE NEXT HEAD'S SELECTION (CLOUD-2842): where the
+    // selection held fewer cases than passed, the reach phase records them,
+    // detached and only while no lap runs. An economy: the verdict is `ran`'s.
+    if passed && let Some((_, root)) = &journaled {
+        let _ = crate::mutate::resume::seed(root);
+    }
     if !passed {
         let run = Ran {
             root: journaled.as_ref().map(|(_, root)| root.as_path()),
