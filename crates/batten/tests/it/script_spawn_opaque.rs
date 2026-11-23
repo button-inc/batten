@@ -86,3 +86,87 @@ fn opaque_reach_from_an_untracked_script_is_refused_and_a_tracked_one_runs() {
         "a tracked script edited in place is no longer reviewed: {edited}"
     );
 }
+
+/// A repository registering the module, with `tools/reviewed.sh` (plain shell)
+/// and `tools/reviewed.py` (an opaque spawn) tracked and unchanged.
+fn staged(name: &str) -> std::path::PathBuf {
+    let module =
+        std::fs::read_to_string(common::at_root("policy/script-spawn-opaque.rego")).unwrap();
+    common::Fixture::new(name)
+        .config(&config())
+        .file("policy/script-spawn-opaque.rego", &module)
+        .file("tools/reviewed.sh", "echo reviewed\n")
+        .file("tools/reviewed.py", OPAQUE)
+        .file("root.sh", "echo root\n")
+        .base_commit()
+        .build()
+}
+
+fn refused(said: &str) -> bool {
+    said.contains("\"deny\"") && said.contains(VERDICT)
+}
+
+/// THE REACH READS A SCRIPT WHERE ITS STAGE RUNS (CLOUD-2775): after `cd
+/// tools`, `sh reviewed.sh` runs `tools/reviewed.sh`, which is tracked and
+/// unchanged, so it is not opaque; and `python3 fresh.py` runs
+/// `tools/fresh.py`, whose computed spawn is read and refused. Fails by: the
+/// `cd` unfollowed, so the operand is looked for beside the call, where it is
+/// absent (refusing the reviewed script, or never reading the fresh one).
+#[test]
+fn a_script_after_a_cd_is_read_in_that_directory() {
+    let dir = staged("script-spawn-cd");
+    std::fs::write(dir.join("tools/fresh.py"), OPAQUE).unwrap();
+    let reviewed = decision(&dir, "cd tools && sh reviewed.sh");
+    assert!(
+        !reviewed.contains(VERDICT),
+        "a tracked, unchanged script in the cd's directory runs: {reviewed}"
+    );
+    let fresh = decision(&dir, "cd tools && python3 fresh.py git push");
+    assert!(
+        refused(&fresh),
+        "the untracked script in the cd's directory is read: {fresh}"
+    );
+}
+
+/// A script absent where its stage runs is program text nothing read, so it is
+/// opaque. Fails by: an absent file read as a script that runs nothing.
+#[test]
+fn a_script_absent_at_its_resolved_path_is_opaque() {
+    let dir = staged("script-spawn-absent");
+    let absent = decision(&dir, "sh missing.sh");
+    assert!(refused(&absent), "an absent script is refused: {absent}");
+    let moved = decision(&dir, "cd tools && sh root.sh");
+    assert!(
+        refused(&moved),
+        "a script present beside the call but absent in the cd's directory: {moved}"
+    );
+}
+
+/// A script an earlier stage writes is absent when the call is judged, so
+/// what it runs is unread. Fails by: the write-then-run shape admitted
+/// unjudged, which it was before CLOUD-2775.
+#[test]
+fn a_script_written_by_an_earlier_stage_is_opaque() {
+    let dir = staged("script-spawn-written");
+    let written = decision(
+        &dir,
+        "cat > ship.sh <<'EOF' && sh ship.sh\ngit push --force origin main\nEOF",
+    );
+    assert!(refused(&written), "{written}");
+}
+
+/// A `cd` the reach cannot place (an expansion) leaves the next stage's
+/// directory unknown, so a relative script there is opaque even where a file
+/// of that name sits beside the call. Fails by: the operand read beside the
+/// call, as if the `cd` were not there.
+#[test]
+fn a_script_after_an_unplaceable_cd_is_opaque() {
+    let dir = staged("script-spawn-cd-expansion");
+    let unplaced = decision(&dir, "cd \"$D\" && sh root.sh");
+    assert!(refused(&unplaced), "{unplaced}");
+    let beside = decision(&dir, "sh root.sh");
+    assert!(
+        !beside.contains(VERDICT),
+        "the same tracked script with no cd runs: {beside}"
+    );
+}
