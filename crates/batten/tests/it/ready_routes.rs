@@ -56,16 +56,25 @@ fn refusing(dir: &Path, command: &str) -> Option<String> {
     }
 }
 
-/// A GraphQL ready mutation is refused by `review reach loose`, and a `gh api`
-/// call that readies nothing is not. Without the second arm the row could ban
-/// every forge read and still pass the first.
+/// A GraphQL ready mutation is refused, and a `gh api` call that readies nothing
+/// is not refused by `review reach loose`. Without the second arm the row could
+/// ban every forge read and still pass the first.
+///
+/// TWO GATES NOW REFUSE THE MUTATION, and which reports first is order, not
+/// substance (CLOUD-2662): the call is a `pull-request-ready` event, so on this
+/// fixture's key-less branch `review open unnamed` refuses it ahead of `review
+/// reach loose`. Either is the ready door holding.
 #[test]
 fn a_hand_written_ready_mutation_is_refused_and_a_plain_api_read_is_not() {
     let dir = repo("ready-route-graphql");
     let mutation = "gh api graphql -f query='mutation{markPullRequestReadyForReview(input:{pullRequestId:\"PR_x\"}){clientMutationId}}'";
-    assert_eq!(
-        refusing(&dir, mutation).as_deref(),
-        Some("review reach loose")
+    let refused = refusing(&dir, mutation);
+    assert!(
+        matches!(
+            refused.as_deref(),
+            Some("review reach loose" | "review open unnamed")
+        ),
+        "{refused:?}"
     );
     for read in [
         "gh api repos/o/r/pulls/1",
@@ -77,4 +86,19 @@ fn a_hand_written_ready_mutation_is_refused_and_a_plain_api_read_is_not() {
             "{read}"
         );
     }
+}
+
+/// THIS REPOSITORY'S READY GATE KEYS ON THE EVENT (CLOUD-2662). `gh pr ready
+/// --undo` drafts a PR rather than readying it, so the shape row that demands an
+/// issue key on a ready owes it nothing; `gh pr ready` itself is still refused
+/// on a branch naming no key. Under the old `pattern = "gh pr ready"` the undo
+/// was refused too, which is the mutant this case kills.
+#[test]
+fn the_repos_own_config_admits_ready_undo() {
+    let dir = repo("ready-route-undo");
+    assert_eq!(refusing(&dir, "gh pr ready 167 --undo"), None);
+    assert_eq!(
+        refusing(&dir, "gh pr ready 167").as_deref(),
+        Some("review open unnamed")
+    );
 }
