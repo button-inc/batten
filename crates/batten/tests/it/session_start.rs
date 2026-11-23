@@ -301,3 +301,76 @@ fn no_compile_runs_without_a_source_pin() {
     );
     assert!(!repo.join("target").exists(), "nothing built into target/");
 }
+
+/// Fails by: the environment manager's install running after the declared
+/// handlers, or not at all (CLOUD-2840). Every later step runs a pinned tool,
+/// so the preset's install is the setup task's first step. A `mise` stub that
+/// reports a missing tool and records each call stands first on `PATH`.
+#[test]
+fn the_preset_install_runs_before_any_handler() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let repo = scratch("session-start-install-first").join("repo");
+    std::fs::create_dir_all(repo.join("steps")).expect("the fixture repo");
+    let log = repo.join("order.log");
+    write(
+        &repo,
+        "batten.toml",
+        "version = 1\n\n[[rule]]\nid = \"task reach loose\"\nkind = \"policy\"\n\
+         scope = \"mediated_call\"\npreset = \"mise\"\nseverity = \"warn\"\n\
+         environments = [\"agent\"]\n\n\
+         [[hook.handler]]\nid = \"step\"\non = \"session-start\"\nrun = [\"steps/step\"]\n\
+         timeout_ms = 5000\n\n\
+         [[startup]]\nid = \"toolchain\"\ngloss = \"the listed environments are installed\"\n\
+         preset = \"mise\"\n",
+    );
+    write(&repo, "mise.agent.toml", "");
+    let script = |path: &Path, body: &str| {
+        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("the stub");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("the stub is runnable");
+    };
+    script(
+        &repo.join("steps/step"),
+        &format!("printf 'handler\\n' >> '{}'", log.display()),
+    );
+    let bin = repo.join("stub-bin");
+    std::fs::create_dir_all(&bin).expect("the stub directory");
+    script(
+        &bin.join("mise"),
+        &format!(
+            "printf 'mise %s\\n' \"$*\" >> '{}'\ncase \"$1\" in ls) echo 'tool 1.0 (missing)' ;; esac",
+            log.display()
+        ),
+    );
+    git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&common::ambient_path())),
+    )
+    .expect("a joinable PATH");
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "session-start-install-first",
+        "source": "startup",
+        "cwd": repo,
+    })
+    .to_string();
+    let mut command = common::batten();
+    command.env("PATH", path);
+    let _ = common::stdin_run(
+        &mut command,
+        &repo,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    let _ = settle(&repo);
+    let order = std::fs::read_to_string(&log).expect("the task ran");
+    let lines: Vec<&str> = order.lines().collect();
+    let install = lines
+        .iter()
+        .position(|line| line.starts_with("mise install --yes"));
+    let handler = lines.iter().position(|line| *line == "handler");
+    assert!(
+        install.is_some() && handler.is_some() && install < handler,
+        "the preset's install precedes every handler: {order}"
+    );
+}
