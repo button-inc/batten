@@ -2276,6 +2276,9 @@ fn spawn_scrubbed(
         .spawn()
         .with_context(|| format!("mutate: could not run {program}"))?;
     forwarding.adopt(child.id())?;
+    // LISTED WHILE IT RUNS (CLOUD-2854), so an orphaned sweep's parent watch
+    // can end it; `wait_bounded` ends the group on every path before it drops.
+    let listed = LiveSuite::list(child.id());
     let pumps = [
         child
             .stdout
@@ -2287,6 +2290,7 @@ fn spawn_scrubbed(
             .map(|pipe| pump_into(pipe, &err_path, said.stderr_echo())),
     ];
     let waited = wait_bounded(child, bound);
+    drop(listed);
     // THE GROUP IS GONE BY NOW (`wait_bounded` ends it on every path), so each
     // pipe's last writer has exited and its pump reaches EOF. The deadline is
     // for a writer that left the group; what it pumped is in the file either way.
@@ -2648,6 +2652,126 @@ fn kill_group(leader: u32) {
         let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
         let _ = rustix::process::kill_process(group, rustix::process::Signal::KILL);
     }
+}
+
+// ---------------------------------------------------------------------------
+// An orphaned sweep (CLOUD-2854).
+// ---------------------------------------------------------------------------
+
+/// The suite groups this process leads right now, by leader pid.
+static LIVE_SUITES: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// One suite group listed in [`LIVE_SUITES`], unlisted when this drops.
+struct LiveSuite(u32);
+
+impl LiveSuite {
+    /// List `leader`'s group until the returned value drops.
+    fn list(leader: u32) -> Self {
+        if let Ok(mut live) = LIVE_SUITES.lock() {
+            live.push(leader);
+        }
+        Self(leader)
+    }
+}
+
+impl Drop for LiveSuite {
+    fn drop(&mut self) {
+        if let Ok(mut live) = LIVE_SUITES.lock() {
+            live.retain(|leader| *leader != self.0);
+        }
+    }
+}
+
+/// How long an orphaned sweep's suites have to end what they started after
+/// `SIGTERM`, before `SIGKILL`: short, because nobody waits on this answer.
+#[cfg(target_os = "linux")]
+const ORPHAN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// End this sweep, and every suite group it leads, once its parent is gone
+/// (CLOUD-2854).
+///
+/// A capped `mutant:changed` had its mise killed while `--continue-on-error`
+/// went on into `mutant:rust`: that sweep ran under init for hours, writing to
+/// an output nobody read and holding the schema mirror's lock, so the next sweep
+/// refused. A process group does not reach it (mise leads one per task, which
+/// the kill missed), and `PR_SET_PDEATHSIG` fires on the spawning THREAD's exit
+/// in a threaded mise. So the verb waits on its parent itself: a pidfd of the
+/// parent it started under, readable when that parent exits, with no timer. On
+/// exit it says one could-not-look line, ends each listed suite group and exits
+/// 3; the `flock` the sweep holds drops with the process.
+///
+/// LINUX ONLY: rustix's `kevent` is `unsafe` and this crate forbids it, so a
+/// Darwin sweep keeps the behaviour it had.
+pub(crate) fn watch_parent() {
+    #[cfg(target_os = "linux")]
+    {
+        let Some(parent) = rustix::process::getppid() else {
+            return;
+        };
+        let pidfd = rustix::process::pidfd_open(parent, rustix::process::PidfdFlags::empty());
+        let _ = std::thread::Builder::new()
+            .name("parent-watch".to_owned())
+            .spawn(move || {
+                // GONE BEFORE THE PIDFD, OR REPARENTED SINCE: no wait owed.
+                if let Ok(pidfd) = pidfd
+                    && rustix::process::getppid() == Some(parent)
+                {
+                    let mut fds = [rustix::event::PollFd::new(
+                        &pidfd,
+                        rustix::event::PollFlags::IN,
+                    )];
+                    loop {
+                        match rustix::event::poll(&mut fds, None) {
+                            Ok(_) => break,
+                            Err(rustix::io::Errno::INTR) => {}
+                            Err(_) => return,
+                        }
+                    }
+                }
+                orphaned(parent);
+            });
+    }
+}
+
+/// Say that `parent` is gone, end every listed suite group, and exit 3.
+#[cfg(target_os = "linux")]
+fn orphaned(parent: rustix::process::Pid) -> ! {
+    let _ = std::io::Write::write_fmt(
+        &mut std::io::stderr(),
+        format_args!(
+            "mutate: parent {} is gone; could not look, ending this sweep and its suites\n",
+            parent.as_raw_nonzero()
+        ),
+    );
+    let live = LIVE_SUITES
+        .lock()
+        .map(|live| live.clone())
+        .unwrap_or_default();
+    // NEXTEST LEADS A GROUP PER TEST, so the TERM it answers by ending them all
+    // comes first, as in `wait_bounded`; the KILL follows within the grace.
+    let (send, exits) = std::sync::mpsc::channel();
+    for leader in &live {
+        terminate_group(*leader);
+        let send = send.clone();
+        let leader = *leader;
+        let _ = std::thread::Builder::new().spawn(move || {
+            let _ = await_exit(leader);
+            let _ = send.send(());
+        });
+    }
+    drop(send);
+    let deadline = std::time::Instant::now() + ORPHAN_GRACE;
+    for _ in &live {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if exits.recv_timeout(left).is_err() {
+            break;
+        }
+    }
+    for leader in &live {
+        kill_group(*leader);
+        sweep_group(*leader);
+    }
+    std::process::exit(crate::ExitCode::Internal.code())
 }
 
 // ---------------------------------------------------------------------------
