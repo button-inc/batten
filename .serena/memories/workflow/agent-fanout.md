@@ -66,6 +66,11 @@ following them re-derived hand dispatch.
   only modes the record reaches. If the owner wants `auto` and the record reads
   `plan`, the question says so: the owner switches this session to Auto first.
   Offering `auto` anyway is a false choice.
+- **The record can be STALE in the other direction, too** (measured
+  2026-11-23). The server can hold a parent's mode as `plan` while the session
+  runs `auto`, and `create_session` then refuses `permission_mode: auto`.
+  Children boot in `default`; CLOUD-2768 makes that harmless, because batten
+  grants allowed calls at PermissionRequest in every mode but plan.
 - **Any other answer is not a refusal.** It means improve the prompts or wait
   for input. Revise, re-lint, and ask again.
 - An edited prompt has a new digest and prompts again.
