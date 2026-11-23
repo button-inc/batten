@@ -671,6 +671,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             cli::StepCommand::Env { exclude, patterns } => {
                 crate::step::run_env(&exclude, &patterns, out, err)
             }
+            cli::StepCommand::Exists { specs } => crate::step::run_exists(&specs, out, err),
         },
         Some(Command::Modules {
             command: cli::ModulesCommand::Metrics { root },
