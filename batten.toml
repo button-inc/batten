@@ -8814,7 +8814,11 @@ input = "Cargo.lock"
 subject = "batten"
 out_dir = "sbom"
 binary_out_dir = "dist"
-exclude = ["./tests/bats", "./target", "**/fuzz/**", "./.claude/worktrees"]
+# `./tools` holds detached, never-released cargo workspaces (`batten-semantic`,
+# `batten-profile`, each `publish = false`): their own lockfiles reached the
+# document with 128 packages `cargo metadata` over the root workspace never
+# enriches, so `manifest list wrong` and `manifest cover other` refused (#1276).
+exclude = ["./tests/bats", "./target", "**/fuzz/**", "./tools", "./.claude/worktrees"]
 actions = "mise-tasks/sbom-actions.tsv"
 inventory = "sbom"
 [sbom.conformance]
