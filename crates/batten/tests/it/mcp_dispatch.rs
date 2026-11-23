@@ -871,7 +871,9 @@ fn this_change_introduces_no_consumer_identifier_into_the_crate() {
     // it would be worse than either. What this case owns is that the MCP change
     // adds none of its own.
     let mut hits: Vec<String> = Vec::new();
-    for path in sources(&at_root("crates/batten/src")) {
+    // Every workspace crate's `src/` (CLOUD-2789): a launcher layout cut into
+    // `batten-base` is still in the engine.
+    for path in common::engine_sources() {
         let Ok(source) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -918,23 +920,6 @@ fn this_change_introduces_no_consumer_identifier_into_the_crate() {
             "mcp.rs must not name a tracker method in code: {needle}"
         );
     }
-}
-
-/// Every `.rs` file under `root`, recursively.
-fn sources(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return found;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            found.extend(sources(&path));
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-            found.push(path);
-        }
-    }
-    found
 }
 
 #[test]
