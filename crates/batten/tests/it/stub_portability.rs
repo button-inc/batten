@@ -34,8 +34,6 @@
 
 use crate::common;
 
-use std::path::{Path, PathBuf};
-
 use syn::visit::Visit;
 
 /// The portability rows this tier holds stubs to, by id. The gate case asserts
@@ -166,17 +164,6 @@ fn findings(label: &str, source: &str, rows: &[Row]) -> (usize, Vec<String>) {
     (stubs, found)
 }
 
-fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).expect("read a test directory") {
-        let path = entry.expect("a test directory entry").path();
-        if path.is_dir() {
-            rust_sources(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
-}
-
 /// THE GATE: no stub this suite writes carries a GNU-only spelling.
 #[test]
 fn every_executed_test_stub_is_portable() {
@@ -187,10 +174,10 @@ fn every_executed_test_stub_is_portable() {
     expected.sort_unstable();
     assert_eq!(loaded, expected, "the portability rows this tier reads");
 
-    let root = common::at_root("crates/batten/tests");
-    let mut sources = Vec::new();
-    rust_sources(&root, &mut sources);
-    sources.sort();
+    // EVERY WORKSPACE CRATE'S `tests/` (CLOUD-2789), not `crates/batten`'s
+    // alone: a suite in a crate cut out of it is still a suite.
+    let root = common::at_root("crates");
+    let sources = common::test_sources();
     let mut stubs = 0;
     let mut found = Vec::new();
     for path in &sources {
