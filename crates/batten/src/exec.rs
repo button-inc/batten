@@ -2189,12 +2189,38 @@ fn piped_through(
 /// Silent: no `Result`, because there is no caller that could act on the
 /// difference. A boundary that cannot start its own background work must not
 /// turn that into a verdict about the call it was mediating.
+pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
+    let _ = spawn_detached(program, args, env, None);
+}
+
+/// [`detached`] in `dir`, answering the child's pid (CLOUD-2840).
+///
+/// The pid is what a caller REGISTERS: a task the hook starts must be in the
+/// registry before the hook returns, so the next call can read whether it
+/// still runs. Still no handle kept — the pid is a name, not a wait.
+pub(crate) fn detached_in(
+    program: &Path,
+    args: &[String],
+    env: &[(&str, &str)],
+    dir: &Path,
+) -> Option<u32> {
+    spawn_detached(program, args, env, Some(dir))
+}
+
 #[expect(
     clippy::disallowed_types,
     reason = "stays: the detached child IS the point (CLOUD-1480). `piped` above is the waiting path and is exactly what this must not be; both spawns are the placed adapter's"
 )]
-pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
+fn spawn_detached(
+    program: &Path,
+    args: &[String],
+    env: &[(&str, &str)],
+    dir: Option<&Path>,
+) -> Option<u32> {
     let mut builder = Command::new(program.as_os_str());
+    if let Some(dir) = dir {
+        builder.current_dir(dir);
+    }
     builder
         .args(args)
         .stdin(Stdio::null())
@@ -2211,7 +2237,7 @@ pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
         builder.process_group(0);
     }
     // SPAWNED AND DROPPED. No `wait`, no `status`, no handle kept.
-    drop(builder.spawn());
+    builder.spawn().ok().map(|child| child.id())
 }
 
 // Carried from the retired shim's `forks-instead-of-execing` row (CLOUD-843): a

@@ -3493,6 +3493,7 @@ verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
 complete -c batten -n "__fish_batten_using_subcommand startup" -l repair -d 'Run each failing row\'s declared repair, then re-decide its check'
+complete -c batten -n "__fish_batten_using_subcommand startup" -l session -d 'Run this session\'s setup task: its declared session-start handlers, repairs and health report, recorded for the next call'
 complete -c batten -n "__fish_batten_using_subcommand startup" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand startup" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand startup" -l silent -d 'Say nothing but a verdict or a usage error'
