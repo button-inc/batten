@@ -152,7 +152,25 @@ fn verdict_fields(line: &str) -> Vec<String> {
     assert!(fields[3].parse::<i32>().is_ok(), "{line}");
     assert!(fields[4].parse::<f64>().is_ok(), "{line}");
     assert!(!fields[5].is_empty(), "{line}");
+    assert_pointer(&fields[5], line);
     fields
+}
+
+/// A verdict line's pointer is `-` or comma-joined `<stream>:<handle>` parts,
+/// each matching `^(stdout|stderr):\S+$` (CLOUD-2838): capture handles a reader
+/// follows, and nothing else `step::logged` could hand over.
+fn assert_pointer(pointer: &str, line: &str) {
+    if pointer == "-" {
+        return;
+    }
+    for part in pointer.split(',') {
+        let shaped = part.split_once(':').is_some_and(|(stream, handle)| {
+            matches!(stream, "stdout" | "stderr")
+                && !handle.is_empty()
+                && !handle.contains(char::is_whitespace)
+        });
+        assert!(shaped, "pointer part `{part}` is no capture handle: {line}");
+    }
 }
 
 /// A FINISHED STEP'S VERDICT IS WRITTEN WHEN IT FINISHES (CLOUD-2838), and a
@@ -179,7 +197,12 @@ fn a_red_step_in_an_earlier_group_is_read_before_a_later_group_ends() {
         .iter()
         .find(|line| line.starts_with("step graph: red t1 a "))
         .expect("the red line");
-    assert_eq!(verdict_fields(red)[..4], ["red", "t1", "a", "2"], "{red}");
+    let fields = verdict_fields(red);
+    assert_eq!(fields[..4], ["red", "t1", "a", "2"], "{red}");
+    assert_ne!(
+        fields[5], "-",
+        "exec reports a handle for each stream, so a red node points somewhere: {red}"
+    );
     let ok = lines
         .iter()
         .find(|line| line.starts_with("step graph: ok t1 b "))
@@ -205,6 +228,40 @@ fn a_red_step_is_read_while_its_slow_sibling_still_runs() {
             && !seen.iter().any(|event| event == "end slow"),
         "the red line waited for its sibling to end: {seen:?}"
     );
+}
+
+/// A HELD PIPE NEVER REACHES THE POINTER (CLOUD-2838). The node backgrounds a
+/// grandchild that keeps its stdout open past exec's drain deadline, so exec
+/// writes `… a process still holds the pipe open`, whose last field is `open`.
+/// Fails by: `verdict_line` passing `step::logged`'s fields through unfiltered.
+#[test]
+fn a_held_pipe_never_reaches_the_pointer() {
+    let rows = "[[step]]\nid = \"held\"\ngroup = \"g\"\nrun = [\"bin/held\"]\ndepends_on = []\n\n";
+    let graph = Graph::new("held-pipe", rows);
+    common::write(&graph.dir, "bin/held", "#!/bin/sh\nsleep 12 &\nexit 0\n");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            graph.dir.join("bin/held"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("chmod");
+    }
+    let output = graph.run(&["g"]);
+    let stderr = common::stderr(&output);
+    let line = stderr
+        .lines()
+        .find(|line| line.starts_with("step graph: ok g held "))
+        .unwrap_or_else(|| panic!("no verdict line for held: {stderr}"));
+    let fields = verdict_fields(line);
+    // exec's held-pipe line goes to the step's report, not this stderr; the
+    // node's own seconds show the drain waited out its deadline instead.
+    let seconds: f64 = fields[4].parse().expect("seconds");
+    assert!(
+        seconds >= 9.5,
+        "the fixture must hold the pipe past exec's 10 s drain deadline: {line}"
+    );
+    assert!(!fields[5].contains("open"), "{line}");
 }
 
 /// A LATER TIER STARTS ONLY ONCE EVERY EARLIER ONE PASSED (CLOUD-2853; owner
