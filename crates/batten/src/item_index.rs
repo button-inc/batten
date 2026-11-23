@@ -1034,10 +1034,36 @@ fn comment_spans(body: &str) -> Vec<(usize, usize)> {
 
 /// Pass 2: every path through a shim, respelled at the shim's target.
 fn respell_paths(body: &str, reader: &Reader, index: &Index) -> String {
+    respell_paths_at(body, 0, reader, index)
+}
+
+/// `text[span]` — one body of the file `path` — with each path through a shim
+/// of `index`'s tree respelled at the shim's target, as
+/// [`respell_through_shims`]' second pass respells a whole file.
+///
+/// What `batten test replay` reads a base body through before it splices it
+/// (CLOUD-2789): a branch that retired a shim (`crate::verdict::Native` to
+/// `crate::error::Native`) leaves the base spelling private or gone at HEAD,
+/// so the base body failed to compile on a path, not on an assertion.
+/// Measured on #1276. `index` is the BASE tree's: the shim is one base had.
+#[must_use]
+pub fn respell_span_through_shims(
+    index: &Index,
+    path: &str,
+    text: &str,
+    span: (usize, usize),
+) -> String {
+    let reader = index.reader(path, text);
+    respell_paths_at(&text[span.0..span.1], span.0, &reader, index)
+}
+
+/// [`respell_paths`] over `body`, which starts at byte `offset` of the file
+/// `reader` reads, so an inline module around it is still seen.
+fn respell_paths_at(body: &str, offset: usize, reader: &Reader, index: &Index) -> String {
     let mut out = body.to_owned();
     for (at, segments, len) in paths_in(body).into_iter().rev() {
         if let Some(path) = index
-            .rooted_at(reader, at, &segments)
+            .rooted_at(reader, offset + at, &segments)
             .and_then(|absolute| index.respelled_for(&reader.krate, &absolute))
         {
             out.replace_range(at..at + len, &spell(&path, &reader.krate));
@@ -1299,6 +1325,29 @@ mod tests {
         ("src/rules.rs", ""),
         ("src/model.rs", "pub struct Rule;\n"),
     ];
+
+    /// Fails by: a base body spliced in a spelling through a shim HEAD
+    /// retired, which then fails to compile on the path, not the assertion
+    /// (#1276's `crate::verdict::Native`). Only the body's span is respelled.
+    #[test]
+    fn a_span_is_respelled_through_its_trees_shims() {
+        let text = "fn a() { crate::verdict::Native::A; }\nfn b() { crate::verdict::Native::A; }\n";
+        let base = index(&[
+            ROOT,
+            (
+                "src/lib.rs",
+                "pub mod error;\npub mod verdict;\npub mod other;\n",
+            ),
+            ("src/error.rs", "pub enum Native { A }\n"),
+            ("src/verdict.rs", "pub use crate::error::Native;\n"),
+            ("src/other.rs", text),
+        ]);
+        let span = (text.find('{').unwrap(), text.find('}').unwrap() + 1);
+        assert_eq!(
+            respell_span_through_shims(&base, "src/other.rs", text, span),
+            "{ crate::error::Native::A; }"
+        );
+    }
 
     /// Fails by: a file moved whole between crates, declaring a name another
     /// file shares, reads as naming a different item at base and HEAD, since
