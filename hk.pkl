@@ -666,12 +666,16 @@ local gate = new Mapping<String, Step> {
   // --- rust ------------------------------------------------------------------
 
   ["cargo-fmt"] = (Builtins.cargo_fmt) {
-    // Routed through the task so `mise run lint:fmt` and this step cannot
-    // disagree about what "formatted" means. Costs no file-scoping: upstream's
-    // check is already whole-workspace (`--manifest-path
-    // {{workspace_indicator}}`), never file by file. The FIXER stays upstream's,
-    // so the fix/check split still comes from the builtin.
-    check = "mise run lint:fmt"
+    // THE TASK'S BODY, CALLED DIRECTLY, NOT `mise run lint:fmt` (CLOUD-2789).
+    // This is a default commit-time step, held to the 100 ms ceiling, and `mise`
+    // alone costs 105-125 ms before a task body runs (CLOUD-1397). The pinned
+    // formatter is the one on PATH: the hook runs under `mise exec -- hk`. The
+    // hook and the task still cannot disagree about what "formatted" means:
+    // `hk_contract.rs::no_commit_time_hook_step_pays_mise_startup_unbudgeted`
+    // holds this command equal to `lint:fmt`'s body. Costs no file-scoping:
+    // upstream's check is already whole-workspace, never file by file. The FIXER
+    // stays upstream's, so the fix/check split still comes from the builtin.
+    check = "cargo fmt --all --check"
   }
   ["cargo-clippy"] = (Builtins.cargo_clippy) {
     // `slow` tier: a whole-workspace compile at --all-targets --all-features. A
@@ -1033,37 +1037,24 @@ hooks {
   // PRs land by fast-forward, so every commit reaches main with its original
   // SHA and must be conventional for release-plz to compute semver correctly.
   //
-  // THESE TWO STEPS STILL ROUTE THROUGH `mise run`, AND THE BUDGET SAYS THEY
-  // SHOULD NOT (CLOUD-1397). A git hook is a batten hook: README's `wired` row is
-  // 8.0ms p50 against a published <=100ms ceiling, and nothing makes the
-  // commit-msg surface exempt because git is the harness.
+  // THESE TWO STEPS CALL THE BINARY DIRECTLY, NOT `mise run` (CLOUD-1397). A git
+  // hook is a batten hook, held to the same 10 ms target and 100 ms ceiling, and
+  // nothing makes the commit-msg surface exempt because git is the harness.
+  // `mise` alone cost more than the whole budget before a task body ran:
   //
-  // Measured 2026-09-09, same message, warm, three runs each:
-  //
+  //   Measured 2026-09-09, same message, warm, three runs each:
   //   mise run commit-msg, body spelling `cargo run`      582ms
   //   mise run commit-msg, body resolving the binary      ~300ms
   //   batten commit check --message                       121-130ms
   //   batten attribution check --message                  16-18ms
   //   mise --version, the process alone, no task          105-125ms
   //
-  // The task bodies now resolve the binary, which is the 582 -> ~300ms half and
-  // is in `mise.toml`. The other half is unreachable from here: `mise` alone
-  // costs more than the whole budget before a task body runs, so only a step
-  // calling the binary directly can land under it.
-  //
-  // WHY THAT HALF IS NOT HERE YET. Respelling these two steps used to break
-  // `tests/commit-attribution.bats` and `tests/commit-convention.bats`, which
-  // pinned the call site by its text -- correctly, since CLOUD-216 found this
-  // gate wired to nothing -- and a governed bats suite could not be edited to
-  // follow. Both retired under CLOUD-843 onto
-  // `crates/batten/tests/it/commit_wiring.rs`, which pins the WIRING rather than
-  // the spelling: either `mise run <task>` or the engine's own `… check
-  // --message` satisfies it, and a step running neither is still refused.
-  //
-  // So the respelling is unblocked, and CLOUD-1397 carries it. What does
-  // NOT wait is the 8687ms case -- the first commit after touching one
-  // `crates/batten/src` file, which was a hook running the compiler -- because
-  // that lived in the task body and is gone.
+  // So both steps run the pinned engine on PATH (the hook runs under `mise exec
+  // -- hk`). `crates/batten/tests/it/commit_wiring.rs` pins the WIRING, not the
+  // spelling, and `hk_contract.rs` refuses a commit-time step that compiles or
+  // pays mise's startup unbudgeted. Each step is an arm of `perf measure` in the
+  // commit fixture, and `perf-assert` holds its p95 to the 100 ms ceiling
+  // (CLOUD-2789) -- the budget is a gate now, not this comment.
   ["commit-msg"] {
     steps {
       ["conventional-commit"] {

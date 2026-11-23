@@ -1480,7 +1480,7 @@ fn commit_arms(bin: &str) -> Vec<(&'static str, Vec<String>)> {
             .collect::<Vec<_>>()
     };
     vec![
-        ("cargo-fmt", words(&["mise", "run", "lint:fmt"])),
+        ("cargo-fmt", words(&["cargo", "fmt", "--all", "--check"])),
         (
             "taplo",
             words(&["env", "RUST_LOG=warn", "taplo", "lint", "batten.toml"]),
