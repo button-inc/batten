@@ -98,7 +98,7 @@ pub fn read_overlay(dir: Option<&Path>, relative: &str) -> Overlaid {
         receipt.push(OVERLAY_READ);
         // A receipt that cannot be written leaves the sweep holding none, which it
         // reads as unjudged: fail-closed, so the error needs no other route.
-        let _ = std::fs::write(receipt, "");
+        let _ = crate::durable::replace(std::path::PathBuf::from(receipt), "");
         return Overlaid::Mutated(text);
     }
     let targeted = crate::fsio::read_to_string(dir.join(OVERLAY_TARGET))
