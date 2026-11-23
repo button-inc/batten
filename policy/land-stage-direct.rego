@@ -7,6 +7,8 @@
 #MUTANT step-set-unread|s@^\tsome step in input.call\["step-programs"\]$@\tsome step in []@|a_receipted_steps_program_run_outside_it_is_refused
 #MUTANT receipt-unexempt|s@^\tnot receipted(program)$@\ttrue@|the_development_forms_stay_allowed
 #MUTANT selection-unread|s@^\tselected(program) == selected(step)$@\ttrue@|the_development_forms_stay_allowed
+#MUTANT partition-unread|s@^\tword == "--partition"$@\tfalse@|a_partitioned_run_is_selection_not_the_stage
+#MUTANT joined-partition-unread|s@^\tstartswith(word, "--partition=")$@\tfalse@|a_partitioned_run_is_selection_not_the_stage
 # A land or verify stage, rerun by hand outside the lap that owns it.
 #
 # MEASURED 2026-11-15, and the incident is the whole reason this exists: an agent
@@ -342,6 +344,20 @@ filtered(program) if {
 	word != prefix
 }
 
+# A PARTITION IS A SUBSET (CLOUD-2253): `--partition hash:k/n` runs one shard of
+# the suite and keeps no receipt, the rationale `test:filter` states in
+# mise.toml. It stays in `value_options`, so its value is never read as a
+# test-name operand; this clause is what admits it, in either spelling.
+filtered(program) if {
+	some word in tail(program)
+	word == "--partition"
+}
+
+filtered(program) if {
+	some word in tail(program)
+	startswith(word, "--partition=")
+}
+
 filtered(program) if {
 	words = tail(program)
 	some at, word in words
@@ -446,6 +462,24 @@ test_a_filtered_suite_is_allowed if {
 		"command": "cargo nextest run -p batten forced_push",
 		"segments": [],
 		"programs": [{"program": "cargo", "name": "cargo", "arguments": ["nextest", "run", "-p", "batten", "forced_push"], "subcommand": "nextest", "nested": "run", "global-options": [], "mediated": false}],
+		"task-programs": [],
+	}}
+}
+
+test_a_partitioned_suite_is_allowed if {
+	count(violation) == 0 with input as {"call": {
+		"command": "cargo nextest run --workspace --partition hash:1/2",
+		"segments": [],
+		"programs": [{"program": "cargo", "name": "cargo", "arguments": ["nextest", "run", "--workspace", "--partition", "hash:1/2"], "subcommand": "nextest", "nested": "run", "global-options": [], "mediated": false}],
+		"task-programs": [],
+	}}
+}
+
+test_a_joined_partition_is_allowed if {
+	count(violation) == 0 with input as {"call": {
+		"command": "cargo nextest run --workspace --partition=hash:1/2",
+		"segments": [],
+		"programs": [{"program": "cargo", "name": "cargo", "arguments": ["nextest", "run", "--workspace", "--partition=hash:1/2"], "subcommand": "nextest", "nested": "run", "global-options": [], "mediated": false}],
 		"task-programs": [],
 	}}
 }
