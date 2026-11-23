@@ -403,6 +403,29 @@ fn a_stage_a_python_script_spawns_is_refused() {
     none_refused(&[(&format!("python3 {}", harmless.display()), false)]);
 }
 
+/// A TASK'S FORWARDED WORDS ARE PART OF WHAT IT RUNS (CLOUD-2837). mise appends
+/// the words after a task's name to its run line, so `mise run test:filter --
+/// -E '<filter>'` runs a filtered `cargo nextest run` — selection, which the
+/// rule admits — while the bare task still runs the whole workspace suite and
+/// is still refused. Fails by: the task followed into its body with the
+/// forwarded words dropped, so every filtered run of the task read as the
+/// suite.
+#[test]
+fn a_task_handed_a_filter_is_selection_not_the_stage() {
+    none_refused(&[
+        (
+            "mise run test:filter -- -p batten --test it -E 'test(/forced_push|land_stage/)'",
+            true,
+        ),
+        ("mise run test:filter -- -E 'test(/forced_push/)'", true),
+        ("mise run test:filter -p batten forced_push", true),
+    ]);
+    all_refused(&[
+        ("mise run test:filter", true),
+        ("mise run test:filter -- -p batten", true),
+    ]);
+}
+
 /// A landing is the one way a stage is meant to run.
 #[test]
 fn a_backgrounded_land_is_allowed() {
