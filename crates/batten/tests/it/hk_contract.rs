@@ -213,6 +213,43 @@ fn no_commit_time_hook_step_compiles() {
 /// the `pre-commit` and `commit-msg` hooks only: a `slow` step runs only where
 /// landing asks.
 fn resolved_commit_time_commands() -> Vec<(String, String)> {
+    let config = resolved_hk();
+    let mut commands = Vec::new();
+    for hook in ["pre-commit", "commit-msg"] {
+        let steps = config["hooks"][hook]["steps"]
+            .as_object()
+            .unwrap_or_else(|| panic!("hk.pkl resolves a `{hook}` hook with steps"));
+        for (name, step) in steps {
+            if step.get("profiles").is_some_and(|p| !p.is_null()) {
+                continue;
+            }
+            for key in ["check", "check_diff", "check_list_files", "fix"] {
+                if let Some(command) = step.get(key).and_then(command_text) {
+                    commands.push((name.clone(), command));
+                }
+            }
+        }
+    }
+    commands
+}
+
+/// One resolved step command as a single line: a string as written, or an
+/// `argv` joined by spaces.
+fn command_text(spec: &serde_json::Value) -> Option<String> {
+    let command = spec.get("command").unwrap_or(spec);
+    command.as_str().map(str::to_owned).or_else(|| {
+        let argv = command.get("argv")?.as_array()?;
+        Some(
+            argv.iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    })
+}
+
+/// `hk.pkl` as hk resolves it: `pkl eval` with its pinned `Builtins`.
+fn resolved_hk() -> serde_json::Value {
     let pkl = common::require_tool("pkl");
     #[expect(
         clippy::disallowed_types,
@@ -228,37 +265,7 @@ fn resolved_commit_time_commands() -> Vec<(String, String)> {
         "pkl eval hk.pkl failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let config: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("`-f json` prints one JSON document");
-    let text = |spec: &serde_json::Value| -> Option<String> {
-        let command = spec.get("command").unwrap_or(spec);
-        command.as_str().map(str::to_owned).or_else(|| {
-            let argv = command.get("argv")?.as_array()?;
-            Some(
-                argv.iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            )
-        })
-    };
-    let mut commands = Vec::new();
-    for hook in ["pre-commit", "commit-msg"] {
-        let steps = config["hooks"][hook]["steps"]
-            .as_object()
-            .unwrap_or_else(|| panic!("hk.pkl resolves a `{hook}` hook with steps"));
-        for (name, step) in steps {
-            if step.get("profiles").is_some_and(|p| !p.is_null()) {
-                continue;
-            }
-            for key in ["check", "check_diff", "check_list_files", "fix"] {
-                if let Some(command) = step.get(key).and_then(text) {
-                    commands.push((name.clone(), command));
-                }
-            }
-        }
-    }
-    commands
+    serde_json::from_slice(&output.stdout).expect("`-f json` prints one JSON document")
 }
 
 /// No command a plain commit runs, as hk resolves it from its builtins as well
@@ -267,13 +274,11 @@ fn resolved_commit_time_commands() -> Vec<(String, String)> {
 /// `mise` alone costs 105-125 ms before a task body runs (CLOUD-1397), past the
 /// 100 ms ceiling every commit-time step answers to, so a step routed through
 /// `mise` is refused unless `policy/perf-assert.rego` budgets it by name — then
-/// its measured arm, not this test, decides. And `cargo-fmt`, calling the
-/// formatter directly, calls exactly `lint:fmt`'s body, so the hook and the task
-/// cannot disagree about what passes.
+/// its measured arm, not this test, decides.
 ///
 /// Fails by: `cargo-fmt` routed back through `mise run lint:fmt` with no
-/// budget, its command drifting from `lint:fmt`'s body, or a builtin's default
-/// command (which `no_commit_time_hook_step_compiles` cannot see) compiling.
+/// budget, or a builtin's default command (which
+/// `no_commit_time_hook_step_compiles` cannot see) compiling.
 #[test]
 fn no_resolved_commit_time_command_compiles_or_pays_mise_startup_unbudgeted() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -306,20 +311,173 @@ fn no_resolved_commit_time_command_compiles_or_pays_mise_startup_unbudgeted() {
         })
         .collect();
     assert!(offending.is_empty(), "commit-time commands: {offending:?}");
-    let fmt = commands
-        .iter()
-        .find(|(name, command)| {
-            name == "cargo-fmt" && (command.contains("--all") || command.contains("mise run"))
-        })
-        .map(|(_, command)| command.clone())
-        .expect("cargo-fmt's check is a commit-time command");
-    if !fmt.contains("mise run") {
-        assert_eq!(
-            fmt,
-            task_body(&mise, "mise run lint:fmt"),
-            "cargo-fmt calls the formatter directly, so it calls exactly lint:fmt's body"
+}
+
+/// The rustfmt line the commit-time `cargo-fmt` step runs, for `edition`.
+fn staged_rustfmt(edition: &str) -> String {
+    format!("rustfmt --check --edition {edition} --config skip_children=true {{{{files}}}}")
+}
+
+/// The commit-time formatter judges EXACTLY the staged `.rs` files (CLOUD-2789).
+///
+/// `cargo fmt --all --check` formatted the whole workspace on every commit, 5.0 s
+/// p50, past the 100 ms ceiling whatever the commit touched. hk hands a
+/// pre-commit step's `{{files}}` the staged paths its glob selects, so the step's
+/// file set is the staged set only when every command reads `{{files}}`, none
+/// widens to `--all` or a manifest, and no `workspace_indicator` splits the job
+/// per Cargo workspace. The edition is the workspace's, so the hook and landing's
+/// `lint:fmt` cannot disagree on a file.
+///
+/// Fails by: a command going back to `cargo fmt`, `--all` or the indicator; the
+/// glob widening past `.rs`; or the edition drifting from `Cargo.toml`'s.
+#[test]
+fn the_commit_time_formatter_reads_exactly_the_staged_rs_files() {
+    let root = common::at_root(".");
+    let manifest: toml::Table = fs::read_to_string(root.join("Cargo.toml"))
+        .expect("Cargo.toml reads")
+        .parse()
+        .expect("Cargo.toml parses");
+    let edition = manifest["workspace"]["package"]["edition"]
+        .as_str()
+        .expect("the workspace declares one edition");
+    let config = resolved_hk();
+    let step = &config["hooks"]["pre-commit"]["steps"]["cargo-fmt"];
+    assert_eq!(step["glob"], "**/*.rs", "the step selects staged Rust only");
+    assert!(
+        step["workspace_indicator"].is_null(),
+        "one job over the staged files, not one per Cargo workspace: {step}"
+    );
+    assert_eq!(
+        step.get("check").and_then(command_text),
+        Some(staged_rustfmt(edition))
+    );
+    for key in ["check_list_files", "fix"] {
+        let command = step.get(key).and_then(command_text).unwrap_or_default();
+        assert!(
+            command.starts_with("rustfmt ")
+                && command.ends_with(" {{files}}")
+                && command.contains(&format!("--edition {edition} "))
+                && command.contains("--config skip_children=true"),
+            "cargo-fmt's {key} formats the staged files as `check` does: `{command}`"
         );
     }
+}
+
+/// The schema-bound TOML is linted at landing, every other TOML at the commit,
+/// and the two sets are exactly `.taplo.toml`'s schema bindings (CLOUD-2789).
+///
+/// `taplo lint batten.toml` is 110 ms p95 against its 512 KB schema, over the
+/// commit ceiling, so the default `taplo` step excludes the bound files and a
+/// `slow` `taplo-schema` step lints them where `ci:checks` (`hk check --all`)
+/// reaches it in `verify`. A binding added to `.taplo.toml` and not here would
+/// be linted at the commit again, or at no point at all if dropped from both.
+///
+/// Fails by: the commit step linting a bound file, the landing step losing
+/// `slow` or a bound file, or the list drifting from `.taplo.toml`.
+#[test]
+fn schema_bound_toml_is_linted_at_landing_and_the_rest_at_the_commit() {
+    let root = common::at_root(".");
+    let taplo: toml::Table = fs::read_to_string(root.join(".taplo.toml"))
+        .expect(".taplo.toml reads")
+        .parse()
+        .expect(".taplo.toml parses");
+    let mut bound: Vec<String> = taplo["rule"]
+        .as_array()
+        .expect(".taplo.toml declares rules")
+        .iter()
+        .filter(|rule| rule.get("schema").is_some())
+        .flat_map(|rule| {
+            rule["include"]
+                .as_array()
+                .expect("a schema rule includes files")
+                .iter()
+                .map(|glob| glob.as_str().expect("a glob").to_owned())
+        })
+        .collect();
+    bound.sort();
+    assert!(
+        bound.contains(&String::from("batten.toml")),
+        "the scan found the bindings this tree carries: {bound:?}"
+    );
+    let config = resolved_hk();
+    let steps = &config["hooks"]["pre-commit"]["steps"];
+    let listed = |value: &serde_json::Value| -> Vec<String> {
+        let mut globs: Vec<String> = value
+            .as_array()
+            .map(|globs| {
+                globs
+                    .iter()
+                    .filter_map(|glob| glob.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        globs.sort();
+        globs
+    };
+    let commit = &steps["taplo"];
+    assert!(
+        commit["profiles"].is_null(),
+        "taplo still runs at the commit"
+    );
+    assert_eq!(
+        listed(&commit["exclude"]),
+        bound,
+        "and skips every bound file"
+    );
+    let landing = &steps["taplo-schema"];
+    assert_eq!(
+        listed(&landing["profiles"]),
+        ["slow"],
+        "the schema check runs where `hk check --all` reaches it"
+    );
+    assert_eq!(listed(&landing["glob"]), bound, "over every bound file");
+    assert_eq!(
+        landing.get("check").and_then(command_text),
+        commit.get("check").and_then(command_text),
+        "with the same lint the commit runs over the rest"
+    );
+}
+
+/// A staged `lib.rs` does not drag its UNSTAGED children in (CLOUD-2789).
+///
+/// rustfmt given a file recurses into every out-of-line `mod` it declares, so
+/// over the crate root it formats the whole crate: 2.5 s for this tree's
+/// `lib.rs`, and a verdict on files the commit does not contain. The step's
+/// `skip_children` is what stops it, and stable rustfmt honours it — asserted
+/// here against the pinned formatter, not assumed from its docs.
+///
+/// Fails by: `skip_children` dropped from the step, or the pinned rustfmt
+/// ignoring it (the unformatted child then fails the staged root's check).
+#[test]
+fn a_staged_crate_root_is_formatted_without_its_children() {
+    let rustfmt = common::require_tool("rustfmt");
+    let dir = common::scratch("staged-rustfmt");
+    fs::write(dir.join("lib.rs"), "mod child;\n\nfn root() {}\n").expect("write lib.rs");
+    fs::write(dir.join("child.rs"), "fn   child( ) {}\n").expect("write child.rs");
+    let command = resolved_hk()["hooks"]["pre-commit"]["steps"]["cargo-fmt"]
+        .get("check")
+        .and_then(command_text)
+        .expect("cargo-fmt has a check");
+    let run = |file: &str| {
+        let argv: Vec<String> = command
+            .split_whitespace()
+            .skip(1)
+            .map(|word| word.replace("{{files}}", file))
+            .collect();
+        #[expect(
+            clippy::disallowed_types,
+            reason = "the subject is the pinned formatter's own verdict on a scratch file; a read-only `--check`"
+        )]
+        let mut process = std::process::Command::new(&rustfmt);
+        process.args(&argv).current_dir(&dir);
+        code(&process.streamed_output().expect("rustfmt runs"))
+    };
+    assert_eq!(run("lib.rs"), Some(0), "the staged root alone is formatted");
+    assert_eq!(
+        run("child.rs"),
+        Some(1),
+        "and the child really is unformatted, so the first answer means something"
+    );
 }
 
 /// Every nested Cargo workspace is outside the root clippy step (CLOUD-2051).

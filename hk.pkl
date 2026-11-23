@@ -26,6 +26,18 @@ import "package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1#/Builtin
 // target-dir lock at a time: parallel steps would only serialize on that lock
 // while oversubscribing the CPU. Each step also reads the formatted, then
 // linted, tree.
+
+// The TOML files `.taplo.toml` binds to a shipped schema, which `taplo-schema`
+// lints at landing rather than at the commit (see `taplo` below). Its
+// `include` lists, restated: `hk_contract.rs` holds the two equal.
+local schema_bound_toml =
+  List(
+    "batten.toml",
+    "batten.example.toml",
+    "crates/batten/src/starter.toml",
+    "batten.local.toml",
+  )
+
 local gate = new Mapping<String, Step> {
   // --- repo-specific gates (no upstream builtin exists) ---------------------
 
@@ -525,7 +537,24 @@ local gate = new Mapping<String, Step> {
   // mise.toml is the most-edited file in the repo and had no formatter, so
   // hand edits drifted in spacing and key order. taplo lints it (duplicate
   // keys, bad syntax) and formats it.
-  ["taplo"] = Builtins.taplo
+  //
+  // THE SCHEMA-BOUND FILES ARE LINTED AT LANDING, NOT AT THE COMMIT (CLOUD-2789).
+  // `.taplo.toml` binds them to the schemas Batten ships, and `taplo lint` over
+  // `batten.toml` (19,179 lines against a 512 KB schema) is 88 ms p50 / 110 ms
+  // p95 on a quiet box, over the 100 ms commit ceiling, where `Cargo.toml` is
+  // 16 ms: the file is the cost, so one process over all staged files does not
+  // change it. The commit keeps a stronger proof of the same file: the default
+  // `config-lint-pinned` loads `batten.toml` into the Rust type the schema is
+  // DERIVED from (`test:config-schema`). `taplo-schema` keeps the schema check
+  // itself, `slow`, which `ci:checks` (`hk check --all`) runs in `verify`'s
+  // second tier, so it still runs before anything lands.
+  ["taplo"] = (Builtins.taplo) {
+    exclude = schema_bound_toml
+  }
+  ["taplo-schema"] = (Builtins.taplo) {
+    profiles = List("slow")
+    glob = schema_bound_toml
+  }
   ["taplo-format"] = (Builtins.taplo_format) {
     depends = List("taplo")
   }
@@ -666,16 +695,26 @@ local gate = new Mapping<String, Step> {
   // --- rust ------------------------------------------------------------------
 
   ["cargo-fmt"] = (Builtins.cargo_fmt) {
-    // THE TASK'S BODY, CALLED DIRECTLY, NOT `mise run lint:fmt` (CLOUD-2789).
-    // This is a default commit-time step, held to the 100 ms ceiling, and `mise`
-    // alone costs 105-125 ms before a task body runs (CLOUD-1397). The pinned
-    // formatter is the one on PATH: the hook runs under `mise exec -- hk`. The
-    // hook and the task still cannot disagree about what "formatted" means:
-    // `hk_contract.rs::no_commit_time_hook_step_pays_mise_startup_unbudgeted`
-    // holds this command equal to `lint:fmt`'s body. Costs no file-scoping:
-    // upstream's check is already whole-workspace, never file by file. The FIXER
-    // stays upstream's, so the fix/check split still comes from the builtin.
-    check = "cargo fmt --all --check"
+    // THE STAGED `.rs` FILES, NOT THE WORKSPACE (CLOUD-2789). This is a default
+    // commit-time step, held to the 100 ms ceiling. `cargo fmt --all --check`
+    // formats every target's root and recurses into each `mod`: 5.0 s p50 on the
+    // commit fixture, whatever the commit touched. `rustfmt` over `{{files}}` is
+    // the formatter on exactly what is being committed, and `skip_children`
+    // stops `lib.rs` dragging its whole module tree in (2.5 s -> 0.31 s for that
+    // one file, measured; honoured on stable). The pinned formatter is the one on
+    // PATH: the hook runs under `mise exec -- hk`, not `mise run`, whose startup
+    // alone is 105-125 ms (CLOUD-1397).
+    //
+    // `workspace_indicator` is CLEARED, so hk forms one job over every staged
+    // file instead of one per Cargo workspace, and the fixer follows the checker
+    // onto the file list: upstream's fixer interpolates the indicator. Landing
+    // still runs `lint:fmt` (`cargo fmt --all --check`) over the whole workspace,
+    // and both read the one `rustfmt.toml`; `hk_contract.rs` holds the edition
+    // here equal to the workspace's, so the two cannot disagree on a file.
+    workspace_indicator = null
+    check = "rustfmt --check --edition 2024 --config skip_children=true {{files}}"
+    check_list_files = "rustfmt --check --edition 2024 --config skip_children=true -l {{files}}"
+    fix = "rustfmt --edition 2024 --config skip_children=true {{files}}"
   }
   ["cargo-clippy"] = (Builtins.cargo_clippy) {
     // `slow` tier: a whole-workspace compile at --all-targets --all-features. A
@@ -1091,7 +1130,9 @@ hooks {
       }
       ["cfg-gated-test-pinned"] {
         glob = List("**/*.rs")
-        check = "batten check --rule 'test cover missing'"
+        // `--staged`: the module reads the staged `.rs` files' lines, never the
+        // whole tree's (CLOUD-2789: 4.4 s p50 over every tracked file).
+        check = "batten check --staged --rule 'test cover missing'"
       }
       // THE STRUCTURAL CENSUSES, AT THE COMMIT THAT MOVES THEM (CLOUD-2803).
       // Measured on #1276: the module cycle went 54 -> 76 over five commits
