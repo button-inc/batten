@@ -1545,11 +1545,20 @@ pub(crate) fn summary(line: &str) -> bool {
 }
 
 /// Every attempt a nextest run reported, up to its summary.
+///
+/// THE RUN'S SUMMARY IS ITS LAST ONE. A failing case's captured output is
+/// printed inside the run, and a case that runs nextest itself prints that
+/// inner run's `Summary [` there: stopping at the first one dropped every
+/// result after it. Measured on #1276: `mutate::a_modules_own_test_is_run_in_process`
+/// PASSED 170 lines past a failing case's inner summary, read as named nowhere,
+/// and the whole replay could not look.
 pub(crate) fn attempts(output: &str) -> impl Iterator<Item = (&str, &str)> {
-    output
-        .lines()
-        .take_while(|line| !summary(line))
-        .filter_map(attempt)
+    let lines: Vec<&str> = output.lines().collect();
+    let end = lines
+        .iter()
+        .rposition(|line| summary(line))
+        .unwrap_or(lines.len());
+    lines.into_iter().take(end).filter_map(attempt)
 }
 /// What `cargo` prints when rustc refused the crate: a base body HEAD's code
 /// cannot compile, as opposed to a build that never reached rustc.
@@ -1896,6 +1905,23 @@ mod tests {
         assert!(passes(said(101, "error: no such command: `nextest`").as_ref(), "t").is_err());
         assert!(passes(said(4, "").as_ref(), "t").is_err());
         assert!(passes(None, "t").is_err());
+    }
+
+    /// Fails by: a failing case's captured output holding an inner nextest
+    /// run's `Summary [` line ends the parse there, so a case that passed
+    /// after it reads as named nowhere and the replay cannot look (#1276:
+    /// `mutate::a_modules_own_test_is_run_in_process`).
+    #[test]
+    fn an_inner_runs_summary_in_captured_output_is_not_the_runs_end() {
+        let output = "        FAIL [   0.010s] batten::it m::spawns\n\
+                      \x20 stdout ───\n\
+                      \x20        Summary [   0.006s] 0 tests run: 0 passed, 2 skipped\n\
+                      \x20       PASS [  20.7s] batten::it m::later\n\
+                      \x20    Summary [ 126.4s] 2 tests run: 1 passed, 1 failed\n\
+                      \x20       FAIL [   0.010s] batten::it m::later\n";
+        let outcome = Some((100, output.to_owned()));
+        assert!(passes(outcome.as_ref(), "later").unwrap());
+        assert!(!passes(outcome.as_ref(), "spawns").unwrap());
     }
 
     /// Fails by: a word nextest's `status_str` / `short_status_str` print read
