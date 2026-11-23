@@ -295,6 +295,26 @@ fn a_lease_with_force_if_includes_is_allowed() {
     }
 }
 
+/// THE PROGRAM ANCHOR, and the case `#MUTANT program-anchor-unread` reddens on
+/// the preset. `hg` above has no subcommand table, so `subcommand == "push"`
+/// already fails for it and dropping the anchor changes nothing there. A program
+/// the engine DOES resolve a subcommand for, whose subcommand is `push`, is the
+/// only shape the anchor alone keeps out.
+#[test]
+fn another_programs_push_subcommand_is_not_gits() {
+    for command in [
+        "cargo push --force-with-lease",
+        "gh push --force-with-lease",
+        "mise push --force-with-lease",
+    ] {
+        let out = lease_decision("lease-asserted-other-program", command);
+        assert!(
+            !out.contains("branch write unnamed"),
+            "the lease module must leave `{command}` alone\n{out}"
+        );
+    }
+}
+
 #[test]
 fn the_flag_named_in_prose_is_not_a_push() {
     // ANTI-VACUITY IN THE OTHER DIRECTION. A row keyed on the substring alone
