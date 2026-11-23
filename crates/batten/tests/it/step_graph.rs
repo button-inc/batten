@@ -209,7 +209,9 @@ fn a_red_step_in_an_earlier_group_is_read_before_a_later_group_ends() {
         .unwrap_or_else(|| panic!("no ok line for b: {lines:#?}"));
     assert_eq!(verdict_fields(ok)[..4], ["ok", "t1", "b", "0"], "{ok}");
     assert!(
-        lines.iter().any(|line| line.starts_with("step graph: t2 skipped")),
+        lines
+            .iter()
+            .any(|line| line.starts_with("step graph: t2 skipped")),
         "group 2 is reported skipped: {lines:#?}"
     );
     assert!(!graph.started("slow"), "group 2's step never ran");
