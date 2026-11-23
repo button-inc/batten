@@ -2775,6 +2775,11 @@ struct SealContext {
     /// written before it existed takes no selection digest.
     #[serde(default)]
     format: Option<Format>,
+    /// The build every case digest is taken under ([`sweep_build`]). A
+    /// context written before it existed seals digests no sweep recomputes,
+    /// so its leftovers are recorded again rather than carried.
+    #[serde(default)]
+    build: Option<String>,
 }
 
 impl SealContext {
@@ -2852,6 +2857,10 @@ fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
             untraced: &context.untraced,
         },
     );
+    let digests = match &context.build {
+        Some(build) => under_build(digests, build),
+        None => digests,
+    };
     let mut reached: std::collections::BTreeMap<&Case, BTreeSet<u32>> =
         std::collections::BTreeMap::new();
     for (site, cases) in &reach.sites {
@@ -4586,6 +4595,56 @@ fn digests_with(
     case_digests(root, executed.keys(), dirs, executed, &depends)
 }
 
+/// What every case of a sweep runs that its record cannot name: the build's
+/// inputs (manifests, lockfile, build scripts, cargo and toolchain config,
+/// the compiler's `-vV`), the sources of every package the sweep never
+/// probed, and the flags and features the suite is built with.
+///
+/// A RECORD NAMES ONLY PROBED FUNCTIONS, so a helper crate the case links, a
+/// lockfile bump or a new compiler moved no digest it held: a carried pass
+/// and a reused pair outcome stood over code the case no longer runs. The
+/// selection digest already folds these in ([`super::resume`]); the sweep's
+/// own keys now do too.
+fn sweep_build(
+    root: &std::path::Path,
+    resources: &std::collections::BTreeMap<String, String>,
+    format: &Format,
+    compiler: &[u8],
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for part in [
+        super::resume::build_digest_with(root, resources, compiler),
+        super::resume::unprobed_packages_digest(root, resources, format),
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update(b"\x1f");
+    }
+    for (name, value) in &format.flags {
+        hasher.update(format!("\x1e{name}\x1f{value}").as_bytes());
+    }
+    for feature in &format.features {
+        hasher.update(format!("\x1d{feature}").as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Each case digest of `digests` taken under `build` ([`sweep_build`]).
+fn under_build(
+    digests: std::collections::BTreeMap<Case, String>,
+    build: &str,
+) -> std::collections::BTreeMap<Case, String> {
+    digests
+        .into_iter()
+        .map(|(case, digest)| {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(digest.as_bytes());
+            hasher.update(b"\x18");
+            hasher.update(build.as_bytes());
+            (case, hasher.finalize().to_hex().to_string())
+        })
+        .collect()
+}
+
 /// What a sweep reads off its reach run: the record, each case's digest,
 /// each case's seconds, and every case that failed unmutated.
 type Reached = (
@@ -4619,10 +4678,17 @@ fn reached(
         classic,
     };
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
+    let compiler = super::resume::compiler_version(root).ok_or_else(|| {
+        anyhow::anyhow!("the compiler cannot be asked, so no case's build can be keyed")
+    })?;
+    let build = sweep_build(root, ids.0, format, &compiler);
     let recompute =
         |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
          read: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
-            digests_with(root, &dirs, schema, ids, executed, read)
+            under_build(
+                digests_with(root, &dirs, schema, ids, executed, read),
+                &build,
+            )
         };
     let base = state.join("reach");
     std::fs::create_dir_all(&base)?;
@@ -4641,6 +4707,7 @@ fn reached(
             mutant_fns: schema.mutant_fns.clone(),
             classic: classic.clone(),
             format: Some(format.clone()),
+            build: Some(build.clone()),
         })?,
     )?;
     let (reach, passed) = record_reach(
@@ -4655,7 +4722,10 @@ fn reached(
     for case in reach.sites.values().flatten() {
         recorded.entry(case.clone()).or_default();
     }
-    let digests = digests_with(root, &dirs, schema, ids, &recorded, &reach.read);
+    let digests = under_build(
+        digests_with(root, &dirs, schema, ids, &recorded, &reach.read),
+        &build,
+    );
     let seconds = measured_seconds(case_seconds(state)?, &reach);
     seal_reach(
         &state.join("reach"),
@@ -6098,6 +6168,7 @@ mod tests {
             mutant_fns: std::collections::BTreeMap::new(),
             classic: BTreeSet::new(),
             format: None,
+            build: None,
         }
     }
 
@@ -7252,6 +7323,120 @@ mod tests {
             });
         }
         mutant
+    }
+
+    /// Every case's key holds what its record cannot name: the sources of
+    /// each package the sweep never probed, the lockfile and manifests, the
+    /// toolchain and the flags. An edit to any of them moves the pair key and
+    /// drops the carried record, so the case runs again.
+    ///
+    /// Fails by: a helper crate's edit, a lockfile bump or a new compiler
+    /// leaving a carried pass and a reused pair outcome in place, though the
+    /// code the case runs is no longer the code it passed on.
+    #[test]
+    fn an_unprobed_package_or_the_lockfile_moves_every_case_key() {
+        let root = crate::scratch::scratch("schema-build-key");
+        for (path, text) in [
+            ("Cargo.toml", "[package]\nname = \"p\"\n"),
+            (
+                "src/lib.rs",
+                "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n",
+            ),
+            ("b/Cargo.toml", "[package]\nname = \"b\"\n"),
+            ("b/src/lib.rs", "pub fn g() {}\n"),
+            ("Cargo.lock", "version = 4\n"),
+        ] {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        }
+        let ids: std::collections::BTreeMap<String, String> = [
+            "Cargo.toml",
+            "src/lib.rs",
+            "b/Cargo.toml",
+            "b/src/lib.rs",
+            "Cargo.lock",
+        ]
+        .map(|path| (path.to_owned(), String::from("v1")))
+        .into();
+        let format = Format {
+            probed: [String::from("src/lib.rs")].into(),
+            ..Format::default()
+        };
+        let case = (String::from("t"), String::from("bin"));
+        let mutant = in_function(
+            listed("BinaryOperator", "!=", (2, 7), (2, 9)),
+            (1, 1),
+            (3, 2),
+        );
+        let digests = |ids: &std::collections::BTreeMap<String, String>, compiler: &[u8]| {
+            under_build(
+                [(case.clone(), String::from("d"))].into(),
+                &sweep_build(&root, ids, &format, compiler),
+            )
+        };
+        let held = digests(&ids, b"rustc 1");
+        let pair = pair_key(&root, &mutant, &case, &held).unwrap();
+        let edited = |path: &str| {
+            let mut moved = ids.clone();
+            moved.insert(path.to_owned(), String::from("v2"));
+            digests(&moved, b"rustc 1")
+        };
+        let probed = edited("src/lib.rs");
+        assert_eq!(
+            probed, held,
+            "a probed source is the record's own to key, by function"
+        );
+        for (why, now) in [
+            ("an unprobed package's source", edited("b/src/lib.rs")),
+            ("the lockfile", edited("Cargo.lock")),
+            ("the toolchain", digests(&ids, b"rustc 2")),
+        ] {
+            assert_ne!(
+                pair_key(&root, &mutant, &case, &now).unwrap(),
+                pair,
+                "{why}"
+            );
+            assert_ne!(
+                verdict_key(&root, &mutant, &[case.clone()].into(), &now),
+                verdict_key(&root, &mutant, &[case.clone()].into(), &held),
+                "{why}"
+            );
+            let base = crate::scratch::scratch("schema-build-key-carry");
+            let sealed = format!("D{}\n", held[&case]);
+            record(&base, "t", "t", Some("0"), &[(DEPENDS, sealed.as_str())]);
+            let recompute =
+                |_: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+                 _: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+                    now.clone()
+                };
+            assert_eq!(
+                carry_forward(&base, "tree-2", &no_identity(), (&recompute, None)).unwrap(),
+                (0, 0),
+                "{why} drops the carried record"
+            );
+            assert!(!base.join("t").exists(), "{why}");
+        }
+        let flagged = Format {
+            flags: [(String::from("RUSTFLAGS"), String::from("-Cx"))].into(),
+            ..format.clone()
+        };
+        assert_ne!(
+            sweep_build(&root, &ids, &flagged, b"rustc 1"),
+            sweep_build(&root, &ids, &format, b"rustc 1"),
+            "the flags"
+        );
+        // AND THE CARRY ITSELF HOLDS when nothing it keys on moved.
+        let base = crate::scratch::scratch("schema-build-key-held");
+        let sealed = format!("D{}\n", held[&case]);
+        record(&base, "t", "t", Some("0"), &[(DEPENDS, sealed.as_str())]);
+        let recompute =
+            |_: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+             _: &std::collections::BTreeMap<Case, BTreeSet<String>>| { held.clone() };
+        assert_eq!(
+            carry_forward(&base, "tree-2", &no_identity(), (&recompute, None)).unwrap(),
+            (1, 0)
+        );
     }
 
     /// A site's key is its function's text and the mutation: two mutations
