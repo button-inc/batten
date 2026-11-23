@@ -188,6 +188,7 @@ pub fn run(
     git_dir: &Path,
     handlers: &[crate::config_model::Handler],
     rows: &[crate::config_model::Startup],
+    presets: &[&str],
 ) -> bool {
     let pid = std::process::id().to_string();
     register_once(git_dir, &pid, crate::clock::now_unix());
@@ -252,7 +253,7 @@ pub fn run(
         ENGINE,
         crate::clock::now_unix(),
     );
-    let engine_passed = match adopt_checkout_build(root, &installs) {
+    let engine_passed = match adopt_checkout_build(root, presets) {
         Some(finding) => {
             findings.push(finding);
             false
@@ -307,8 +308,12 @@ pub fn run(
 /// stamped build is current is `doctor mediator`'s question.
 ///
 /// The build runs on the toolchain the environment manager pins, through its
-/// declared `exec`, where a `[[startup]]` row names one; else on the host's.
-fn adopt_checkout_build(root: &Path, installs: &[crate::config_model::Startup]) -> Option<Finding> {
+/// declared `exec`, where any enabled preset (`presets`, every name a
+/// `[[rule]]` or `[[startup]]` row enables) declares an install; else on the
+/// host's. Not the `[[startup]]` rows alone: a consumer can enable the manager
+/// without placing its install row, and then the host's compiler, older than
+/// the floor the manager pins, failed the build.
+fn adopt_checkout_build(root: &Path, presets: &[&str]) -> Option<Finding> {
     if !crate::engine::builds_itself(root) {
         return None;
     }
@@ -318,9 +323,9 @@ fn adopt_checkout_build(root: &Path, installs: &[crate::config_model::Startup]) 
         reason: reason.to_owned(),
         subjects: vec![target.display().to_string()],
     };
-    let mut argv: Vec<String> = installs
+    let mut argv: Vec<String> = presets
         .iter()
-        .filter_map(|row| row.preset.as_deref())
+        .copied()
         .find_map(crate::config_model::install_of)
         .map(|install| {
             std::iter::once(install.program)

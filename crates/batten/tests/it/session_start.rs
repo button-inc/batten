@@ -418,6 +418,86 @@ fn a_session_in_the_engine_checkout_installs_its_build_under_the_hooks() {
     );
 }
 
+/// Fails by: the engine built on the host's compiler while the repository
+/// enables an environment manager that pins its own (CLOUD-2871). Only a
+/// `[[rule]]` enables `mise` here, with no `[[startup]]` install row, which is
+/// this repository's own shape while that row is withheld: measured, the host
+/// carried rustc 1.97 against the 1.98 floor `mise.toml` pins.
+#[test]
+fn the_engine_builds_on_the_toolchain_the_enabled_manager_pins() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let repo = common::Fixture::new("session-start-engine-toolchain").build();
+    std::fs::create_dir_all(repo.join("crates/batten")).expect("the fixture repo");
+    write(
+        &repo,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/batten\"]\n",
+    );
+    write(
+        &repo,
+        "crates/batten/Cargo.toml",
+        "[package]\nname = \"batten\"\nversion = \"0.0.0\"\n",
+    );
+    write(
+        &repo,
+        "batten.toml",
+        "version = 1\n\n[[rule]]\nid = \"task reach loose\"\nkind = \"policy\"\n\
+         scope = \"mediated_call\"\npreset = \"mise\"\nseverity = \"warn\"\n",
+    );
+    let _ = common::git_in(&repo, &["add", "-A"]);
+
+    let host = common::scratch_outside_tree("session-start", "engine-toolchain-host");
+    let hook_engine = host.join("batten");
+    std::fs::write(&hook_engine, "a release download\n").expect("the placeholder");
+    let log = repo.join("mise.log");
+    let mise = host.join("mise");
+    std::fs::write(
+        &mise,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n\
+             mkdir -p target/release\nprintf 'built\\n' > target/release/batten\n",
+            log.display()
+        ),
+    )
+    .expect("the mise stub");
+    for stub in [&hook_engine, &mise] {
+        std::fs::set_permissions(stub, std::fs::Permissions::from_mode(0o755))
+            .expect("the stub is runnable");
+    }
+    let path = std::env::join_paths(
+        std::iter::once(host.clone()).chain(std::env::split_paths(&common::ambient_path())),
+    )
+    .expect("a joinable PATH");
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "session-start-engine-toolchain",
+        "source": "startup",
+        "cwd": repo,
+    })
+    .to_string();
+    let mut command = common::batten();
+    command.env("PATH", path).env_remove("CARGO_TARGET_DIR");
+    let _ = common::stdin_run(
+        &mut command,
+        &repo,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    let _ = settle(&repo);
+    let calls = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        calls
+            .lines()
+            .any(|line| line == "exec -- cargo build --release -p batten"),
+        "the build runs through the manager's exec: {calls}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&hook_engine).expect("the hook engine"),
+        "built\n",
+        "and its output is what the hooks now run"
+    );
+}
+
 /// Fails by: the environment manager's install running after the declared
 /// handlers, or not at all (CLOUD-2840). Every later step runs a pinned tool,
 /// so the preset's install is the setup task's first step. A `mise` stub that

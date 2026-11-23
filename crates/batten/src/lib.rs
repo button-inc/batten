@@ -3291,8 +3291,19 @@ fn run_session_setup(overrides: &Overrides) -> Result<ExitCode> {
         .as_ref()
         .map(|table| table.handlers.clone())
         .unwrap_or_default();
+    let presets: Vec<&str> = resolved
+        .rules
+        .iter()
+        .filter_map(|rule| rule.preset.as_deref())
+        .chain(
+            resolved
+                .startup
+                .iter()
+                .filter_map(|row| row.preset.as_deref()),
+        )
+        .collect();
     Ok(
-        if session_setup::run(here, &git_dir, &handlers, &resolved.startup) {
+        if session_setup::run(here, &git_dir, &handlers, &resolved.startup, &presets) {
             ExitCode::Success
         } else {
             ExitCode::Usage
