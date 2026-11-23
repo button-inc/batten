@@ -2176,9 +2176,9 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     // non-Rust file. The tree the paths are taken against comes from the
     // recorder, which knows it; a case run outside one is not traced.
     let tree = std::env::var_os(TREE_ENV).map(std::path::PathBuf::from);
-    let traced = trace::tracer().filter(|_| tree.is_some());
+    let mut traced = trace::tracer().filter(|_| tree.is_some());
     let trace = dir.join(TRACE);
-    let ran = match traced.as_deref() {
+    let run = |traced: Option<&str>| match traced {
         Some(strace) => super::spawn_as(
             &cwd,
             super::Program::Tracer(strace),
@@ -2186,7 +2186,7 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
             &env,
             super::runner_bound(),
             super::Said::Streamed,
-        )?,
+        ),
         None => super::spawn_as(
             &cwd,
             super::Program::Test(program),
@@ -2194,8 +2194,15 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
             &env,
             super::runner_bound(),
             super::Said::Streamed,
-        )?,
+        ),
     };
+    let mut ran = run(traced.as_deref())?;
+    // A CASE THAT ASKED FOR ITS OWN TRACER RUNS AGAIN UNTRACED (U3): under
+    // this one it took the branch no judging run takes.
+    if traced.is_some() && untraced_again(&dir)? {
+        traced = None;
+        ran = run(None)?;
+    }
     let code = match ran.outcome {
         super::Outcome::Passed => 0,
         super::Outcome::Failed(Some(code)) => u8::try_from(code).unwrap_or(101),
@@ -2220,6 +2227,26 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     }
     crate::durable::replace(dir.join(DONE), code.to_string())?;
     Ok(code)
+}
+
+/// Whether the case recorded at `dir` asked for a tracer under the
+/// recorder's ([`trace::REFUSED`]); if so, everything its traced run left
+/// but the case's own name and tree is removed, so it can be recorded again.
+///
+/// # Errors
+///
+/// The record directory cannot be read.
+fn untraced_again(dir: &std::path::Path) -> anyhow::Result<bool> {
+    if !dir.join(trace::REFUSED).is_file() {
+        return Ok(false);
+    }
+    for file in std::fs::read_dir(dir)? {
+        let path = file?.path();
+        if !path.file_name().is_some_and(|f| f == "case" || f == OVER) {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    Ok(true)
 }
 
 /// The file a case's record holds once its process exited, with its exit code.
@@ -6237,6 +6264,39 @@ mod tests {
                 span: None,
             }),
         }
+    }
+
+    /// A CASE THAT ASKS FOR ITS OWN TRACER UNDER THE RECORDER'S IS RECORDED
+    /// AGAIN UNTRACED (U3): the refusal leaves its mark only inside a recorded
+    /// case, and the recorder then drops the traced run's record, keeping the
+    /// case's name and tree.
+    ///
+    /// Fails by: an untraced process refused, a refusal outside a record
+    /// marking nothing then reading as one, a traced run's probes or trace
+    /// kept into the untraced one, or the case's own name dropped.
+    #[test]
+    fn a_case_refused_a_tracer_is_recorded_again_untraced() {
+        let dir = crate::scratch::scratch("schema-refused-tracer");
+        assert!(!trace::refused(false, Some(&dir)));
+        assert!(!untraced_again(&dir).unwrap(), "untraced: no mark");
+        assert!(trace::refused(true, None), "outside a record still refused");
+        for (file, text) in [
+            ("case", "tests::t\tfix"),
+            (OVER, "tree"),
+            ("4242", "3\n"),
+            (TRACE, "x"),
+        ] {
+            std::fs::write(dir.join(file), text).unwrap();
+        }
+        assert!(trace::refused(true, Some(&dir)));
+        assert!(untraced_again(&dir).unwrap());
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["case", OVER]);
+        assert!(!untraced_again(&dir).unwrap(), "once");
     }
 
     /// A RENDERED TREE HAS THE ORIGINAL'S MODULE GRAPH (U2): the prelude's
