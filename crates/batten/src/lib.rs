@@ -22940,35 +22940,61 @@ fn spills_within(
     counted <= configured
 }
 
-/// Whether this call reads a capture view, the route the bound's own pointer
-/// prints (CLOUD-2228): such a read is never bounded again.
+/// Whether this call reads the capture store, the route the bound's own
+/// pointer prints (CLOUD-2228): such a read is never bounded again.
 ///
-/// **THE SAME ANSWER FOR A SHELL READ OF THE VIEW.** A `cat`, `sed -n` or
-/// `grep` naming the view is the same route followed through another tool, and
-/// bounding it handed back a pointer to a pointer: measured 2026-11-11, a `sed`
-/// over a view spilled into a second view. One route, one answer, whichever
-/// tool takes it. A shell call is a view read when one of its words is a view.
+/// **THE SAME ANSWER WHICHEVER TOOL FOLLOWS THE ROUTE.** A `Read` names the
+/// view in `file_path`, a `Grep` in `path`; a `cat`, `sed -n` or `grep` naming
+/// the view or a stored capture is the same route through a shell, and
+/// `batten capture show` is the engine's own reader of it. Bounding any of them
+/// handed back a pointer to a pointer: measured 2026-11-11, a `sed` over a view
+/// spilled into a second view, and on PR #1276 a `Read` of a spilled leaf's
+/// `response-<digest>` file did the same. One route, one answer.
 fn reads_a_view(envelope: &hook::Envelope) -> bool {
-    let named = envelope
-        .input
-        .get("file_path")
-        .and_then(serde_json::Value::as_str);
-    if named.is_none() && envelope.command.is_empty() {
+    let named: Vec<&str> = ["/file_path", "/notebook_path", "/path"]
+        .iter()
+        .filter_map(|pointer| {
+            envelope
+                .input
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+        })
+        .collect();
+    if named.is_empty() && envelope.command.is_empty() {
         return false;
+    }
+    if shows_a_capture(&envelope.command) {
+        return true;
     }
     let Ok(root) = git::repo_root(hook_session_home()) else {
         return false;
     };
-    named.map_or_else(
-        || {
-            envelope
-                .command
-                .split_whitespace()
-                .map(|word| word.trim_matches(|c| c == '\'' || c == '"'))
-                .any(|word| capture::is_view(&root, Path::new(word)))
-        },
-        |path| capture::is_view(&root, Path::new(path)),
-    )
+    let words = envelope
+        .command
+        .split_whitespace()
+        .map(|word| word.trim_matches(|c| c == '\'' || c == '"'));
+    named
+        .into_iter()
+        .chain(words)
+        .any(|word| capture::is_view(&root, Path::new(word)))
+}
+
+/// Whether a shell command runs `batten capture show` over a window the reader
+/// chose (`--lines`, `--grep`, `--bytes`), the engine's own reader of the store
+/// a pointer names (CLOUD-2284): bounding that window into another pointer is
+/// the pointer-to-pointer loop. A `capture show` with no window is the whole
+/// capture, and stays bounded.
+fn shows_a_capture(command: &str) -> bool {
+    runs_engine(command)
+        && command.split(['|', ';', '&', '\n']).any(|segment| {
+            let words: Vec<&str> = segment.split_whitespace().collect();
+            words.windows(2).any(|pair| pair == ["capture", "show"])
+                && words.iter().any(|word| {
+                    ["--lines", "--grep", "--bytes"]
+                        .iter()
+                        .any(|flag| word.split('=').next() == Some(*flag))
+                })
+        })
 }
 
 /// Mark every finding a tool's output carries as seen in this context, and cut

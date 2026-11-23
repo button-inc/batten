@@ -865,3 +865,161 @@ fn a_spill_note_names_no_field_route() {
     }
 }
 
+// --- every pointer resolves to readable bytes, on every surface --------------
+//
+// The contract (PR #1276): a pointer names a real file and the lines to start
+// reading; those lines are the bytes the result carried, never a spill marker;
+// and following the route — a `Read` or `Grep` of the view, a shell read of a
+// stored leaf, `capture show --lines` — is never bounded into another pointer.
+
+/// Post one `PostToolUse` call of `tool` in the `bound` session.
+fn post_call(
+    dir: &Path,
+    tool: &str,
+    input: &serde_json::Value,
+    response: &serde_json::Value,
+) -> std::process::Output {
+    common::run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "bound",
+            "tool_name": tool,
+            "tool_input": input,
+            "tool_response": response,
+        })
+        .to_string(),
+    )
+}
+
+/// Assert `posted` bounded its result at `pointer`, that the lines it names
+/// hold `body` and no spill marker, and return the view and the stored leaf's
+/// file in the capture store.
+fn resolves(posted: &std::process::Output, pointer: &str, body: &str) -> (PathBuf, PathBuf) {
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(posted));
+    let note = note_of(&posted.stdout);
+    let view = view_named(&posted.stdout);
+    let text = std::fs::read_to_string(&view).expect("the pointer names a real file");
+    assert!(
+        !text.contains("batten-spilled"),
+        "the view holds a spill marker, not the bytes: {view}"
+    );
+    let subjects = spilled_subjects(&note);
+    let subject = subjects
+        .iter()
+        .find(|subject| subject.pointer == pointer)
+        .unwrap_or_else(|| panic!("{pointer} in {note}"));
+    assert_eq!(section(&view, subject), body, "{pointer}: {note}");
+    let handle = leaf_handle(&note);
+    let digest = handle.trim_start_matches("response:");
+    let store = Path::new(&view)
+        .parent()
+        .and_then(Path::parent)
+        .expect("a view sits in the store's views/");
+    let leaf = store.join(format!("response-{digest}"));
+    assert_eq!(
+        std::fs::read_to_string(&leaf).expect("the stored leaf is a real file"),
+        body,
+        "the stored leaf is the field's own bytes"
+    );
+    (PathBuf::from(view), leaf)
+}
+
+/// Assert a follow-up call was left to the host: no rewrite, no pointer.
+fn left_alone(followed: &std::process::Output, route: &str) {
+    assert_eq!(
+        followed.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(followed)
+    );
+    let said = String::from_utf8_lossy(&followed.stdout);
+    assert!(
+        !said.contains("output point now") && !said.contains("updatedToolOutput"),
+        "{route} was bounded into another pointer: {said}"
+    );
+}
+
+/// Fails by: a `Read` of a spilled leaf's own stored file bounded into a
+/// pointer to a view of itself, the pointer-to-pointer loop.
+#[test]
+fn a_read_pointer_resolves_and_reading_its_leaf_is_not_recaptured() {
+    let dir = repo("result-bound-surface-read");
+    let body = payload(2000);
+    let posted = post_tool(&dir, &read_result(&body));
+    let (_, leaf) = resolves(&posted, "/file/content", &body);
+    let leaf = leaf.display().to_string();
+    let followed = post_call(
+        &dir,
+        "Read",
+        &serde_json::json!({ "file_path": leaf }),
+        &read_result(&body),
+    );
+    left_alone(&followed, "a Read of the stored leaf");
+}
+
+/// Fails by: a `Grep` over the view, which names it in `path` rather than
+/// `file_path`, bounded into another pointer.
+#[test]
+fn a_grep_pointer_resolves_and_grepping_its_view_is_not_recaptured() {
+    let dir = repo("result-bound-surface-grep");
+    let body = payload(2000);
+    let grep = |content: &str| {
+        serde_json::json!({
+            "mode": "content",
+            "numFiles": 1,
+            "filenames": [],
+            "content": content,
+            "numLines": content.lines().count(),
+        })
+    };
+    let posted = post_call(
+        &dir,
+        "Grep",
+        &serde_json::json!({ "pattern": "payload", "path": "." }),
+        &grep(&body),
+    );
+    let (view, _) = resolves(&posted, "/content", &body);
+    let followed = post_call(
+        &dir,
+        "Grep",
+        &serde_json::json!({ "pattern": "payload", "path": view.display().to_string() }),
+        &grep(&body),
+    );
+    left_alone(&followed, "a Grep of the view");
+}
+
+/// Fails by: a shell read of a stored leaf, or a `capture show --lines` of
+/// it, bounded into another pointer.
+#[test]
+fn a_bash_pointer_resolves_and_its_shell_reads_are_not_recaptured() {
+    let dir = repo("result-bound-surface-bash");
+    let body = payload(2000);
+    let shell = |command: &str| {
+        (
+            serde_json::json!({ "command": command }),
+            serde_json::json!({ "stdout": body, "stderr": "", "interrupted": false }),
+        )
+    };
+    let (input, response) = shell("cat big.log");
+    let posted = post_call(&dir, "Bash", &input, &response);
+    let (_, leaf) = resolves(&posted, "/stdout", &body);
+    let handle = format!(
+        "response:{}",
+        leaf.file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix("response-"))
+            .expect("a stored leaf is response-<digest>")
+    );
+    let (input, response) = shell(&format!("cat '{}'", leaf.display()));
+    left_alone(
+        &post_call(&dir, "Bash", &input, &response),
+        "a cat of the stored leaf",
+    );
+    let (input, response) = shell(&format!("batten capture show {handle} --lines 1-2000"));
+    left_alone(
+        &post_call(&dir, "Bash", &input, &response),
+        "capture show --lines",
+    );
+}
