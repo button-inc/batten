@@ -22,10 +22,13 @@
 # -i`, `cp` onto a tracked file) exposes no target here. The void catches it at
 # the gate's return, except an edit reverted before the gate returns.
 #
-# LIVENESS IS THE LAP'S OWN READING. `input.facts["land-live"]` is the pid the
-# `land` singleton lock names, when that pid exists (`task::singleton_holder`):
-# the reading `land` uses to refuse a second lap. A string while a lap is live,
-# null otherwise, so a call outside a lap is never judged here.
+# LIVENESS IS THE LAP'S OWN READING, IN THE CHECKOUT THE CALL WRITES
+# (CLOUD-2789). `input.facts["land-live"]` is the root of a checkout the call
+# writes in (a program's directory as its own `-C`/`--git-dir`/`--manifest-path`
+# moves it, a redirect's target, a write tool's target) whose `land` singleton
+# lock names a pid that exists (`task::singleton_holder`): the reading `land`
+# uses to refuse a second lap. A string while such a lap is live, null
+# otherwise, so a call that writes no lap's checkout is never judged here.
 
 # METADATA
 # description: |
@@ -54,6 +57,14 @@ inside(target) if {
 	is_string(target)
 	not startswith(target, "/")
 	not startswith(target, "&")
+}
+
+# Or absolute and under the live lap's checkout root (CLOUD-2789): a redirect or
+# a write tool naming `<root>/f` writes the lap's tree from wherever it runs,
+# while `/dev/null` or another checkout's path lies under no live root.
+inside(target) if {
+	is_string(target)
+	startswith(target, concat("", [input.facts["land-live"], "/"]))
 }
 
 held contains path if {
@@ -109,7 +120,21 @@ deny contains verdict if some verdict in {v.verdict | some v in violation}
 
 # --- cases ---------------------------------------------------------------
 
-live_lap := {"land-live": "4242"}
+live_lap := {"land-live": "/work/a"}
+
+test_an_absolute_write_under_the_live_root_is_held if {
+	some v in violation with input as {"facts": live_lap, "call": {"operation": "write", "writes": "/work/a/src/x.rs"}}
+	v.verdict == "path write held"
+}
+
+test_an_absolute_redirect_under_the_live_root_is_held if {
+	some v in violation with input as {"facts": live_lap, "call": {"segments": [{"redirects": [">", "/work/a/out.txt"], "redirect-writes": ["/work/a/out.txt"]}]}}
+	v.verdict == "path write held"
+}
+
+test_a_sibling_of_the_live_root_is_not_under_it if {
+	count(violation) == 0 with input as {"facts": live_lap, "call": {"operation": "write", "writes": "/work/ab/src/x.rs"}}
+}
 
 test_a_write_inside_the_checkout_is_held_while_a_lap_is_live if {
 	some v in violation with input as {"facts": live_lap, "call": {"operation": "write", "writes": "src/a.rs"}}
