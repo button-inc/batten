@@ -5,6 +5,7 @@
 #MUTANT auto-grant-pre-tool-only|s@^\tinput.call.event == "permission-denied"$@\tinput.call.event == "pre-tool"@|a_denial_in_auto_is_answered_with_retry_and_counted
 #MUTANT prompt-grant-pre-tool-only|s@^granted_event(event) if event in {"pre-tool", "permission-request"}$@granted_event(event) if event == "pre-tool"@|a_prompt_in_auto_is_answered_with_allow_and_counted
 #MUTANT denial-needs-the-mode-field|s@^\tnot input.call\["permission-mode"\] == "plan"$@\tis_string(input.call["permission-mode"])@|a_denial_with_no_mode_field_is_still_answered_and_counted
+#MUTANT host-decided-granted|s@^\tnot host_decided_call$@\ttrue@|a_destructive_git_call_is_left_to_the_host_in_every_mode
 # Every call batten allows is granted, in every permission mode but plan
 # (CLOUD-2125; widened by the owner's ruling of 2026-11-23, CLOUD-2768).
 #
@@ -36,12 +37,22 @@
 # the host only for a call batten allowed at pre-tool, so its grant is the one
 # that call already had. It adds no judgement; it stops discarding the one
 # batten already made.
+#
+# A CALL THE HOST DECIDES IS NOT BATTEN'S TO GRANT (CLOUD-2768). Allowed is not
+# granted for a git call that discards work with no batten alternative: the git
+# preset leaves it to the host on purpose, so this yields wherever
+# `git_host.host_decides` holds for any program in the call. That predicate is
+# one module shipped in both presets' bundles, so the two grants read one
+# judgement. Plan mode is unchanged.
 # Its own package: `preapprove` is a package-wide set, so sharing
 # `batten.claude_code_cloud` would put this grant into every sibling module's
 # own `test_` cases, which state what THAT module grants.
 package batten.claude_code_cloud.auto_mode
 
+import data.batten.git_host
 import rego.v1
+
+host_decided_call if git_host.call_decided(input.call, object.get(input, ["facts", "pathspec-status"], null))
 
 rules contains "mode grant now"
 
@@ -55,6 +66,7 @@ preapprove contains "mode grant now" if {
 	granted_event(input.call.event)
 	is_string(input.call["permission-mode"])
 	input.call["permission-mode"] != "plan"
+	not host_decided_call
 }
 
 # The denial: the host sends it only in auto mode, so plan is a guard here, not
@@ -62,6 +74,7 @@ preapprove contains "mode grant now" if {
 preapprove contains "mode grant now" if {
 	input.call.event == "permission-denied"
 	not input.call["permission-mode"] == "plan"
+	not host_decided_call
 }
 
 test_an_auto_mode_call_is_granted if {
@@ -106,6 +119,29 @@ test_a_permission_request_in_auto_is_granted if {
 
 test_a_permission_denied_is_granted if {
 	"mode grant now" in preapprove with input as {"call": {"event": "permission-denied", "tool": "Bash"}}
+}
+
+test_a_hard_reset_is_left_to_the_host if {
+	not "mode grant now" in preapprove with input as {"call": {
+		"event": "pre-tool", "tool": "Bash", "permission-mode": "default",
+		"command": "git reset --hard HEAD~1",
+		"programs": [{"name": "git", "arguments": ["reset", "--hard", "HEAD~1"], "subcommand": "reset"}],
+	}}
+}
+
+test_a_denied_forced_clean_is_not_retried if {
+	not "mode grant now" in preapprove with input as {"call": {
+		"event": "permission-denied", "tool": "Bash", "permission-mode": "auto",
+		"programs": [{"name": "git", "arguments": ["clean", "-fdx"], "subcommand": "clean"}],
+	}}
+}
+
+test_a_soft_reset_is_still_granted if {
+	"mode grant now" in preapprove with input as {"call": {
+		"event": "pre-tool", "tool": "Bash", "permission-mode": "default",
+		"command": "git reset --soft HEAD~1",
+		"programs": [{"name": "git", "arguments": ["reset", "--soft", "HEAD~1"], "subcommand": "reset"}],
+	}}
 }
 
 test_a_post_tool_event_grants_nothing if {
