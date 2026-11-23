@@ -3341,6 +3341,30 @@ fn an_exemption_with_no_reason_is_unfiled_as_well() {
     assert!(out.contains("exempt-unfiled"), "{out}");
 }
 
+/// Fails by: an exemption on a file that still declares rows read as a closed
+/// census, so those rows were never swept. Measured on this repository:
+/// `policy/connector-not-granted.rego` carried a `write-grant-refused` row under
+/// a stale `#MUTANT-EXEMPT`, outside the set, and no sweep ever applied it.
+#[test]
+fn an_exemption_over_declared_rows_is_refused_because_the_rows_never_run() {
+    let root = toy("census-exempt-rows");
+    write(
+        &root,
+        "policy/some-rule.rego",
+        "package batten.some_rule\n\
+         #MUTANT-EXEMPT CLOUD-931|a reason that went stale\n\
+         #MUTANT live|s@^deny if input.bad$@deny if false@|test_x\n\
+         deny if input.bad\n",
+    );
+    track(&root);
+    let (code, out, _) = census(&root, "nothing");
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("policy/some-rule.rego exempt-with-rows"),
+        "{out}"
+    );
+}
+
 #[test]
 fn declared_and_exempt_is_refused_because_the_reason_would_be_a_dead_letter() {
     let root = toy("census-both");
