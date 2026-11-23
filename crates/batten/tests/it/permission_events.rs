@@ -171,6 +171,41 @@ fn a_prompt_in_default_mode_is_answered_with_allow() {
     );
 }
 
+/// A CALL THE HOST DECIDES IS NOT GRANTED IN ANY MODE (CLOUD-2768): batten
+/// allows a hard reset and a forced clean, and the git preset leaves both to the
+/// host on purpose, so the mode grant yields on them at the prompt and at the
+/// auto-mode denial alike. Fails by: the yield removed from the mode grant
+/// (`host-decided-granted`), which answered every such prompt with allow.
+#[test]
+fn a_destructive_git_call_is_left_to_the_host_in_every_mode() {
+    for (event, mode, command) in [
+        (
+            "PermissionRequest",
+            Some("default"),
+            "git reset --hard HEAD~1",
+        ),
+        ("PermissionRequest", Some("auto"), "git clean -fdx"),
+    ] {
+        let root = root(&format!("host-decided-{}", mode.unwrap_or("none")));
+        let (code, documents) = adjudicate(&root, &shell(event, mode, command));
+        assert_eq!(code, Some(0), "{command}: {documents:?}");
+        assert!(
+            !allowed(&documents),
+            "{command} is the host's: {documents:?}"
+        );
+    }
+    let root = root("host-decided-denied");
+    let (code, documents) = adjudicate(
+        &root,
+        &shell("PermissionDenied", Some("auto"), "git clean -fdx"),
+    );
+    assert_eq!(code, Some(0), "{documents:?}");
+    assert!(
+        !retried(&documents),
+        "a denied forced clean is not retried: {documents:?}"
+    );
+}
+
 /// PLAN MODE IS READ-ONLY: a write prompt there is the person's. No answer
 /// document, exit 0, and no gap line, because it is outside the grant's scope.
 /// Fails by: the plan test removed from the grant (`plan-mode-write-granted`)

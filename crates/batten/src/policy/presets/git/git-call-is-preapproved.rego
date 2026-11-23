@@ -1,12 +1,6 @@
 #MUTANT-SUITE crates/batten/tests/it/git_preset.rs
 #MUTANT git-ungranted|s@^\tgit_call(program)$@\tfalse@|an_everyday_git_call_is_granted
-#MUTANT destructive-granted|s@^\tnot destructive(program)$@\ttrue@|a_destructive_git_call_is_left_to_the_host
-#MUTANT reset-subcommand-unread|s@^\tprogram.subcommand == "reset"$@\tfalse@|a_global_option_never_hides_a_destructive_git_call
-#MUTANT clean-restore-ungranted|s@^\tcount(status.pathspecs) > 0$@\tfalse@|a_checkout_of_a_clean_tracked_file_is_granted
-#MUTANT dirty-restore-granted|s@^\t\tp.clean == true$@\t\ttrue@|a_checkout_of_a_dirty_file_is_left_to_the_host
-#MUTANT bare-restore-granted|s@^\tprogram.subcommand == "restore"$@\tfalse@|a_bare_restore_of_a_dirty_file_is_left_to_the_host
-#MUTANT untracked-restore-granted|s@^\t\tp.tracked == true$@\t\ttrue@|a_checkout_of_an_untracked_path_is_left_to_the_host
-#MUTANT glob-restore-granted|s@^\t\tp.literal == true$@\t\ttrue@|a_globbed_or_directory_pathspec_is_left_to_the_host
+#MUTANT destructive-granted|s@^\tnot git_host.host_decides\(program, pathspec_status\)$@\ttrue@|a_destructive_git_call_is_left_to_the_host
 #MUTANT plan-granted|s@^\tnot input.call\["permission-mode"\] == "plan"$@\ttrue@|a_git_write_is_not_granted_in_plan_mode
 # Every git call batten allows is put to no one (CLOUD-2057).
 #
@@ -27,9 +21,11 @@
 # DESTRUCTIVE CALLS ARE LEFT TO THE HOST, NEVER DENIED. A call that discards
 # work with no batten alternative is neither granted nor refused here: refusing
 # it would be a dead end, and granting it would decide a loss nobody asked
-# about. The host asks, as it does for a `destructive` batten verb.
+# about. The host asks, as it does for a `destructive` batten verb. WHICH calls
+# those are is `host-decided.rego`'s, which the mode grant reads too (CLOUD-2768).
 package batten.git
 
+import data.batten.git_host
 import rego.v1
 
 rules contains "program grant now"
@@ -49,9 +45,9 @@ preapprove contains "program grant now" if {
 
 granted(program) if {
 	git_call(program)
-	not destructive(program)
+	pathspec_status := object.get(input, ["facts", "pathspec-status"], null)
+	not git_host.host_decides(program, pathspec_status)
 	not pushes_to_trunk(program)
-	not discards(program, object.get(input, ["facts", "pathspec-status"], null))
 }
 
 granted(program) if program.name == "cd"
@@ -73,108 +69,6 @@ some_output_redirect(call) if {
 some_output_redirect(call) if {
 	not is_array(call.segments)
 }
-
-has(arguments, flag) if flag in arguments
-
-has_prefix(arguments, prefix) if {
-	some word in arguments
-	startswith(word, prefix)
-}
-
-# What discards work and has no batten alternative. Stated once, here. Each
-# reads the subcommand the engine projects past git's own options
-# (CLOUD-2354), never a copy of git's option table.
-destructive(program) if {
-	program.subcommand == "clean"
-	some word in program.arguments
-	regex.match(`^(-[a-zA-Z]*f[a-zA-Z]*|--force)$`, word)
-}
-
-destructive(program) if {
-	program.subcommand == "branch"
-	some word in program.arguments
-	regex.match(`^(-[a-zA-Z]*D[a-zA-Z]*)$`, word)
-}
-
-destructive(program) if {
-	program.subcommand == "branch"
-	has(program.arguments, "--delete")
-	has(program.arguments, "--force")
-}
-
-destructive(program) if {
-	program.subcommand == "push"
-	some word in program.arguments
-	word in {"--delete", "-d"}
-}
-
-# `git push origin :feat` deletes `feat`.
-destructive(program) if {
-	program.subcommand == "push"
-	some word in program.arguments
-	startswith(word, ":")
-}
-
-destructive(program) if {
-	program.subcommand == "reset"
-	has(program.arguments, "--hard")
-}
-
-# DISCARDING WORKING-TREE CHANGES, decided by what is at the paths
-# (CLOUD-2684): a checkout or restore of literal, tracked, clean pathspecs loses
-# nothing, so it is granted; anything else is left to the host. The fact is the
-# engine's `pathspec-status`, `null` where the call names no such program or one
-# it cannot place, and `null` never reads as clean. A restore needs no `--`.
-discards(program, status) if {
-	program.subcommand == "checkout"
-	some word in program.arguments
-	word in {"--", "."}
-	not clean_pathspecs(status)
-}
-
-discards(program, status) if {
-	program.subcommand == "restore"
-	not clean_pathspecs(status)
-}
-
-clean_pathspecs(status) if {
-	is_array(status.pathspecs)
-	count(status.pathspecs) > 0
-	every p in status.pathspecs {
-		p.literal == true
-		p.tracked == true
-		p.clean == true
-	}
-}
-
-destructive(program) if {
-	program.subcommand == "stash"
-	some word in program.arguments
-	word in {"drop", "clear"}
-}
-
-destructive(program) if {
-	program.subcommand == "worktree"
-	has(program.arguments, "remove")
-	has_prefix(program.arguments, "--force")
-}
-
-destructive(program) if {
-	program.subcommand == "update-ref"
-	has(program.arguments, "-d")
-}
-
-destructive(program) if {
-	program.subcommand == "reflog"
-	has(program.arguments, "expire")
-}
-
-destructive(program) if {
-	program.subcommand == "gc"
-	has_prefix(program.arguments, "--prune")
-}
-
-destructive(program) if program.subcommand == "filter-branch"
 
 # A push that names the trunk lands without the landing loop's gate and CI, so it
 # is the host's to ask about rather than this module's to wave through. The trunk
