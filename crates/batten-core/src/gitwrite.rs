@@ -1829,6 +1829,63 @@ pub fn borrow_repository(source: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `git clone --shared <source> <dest>`, in-process: [`borrow_repository`]'s
+/// repository (alternates, `HEAD`, the trunk refs), then a checkout of `HEAD`'s
+/// tree from the empty one, so every tracked file is on disk with its mode and
+/// the index carries each file's stat — a status over the clone compares sizes,
+/// as it does in a real one, rather than hashing every file.
+///
+/// # Errors
+///
+/// As [`borrow_repository`], or a checkout that will not complete.
+pub fn clone_shared(source: &Path, dest: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest)
+        .map_err(|err| anyhow::anyhow!("gitwrite: cannot create {}: {err}", dest.display()))?;
+    borrow_repository(source, dest)?;
+    let repo = crate::git::open_for_write(dest)?;
+    let head = repo
+        .head_id()
+        .map_err(|err| anyhow::anyhow!("gitwrite: HEAD will not resolve: {err}"))?
+        .detach();
+    let empty = gix::ObjectId::empty_tree(repo.object_hash());
+    checkout_between(&repo, empty, tree_of(&repo, head)?)
+}
+
+/// `git add <paths>` for paths the index already tracks: each file's bytes are
+/// written as a blob and its entry takes that id and the file's stat.
+///
+/// # Errors
+///
+/// A path the index does not track, a file that will not read or stat, or an
+/// index that will not write.
+pub fn stage_paths(dir: &Path, paths: &[String]) -> Result<()> {
+    let repo = crate::git::open_for_write(dir)?;
+    let mut index = repo
+        .open_index()
+        .map_err(|err| anyhow::anyhow!("gitwrite: no index in {}: {err}", dir.display()))?;
+    for path in paths {
+        let full = dir.join(path);
+        let body = crate::fsio::read(&full)
+            .map_err(|err| anyhow::anyhow!("gitwrite: cannot read {}: {err}", full.display()))?;
+        let id = repo
+            .write_blob(&body)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {path} will not write: {err}"))?
+            .detach();
+        let landed = gix::index::fs::Metadata::from_path_no_follow(&full)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {path} will not stat: {err}"))?;
+        let entry = index
+            .entries_mut_with_paths()
+            .find(|(_, at)| *at == path.as_str())
+            .map(|(entry, _)| entry)
+            .ok_or_else(|| anyhow::anyhow!("gitwrite: {path} is not tracked"))?;
+        entry.id = id;
+        entry.stat = gix::index::entry::Stat::from_fs(&landed).unwrap_or_default();
+    }
+    index
+        .write(gix::index::write::Options::default())
+        .map_err(|err| anyhow::anyhow!("gitwrite: the index will not write: {err}"))
+}
+
 /// One directory level of a tree being assembled from a path list.
 #[derive(Default)]
 struct Node {
@@ -2245,6 +2302,57 @@ mod tests {
             !source_repo.has_object(id),
             "a write in the copy reached the source"
         );
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&copy);
+    }
+
+    /// A shared clone is a checkout of the source's `HEAD`: every tracked file
+    /// on disk, an index carrying each one's stat (so a status compares sizes,
+    /// not contents), and nothing staged — until a path is staged, and then
+    /// exactly that path. A path the index does not track is refused.
+    ///
+    /// Fails by: the checkout skipped (no file, or a zero-stat index), the
+    /// staging writing nothing, or staging an untracked path answering `Ok`.
+    #[test]
+    fn a_shared_clone_is_a_clean_checkout_that_stages_only_what_it_is_told() {
+        let source = crate::scratch::scratch("gitwrite-clone-source");
+        init_on_main(&source).unwrap_or_else(|err| panic!("init: {err}"));
+        for (path, body) in [("a.txt", "a\n"), ("dir/b.txt", "b\n")] {
+            std::fs::create_dir_all(source.join(path).parent().unwrap_or(&source))
+                .unwrap_or_else(|err| panic!("{err}"));
+            std::fs::write(source.join(path), body).unwrap_or_else(|err| panic!("{err}"));
+        }
+        commit_paths(
+            &source,
+            &["a.txt".to_owned(), "dir/b.txt".to_owned()],
+            "one",
+        )
+        .unwrap_or_else(|err| panic!("commit: {err}"));
+        let copy = crate::scratch::scratch("gitwrite-clone-copy");
+        let _ = std::fs::remove_dir_all(&copy);
+        clone_shared(&source, &copy).unwrap_or_else(|err| panic!("clone: {err}"));
+        assert_eq!(
+            crate::fsio::read_to_string(copy.join("dir/b.txt"))
+                .ok()
+                .as_deref(),
+            Some("b\n")
+        );
+        let repo = gix::open(&copy).unwrap_or_else(|err| panic!("open: {err}"));
+        let index = repo
+            .open_index()
+            .unwrap_or_else(|err| panic!("index: {err}"));
+        assert!(
+            index.entries().iter().all(|entry| entry.stat.size > 0),
+            "every entry carries the stat of the file it wrote"
+        );
+        let staged = |dir: &Path| {
+            crate::git::staged_paths(dir).unwrap_or_else(|err| panic!("staged: {err}"))
+        };
+        assert!(staged(&copy).is_empty(), "{:?}", staged(&copy));
+        std::fs::write(copy.join("a.txt"), "a\none line\n").unwrap_or_else(|err| panic!("{err}"));
+        stage_paths(&copy, &["a.txt".to_owned()]).unwrap_or_else(|err| panic!("stage: {err}"));
+        assert_eq!(staged(&copy).into_iter().collect::<Vec<_>>(), ["a.txt"]);
+        assert!(stage_paths(&copy, &["absent.txt".to_owned()]).is_err());
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(&copy);
     }
