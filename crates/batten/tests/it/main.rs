@@ -293,6 +293,7 @@ mod mcp_spawn;
 mod mcp_timeout_budget;
 mod measure_and_edit_routes;
 mod mediated_admission;
+mod mediated_selectors;
 mod mediated_verbs;
 mod memories;
 mod memory_injection;

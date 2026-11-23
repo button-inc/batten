@@ -882,6 +882,39 @@ fn a_write_into_the_checkout_is_held_while_a_lap_is_live() {
     );
 }
 
+/// Whether `answer` refused under `path write held`: the row named AND a deny
+/// on the host's contract, so an advisory naming the row is not read as a hold.
+fn held_answer(answer: &std::process::Output) -> bool {
+    let named =
+        format!("{}{}", common::stdout(answer), common::stderr(answer)).contains("path write held");
+    if named {
+        assert!(
+            common::stdout(answer).contains(r#""permissionDecision":"deny""#),
+            "a hold refuses: {answer:?}"
+        );
+    }
+    named
+}
+
+/// The exit code `adjudicate --harness exit-code` gives a Bash call of
+/// `command` in `dir`: `2` is a refusal.
+fn bash_exit(dir: &std::path::Path, command: &str) -> Option<i32> {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    })
+    .to_string();
+    common::stdin_run(
+        &mut common::batten(),
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &payload,
+    )
+    .status
+    .code()
+}
+
 /// A Claude Code `PreToolUse` Bash call of `command`, judged in `dir`; whether
 /// it was refused under `path write held`.
 fn bash_held(dir: &std::path::Path, command: &str) -> bool {
@@ -897,7 +930,7 @@ fn bash_held(dir: &std::path::Path, command: &str) -> bool {
         &["adjudicate", "--harness", "claude-code"],
         &payload,
     );
-    format!("{}{}", common::stdout(&answer), common::stderr(&answer)).contains("path write held")
+    held_answer(&answer)
 }
 
 /// **A SHELL READ IS NOT A WRITE BECAUSE IT REDIRECTS** (#1276): while a lap is
@@ -962,6 +995,11 @@ fn mediated_filing_and_body_edits_are_held_as_the_direct_tool_is() {
         bash_held(&dir, &mediated("Linear", "save_issue", &file)),
         "the mediated filing is held as the direct one is"
     );
+    assert_eq!(
+        bash_exit(&dir, &mediated("Linear", "save_issue", &file)),
+        Some(2),
+        "the mediated filing's hold is a refusal on the exit-code contract"
+    );
     assert!(
         tool_held(&dir, "mcp__github__update_pull_request", &body),
         "the direct body edit is held"
@@ -969,6 +1007,16 @@ fn mediated_filing_and_body_edits_are_held_as_the_direct_tool_is() {
     assert!(
         bash_held(&dir, &mediated("github", "update_pull_request", &body)),
         "the mediated body edit is held as the direct one is"
+    );
+    assert_eq!(
+        bash_exit(&dir, &mediated("github", "update_pull_request", &body)),
+        Some(2),
+        "the mediated body edit's hold is a refusal on the exit-code contract"
+    );
+    assert_eq!(
+        bash_exit(&dir, &mediated("github", "pull_request_read", &read)),
+        Some(0),
+        "a mediated read is allowed on the exit-code contract"
     );
     assert!(
         !bash_held(&dir, &mediated("github", "pull_request_read", &read)),
@@ -1035,7 +1083,7 @@ fn tool_held(dir: &std::path::Path, tool: &str, arguments: &serde_json::Value) -
         &["adjudicate", "--harness", "claude-code"],
         &payload,
     );
-    format!("{}{}", common::stdout(&answer), common::stderr(&answer)).contains("path write held")
+    held_answer(&answer)
 }
 
 /// **THE BOARD AND THE PR BODY ARE THE GATE'S INPUTS TOO** (CLOUD-2785): laps 6

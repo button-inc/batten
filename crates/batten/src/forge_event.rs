@@ -502,6 +502,7 @@ fn envelope(row: &CatalogRow, payload: &Value, repo: Option<String>) -> Envelope
             git_ref,
             key,
         }),
+        mediated: None,
     }
 }
 

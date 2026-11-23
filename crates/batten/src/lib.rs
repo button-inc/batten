@@ -4809,6 +4809,7 @@ fn run_mcp(
         &McpAnswer {
             config: &config,
             method,
+            params: &params,
             source: &wiring.source,
             result: &result,
             mints: &resolved.mints,
@@ -4955,6 +4956,9 @@ struct McpAnswer<'a> {
     config: &'a crate::config_model::McpConfig,
     /// The method that was called.
     method: &'a str,
+    /// The params it was handed, which a `[[mint]]` row's `selects_at` reads
+    /// exactly as it reads a direct call's input (CLOUD-2789).
+    params: &'a serde_json::Value,
     /// Which `[[mcp.source]]` row resolved the wiring, by id.
     source: &'a str,
     /// The JSON-RPC result, still framed.
@@ -4966,6 +4970,59 @@ struct McpAnswer<'a> {
     mints: &'a [crate::config_model::MintDeclared],
     /// The named-regex table, for a body's `{authority:…}` piece.
     patterns: &'a [crate::pattern::NamedPattern],
+}
+
+/// The receipts a dispatched call mints: [`mint_receipts`] over the method, the
+/// params the caller handed it and the unframed answer.
+///
+/// THE REQUEST INPUT IS THE CALL'S PARAMS (CLOUD-2789), so a row declaring a
+/// `selects_at` selects the mediated call exactly as it selects the direct one,
+/// whose input is the same document. Before this the verb passed `null`, and
+/// such a row selected nothing on this route.
+fn mint_dispatched(
+    mints: &[crate::config_model::MintDeclared],
+    patterns: &[crate::pattern::NamedPattern],
+    method: &str,
+    params: &serde_json::Value,
+    payload: &serde_json::Value,
+    repo: &Path,
+) {
+    mint_receipts(
+        mints,
+        method,
+        params,
+        payload,
+        repo,
+        ready::Grammar::from_compiled(&crate::pattern::compiled(patterns))
+            .ok()
+            .as_ref(),
+    );
+}
+
+/// [`mint_dispatched`] under `repo`'s own resolved config, as `mcp call` reaches
+/// it once its exchange has completed: a case drives the verb's mint without a
+/// listener to dispatch to.
+///
+/// # Errors
+///
+/// When `repo`'s config does not resolve.
+#[doc(hidden)]
+pub fn mint_dispatched_for_test(
+    repo: &Path,
+    method: &str,
+    params: &serde_json::Value,
+    payload: &serde_json::Value,
+) -> Result<()> {
+    let resolved = resolve::resolve(repo, &Overrides::default())?;
+    mint_dispatched(
+        &resolved.mints,
+        &resolved.patterns,
+        method,
+        params,
+        payload,
+        repo,
+    );
+    Ok(())
 }
 
 /// Store the response, record the call, and print a pointer plus the reduction.
@@ -4984,6 +5041,7 @@ fn file_and_report(
     let McpAnswer {
         config,
         method,
+        params,
         source,
         result,
         mints,
@@ -5062,22 +5120,7 @@ fn file_and_report(
     // AFTER THE CAPTURE AND THE CALL LOG, mirroring `record_post_tool`: the
     // record of the exchange is written first and the derived receipt second, so
     // a mint can never be the reason a capture is missing.
-    mint_receipts(
-        mints,
-        method,
-        // NO REQUEST INPUT REACHES HERE, so a row declaring a `selects_at`
-        // selects NOTHING on this path — fail-closed, and stated rather than
-        // papered over. `file_and_report` is handed the answer and not the call,
-        // and synthesising an input would be the boundary certifying a selection
-        // it never read. A row that declares no selector is unaffected, which is
-        // every landed row.
-        &serde_json::Value::Null,
-        &payload.value,
-        repo,
-        ready::Grammar::from_compiled(&crate::pattern::compiled(patterns))
-            .ok()
-            .as_ref(),
-    );
+    mint_dispatched(mints, patterns, method, params, &payload.value, repo);
 
     // THE TRANSPARENCY DEFAULT (CLOUD-418's mirror). A method no row declares is
     // returned WHOLE, and so is one whose row could not reach its payload: a
@@ -23317,7 +23360,8 @@ fn dispatch_handlers(
     // CLOUD-460's narrowing, and the reason `pre-tool` is affordable at all: a
     // repository declaring no handler for this event pays one slice scan and
     // never reaches a spawn.
-    if !handler::selects(&hook_config.handlers, envelope.event, &envelope.raw_tool) {
+    let tools: Vec<&str> = envelope.tools().collect();
+    if !handler::selects(&hook_config.handlers, envelope.event, &tools) {
         return None;
     }
     // EMPTY IS ABSENT HERE, and the conversion happens once, at the boundary
@@ -23331,7 +23375,7 @@ fn dispatch_handlers(
         hook_authority_root(),
         &hook_config.handlers,
         envelope.event,
-        &envelope.raw_tool,
+        &tools,
         command,
         envelope.writes.as_deref(),
         &handler::Payload::from(raw),
@@ -26031,6 +26075,7 @@ fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
         overrides,
         &envelope.raw_tool,
         &envelope.input,
+        envelope.mediated.as_ref(),
         &envelope.result,
     );
 }
@@ -26056,7 +26101,20 @@ fn resolve_backgrounded(overrides: &Overrides, envelope: &hook::Envelope) {
     let transcript = envelope.transcript.as_deref().map(Path::new);
     for (pending, stdout) in background::resolve(&git_dir, transcript, now_unix()) {
         let result = serde_json::json!({"stdout": stdout, "stderr": ""});
-        write_records_for(overrides, &pending.tool, &pending.input, &result);
+        // The replayed call decoded as the hook decodes a live one: its command
+        // resolved once to the connector call it mediates (CLOUD-2789).
+        let mediated = pending
+            .input
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .and_then(hook::mediated_mcp_call);
+        write_records_for(
+            overrides,
+            &pending.tool,
+            &pending.input,
+            mediated.as_ref(),
+            &result,
+        );
         replay_mints(overrides, &pending, &result);
     }
 }
@@ -26067,6 +26125,7 @@ fn write_records_for(
     overrides: &Overrides,
     raw_tool: &str,
     input: &serde_json::Value,
+    mediated: Option<&(String, serde_json::Value)>,
     raw: &serde_json::Value,
 ) {
     // A MEDIATED CALL IS THE CALL IT MEDIATES (CLOUD-2789): `batten mcp call
@@ -26074,14 +26133,9 @@ fn write_records_for(
     // and the answer the direct connector call would, so every row selects
     // both alike. The answer is the command's stdout, where the verb prints the
     // payload; a stdout that is no JSON is an answer with no members, which a
-    // row's `requires` reads as could-not-look.
-    let mediated = input
-        .get("command")
-        .and_then(serde_json::Value::as_str)
-        .and_then(hook::mediated_mcp_call);
-    let selected_tool = mediated
-        .as_ref()
-        .map_or(raw_tool, |(tool, _)| tool.as_str());
+    // row's `requires` reads as could-not-look. Resolved by the caller, once,
+    // as `Envelope::mediated`.
+    let selected_tool = mediated.map_or(raw_tool, |(tool, _)| tool.as_str());
     let Some(result) = facts::payload_in(raw) else {
         return;
     };
@@ -26104,7 +26158,7 @@ fn write_records_for(
     // records a measurement of nothing. Kept for `resolve_backgrounded` instead,
     // when some row selects the call at all.
     if let Some(id) = background::task_id(&result) {
-        defer_backgrounded(&policy, recorders, raw_tool, input, &result, id);
+        defer_backgrounded(&policy, recorders, raw_tool, input, mediated, &result, id);
         return;
     }
     // THE ANCHOR, NEVER THE CWD (CLOUD-1024's measured defect, restated here
@@ -26153,7 +26207,7 @@ fn write_records_for(
     // THE SHELL CALL STAYS A SHELL CALL TOO: a row over the shell still reads
     // it, and the mediated pass is the connector call's rows reading the same
     // call under the name the host gives the direct one.
-    if let Some((tool, params)) = &mediated {
+    if let Some((tool, params)) = mediated {
         let answer = result
             .get("stdout")
             .and_then(serde_json::Value::as_str)
@@ -26170,6 +26224,7 @@ fn defer_backgrounded(
     recorders: &[crate::config_model::RecorderDeclared],
     raw_tool: &str,
     input: &serde_json::Value,
+    mediated: Option<&(String, serde_json::Value)>,
     result: &serde_json::Value,
     id: &str,
 ) {
@@ -26188,12 +26243,32 @@ fn defer_backgrounded(
         branch: None,
         now: i64::try_from(now_unix()).unwrap_or(i64::MAX),
     };
-    let selected = recorders.iter().any(|row| {
-        crate::facts::selects_tool_name(&row.tool, raw_tool)
+    // THE MEDIATED CALL IS SELECTED AS THE DIRECT ONE (CLOUD-2789): its rows
+    // judged over its params, so a backgrounded `batten mcp call` is kept for
+    // the replay that records it under the connector's name.
+    let mediated_context = mediated.map(|(tool, params)| {
+        (
+            tool.as_str(),
+            crate::recorder::Context {
+                input: params,
+                ..context
+            },
+        )
+    });
+    let selects = |row: &crate::config_model::RecorderDeclared,
+                   tool: &str,
+                   context: &crate::recorder::Context<'_>| {
+        crate::facts::selects_tool_name(&row.tool, tool)
             && !matches!(
-                crate::recorder::outcome(row, &context),
+                crate::recorder::outcome(row, context),
                 crate::recorder::Outcome::NotSelected
             )
+    };
+    let selected = recorders.iter().any(|row| {
+        selects(row, raw_tool, &context)
+            || mediated_context
+                .as_ref()
+                .is_some_and(|(tool, context)| selects(row, tool, context))
     });
     if selected {
         let _ = background::defer(&git_dir, id, &pending_for(root, raw_tool, input));
