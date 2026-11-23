@@ -17,7 +17,7 @@ use batten::capture::StreamedChild as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{git_in, scratch, stderr, stdout, write};
+use common::{stderr, stdout, write};
 
 /// The hook's ceiling (`perf-assert`'s): what "returns at once" means here.
 const CEILING: Duration = Duration::from_millis(100);
@@ -108,7 +108,7 @@ pub(crate) fn setup_phase(repo: &Path) -> Option<String> {
 
 /// A fixture repository declaring one `session-start` row running `body`.
 fn bench(name: &str, body: &str, timeout_ms: u64) -> PathBuf {
-    let repo = scratch(name).join("repo");
+    let repo = common::Fixture::new(name).build();
     std::fs::create_dir_all(repo.join("steps")).expect("the fixture repo");
     write(
         &repo,
@@ -125,7 +125,6 @@ fn bench(name: &str, body: &str, timeout_ms: u64) -> PathBuf {
         mode.set_mode(0o755);
         std::fs::set_permissions(&path, mode).expect("the stub is runnable");
     }
-    git_in(&repo, &["init", "-q", "-b", "main", "."]);
     let wired = common::batten()
         .current_dir(&repo)
         .args(["wiring", "register", "--all"])
@@ -216,7 +215,7 @@ fn a_session_start_registers_its_task_before_it_returns() {
 #[test]
 fn no_compile_runs_without_a_source_pin() {
     use std::os::unix::fs::PermissionsExt as _;
-    let repo = scratch("session-start-no-compile").join("repo");
+    let repo = common::Fixture::new("session-start-no-compile").build();
     std::fs::create_dir_all(repo.join("crates/batten")).expect("the fixture repo");
     write(
         &repo,
@@ -253,7 +252,6 @@ fn no_compile_runs_without_a_source_pin() {
         "batten.toml",
         &toml::to_string(&config).expect("the fixture config renders"),
     );
-    git_in(&repo, &["init", "-q", "-b", "main", "."]);
 
     let bin = repo.join("stub-bin");
     std::fs::create_dir_all(&bin).expect("the stub directory");
@@ -309,7 +307,7 @@ fn no_compile_runs_without_a_source_pin() {
 #[test]
 fn the_preset_install_runs_before_any_handler() {
     use std::os::unix::fs::PermissionsExt as _;
-    let repo = scratch("session-start-install-first").join("repo");
+    let repo = common::Fixture::new("session-start-install-first").build();
     std::fs::create_dir_all(repo.join("steps")).expect("the fixture repo");
     let log = repo.join("order.log");
     write(
@@ -342,7 +340,6 @@ fn the_preset_install_runs_before_any_handler() {
             log.display()
         ),
     );
-    git_in(&repo, &["init", "-q", "-b", "main", "."]);
     let path = std::env::join_paths(
         std::iter::once(bin).chain(std::env::split_paths(&common::ambient_path())),
     )

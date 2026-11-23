@@ -632,6 +632,13 @@ declared_modules := {
 	# and the fact model bars that from a call being adjudicated -- `lib` is the
 	# caller that runs these at session start, which is not such a call.
 	"startup",
+	# `session_setup` arrived with CLOUD-2840: the session's setup as ONE detached
+	# task. It sits ABOVE `startup`, `handler`, `doctor` and `task`, all of which
+	# it drives, and below `lib`, its only caller: the hook starts it, and
+	# `startup --session` is the task. Like `startup` it must not be reachable
+	# from the mediated boundary as a step: what the boundary reads of it is the
+	# recorded outcome, never a spawn.
+	"session_setup",
 	# `environment` arrived with CLOUD-1383 and this rule named it, which is the
 	# coverage half working yet again: the module was written, its tier was green,
 	# clippy was clean, and this is what said nobody had placed it.
