@@ -71,6 +71,10 @@ const OK: &str = "#!/bin/sh\necho ran >>bin/ran.log\n";
 /// A step command that fails with the code the case chooses.
 const FAIL: &str = "#!/bin/sh\necho 'stub failure detail' >&2\nexit \"${STUB_CODE:-2}\"\n";
 
+/// A step command that leaves a mark each time it RUNS and exits with the code
+/// the case chooses, so a failure answered from its receipt is observable.
+const RED: &str = "#!/bin/sh\necho ran >>bin/red.log\necho 'red detail' >&2\nexit \"${STUB_CODE:-0}\"\n";
+
 /// A step command that PASSES after leaving the committed authority unloadable,
 /// so the record after it cannot recompute the key.
 const BREAK: &str = "#!/bin/sh\necho ran >>bin/ran.log\nprintf 'version = [\\n' >batten.toml\n";
@@ -142,6 +146,7 @@ impl Repo {
             ("bin/decl", DECL),
             ("bin/ok", OK),
             ("bin/fail", FAIL),
+            ("bin/red", RED),
             ("bin/break", BREAK),
             ("bin/cargo", CARGO),
         ] {
@@ -631,12 +636,15 @@ fn a_hit_does_not_run_the_command() {
 }
 
 #[test]
-fn a_failing_command_passes_its_code_through_and_records_nothing() {
+fn a_failing_command_passes_its_code_through_and_records_no_pass() {
     // CLOUD-1090's property, now the verb's: the child's `2` stays `2` rather
-    // than folding onto a runner's `1`, and a denied run leaves no receipt the
-    // next run could answer from.
+    // than folding onto a runner's `1`, and a denied run leaves no PASS receipt
+    // the next run could answer from. Each code is a different input state:
+    // over the same one the second run would be answered from the first's
+    // failure receipt (CLOUD-2253).
     let repo = Repo::new("run-fails");
-    for code in ["2", "7"] {
+    for (input, code) in [("one\n", "2"), ("two\n", "7")] {
+        repo.stage(input);
         let out = repo.run_step(&["mystep"], &["fail"], &[("STUB_CODE", code)]);
         assert_eq!(
             out.status.code().map(|code| code.to_string()).as_deref(),
@@ -645,7 +653,11 @@ fn a_failing_command_passes_its_code_through_and_records_nothing() {
             common::stderr(&out)
         );
     }
-    assert!(repo.receipts().is_empty(), "{:?}", repo.receipts());
+    let receipts = repo.receipts();
+    assert_eq!(receipts.len(), 2, "one failure receipt per key: {receipts:?}");
+    for receipt in &receipts {
+        assert!(read(receipt).contains(" exit "), "{}", read(receipt));
+    }
     assert_eq!(repo.check(&["mystep"]), "miss");
 }
 
@@ -1239,4 +1251,86 @@ fn a_write_under_an_ignored_path_is_not_a_hazard() {
         "traced or not, an ignored write records: {}",
         common::stderr(&out)
     );
+}
+
+// --- a failed run is a verdict too (CLOUD-2253) --------------------------------
+//
+// A receipt written only on success left a failed check with no record of its
+// inputs, so a lap on a known-red tree re-ran the whole fan to say red again.
+
+/// The `step run` of the `red` stub over `mystep`, exiting `code` if it runs.
+fn red_run(repo: &Repo, code: &str, env: &[(&str, &str)]) -> Output {
+    let mut env = env.to_vec();
+    env.push(("STUB_CODE", code));
+    repo.run_step(&["mystep"], &["red"], &env)
+}
+
+/// How many times the `red` stub has run.
+fn red_runs(repo: &Repo) -> usize {
+    read(&repo.path("bin/red.log")).lines().count()
+}
+
+/// Fails by: a failure leaving no receipt (the command re-runs and its new
+/// code wins), the recorded code not the one returned, or the answer printing
+/// the log's bytes rather than a pointer to them.
+#[test]
+fn a_failed_run_is_not_re_run_on_unchanged_inputs_and_returns_its_code() {
+    let repo = Repo::new("red-kept");
+    let first = red_run(&repo, "7", &[]);
+    assert_eq!(first.status.code(), Some(7), "{}", common::stderr(&first));
+    let again = red_run(&repo, "0", &[]);
+    let err = common::stderr(&again);
+    assert_eq!(again.status.code(), Some(7), "the recorded code: {err}");
+    assert_eq!(red_runs(&repo), 1, "answered from the failure receipt: {err}");
+    assert_eq!(
+        err.split_whitespace().next(),
+        Some("red"),
+        "the answer says red first: {err}"
+    );
+    let pointer = err
+        .lines()
+        .find_map(|line| line.strip_prefix("step run: mystep failed with exit 7; read "))
+        .unwrap_or_else(|| panic!("the answer points at the failed run's log: {err}"));
+    assert!(pointer.contains("stderr:"), "a capture handle: {pointer}");
+    assert!(!err.contains("red detail"), "a pointer, never the log: {err}");
+}
+
+/// Fails by: a failure receipt answering for inputs it never judged.
+#[test]
+fn a_changed_input_re_runs_a_failed_step() {
+    let repo = Repo::new("red-moved");
+    assert_eq!(red_run(&repo, "7", &[]).status.code(), Some(7));
+    repo.stage("two\n");
+    let out = red_run(&repo, "0", &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert_eq!(red_runs(&repo), 2);
+}
+
+/// Fails by: the bypass answered from a failure receipt, or a bypassed run
+/// writing a receipt over the failure.
+#[test]
+fn the_bypass_re_runs_a_failed_step() {
+    let repo = Repo::new("red-bypass");
+    assert_eq!(red_run(&repo, "7", &[]).status.code(), Some(7));
+    let bypassed = red_run(&repo, "0", &[("BATTEN_STEP_RECEIPT_BYPASS", "1")]);
+    assert_eq!(bypassed.status.code(), Some(0), "{}", common::stderr(&bypassed));
+    assert_eq!(red_runs(&repo), 2, "the bypass forces a run");
+    let after = red_run(&repo, "0", &[]);
+    assert_eq!(after.status.code(), Some(7), "a bypassed pass records nothing");
+    assert_eq!(red_runs(&repo), 2);
+}
+
+/// Fails by: a failure receipt the engine released before it (which reads the
+/// key as the last field of the first line) would read as a PASS.
+#[test]
+fn a_failure_receipt_never_reads_as_a_pass_to_the_key_reader() {
+    let repo = Repo::new("red-shape");
+    assert_eq!(red_run(&repo, "7", &[]).status.code(), Some(7));
+    let receipts = repo.receipts();
+    assert_eq!(receipts.len(), 1, "{receipts:?}");
+    let body = read(&receipts[0]);
+    let first = body.lines().next().unwrap_or_default();
+    let key = first.split_whitespace().nth(2).unwrap_or_default();
+    assert_eq!(key.len(), 64, "the key rides the first line: {body}");
+    assert_ne!(first.split_whitespace().last(), Some(key), "{body}");
 }
