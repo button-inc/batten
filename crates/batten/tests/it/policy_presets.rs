@@ -621,7 +621,7 @@ fn every_shipped_preset_passes_its_own_suite() {
         // states it per scope directly, and `mise run policy-test` over the
         // committed `batten.toml` decides it for the rows this repository
         // actually enables.
-        let Look::Is(suite) = policy::test(&bundles[0], "{}", false).expect("the suite runs")
+        let Look::Is(suite) = policy::test(&bundles[0], "{}", false, None).expect("the suite runs")
         else {
             panic!("the preset `{name}` has a suite that could not run at all");
         };
