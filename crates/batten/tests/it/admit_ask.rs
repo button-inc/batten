@@ -158,13 +158,60 @@ fn a_question_with_one_useful_answer_is_refused() {
         reapproval.contains("\"deny\"") && reapproval.contains(VERDICT),
         "an approval against revising is refused: {reapproval}"
     );
+    // CLOUD-2915: the 2026-11-24 question, whose alternative is an action.
+    let action = ask(
+        &dir,
+        "Keep fix 2 and close CLOUD-2904 with #1276?",
+        &["Keep fix 2 (Recommended)", "Split fix 2 out"],
+    );
+    assert!(
+        action.contains("\"deny\"") && action.contains(VERDICT),
+        "a recommendation settles it whatever the alternative is: {action}"
+    );
     let choice = ask(
         &dir,
         "Where should the shards run?",
-        &["Dispatched sessions (Recommended)", "CI matrix legs"],
+        &["Dispatched sessions", "CI matrix legs"],
     );
     assert!(
         !choice.contains(VERDICT),
         "two real choices are asked: {choice}"
+    );
+}
+
+/// Fails by: the ledger's own question refused because it carries a
+/// recommendation (a human answers it by design), or either half of that
+/// exception dropped so a settled question with only an `Admit…` label, or
+/// only a pair, reaches the owner (CLOUD-2915). Neither refused question's
+/// text says "admit", so only the settled arm can decide it.
+#[test]
+fn a_ledger_question_with_a_recommendation_is_asked() {
+    let dir = fixture("admit-ask-ledger");
+    let ledger = ask(
+        &dir,
+        &format!("Admit this finding? {FULL}"),
+        &["Admit (Recommended)", "Refuse"],
+    );
+    assert!(
+        !ledger.contains(VERDICT),
+        "the ledger's own question is asked: {ledger}"
+    );
+    let label_only = ask(
+        &dir,
+        "Keep fix 2?",
+        &["Admit it (Recommended)", "Split fix 2 out"],
+    );
+    assert!(
+        label_only.contains("\"deny\"") && label_only.contains(VERDICT),
+        "an `Admit` label without the pair is not the ledger's question: {label_only}"
+    );
+    let pair_only = ask(
+        &dir,
+        &format!("Keep {FULL}?"),
+        &["Keep it (Recommended)", "Split it out"],
+    );
+    assert!(
+        pair_only.contains("\"deny\"") && pair_only.contains(VERDICT),
+        "a pair without an `Admit` label is not the ledger's question: {pair_only}"
     );
 }
