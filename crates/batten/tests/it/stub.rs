@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::Output;
 
 use crate::common;
+use batten::capture::{Streamed as _, StreamedChild as _};
 
 /// Run the stand-in installed at `path` with `args`, feeding `stdin`.
 fn run(path: &Path, args: &[&str], stdin: &str) -> Output {
@@ -33,7 +34,7 @@ fn run(path: &Path, args: &[&str], stdin: &str) -> Output {
         .expect("stdin")
         .write_all(stdin.as_bytes())
         .expect("feed stdin");
-    child.wait_with_output().expect("the stand-in exits")
+    child.streamed_wait().expect("the stand-in exits")
 }
 
 /// Run by bare NAME through `PATH`, `argv[0]` has no directory, so the plan is
@@ -57,7 +58,10 @@ fn a_program_run_by_name_finds_its_plan_on_path() {
         .env("PATH", path)
         .env_remove("BATTEN_STUB_PLAN")
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            ..batten::capture::Keep::NONE
+        })
         .expect("the stand-in runs by name");
     assert_eq!(
         out.status.code(),

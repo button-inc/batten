@@ -684,10 +684,7 @@ fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
         .git()
         .base_commit()
         .build();
-    let failing = repo
-        .parent()
-        .expect("the fixture's scratch")
-        .join("fail");
+    let failing = repo.parent().expect("the fixture's scratch").join("fail");
     common::stub_at(&failing, &serde_json::json!([{ "steps": [{ "exit": 5 }] }]));
     let engine = env!("CARGO_BIN_EXE_batten");
     let seeded = batten()

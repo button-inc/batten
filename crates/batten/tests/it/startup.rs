@@ -585,7 +585,7 @@ fn a_foreign_pre_push_survives_wiring_gate_and_check_names_it() {
     let dir = scratch("wiring-gate-foreign");
     write(&dir, "batten.toml", "version = 1\n\n");
     common::init_repo(&dir);
-    let body = "#!/bin/sh\necho theirs\n";
+    let body = "a teammate's pre-push, never run here\n";
     write(&dir, ".git/hooks/pre-push", body);
 
     let linked = wiring_gate(&dir, &[]);
@@ -617,7 +617,7 @@ fn a_foreign_hook_in_a_shared_hooks_dir_is_never_taken_over() {
         "version = 1\n\n[hook.git]\npre-commit = [\"true\"]\n",
     );
     common::init_repo(&dir);
-    let body = "#!/bin/sh\necho shared\n";
+    let body = "a hook other repositories share, never run here\n";
 
     let shared = scratch("wiring-gate-shared-hooks");
     write(&shared, "pre-commit", body);

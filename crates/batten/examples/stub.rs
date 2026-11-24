@@ -33,7 +33,7 @@
 //! `cat`, `sleep` (ms), `run` (an argv, waited for), `spawn` (`{argv, pid,
 //! quiet}`: not waited for, its pid written, its streams sent to null when
 //! `quiet`), `probe-pid` (`{pid, to}`: writes `alive` or `dead`), `save-stdin`
-//! (a path: stdin byte for byte), `trap` (`TERM`, `INT` or `HUP` no longer ends
+//! (a path: stdin byte for byte), `append-stdin` (the same, appended), `trap` (`TERM`, `INT` or `HUP` no longer ends
 //! the program; unix only), `await-signal` (block until a trapped signal
 //! arrives), `await-file` (`[path, text]`: block until the file contains the
 //! text, exiting 124 after a minute), `exec` (an argv, exiting with its code),
@@ -90,6 +90,8 @@ enum Step {
     },
     /// Stdin, byte for byte, to a path.
     SaveStdin(String),
+    /// Stdin, byte for byte, appended to a path, so each call adds a record.
+    AppendStdin(String),
     /// A signal (`TERM`, `INT`, `HUP`) no longer ends this program.
     Trap(String),
     /// Block until a signal `trap` caught arrives, then go on to the next step.
@@ -305,6 +307,13 @@ fn step(call: &Call, step: &Step) -> anyhow::Result<Option<i32>> {
             std::fs::write(call.expand(pid), child.id().to_string())?;
         }
         Step::SaveStdin(path) => std::fs::write(call.expand(path), &call.stdin)?,
+        Step::AppendStdin(path) => {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(call.expand(path))?;
+            file.write_all(call.stdin.as_bytes())?;
+        }
         Step::Trap(name) => trap(name)?,
         Step::AwaitSignal(name) => await_signal(name)?,
         Step::AwaitFile(path, text) => {

@@ -1338,12 +1338,7 @@ fn a_wrapped_compile_in_a_worktree_reads_the_worktrees_prune() {
         4096,
     );
     let rustc = main.join("rustc");
-    std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    common::stub_at(&rustc, &serde_json::json!([{ "steps": [{ "exit": 0 }] }]));
     let out_dir = linked.join("target/debug/deps");
     std::fs::create_dir_all(&out_dir).unwrap();
     let ran = common::batten()
