@@ -88,6 +88,10 @@ exclude_re = [
   # The same for the lease's off-Linux `holder_alive`, `#[cfg(not(target_os =
   # "linux"))]` in `off_proc`: no Linux build compiles it (CLOUD-2789).
   'lease\.rs:\d+:\d+: replace off_proc::holder_alive -> bool with true$',
+  # COMPILED OUT, not equivalent: column 10 is the `!` of the `#[cfg(windows)]`
+  # leg's empty-table guard in `processes`, and mutants run on Linux, where
+  # that leg is not built, so no case can reach it (CLOUD-2789).
+  'collect\.rs:\d+:10: delete ! in processes$',
   # `torn_tail`'s one caller runs it only after the whole line failed to
   # decode, and offset 0 is that same whole line: admitting it decodes the
   # same failing text again (CLOUD-2789).
