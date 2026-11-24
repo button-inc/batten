@@ -779,12 +779,16 @@ mod tests {
     // answering a constant), so a run under no tracer reads as traced and
     // records every case untraced. Compared with `traced_in` over the same
     // file rather than with `false`, so it holds under a reach run's tracer
-    // too (CLOUD-2789).
-    #[cfg(target_os = "linux")]
+    // too (CLOUD-2789). Off Linux there is no `/proc`, so nothing reads as
+    // traced: `cfg!` keeps both arms compiled on every target.
     #[test]
     fn traced_already_reads_this_process_status() {
-        let status = crate::fsio::read_to_string("/proc/self/status").unwrap();
-        assert_eq!(super::traced_already(), super::traced_in(&status));
+        if cfg!(target_os = "linux") {
+            let status = crate::fsio::read_to_string("/proc/self/status").unwrap();
+            assert_eq!(super::traced_already(), super::traced_in(&status));
+        } else {
+            assert!(!super::traced_already());
+        }
     }
 
     // Fails by: an escaped quote or backslash refused (the path cut short as
