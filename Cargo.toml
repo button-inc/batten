@@ -523,15 +523,17 @@ gix-packetline = { version = "0.24", default-features = false, features = [
 # edge. The first tree-scoped preset was written string-only and hit the wall on
 # the second rule, which is when this was reconsidered.
 #
-# `semver` IS NOT HERE, AND THAT IS THIS ROW'S OWN RULE APPLIED TO ITSELF. It
-# was added beside `regex` on the reasoning that version-comparison gates will
-# want it — and no module in the tree calls it. A feature nothing calls is
-# `input.tree.tracked` documented and never built (CLOUD-845): it reads as a
-# capability, it is checked by nothing, and the first consumer discovers whether
-# it actually works. So it lands with its first consumer rather than ahead of
-# one. The measurement is recorded on CLOUD-885 either way — `semver` is
-# `dep:semver` alone and cleared both gates — so re-adding it costs a line, not
-# a re-derivation.
+# `semver` LANDED WITH ITS FIRST CONSUMER (CLOUD-2906), which is this row's own
+# rule applied to itself: a feature nothing calls is `input.tree.tracked`
+# documented and never built (CLOUD-845), so it waited for one rather than
+# landing ahead. `policy/release-tag-shape.rego` (`semver.is_valid`) is that
+# consumer, with `hk-pin-agreement.rego` and `digest-major-agreement.rego`
+# guarding their captures the same way, in the same commit. `semver` is
+# `dep:semver` alone, already in `Cargo.lock` beneath `batten-base`, and cleared
+# both gates (CLOUD-885). Measured 2026-11-24: the interpreter and the RVM agree
+# on `semver.is_valid`/`semver.compare` with strict builtin errors, and without
+# the feature the module is refused at compile ("Missing builtin function"),
+# never read as green.
 #
 # `glob` IS REFUSED BY CONSTRUCTION, not by preference, and stating it here is
 # what stops it being re-litigated as an oversight: `glob = ["dep:globset"]`, and
@@ -552,9 +554,6 @@ gix-packetline = { version = "0.24", default-features = false, features = [
 # regorus requested — this is not fixable from our manifest. CLOUD-885 carries
 # the re-open predicate as a command.
 #
-# `semver` IS NOT HERE, on the same rule (CLOUD-885): no module calls it, and a
-# feature nothing calls is `input.tree.tracked` documented and never built
-# (CLOUD-845). It lands with its first consumer.
 #
 # `graph` (CLOUD-1863), and it lands WITH its consumer rather than ahead of one:
 # `ci-cache-declared` retires a hand-unrolled walk in the same commit, which is
@@ -605,6 +604,7 @@ regorus = { version = "0.15", default-features = false, features = [
   "arc",
   "coverage",
   "regex",
+  "semver",
   "graph",
   # The compiled-regex LRU (CLOUD-1891). Without it `regex.match` RECOMPILES its
   # pattern on every call, and a module matching one registry pattern against
