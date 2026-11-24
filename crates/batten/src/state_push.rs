@@ -461,6 +461,7 @@ fn judge(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{StoreFile, matches, parse};
     use std::path::Path;

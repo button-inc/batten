@@ -2,7 +2,7 @@
 //! the state repo (CLOUD-2887).
 //!
 //! Over the compiled binary: the hook resolves the `state-push` fact for a
-//! PreToolUse `git push` and the `state-private` preset refuses one whose pushed
+//! `PreToolUse` `git push` and the `state-private` preset refuses one whose pushed
 //! blobs equal a private store's file, or begin an append-only one, unless the
 //! remote is `BATTEN_STATE_REPO`. Measured 2026-11-24: a dispatched session
 //! pushed its 6,118-line mutant verdict journal to the public repository as
@@ -78,7 +78,7 @@ fn journal(dir: &Path) {
     put(&state_dir(dir), "mutate/schema/verdicts", JOURNAL);
 }
 
-/// A PreToolUse `Bash` call running `command` in `dir`, with `transcript` as
+/// A `PreToolUse` `Bash` call running `command` in `dir`, with `transcript` as
 /// the session's transcript when one is named.
 fn push(dir: &Path, command: &str, transcript: Option<&Path>) -> std::process::Output {
     let mut envelope = serde_json::json!({
