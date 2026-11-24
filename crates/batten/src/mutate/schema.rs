@@ -7736,7 +7736,7 @@ mod tests {
     }
 
     /// A judging run sets its temp, fixture root and switch, and trusts the
-    /// mirror's own `mise.toml` (CLOUD-2789).
+    /// mirror's own task-runner config (CLOUD-2789).
     ///
     /// Fails by: any of the four dropped or swapped; untrusted, a case that
     /// resolves a pinned tool from the mirror fails before it runs.
