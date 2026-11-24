@@ -1954,11 +1954,8 @@ pub enum StateCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RecordCommand {
-    /// Derive what each bats suite costs and record it where an author reads it.
-    Suites {
-        /// Write the corpus to its committed path instead of printing it.
-        write: bool,
-    },
+    /// Derive what each nextest module costs and print it where an author reads it.
+    Suites,
     /// Record a declared tool row's verdict.
     Tool {
         /// The `[[rule.tools]]` id whose verdict is being recorded.
@@ -2427,15 +2424,6 @@ pub enum ReleaseCommand {
 pub enum CiCommand {
     /// Whether a diff can move the hk slow tier.
     SlowNeeded {
-        /// The revision this checkout is diffed against.
-        base: String,
-    },
-    /// Which bats suites a diff can move (CLOUD-1716).
-    ///
-    /// APPENDED LAST, for the reason every enum here records: no `repr`, so a
-    /// variant beside its siblings shifts every later discriminant and
-    /// `mise run semver` reads that as a break the crate has to declare.
-    Suites {
         /// The revision this checkout is diffed against.
         base: String,
     },
@@ -3055,9 +3043,6 @@ fn ci_of(matches: &ArgMatches) -> Option<CiCommand> {
                 None => CiCommand::SlowNeeded { base },
             })
         }
-        ("suites", matches) => Some(CiCommand::Suites {
-            base: matches.get_one::<String>("base").cloned()?,
-        }),
         ("step", matches) => {
             let text = |id: &str| matches.get_one::<String>(id).cloned();
             let many = |id: &str| {
@@ -3899,9 +3884,7 @@ fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
 /// inside their arms — [`state_of`]'s shape rather than [`receipt_of`]'s.
 fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
     match matches.subcommand()? {
-        ("suites", matches) => Some(RecordCommand::Suites {
-            write: flag(matches, "write"),
-        }),
+        ("suites", _) => Some(RecordCommand::Suites),
         ("tool", matches) => {
             let id = matches.get_one::<String>("id")?.clone();
             // `--pick` selects the reducing writer; absent, the lines are
