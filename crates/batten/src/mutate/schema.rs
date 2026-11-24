@@ -1431,6 +1431,18 @@ pub struct Known {
     pub unprobed: BTreeSet<String>,
 }
 
+impl Known {
+    /// The sets a clean build's tree was rendered with, which its pack
+    /// records so a shard reading no journal renders that same tree.
+    fn of(unviable: &BTreeSet<u32>, handed: &BTreeSet<u32>, unprobed: &BTreeSet<String>) -> Self {
+        Self {
+            unviable: unviable.clone(),
+            handed: handed.clone(),
+            unprobed: unprobed.clone(),
+        }
+    }
+}
+
 /// A schema that built: the mutants that do not compile, those handed back
 /// because a const caller needs their function const, and the renderings.
 #[derive(Debug)]
@@ -5185,13 +5197,8 @@ pub fn sweep(
         (&site_keys, &mut cache, &cache_path),
         out,
     )?;
-    // THE SETS THIS RENDERING WAS MADE WITH, packed beside its binaries so a
-    // shard that reads no journal renders the same tree (CLOUD-2789).
-    let rendered_with = Known {
-        unviable: unviable.clone(),
-        handed: handed.clone(),
-        unprobed: unprobed.clone(),
-    };
+    // PACKED FOR A SHARD THAT READS NO JOURNAL (CLOUD-2882).
+    let rendered_with = Known::of(&unviable, &handed, &unprobed);
     let classic = schema.classic(handed);
     let built = (mutants.len(), unviable.len(), classic.len());
     announce_built(out, built, started.elapsed().as_secs())?;
@@ -9917,11 +9924,8 @@ pub fn repo() -> u8 {{ scratch() }}
         let target = state.join("target");
         let mut mutant = listed("FnValue", "()", (1, 1), (1, 2));
         mutant.package = String::from("p");
-        let known = Known {
-            unviable: BTreeSet::from([3]),
-            handed: BTreeSet::from([4]),
-            unprobed: BTreeSet::from([String::from("src/lib.rs")]),
-        };
+        let unprobed = BTreeSet::from([String::from("src/lib.rs")]);
+        let known = Known::of(&BTreeSet::from([3]), &BTreeSet::from([4]), &unprobed);
         let reuse = record_reuse((&work, &target, &state), &[mutant], ("tree-1", &known))
             .expect("the clean build's binaries");
         assert_eq!(reuse.ids, BTreeSet::from([String::from("p")]));
@@ -9933,9 +9937,9 @@ pub fn repo() -> u8 {{ scratch() }}
         let packed: Known =
             serde_json::from_str(&std::fs::read_to_string(dir.join(PACKED_KNOWN)).unwrap())
                 .unwrap();
-        assert_eq!(packed.unviable, known.unviable);
-        assert_eq!(packed.handed, known.handed);
-        assert_eq!(packed.unprobed, known.unprobed);
+        assert_eq!(packed.unviable, BTreeSet::from([3]));
+        assert_eq!(packed.handed, BTreeSet::from([4]));
+        assert_eq!(packed.unprobed, unprobed);
     }
 
     /// A shard judges only its own ids, from the whole listing's build: its
