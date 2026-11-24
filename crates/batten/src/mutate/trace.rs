@@ -592,16 +592,40 @@ pub(crate) fn await_trace(path: &Path) -> Option<String> {
     let (closed, woken) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut events = [0_u8; 1024];
-        while rustix::io::read(&watch, &mut events).is_ok() && closed.send(()).is_ok() {}
+        forward_closes(
+            || rustix::io::read(&watch, &mut events).is_ok(),
+            || closed.send(()).is_ok(),
+        );
     });
-    let deadline = std::time::Instant::now() + TRACE_GRACE;
+    wait_whole(read, |left| woken.recv_timeout(left).is_ok(), TRACE_GRACE)
+}
+
+/// Pass each close event on until either side goes away: the watch's read
+/// failing, or the waiter no longer listening. Apart from the inotify wiring so
+/// a case drives it on every target; only the Linux wiring calls it.
+#[cfg(any(target_os = "linux", test))]
+fn forward_closes(mut event: impl FnMut() -> bool, mut send: impl FnMut() -> bool) {
+    while event() && send() {}
+}
+
+/// [`await_trace`]'s wait, apart from what wakes it (CLOUD-2789): read; a whole
+/// trace is the answer; otherwise wait for the next close, and once `grace` is
+/// spent or nothing more will close, answer one final read. `woken` waits at
+/// most the time it is given and says whether a close came. Platform-free, so a
+/// case drives it with a fake reader on every target.
+fn wait_whole(
+    mut read: impl FnMut() -> Option<String>,
+    mut woken: impl FnMut(std::time::Duration) -> bool,
+    grace: std::time::Duration,
+) -> Option<String> {
+    let deadline = std::time::Instant::now() + grace;
     loop {
         let text = read();
         if text.as_deref().is_some_and(trace_whole) {
             return text;
         }
         let left = deadline.saturating_duration_since(std::time::Instant::now());
-        if left.is_zero() || woken.recv_timeout(left).is_err() {
+        if left.is_zero() || !woken(left) {
             return read();
         }
     }
@@ -617,9 +641,14 @@ pub(crate) use off_linux::await_trace;
 mod off_linux {
     use std::path::Path;
 
-    /// No tracer off Linux, so nothing to wait for.
+    /// No tracer off Linux, so nothing wakes the wait: no grace, and the
+    /// trace is whatever a read finds.
     pub(crate) fn await_trace(path: &Path) -> Option<String> {
-        crate::fsio::read_to_string(path).ok()
+        super::wait_whole(
+            || crate::fsio::read_to_string(path).ok(),
+            |_| false,
+            std::time::Duration::ZERO,
+        )
     }
 }
 
@@ -840,45 +869,75 @@ mod tests {
         assert_eq!(super::await_trace(&file), Some(text));
     }
 
-    // Fails by: the grace's deadline set before now (`+` read as `-`), so the
-    // wait reads once more and answers the second partial text; or the close
-    // watcher sending nothing once a read succeeds (`&&` read as `||`), so the
-    // wait sleeps out its grace and answers that same second read. A FIFO
-    // makes every read block until the writer's next round closes, so the
-    // writer, not a clock, decides which text each read sees: two partial
-    // traces, then the whole one (CLOUD-2789).
-    #[cfg(target_os = "linux")]
+    /// A fake trace file: each read answers the next text, then nothing.
+    fn reads(texts: &[&str]) -> impl FnMut() -> Option<String> + use<> {
+        let mut texts = texts
+            .iter()
+            .map(|text| (*text).to_owned())
+            .collect::<Vec<_>>()
+            .into_iter();
+        move || texts.next()
+    }
+
+    const PARTIAL: &str = "7     execve(\"/bin/sh\", [\"sh\"], 0x0 /* 0 vars */) = 0\n";
+
+    // Fails by: the grace's deadline set before now (`+` read as `-`), or a
+    // close read as no close (`!` dropped), so the wait answers the second
+    // partial text rather than reading on to the whole one (CLOUD-2789).
     #[test]
     fn a_trace_finished_after_a_partial_read_is_waited_for() {
-        use rustix::fs::{CWD, FileType, Mode, mknodat};
-        let dir = crate::scratch::scratch("trace-await-fifo");
-        let fifo = dir.join("trace");
-        mknodat(CWD, &fifo, FileType::Fifo, Mode::from_raw_mode(0o600), 0).unwrap();
-        let partial = String::from("7     execve(\"/bin/sh\", [\"sh\"], 0x0 /* 0 vars */) = 0\n");
         let text = whole(&[]);
-        let rounds = [partial.clone(), partial, text.clone()];
-        // EACH ROUND WAITS FOR THE READER'S CLOSE: a writer opening while the
-        // last read is still open joins that read's stream, and the rounds run
-        // together into one text.
-        let closed = rustix::fs::inotify::init(rustix::fs::inotify::CreateFlags::CLOEXEC).unwrap();
-        rustix::fs::inotify::add_watch(
-            &closed,
-            &fifo,
-            rustix::fs::inotify::WatchFlags::CLOSE_NOWRITE,
-        )
-        .unwrap();
-        let writer = {
-            let fifo = fifo.clone();
-            std::thread::spawn(move || {
-                let mut events = [0_u8; 1024];
-                for round in rounds {
-                    std::fs::write(&fifo, round).unwrap();
-                    rustix::io::read(&closed, &mut events).unwrap();
-                }
-            })
-        };
-        assert_eq!(super::await_trace(&fifo), Some(text));
-        writer.join().unwrap();
+        let read = reads(&[PARTIAL, PARTIAL, &text]);
+        let answer = super::wait_whole(read, |_| true, std::time::Duration::from_secs(3600));
+        assert_eq!(answer, Some(text));
+    }
+
+    // Fails by: a spent grace waited out anyway (`||` read as `&&`, or the
+    // zero test dropped), so the wait reads on past its one final read; or
+    // that final read skipped, answering the first partial text.
+    #[test]
+    fn a_spent_grace_answers_one_final_read() {
+        let text = whole(&[]);
+        let second = format!("{PARTIAL}{PARTIAL}");
+        let read = reads(&[PARTIAL, &second, &text]);
+        assert_eq!(
+            super::wait_whole(read, |_| true, std::time::Duration::ZERO),
+            Some(second.clone())
+        );
+        let read = reads(&[PARTIAL, &second, &text]);
+        let unwoken = super::wait_whole(read, |_| false, std::time::Duration::from_secs(3600));
+        assert_eq!(unwoken, Some(second));
+    }
+
+    // Fails by: a whole first read not answered at once, so the wait reads
+    // again and answers what comes after it.
+    #[test]
+    fn a_whole_first_read_is_the_answer() {
+        let text = whole(&[]);
+        let read = reads(&[&text, PARTIAL]);
+        let answer = super::wait_whole(read, |_| true, std::time::Duration::from_secs(3600));
+        assert_eq!(answer, Some(text));
+    }
+
+    // Fails by: a close not passed on (`&&` read as `||`, so each event
+    // short-circuits the send and only the watch's failure sends, until the
+    // waiter leaves), so the waiter sleeps out its grace; or nothing forwarded.
+    // Every side returns, so a mutant ends rather than hangs.
+    #[test]
+    fn each_close_is_forwarded_until_the_watch_goes() {
+        let mut events = 3_u32;
+        let mut sent = 0_u32;
+        super::forward_closes(
+            || {
+                events = events.saturating_sub(1);
+                events > 0
+            },
+            || {
+                sent += 1;
+                sent < 10
+            },
+        );
+        assert_eq!(sent, 2);
     }
 
     // A SHELL PROBE NAMES NO DIRECTORY (CLOUD-2784): `test -e c` is `stat("c")`.
