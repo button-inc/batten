@@ -34045,6 +34045,61 @@ mod tests {
     /// unpinned.
     ///
     /// Fails by: the `NotFound` guard forced either way.
+    /// Each clause of [`is_adjudicable`] admits its shape ALONE, and an envelope
+    /// carrying none of them pays no config read (CLOUD-2789). The integration
+    /// cases send shapes that satisfy two clauses at once (a Bash call is a
+    /// command AND a pre-tool call naming its tool), so only this case tells
+    /// one clause from another.
+    ///
+    /// Fails by: any clause dropped, negated, or conjoined with its neighbour,
+    /// or an event compared the wrong way round.
+    #[test]
+    fn each_adjudicable_shape_is_admitted_alone() {
+        use crate::config_model::Event;
+        let neutral = hook::decode(
+            crate::config_model::Harness::ClaudeCode,
+            r#"{"hook_event_name":"PostToolUse"}"#,
+        )
+        .unwrap();
+        assert_eq!(neutral.event, Event::PostTool);
+        assert!(neutral.command.is_empty() && neutral.writes.is_none());
+        assert!(neutral.raw_tool.is_empty());
+        assert!(!is_adjudicable(&neutral), "nothing to decide");
+        let with = |change: &dyn Fn(&mut hook::Envelope)| {
+            let mut envelope = neutral.clone();
+            change(&mut envelope);
+            is_adjudicable(&envelope)
+        };
+        assert!(with(&|e| e.command = String::from("ls")), "a command");
+        assert!(with(&|e| e.writes = Some(String::from("a.rs"))), "a write");
+        for event in [
+            Event::Stop,
+            Event::SessionStart,
+            Event::Forge,
+            Event::ChildSession,
+        ] {
+            assert!(with(&|e| e.event = event), "{event:?} alone");
+        }
+        for event in [
+            Event::PreTool,
+            Event::PermissionRequest,
+            Event::PermissionDenied,
+        ] {
+            assert!(
+                with(&|e| {
+                    e.event = event;
+                    e.raw_tool = String::from("Read");
+                }),
+                "{event:?} naming a tool"
+            );
+            assert!(!with(&|e| e.event = event), "{event:?} naming none");
+        }
+        assert!(
+            !with(&|e| e.raw_tool = String::from("Read")),
+            "a tool named on another event"
+        );
+    }
+
     #[test]
     fn a_projection_treats_only_a_missing_file_as_a_creation() {
         let root = std::env::temp_dir().join(format!("batten-projected-{}", std::process::id()));
