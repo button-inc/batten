@@ -8044,8 +8044,14 @@ fn git_dir_operands(tokens: &[&str], current: &Path) -> Vec<std::path::PathBuf> 
     let end = subcommand_index(arguments, &GIT_VALUE_OPTIONS).unwrap_or(arguments.len());
     let mut operands = Vec::new();
     let mut index = 0;
-    while index < end {
-        let word = arguments[index];
+    // BOUNDED BY THE WORD COUNT (CLOUD-2789): every pass moves `index` forward
+    // by at least one word, so `end` passes reach it. A change that stops it
+    // advancing then ends the scan with a wrong answer a case can see, rather
+    // than spinning until the suite's timeout.
+    for _ in 0..end {
+        let Some(&word) = arguments.get(index).filter(|_| index < end) else {
+            break;
+        };
         let value = match word {
             "-C" | "--git-dir" | "--work-tree" => arguments.get(index + 1).copied(),
             _ => word
@@ -16049,6 +16055,9 @@ mod tests {
         assert_eq!(Event::normalize("PostToolUse"), Event::PostTool);
         assert_eq!(Event::normalize("Stop"), Event::Stop);
         assert_eq!(Event::normalize("SessionStart"), Event::SessionStart);
+        // Fails by: the `SessionEnd` arm deleted, so an event the host emits
+        // reads as unrecognized.
+        assert_eq!(Event::normalize("SessionEnd"), Event::SessionEnd);
         // Unknown is a decision, not a fallback into the adjudicated event.
         assert_eq!(Event::normalize("BeforeTool"), Event::Unrecognized);
         assert_eq!(Event::normalize(""), Event::Unrecognized);
@@ -21717,6 +21726,9 @@ deny contains "refused by themodule" if {
         assert_eq!(targets("cd sub"), at(&["/r", "/r/sub"]));
         assert_eq!(targets("cd sub && true"), at(&["/r/sub", "/r/sub"]));
         assert_eq!(targets("git -C sub"), at(&["/r", "/r/sub"]));
+        // Fails by: the operand scan not stepping past a word, so the first
+        // `-C` is read again and the second is never reached.
+        assert_eq!(targets("git -C a -C b status"), at(&["/r", "/r/a", "/r/b"]));
     }
 
     /// Fails by: a `--git-dir` naming a `.git` read as the checkout itself (or a
