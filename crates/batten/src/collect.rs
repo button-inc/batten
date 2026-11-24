@@ -1489,7 +1489,7 @@ pub fn collect_toward_max(
 /// copies from named, rather than the process's temp directory: a case drives
 /// the unbounded pass over a directory of its own, where no copy another
 /// suite's sweep left can be freed first (CLOUD-2789).
-fn collect_toward_max_in(
+pub(crate) fn collect_toward_max_in(
     repo: &Path,
     prune: &crate::config_model::Prune,
     kept: &[Kept],
