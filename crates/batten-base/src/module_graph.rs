@@ -3134,6 +3134,23 @@ mod tests {
         );
     }
 
+    /// Fails by: a static left out of the root's items.
+    #[test]
+    fn a_lib_static_is_a_lib_item() {
+        let items = lib_items("pub static S: u8 = 1;\n").unwrap();
+        assert_eq!(items, BTreeSet::from([String::from("S")]));
+    }
+
+    /// Fails by: a lone `:` inside a token tree read as half of a `::`, so the
+    /// identifier two tokens on is glued to `crate` as a root path.
+    #[test]
+    fn a_lone_colon_after_crate_inside_a_macro_names_no_root() {
+        assert_eq!(
+            names("fn f() { m!(crate: x review); }\n", &["ready"]),
+            Vec::<String>::new()
+        );
+    }
+
     /// Fails by: the walk past a `::` in a token tree landing anywhere but on
     /// the next segment, so a `super::super::` chain loses the name it reaches.
     #[test]
