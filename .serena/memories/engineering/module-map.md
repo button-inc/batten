@@ -100,6 +100,7 @@ row here, so a new module lands with its line.
 - `findings.rs` — what the store HOLDS (CLOUD-164), split from `store.rs`'s _which store_: identity is stable for a repo's life, contents change per scan.
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed predicates over the repo.
 - `invocation.rs` (crate `batten-facts`) — Rust call sites, parsed (CLOUD-914).
+- `kill.rs` (crate `batten-facts`) — the kill-at-a-step hook crash-only code is tested with (CLOUD-2722): a case arms a thread to fail at its Nth durable step; `batten_core::testing` re-exports it beside the lowest durable write it guards.
 - `uses.rs` (crate `batten-facts`) — the `use` graph (CLOUD-762).
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the wrapper-lookthrough command parser, the matcher, and the per-host shims (CLOUD-44).
 - `recorder.rs` — a post-tool record whose SHAPE is the consumer's and whose columns may carry a value another gate decided (CLOUD-1051).
