@@ -121,6 +121,23 @@ fn a_resolved_program_runs_while_the_setup_task_runs() {
     );
 }
 
+/// Fails by: a shell builtin held because no file on `PATH` carries its name,
+/// so `cd <dir> && <anything>` is refused for as long as the task is unsettled
+/// — measured, on a session whose setup task had failed. Mutation: drop the
+/// builtin filter in `install_pending_for`, and `cd` becomes pending.
+#[test]
+fn a_shell_builtin_is_never_pending() {
+    let dir = bench("install-gate-builtin");
+    setup(&dir, NO_SUCH_PID, "failed");
+    let said = call(&dir, "cd /tmp && sh -c true");
+    assert!(!held(&said), "`cd` is the shell's own: {said}");
+    let said = call(&dir, &format!("cd /tmp && {ABSENT} --version"));
+    assert!(
+        held(&said) && said.contains(ABSENT),
+        "held on the absent program alone: {said}"
+    );
+}
+
 /// Fails by: `git status` held, the one read a session takes to learn where it
 /// is.
 #[test]

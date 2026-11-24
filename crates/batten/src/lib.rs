@@ -20369,6 +20369,7 @@ fn install_pending_for(
         let roots = install_roots();
         hook::command_programs(&envelope.command)
             .into_iter()
+            .filter(|program| !SHELL_BUILTINS.contains(&program.as_str()))
             .filter(|program| match resolve_on_path(program) {
                 None => true,
                 Some(found) => roots.iter().any(|root| found.starts_with(root)),
@@ -20382,6 +20383,16 @@ fn install_pending_for(
         "pending": pending,
     }))
 }
+
+/// The command words a POSIX shell, bash or zsh runs itself, never from `PATH`
+/// (CLOUD-2840). No install provides one, so none is ever pending; most have no
+/// file on `PATH` at all, so resolving them would hold `cd /x && …` on `cd`.
+const SHELL_BUILTINS: &[&str] = &[
+    ".", ":", "alias", "bg", "break", "builtin", "cd", "command", "continue", "declare", "dirs",
+    "eval", "exec", "exit", "export", "false", "fg", "getopts", "hash", "jobs", "local", "popd",
+    "printf", "pushd", "pwd", "read", "readonly", "return", "set", "shift", "source", "test",
+    "times", "trap", "true", "type", "typeset", "ulimit", "umask", "unalias", "unset", "wait", "[",
+];
 
 /// Every vendored environment manager's data directory (CLOUD-2840), as its
 /// preset declares it: the variable where set, else the default under `$HOME`.
