@@ -5060,14 +5060,25 @@ pub fn blobs_changed_between(
     Ok(changed)
 }
 
-/// The commit every remote-tracking ref points at, sorted and deduplicated
-/// (CLOUD-2923): the history this clone already knows to exist elsewhere.
+/// The commit every remote-tracking ref pointed at BEFORE `at` (seconds since
+/// the epoch), sorted and deduplicated (CLOUD-2923): the history this clone
+/// already knew to exist elsewhere when a call began.
 ///
-/// Empty when the repository cannot be opened or holds no remote-tracking ref,
-/// which reads as "nothing was pushed" — the direction that excuses nothing.
+/// READ BACK THROUGH EACH REF'S REFLOG, AND ONLY WHEN ASKED. Recording every
+/// tip before each checked shell call measured 2.1 ms a call in release (192
+/// loose refs), paid on every call to excuse a rare one; the reflog answers
+/// the same question after the fact, so it is read only once a protected path
+/// actually changed. An entry stamped at or after `at` is a move the call may
+/// have made, so the ref counts at that entry's previous value — the stamps
+/// are whole seconds, and the ambiguous second is read the way that excuses
+/// less. A ref with no reflog, or one the call created, counts as no tip.
+///
+/// Empty when the repository cannot be opened or holds no such ref, which
+/// reads as "nothing was pushed" — the direction that excuses nothing. Opened
+/// fresh, because the call may have moved the refs after any memo was filled.
 #[must_use]
-pub fn remote_tips(dir: &Path) -> Vec<String> {
-    let Ok(repo) = open(dir) else {
+pub fn remote_tips_before(dir: &Path, at: i64) -> Vec<String> {
+    let Ok(repo) = open_fresh(dir) else {
         return Vec::new();
     };
     let mut tips = Vec::new();
@@ -5075,7 +5086,7 @@ pub fn remote_tips(dir: &Path) -> Vec<String> {
         && let Ok(remotes) = references.prefixed("refs/remotes")
     {
         for reference in remotes.flatten() {
-            if let Some(id) = reference.target().try_id() {
+            if let Some(id) = tip_before(&reference, at) {
                 tips.push(id.to_hex().to_string());
             }
         }
@@ -5083,6 +5094,23 @@ pub fn remote_tips(dir: &Path) -> Vec<String> {
     tips.sort();
     tips.dedup();
     tips
+}
+
+/// One ref's value before `at`, from its reflog read newest first: the newest
+/// entry stamped before `at` names it; otherwise the oldest entry's previous
+/// value does, unless that is null (the ref did not exist).
+fn tip_before(reference: &gix::Reference<'_>, at: i64) -> Option<gix::ObjectId> {
+    let mut log = reference.log_iter();
+    let lines = log.rev().ok()??;
+    let mut earliest_previous = None;
+    for line in lines {
+        let line = line.ok()?;
+        if line.signature.time.seconds < at {
+            return Some(line.new_oid);
+        }
+        earliest_previous = Some(line.previous_oid);
+    }
+    earliest_previous.filter(|id| !id.is_null())
 }
 
 /// Whether the CURRENT `HEAD` moved only FORWARD onto history `tips` already
