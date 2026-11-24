@@ -1346,6 +1346,9 @@ pub struct Request<'a> {
     /// checkout's orphaned trace as freed, met its need from it and removed
     /// none of the units it was asked about.
     pub traces: Option<&'a Path>,
+    /// `[prune] caches`, resolved: compiler-cache directories a pass empties,
+    /// oldest file first, before it touches any cargo unit ([`reclaim_caches`]).
+    pub caches: &'a [PathBuf],
 }
 
 impl Request<'_> {
@@ -1440,15 +1443,7 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
     let mut held = Held::default();
     let (locks, waited) = lock_trees(request.trees, request.wait, halt);
     held.locks = waited;
-    let mut freed: u64 = 0;
-    let mut removed = 0usize;
-    // A KILLED STEP'S TRACE FIRST (CLOUD-2783): it is no build output, so no
-    // tree walk below reaches it, and it can be the largest thing on the disk.
-    if let Some(git_dir) = request.traces {
-        let (traces, bytes) = crate::step::sweep_orphaned_traces(git_dir);
-        removed += traces;
-        freed += bytes;
-    }
+    let (mut removed, mut freed) = reclaim_before_units(request);
     for (tree, _) in &locks {
         if freed >= request.need_bytes || halted(halt) {
             break;
@@ -1556,6 +1551,80 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
         held,
     };
     (done, traced)
+}
+
+/// What a pass takes before any cargo unit: a killed step's orphaned traces,
+/// then the declared caches. Returns what it removed and the bytes it freed.
+fn reclaim_before_units(request: &Request<'_>) -> (usize, u64) {
+    let mut freed: u64 = 0;
+    let mut removed = 0usize;
+    // A KILLED STEP'S TRACE FIRST (CLOUD-2783): it is no build output, so no
+    // tree walk below reaches it, and it can be the largest thing on the disk.
+    if let Some(git_dir) = request.traces {
+        let (traces, bytes) = crate::step::sweep_orphaned_traces(git_dir);
+        removed += traces;
+        freed += bytes;
+    }
+    // THE CACHES BEFORE ANY CARGO UNIT (CLOUD-2907): a cache entry costs the
+    // next build one compile at most, where a unit the next build needs costs
+    // the same compile and every unit downstream of it.
+    let (entries, bytes) = reclaim_caches(
+        request.caches,
+        request.need_bytes.saturating_sub(freed),
+        request.deadline,
+    );
+    removed += entries;
+    freed += bytes;
+    (removed, freed)
+}
+
+/// Empty `caches` oldest file first until `need_bytes` are freed, the deadline
+/// passes, or every cache is empty; returns the files removed and the bytes.
+///
+/// A FILE IS A CACHE ENTRY, AND ITS MTIME IS ITS LAST USE: a compiler cache
+/// touches an entry on every hit (sccache's disk cache does, CLOUD-2907), so
+/// the oldest file is the least recently used one. No lock is taken and no
+/// cache server is stopped: an entry removed under a running cache reads as a
+/// miss, which compiles, whereas a server killed mid-compile fails that compile.
+fn reclaim_caches(caches: &[PathBuf], need_bytes: u64, deadline: Option<Instant>) -> (usize, u64) {
+    if need_bytes == 0 {
+        return (0, 0);
+    }
+    let mut entries: Vec<(SystemTime, PathBuf)> = Vec::new();
+    let mut pending: Vec<PathBuf> = caches.to_vec();
+    while let Some(dir) = pending.pop() {
+        let Ok(listing) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in listing.filter_map(Result::ok) {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                let used = entry
+                    .metadata()
+                    .and_then(|meta| meta.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                entries.push((used, entry.path()));
+            }
+        }
+    }
+    entries.sort();
+    let mut freed = 0_u64;
+    let mut removed = 0_usize;
+    for (_, path) in entries {
+        if freed >= need_bytes || deadline.is_some_and(|at| Instant::now() >= at) {
+            break;
+        }
+        let bytes = remove_counted(&path);
+        if !path.exists() {
+            removed += 1;
+            freed += bytes;
+        }
+    }
+    (removed, freed)
 }
 
 /// What a pass passed over, for the trace: `disk-pass <trees> <candidates>
@@ -1674,6 +1743,7 @@ pub(crate) fn collect_toward_max_in(
     let (_, max) = prune.free_band()?;
     let started = Instant::now();
     let trees = trees(repo, prune);
+    let caches: Vec<PathBuf> = prune.caches.iter().map(|cache| repo.join(cache)).collect();
     let need_bytes = max.saturating_sub(free).saturating_mul(1024 * 1024);
     // THE CHECKOUT'S OWN BUILD IS A ROOT (CLOUD-2232): the installed engine
     // hands every call to it, so collecting it while nothing runs it would leave
@@ -1710,6 +1780,7 @@ pub(crate) fn collect_toward_max_in(
         stop,
         live_since: Some(no_later_than(live_since(&trees), scanned)),
         fixtures_since: Some(no_later_than(fixtures_since(&trees), scanned)),
+        caches: &caches,
     });
     Some(Collected {
         freed_bytes: pass.freed_bytes,
@@ -2239,6 +2310,7 @@ mod tests {
             copies: None,
             fixtures_since: None,
             traces: None,
+            caches: &[],
         }
     }
 
@@ -2277,6 +2349,7 @@ mod tests {
             regrowable: None,
             min_free_mb: band.map(|(min, _)| min),
             max_free_mb: band.map(|(_, max)| max),
+            caches: Vec::new(),
         }
     }
 
@@ -2813,6 +2886,79 @@ mod tests {
         assert_eq!(done.free_after_mb, 5);
         assert!(!older.exists());
         assert!(!newer.exists());
+    }
+
+    /// One cache entry of `bytes` bytes at `path`, last used `age` seconds ago.
+    fn entry(path: &Path, age: u64, bytes: usize) {
+        std::fs::create_dir_all(path.parent().expect("an entry has a parent"))
+            .expect("create the cache dir");
+        std::fs::write(path, vec![3_u8; bytes]).expect("write the entry");
+        aged(path, age, age);
+    }
+
+    /// Fails by: a cargo unit taken while a declared cache still holds an entry,
+    /// a newer entry taken before an older one, or the cache emptied past what
+    /// the pass needed (CLOUD-2907). The unit is OLDER than every entry, so
+    /// least-recently-used order alone would take it first.
+    #[test]
+    fn a_pass_empties_the_declared_caches_oldest_first_before_any_unit() {
+        let tree = scratch("cache-first").join("target");
+        let live = unit(
+            &tree.join("debug"),
+            "live",
+            "4444444444444444",
+            7200,
+            "liblive-4444444444444444.rlib",
+            4096,
+        );
+        let cache = tree.join("sccache");
+        let oldest = cache.join("a/b/oldest");
+        let newest = cache.join("c/newest");
+        entry(&oldest, 600, 4096);
+        entry(&newest, 60, 4096);
+        let trees = [tree.clone()];
+        let caches = [cache.clone()];
+        let mut one = ask(&trees, &[], 1);
+        one.caches = &caches;
+        let (pass, _) = super::pass_of(&one);
+        assert!(!oldest.exists(), "the least recently used entry goes first");
+        assert!(newest.exists(), "one entry met the need");
+        assert!(live.exists(), "no unit goes while a cache entry could");
+        assert_eq!(pass.removed, 1);
+        let mut every = ask(&trees, &[], u64::MAX);
+        every.caches = &caches;
+        let (pass, _) = super::pass_of(&every);
+        assert!(!newest.exists(), "the cache is emptied");
+        assert!(!live.exists(), "then the units are reached");
+        assert_eq!(pass.removed, 2);
+    }
+
+    /// Fails by: `[prune] caches` read from anywhere but the repository root,
+    /// or a declared cache touched while free space is above the band.
+    #[test]
+    fn the_declared_caches_resolve_under_the_repository_and_wait_for_the_band() {
+        let repo = scratch("cache-band");
+        let held = repo.join("target/sccache/entry");
+        entry(&held, 600, 4096);
+        let mut config = band(Some((10, 11)));
+        config.caches = vec!["target/sccache".to_owned()];
+        assert!(
+            super::collect_if_pressed(&repo, &config, &[], &mut || Ok(100), None, false).is_none()
+        );
+        assert!(held.exists(), "above the band nothing is touched");
+        let temp = scratch("cache-band-temp");
+        let done = super::collect_toward_max_in(
+            &repo,
+            &config,
+            &[],
+            10,
+            &mut || Ok(10),
+            (None, false, None),
+            &temp,
+        )
+        .expect("a declared band collects");
+        assert!(!held.exists(), "below it the declared cache is reclaimed");
+        assert_eq!(done.units, 1);
     }
 
     /// This very test binary is a running harness under its own profile
