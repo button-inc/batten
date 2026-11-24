@@ -2139,18 +2139,7 @@ fn judge_run(
         String::from("--config-file"),
         config.to_string_lossy().into_owned(),
     ]);
-    let env = [
-        // EACH RUN ITS OWN TEMP AND FIXTURE ROOTS: a fixture at a fixed path
-        // is then never shared by two workers running one case, so no run
-        // waits on another's cases. The temp root is BESIDE the mirror, never
-        // in it ([`judge_temp`]).
-        (String::from("TMPDIR"), temp.to_string_lossy().into_owned()),
-        (
-            String::from(TEST_TMPDIR),
-            own.join("fixtures").to_string_lossy().into_owned(),
-        ),
-        (String::from(ACTIVE), active.to_owned()),
-    ];
+    let env = judge_env(judging.work, &temp, &own.join("fixtures"), active);
     // KEPT, NEVER ECHOED: the verdict is the report and an error keeps its
     // words below, so the run's output is shown nowhere ([`super::Said::Kept`]).
     let ran = super::spawn_suite(
@@ -2166,6 +2155,43 @@ fn judge_run(
     let _ = std::fs::remove_dir_all(&own);
     let _ = std::fs::remove_dir_all(&temp);
     (ran, xml)
+}
+
+/// The environment one judging run of mutant `active` sets over the mirror at
+/// `work`, with `temp` its `TMPDIR` and `fixtures` its fixture root.
+///
+/// EACH RUN ITS OWN TEMP AND FIXTURE ROOTS: a fixture at a fixed path is then
+/// never shared by two workers running one case, so no run waits on another's
+/// cases. The temp root is BESIDE the mirror, never in it ([`judge_temp`]).
+/// AND THE MIRROR TRUSTED as the checkout is ([`mirror_trusted`]).
+fn judge_env(
+    work: &std::path::Path,
+    temp: &std::path::Path,
+    fixtures: &std::path::Path,
+    active: &str,
+) -> Vec<(String, String)> {
+    vec![
+        (String::from("TMPDIR"), temp.to_string_lossy().into_owned()),
+        (
+            String::from(TEST_TMPDIR),
+            fixtures.to_string_lossy().into_owned(),
+        ),
+        (String::from(ACTIVE), active.to_owned()),
+        mirror_trusted(work),
+    ]
+}
+
+/// `MISE_TRUSTED_CONFIG_PATHS` with the mirror at `work` added, for every
+/// suite run over it, reach and judge alike (CLOUD-2789).
+///
+/// THE MIRROR IS A COPY OF THE CHECKOUT'S OWN CONFIG, so trusting it adds no
+/// trust the checkout lacks; the cargo-mutants arm trusts its staged tree for
+/// the same reason (`trusted_staged`). Untrusted, every case resolving a
+/// pinned tool with `mise which` from the mirror failed before it ran: four
+/// `mutate_schema` and `step_journal` cases were red under reach and the
+/// judge alike, and every mutant they reached went unjudged.
+fn mirror_trusted(work: &std::path::Path) -> (String, String) {
+    super::trusted_staged(work, std::env::var("MISE_TRUSTED_CONFIG_PATHS").ok())
 }
 
 /// The directory beside the mirror that holds each judging run's `TMPDIR`.
@@ -3424,6 +3450,7 @@ pub fn record_reach(
     env.extend([
         (String::from(REACH), base.to_string_lossy().into_owned()),
         (String::from(TREE_ENV), work.to_string_lossy().into_owned()),
+        mirror_trusted(work),
     ]);
     let ran = super::spawn_suite(
         work,
@@ -7505,6 +7532,39 @@ mod tests {
         );
         assert_eq!(temp, state.join(JUDGE_TEMP).join("7"));
         assert_ne!(temp, judge_temp(&work, NULL_MUTANT));
+    }
+
+    /// A judging run sets its temp, fixture root and switch, and trusts the
+    /// mirror's own `mise.toml` (CLOUD-2789).
+    ///
+    /// Fails by: any of the four dropped or swapped; untrusted, a case that
+    /// resolves a pinned tool from the mirror fails before it runs.
+    #[test]
+    fn a_judging_run_sets_its_roots_its_switch_and_trusts_the_mirror() {
+        let work = std::path::Path::new("/s/tree");
+        let env = judge_env(
+            work,
+            std::path::Path::new("/s/judge-tmp/3"),
+            std::path::Path::new("/s/tree/target/tmp/judge/3/fixtures"),
+            "3",
+        );
+        let get = |key: &str| {
+            env.iter()
+                .find(|(set, _)| set == key)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(get("TMPDIR").as_deref(), Some("/s/judge-tmp/3"));
+        assert_eq!(
+            get(TEST_TMPDIR).as_deref(),
+            Some("/s/tree/target/tmp/judge/3/fixtures")
+        );
+        assert_eq!(get(ACTIVE).as_deref(), Some("3"));
+        let trusted = get("MISE_TRUSTED_CONFIG_PATHS").expect("the mirror is trusted");
+        assert!(
+            trusted.split(':').any(|path| path == "/s/tree"),
+            "{trusted}"
+        );
+        assert_eq!(env.len(), 4, "{env:?}");
     }
 
     /// A sweep holds the mirror alone: while another sweep holds it, a second
