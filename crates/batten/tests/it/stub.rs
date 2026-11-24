@@ -51,7 +51,7 @@ fn a_program_run_by_name_finds_its_plan_on_path() {
     .expect("a PATH");
     #[expect(
         clippy::disallowed_types,
-        reason = "the subject is the stand-in run by bare name, which only a PATH lookup does (CLOUD-2336)"
+        reason = "stays: the subject is the stand-in run by bare name, which only a PATH lookup does (CLOUD-2336)"
     )]
     let out = std::process::Command::new("fake-tool")
         .env("PATH", path)
