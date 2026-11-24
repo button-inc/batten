@@ -477,4 +477,50 @@ mod tests {
         );
         assert!(validate_across(&declare("dispatch")).is_ok());
     }
+
+    fn spending_row(name: &str, selects: Option<&str>) -> Declared {
+        let mut row = serde_json::json!({
+            "name": name,
+            "tool": "get_issue",
+            "key": "branch",
+            "requires": ["id"],
+            "mode": "replace",
+            "body": "{id}",
+            "after": "dispatched",
+        });
+        if let Some(selects) = selects {
+            row["selects_at"] = serde_json::json!("/state");
+            row["selects"] = serde_json::json!(selects);
+        }
+        serde_json::from_value(row).expect("a declared mint")
+    }
+
+    /// Two spending rows on the same call and prerequisite race for the one
+    /// record, unless each selects a different value at the same path.
+    ///
+    /// Fails by: the race forgiven whenever the two select at the same path,
+    /// although neither selects anything there.
+    #[test]
+    fn two_rows_spending_one_prerequisite_on_one_call_are_refused() {
+        let writer = serde_json::from_value(serde_json::json!({
+            "name": "dispatched", "tool": "dispatch", "key": "branch",
+            "requires": ["id"], "mode": "replace", "body": "{id}",
+        }))
+        .expect("a declared mint");
+        let raced = [
+            writer,
+            spending_row("first", None),
+            spending_row("second", None),
+        ];
+        let refused = validate_across(&raced).expect_err("the second row could never mint");
+        assert!(
+            refused.to_string().contains("could never mint"),
+            "{refused}"
+        );
+        // ANTI-VACUITY: different values at the same path select different calls.
+        let mut apart = raced;
+        apart[1] = spending_row("first", Some("open"));
+        apart[2] = spending_row("second", Some("closed"));
+        assert!(validate_across(&apart).is_ok());
+    }
 }

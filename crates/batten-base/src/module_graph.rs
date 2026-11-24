@@ -2949,4 +2949,54 @@ mod tests {
         let names: Vec<String> = tree.items().filter_map(|item| item_name(&item)).collect();
         assert_eq!(names, ["T", "S"]);
     }
+
+    /// Fails by: a generic argument's name glued onto the self type's path.
+    #[test]
+    fn an_impl_on_a_generic_type_names_the_bare_path() {
+        let file = parse("impl<T> crate::Wrap<T> {}\n").unwrap();
+        let found = file
+            .items()
+            .find_map(|item| match item {
+                ast::Item::Impl(found) => Some(found),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(self_type_path(&found).unwrap(), ["crate", "Wrap"]);
+    }
+
+    /// Fails by: a binary's `main.rs` located as a module named `main`.
+    #[test]
+    fn a_binary_root_has_no_module() {
+        assert_eq!(locate("main.rs"), None);
+        assert_eq!(locate("lib.rs"), Some((LIB.to_owned(), Vec::new())));
+        assert_eq!(
+            locate("x.rs"),
+            Some((String::from("x"), vec![String::from("x")]))
+        );
+    }
+
+    /// Fails by: an item kind a path can name answered as nameless.
+    #[test]
+    fn a_const_and_a_trait_are_named_items() {
+        let file = parse("const LIMIT: u8 = 1;\npub trait Shape {}\n").unwrap();
+        let named: Vec<String> = file.items().filter_map(|item| item_name(&item)).collect();
+        assert_eq!(named, ["LIMIT", "Shape"]);
+        assert_eq!(
+            lib_items("pub trait Shape {}\n")
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ["Shape"]
+        );
+    }
+
+    /// Fails by: a `crate::` path inside a macro's arguments not read as an
+    /// edge to the root module it names.
+    #[test]
+    fn a_crate_path_inside_a_macro_names_the_root() {
+        assert_eq!(
+            names("fn f() { m!(crate::review::body()); }\n", &["ready"]),
+            ["review"]
+        );
+    }
 }

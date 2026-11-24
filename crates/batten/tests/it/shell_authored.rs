@@ -276,3 +276,21 @@ fn the_transcript_corpus_writes_fire_nothing() {
     }
     assert_eq!((examined, fired), (4, 0));
 }
+
+/// Only a target that is ABSENT reads as a created file: one that cannot be
+/// stat'd for any other reason (here a regular file standing where a directory
+/// must be) is could-not-look, never a new shell file.
+///
+/// Fails by: every stat error read as "absent", which would decide the path
+/// arm over a target the producer never saw.
+#[test]
+fn a_target_that_cannot_be_stated_is_could_not_look() {
+    let dir = repo("shell-authored-unstatable", &[("notes.txt", "plain\n")]);
+    let call = write("notes.txt/run.sh", "echo hi\n");
+    assert_eq!(fact(&dir, &call), Look::CouldNotLook);
+    // ANTI-VACUITY: the same name under a real directory is a created shell file.
+    assert_eq!(
+        fact(&dir, &write("tools/run.sh", "echo hi\n")),
+        Look::Is(SHELL_PATH)
+    );
+}

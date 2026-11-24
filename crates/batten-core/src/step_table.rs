@@ -272,6 +272,20 @@ mod tests {
         }
     }
 
+    /// Fails by: a row declaring only one of inputs and tools read as keyed,
+    /// which keys a receipt to half its material.
+    #[test]
+    fn only_a_row_with_inputs_and_tools_is_keyed() {
+        assert!(row(&["."], &[&["rustc", "-V"]]).is_keyed());
+        let mut no_tools = row(&["."], &[]);
+        no_tools.tools = None;
+        assert!(!no_tools.is_keyed());
+        let mut no_inputs = row(&["."], &[&["rustc", "-V"]]);
+        no_inputs.inputs = None;
+        assert!(!no_inputs.is_keyed());
+        assert!(!node("n", &[]).is_keyed());
+    }
+
     /// A schedule-only node of group `g`, running `true`, after `after`.
     fn node(id: &str, after: &[&str]) -> Step {
         Step {

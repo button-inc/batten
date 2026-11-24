@@ -2316,4 +2316,16 @@ mod tests {
         assert_eq!(Disposition::RejectedByDesign.as_str(), "rejected-by-design");
         assert_eq!(Disposition::Acted.as_str(), "acted");
     }
+
+    /// Fails by: a fingerprint with no record file answered as recorded, which
+    /// tells the journal's merge an entry is already filed when it is not.
+    #[test]
+    fn only_a_saved_fingerprint_is_recorded() {
+        let dir = store("is-recorded");
+        let saved = record_of(vec![instance("refs/heads/a", Observation::Observed(1))]);
+        let absent = identity_for("r", "src/absent.rs", "TODO");
+        save_one(&dir, &saved).unwrap();
+        assert!(is_recorded(&dir, saved.identity.fingerprint));
+        assert!(!is_recorded(&dir, absent.fingerprint));
+    }
 }

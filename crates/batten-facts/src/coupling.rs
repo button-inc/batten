@@ -497,4 +497,13 @@ mod tests {
             "{measured} vs {expected}"
         );
     }
+
+    /// Fails by: an upper layer's term multiplied into the level rather than
+    /// added: half the files in a last layer (0.5) plus half in an upper layer
+    /// depending on one of the two files below it (0.5 x 0.5) is 0.75.
+    #[test]
+    fn an_upper_layer_adds_its_term_to_the_level() {
+        let level = decoupling_level_of(&[(2, 0, 0), (2, 1, 1)], 4);
+        assert!((level - 0.75).abs() < 1e-12, "{level}");
+    }
 }

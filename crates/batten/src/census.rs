@@ -2031,4 +2031,18 @@ mod tests {
         );
         assert!(lines("fn f() {\n    m!(\"bash\", \"-c\", \"x\");\n}\n").is_empty());
     }
+
+    /// `vec!`'s body is re-read from just past its open bracket: one byte
+    /// early and the wrapped list carries the bracket, no longer parses, and
+    /// the argv it holds is never seen.
+    #[test]
+    fn a_vec_macro_argv_is_a_spawn_site_on_its_own_line() {
+        let text = "fn run() {\n    let argv =\n        vec![\"bash\", \"-c\", \"true\"];\n}\n";
+        let sites = spawn_sites("src/run.rs", text);
+        assert_eq!(
+            sites.iter().map(|site| site.line).collect::<Vec<_>>(),
+            vec![3],
+            "{sites:?}"
+        );
+    }
 }

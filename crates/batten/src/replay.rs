@@ -2907,3 +2907,64 @@ mod dependency_key_tests {
         );
     }
 }
+
+/// The cuts read off a branch's file moves (CLOUD-2789).
+#[cfg(test)]
+mod cut_tests {
+    use super::cuts;
+    use crate::item_index::Index;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(left, right)| ((*left).to_owned(), (*right).to_owned()))
+            .collect()
+    }
+
+    /// Fails by: a cut answered that the moves never made, or the one they did
+    /// left out.
+    #[test]
+    fn a_module_moved_between_crates_is_that_cut_and_nothing_else() {
+        let manifests = map(&[
+            ("a/Cargo.toml", "[package]\nname = \"a\"\n"),
+            ("b/Cargo.toml", "[package]\nname = \"b\"\n"),
+        ]);
+        let before = Index::new(
+            &map(&[
+                ("a/src/lib.rs", "pub mod m;\n"),
+                ("a/src/m.rs", "pub fn f() {}\n"),
+            ]),
+            &manifests,
+        );
+        let after = Index::new(
+            &map(&[
+                ("a/src/lib.rs", "\n"),
+                ("b/src/lib.rs", "pub mod m;\n"),
+                ("b/src/m.rs", "pub fn f() {}\n"),
+            ]),
+            &manifests,
+        );
+        let found = cuts(&map(&[("a/src/m.rs", "b/src/m.rs")]), &before, &after);
+        let crate_names = |found: &BTreeMap<(String, String), BTreeSet<String>>| {
+            found
+                .iter()
+                .map(|((from, to), modules)| {
+                    (
+                        from.clone(),
+                        to.clone(),
+                        modules.iter().cloned().collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            crate_names(&found),
+            vec![(
+                String::from("a"),
+                String::from("b"),
+                vec![String::from("m")]
+            )]
+        );
+    }
+}
