@@ -2419,6 +2419,18 @@ pub enum ReleaseCommand {
         /// Write the two files and commit nothing.
         write_only: bool,
     },
+    /// The nearest ancestor release before a release tag, under a glob
+    /// (CLOUD-2906): the one predecessor reader a workflow calls instead of
+    /// describing over every tag.
+    ///
+    /// APPENDED LAST, for the reason every enum here records.
+    Previous {
+        /// The release tag whose predecessor is asked for.
+        tag: String,
+        /// The glob a release tag matches; its literal prefix is stripped once
+        /// before the version is parsed.
+        pattern: String,
+    },
 }
 
 /// The `ci` sub-verbs.
@@ -3038,6 +3050,10 @@ fn release_of(matches: &ArgMatches) -> Option<ReleaseCommand> {
             sha: matches.get_one::<String>("sha").cloned(),
             branch: matches.get_one::<String>("branch").cloned(),
             write_only: flag(matches, "write_only"),
+        }),
+        ("previous", matches) => Some(ReleaseCommand::Previous {
+            tag: matches.get_one::<String>("tag")?.clone(),
+            pattern: matches.get_one::<String>("pattern")?.clone(),
         }),
         _ => None,
     }

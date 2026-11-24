@@ -1122,6 +1122,9 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // `release pin` reads the corpus's own `batten.toml`, which may not exist,
     // and that is could-not-look rather than a pin.
     "release pin",
+    // CLOUD-2906: the corpus carries no tag, so `refs/tags/v0.0.1` names no
+    // commit and the honest answer is could-not-look.
+    "release previous",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -2950,6 +2953,12 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "release pin",
         args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release previous",
+        args: &["--tag", "v0.0.1", "--pattern", "v[0-9]*"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
