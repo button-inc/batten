@@ -1937,6 +1937,28 @@ mod tests {
         );
     }
 
+    /// Fails by: a one-line array read as the text it is written as, whose
+    /// bare `[`…`]` is a glob to the detector, so a plain list is shell and a
+    /// pipeline inside one is named for the brackets (CLOUD-2789).
+    #[test]
+    fn a_one_line_array_is_judged_on_its_strings_not_its_brackets() {
+        let mise = Some(&crate::shell_logic::MISE_TASK);
+        assert!(
+            manifest_reasons(&["run = [\"cargo build\"]"], &keys(&["run"]), mise).is_empty(),
+            "a list of one plain command is argv"
+        );
+        assert_eq!(
+            manifest_reasons(
+                &["run = [\"cargo build\", \"a | b\"]"],
+                &keys(&["run"]),
+                mise
+            )
+            .into_iter()
+            .collect::<Vec<_>>(),
+            [(0, "Pipeline")]
+        );
+    }
+
     #[test]
     fn a_glob_the_ban_reads_differently_is_refused() {
         // Each parses under `globset`, so `Selector::new` alone admits it; each

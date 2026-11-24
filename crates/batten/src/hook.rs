@@ -24425,6 +24425,15 @@ deny contains "refused by themodule" if {
     /// it as a pathspec.
     #[test]
     fn a_restore_source_after_another_option_is_no_pathspec() {
+        // And leading the options, where the pass-count bound ends a stalled
+        // cursor on the `-s` itself, so nothing is placed (CLOUD-2789).
+        assert_eq!(
+            git_pathspecs(&["git", "restore", "-s", "HEAD", "f"], Path::new("/r")),
+            Pathspecs::Placed(vec![PathspecCall {
+                dir: PathBuf::from("/r"),
+                pathspecs: vec![String::from("f")],
+            }])
+        );
         assert_eq!(
             git_pathspecs(
                 &["git", "restore", "-q", "-s", "HEAD", "f"],
