@@ -298,10 +298,7 @@ fn a_missing_empty_archived_or_stale_store_admits_nothing() {
 
     let empty = repo("child-wait-empty");
     std::fs::create_dir_all(receipts(&empty)).expect("an empty receipt store");
-    refused_by(
-        &call(&empty, "send_later", &message),
-        "timer mint refused",
-    );
+    refused_by(&call(&empty, "send_later", &message), "timer mint refused");
 
     let archived = repo("child-wait-archived");
     create_child(&archived, CHILD);
