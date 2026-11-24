@@ -761,7 +761,7 @@ pub fn command_for(verb: Option<&str>) -> Command {
     // performs a default action (§2). clap renders the listing on its error path
     // (stderr, exit 1), so stdout stays the answer channel.
     let root = Command::new("batten")
-        .version(env!("CARGO_PKG_VERSION"))
+        .version(crate::config::VERSION)
         .about(ROOT.about)
         // The §7 table, rendered from `ExitCode`'s own variants rather than
         // re-typed here, so `--help` and the binary can never disagree about

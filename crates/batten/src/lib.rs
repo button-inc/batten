@@ -2518,7 +2518,10 @@ fn engine_pin(
             _ => return Ok(ExitCode::Success),
         },
         Some("source") => source()?,
-        Some("version") => release(engine::release()),
+        // The release this source is cut as, never the build identity
+        // (CLOUD-2903): `release-plz.yml` runs this through `cargo run` on the
+        // release PR's head, which is not the marked release build.
+        Some("version") => release(engine::declared_release()),
         Some(tag) if tag.starts_with('v') => release(tag.to_owned()),
         Some(other) => {
             return Err(UsageError::raise(format!(
@@ -32005,15 +32008,16 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
     let current = config::schema_keys(&derived, "the derived schema")?;
     let added = config::additions_since(&released, &current);
     // The floor is read from the working tree's own authority and compared with
-    // THIS build's version — exactly the pair `check_min_version` compares, so
-    // the two cannot disagree about what "the floor is current" means.
+    // the release this source will be cut as. A floor names a release, so it is
+    // the PACKAGE version, never the build identity (CLOUD-2903): no floor equals
+    // a dev pre-release, and every key addition would read as owed.
     let owed = config::floor_owed(
         &added,
         resolve::resolve(Path::new("."), &Overrides::default())
             .ok()
             .and_then(|resolved| resolved.min_batten_version.clone())
             .as_deref(),
-        config::VERSION,
+        config::PACKAGE_VERSION,
     );
     let unannounced = config::removals_unannounced(
         &released,
@@ -33384,6 +33388,12 @@ pub fn land_ready_owes(
 /// The build script's marker scanner, compiled here only so its own unit tests run.
 #[cfg(test)]
 mod mutation_markers;
+
+/// The build's identity (CLOUD-2903): `build.rs` stamps it, and this
+/// declaration exists so its cases run here and an integration case can render
+/// one. No library code calls it; see the file's own header.
+#[path = "../build/identity.rs"]
+pub mod build_identity;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

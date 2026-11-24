@@ -159,7 +159,7 @@ pub(crate) fn published(home: &Path, tag: &str, target: &str) -> String {
             .join(REPO)
             .join("releases")
             .join("download")
-            .join(tag)
+            .join(batten::engine::forge_tag(tag))
             .join("SHA256SUMS"),
     )
     .unwrap();
@@ -234,7 +234,12 @@ pub(crate) fn release_host(
     let bytes = std::fs::read(&archive).unwrap();
 
     let asset = batten::engine::release_asset(served, &batten::engine::running_target());
-    let download = repo.join("releases").join("download").join(served);
+    // Where the forge publishes `served`: a dev pre-release under `dev/`
+    // (CLOUD-2903), a release under its own tag.
+    let download = repo
+        .join("releases")
+        .join("download")
+        .join(batten::engine::forge_tag(served));
     std::fs::create_dir_all(&download).unwrap();
     std::fs::write(download.join(&asset), &bytes).unwrap();
     // EVERY PROVISION PLATFORM'S ASSET, not only this build's (CLOUD-2279): a
@@ -521,13 +526,46 @@ fn the_ref_outranks_the_worktree_pin() {
     );
 }
 
+/// A DEV BUILD IS NEVER INSTALLED AS ITS PACKAGE'S RELEASE (CLOUD-2903): a pin
+/// naming `v{CARGO_PKG_VERSION}` is the published release's, so the install
+/// fetches it, and with no host answering nothing is placed. Before this row
+/// `release_bytes` placed the running binary as that release, because every
+/// build reported the package version.
+#[test]
+fn a_dev_build_is_never_installed_as_its_package_release() {
+    let home = common::scratch_repo("engine-install-dev-not-release");
+    pin_worktree(&home, &batten::engine::declared_release());
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let output = install(
+        &home,
+        std::slice::from_ref(&named),
+        &[
+            ("BATTEN_INSTALL_DIR", &named_str),
+            ("BATTEN_RELEASES", "https://localhost:1/example/pkg"),
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    assert!(
+        !named.join(binary()).exists(),
+        "no binary is placed as a release it is not"
+    );
+}
+
 /// The bootstrap's download is placed even when the worktree pins exactly the
 /// running release: a download is never "already installed" just because it is
 /// current, and it runs off `PATH`.
 #[test]
 fn the_bootstrap_places_a_running_pin() {
     let home = common::scratch_repo("engine-install-running-pin");
-    let running = format!("v{}", env!("CARGO_PKG_VERSION"));
+    // THE RUNNING IDENTITY (CLOUD-2903), never the package's release: only the
+    // binary that IS the pin is placed as it, and a test build is a dev build.
+    let running = batten::engine::release();
     pin_worktree(&home, &running);
     let named = home.join("bin");
     let named_str = named.display().to_string();
@@ -1681,9 +1719,13 @@ mod repair {
         common::write(
             &dir,
             "batten.toml",
+            // The running identity (CLOUD-2903): this runner removes
+            // `BATTEN_ENGINE` and `BATTEN_RELEASES`, and the package's release
+            // is no longer this build, so pinning it would fetch the published
+            // one.
             &format!(
-                "version = 1\nengine = {{ release = \"v{}\" }}\n",
-                env!("CARGO_PKG_VERSION")
+                "version = 1\nengine = {{ release = \"{}\" }}\n",
+                batten::engine::release()
             ),
         );
         let on_path = hook_bin(&dir).join("batten");

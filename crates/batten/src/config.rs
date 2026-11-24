@@ -3541,11 +3541,19 @@ fn parse_ungated_with(text: &str, source: &str, grammar: Grammar) -> Result<Conf
     Ok(config)
 }
 
-/// The version of the running binary, as `Cargo.toml` declares it.
+/// The identity of the running binary (CLOUD-2903): the package version for
+/// the release build, a dev pre-release for every other
+/// (`crates/batten/build/identity.rs`).
 ///
-/// Read from the compiled-in package version rather than re-typed, so the gate
-/// compares against the build that is actually running.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Stamped once per build by `build.rs` rather than re-typed, so the gate
+/// compares against the build that is actually running, and a build that is
+/// not the release never carries the release's identity.
+pub const VERSION: &str = env!("BATTEN_BUILD_VERSION");
+
+/// The package version `Cargo.toml` declares: the release this source is, or
+/// will be cut as. A floor and a release pin name a release, so the readers
+/// that compare against one of those, rather than name this build, read this.
+pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Refuse a config this build is too old to honour (CLOUD-33).
 ///
