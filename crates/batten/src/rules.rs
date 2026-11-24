@@ -10898,6 +10898,52 @@ mod tests {
         assert!(serde_json::from_str::<Direction>("\"decreasing\"").is_err());
     }
 
+    /// A mediated write is judged against a denying ratchet that names its
+    /// direction, base and glob, and against nothing else (CLOUD-2692).
+    ///
+    /// Fails by: an allowed ratchet judged at the call, or a row of another
+    /// kind carrying a ratchet's columns judged as one (an `&&` read as `||`).
+    #[test]
+    fn only_a_denying_ratchet_with_its_columns_is_judged_at_the_call() {
+        let ratchet = Rule {
+            glob: Some("**/*.rs".to_owned()),
+            pattern: Some("#[test]".to_owned()),
+            direction: Some(Direction::NonDecreasing),
+            base: Some("origin/main".to_owned()),
+            severity: Some(RuleSeverity::Deny),
+            ..blank("r", RuleKind::Ratchet)
+        };
+        assert!(judged_at_call(&ratchet));
+        for unjudged in [
+            Rule {
+                severity: None,
+                ..ratchet.clone()
+            },
+            Rule {
+                severity: Some(RuleSeverity::Allow),
+                ..ratchet.clone()
+            },
+            Rule {
+                kind: RuleKind::Command,
+                ..ratchet.clone()
+            },
+            Rule {
+                direction: None,
+                ..ratchet.clone()
+            },
+            Rule {
+                base: None,
+                ..ratchet.clone()
+            },
+            Rule {
+                glob: None,
+                ..ratchet.clone()
+            },
+        ] {
+            assert!(!judged_at_call(&unjudged), "{unjudged:?}");
+        }
+    }
+
     #[test]
     fn a_ratchet_requires_its_own_columns_and_rejects_the_others() {
         let base = Rule {
