@@ -3238,4 +3238,19 @@ mod tests {
         assert_eq!(comment_spans("a /* x"), []);
         assert_eq!(comment_spans("a /* x */"), [(2, 9)], "a closed one is");
     }
+
+    /// Fails by: a glob whose own path ends at an item (`E::*`, an enum's
+    /// variants) read as binding that item under the variant's name, so a
+    /// path through it resolves to the enum.
+    #[test]
+    fn a_glob_over_an_items_members_binds_nothing() {
+        let built = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", "pub enum E { V }\n"),
+            ("src/b.rs", "pub use crate::a::E::*;\n"),
+        ]);
+        let path: Vec<String> = ["app", "b", "V"].map(String::from).to_vec();
+        assert_eq!(built.resolve_through(&path, 2, true), None);
+    }
 }
