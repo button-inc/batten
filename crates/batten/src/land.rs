@@ -6989,4 +6989,18 @@ mod hold_tests {
             format!("held abc entry-ms=5 {}-ms=7", Step::Verify.as_str())
         );
     }
+
+    /// Fails by: a hold's record line emptied, or not the held line of its own
+    /// entry and phases.
+    #[test]
+    fn a_holds_line_is_the_held_line_of_its_entry_and_phases() {
+        let mut hold = Hold::new(true);
+        hold.entry_ms = Some(7);
+        hold.phases = vec![(Step::Verify, 3)];
+        assert_eq!(
+            hold.line("abc"),
+            super::held_line("abc", 7, &[(Step::Verify, 3)])
+        );
+        assert!(hold.line("abc").starts_with("held abc entry-ms=7 "));
+    }
 }

@@ -1428,6 +1428,66 @@ record = "other"
         let shell = projected(&["tree.shell"]);
         assert!(shell.get("census").is_some(), "{shell}");
     }
+
+    /// Fails by: a raw string's body left in the code after its first byte,
+    /// so an id quoted in backticks would read as a subscript.
+    #[test]
+    fn a_raw_string_body_is_blanked_whole() {
+        assert_eq!(super::rego_code("x := `ab` y"), "x := `` y");
+    }
+
+    /// The tree reads of a module reading exactly `paths`.
+    fn tree(paths: &[&str]) -> super::TreeReads {
+        let paths = paths.iter().map(|path| (*path).to_owned()).collect();
+        super::TreeReads::of(&paths).unwrap()
+    }
+
+    /// Fails by: a named `records` subpath read as the family whole, or a
+    /// recorder row whose store is exactly a read name dropped as unread.
+    #[test]
+    fn a_named_record_read_keeps_exactly_its_store() {
+        let reads = tree(&["tree.records.ledger"]);
+        assert_eq!(
+            reads.records,
+            Some(std::iter::once("ledger".to_owned()).collect())
+        );
+        let row = |record: &str| {
+            let mut table = toml::Table::new();
+            table.insert("record".to_owned(), toml::Value::String(record.to_owned()));
+            toml::Value::Table(table)
+        };
+        assert!(reads.reads_record(&row("ledger")));
+        assert!(!reads.reads_record(&row("other")));
+    }
+
+    /// Fails by: a single-table section (`[forge]`) kept for a module that
+    /// reads nothing it builds, or `[[traversal]]` dropped from one that reads
+    /// `traversals`.
+    #[test]
+    fn the_allowlist_keeps_only_tables_the_module_reads() {
+        let mut value: toml::Table = toml::from_str(
+            "strictness = \"standard\"\n[forge]\nkind = \"x\"\n\
+             [[traversal]]\nid = \"t\"\n[[register]]\nid = \"r\"\n",
+        )
+        .unwrap();
+        let mut unread = value.clone();
+        super::allow(&mut unread, &tree(&["tree.documents"]));
+        assert_eq!(
+            unread
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["strictness"])
+        );
+        super::allow(&mut value, &tree(&["tree.traversals"]));
+        assert_eq!(
+            value
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["register", "strictness", "traversal"])
+        );
+    }
 }
 
 /// The projection's two text helpers, each against the one input that tells

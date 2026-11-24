@@ -2105,6 +2105,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: a fingerprint with no record file answered as recorded, or a
+    /// published one answered as absent.
+    #[test]
+    fn is_recorded_answers_by_the_record_file_alone() {
+        let dir = store("is-recorded");
+        let saved = record_of(vec![instance("refs/heads/a", Observation::Observed(1))]);
+        let mut absent = saved.clone();
+        absent.identity = identity_for("r", "src/never.rs", "TODO");
+        save_one(&dir, &saved).unwrap();
+        assert!(is_recorded(&dir, saved.identity.fingerprint));
+        assert!(!is_recorded(&dir, absent.identity.fingerprint));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // A flap suppression is the engine withholding a finding, so it must be
     // excluded from both sides of the false-positive rate for the same reason the
     // other three reasons are: the agent was never shown it, so its silence is not

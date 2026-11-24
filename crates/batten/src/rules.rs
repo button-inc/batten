@@ -16301,7 +16301,18 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
                 Acquired::Lines(vec![String::from("y")]),
             ),
             (key("m", Wanted::Uses), Acquired::Invocations(Vec::new())),
+            (key("n.rs", Wanted::Units), Acquired::Units(Vec::new())),
+            (key("n.rs", Wanted::Lines), Acquired::Units(Vec::new())),
         ]);
+        assert_eq!(
+            project_declared(&cache, "n.rs", Wanted::Units),
+            Ok(serde_json::json!({"nodes": []}))
+        );
+        assert_eq!(
+            project_declared(&cache, "n.rs", Wanted::Lines),
+            Err(NotAcquired::Absent),
+            "units held under another projection are not its answer"
+        );
         let document = project_declared(&cache, "d.json", Wanted::Document).expect("parsed");
         assert_eq!(document["a"], serde_json::json!(1), "{document}");
         assert_eq!(

@@ -1951,6 +1951,28 @@ mod tests {
         assert!(!ids.contains(&"rule-predicate-changed"), "{ids:?}");
     }
 
+    /// Fails by: a landing path dropped only because its file moved, to a path
+    /// the working list declares, still charged as a weakening; or one moved
+    /// somewhere the list does not declare dropped as a move.
+    #[test]
+    fn a_landing_path_that_only_follows_a_move_is_not_a_weakening() {
+        let lease = |paths: &str| format!("version = 1\n[lease]\nlanding_paths = [{paths}]\n");
+        let base = config::parse(&lease("\"a.sh\", \"b.rs\""), "base").unwrap();
+        let tracked = std::collections::BTreeSet::new();
+        let judged = |paths: &str, to: &str| {
+            let moves = std::collections::BTreeMap::from([("b.rs".to_owned(), to.to_owned())]);
+            let working = config::parse(&lease(paths), "test").unwrap();
+            let found = smells(&lease(paths), "test", Some(&base), today(), &[]).unwrap();
+            let removed = found
+                .iter()
+                .find(|smell| smell.id.as_str() == "landing-path-removed")
+                .unwrap_or_else(|| panic!("{paths}: b.rs was dropped"));
+            explained_by_moves(removed, &base, &working, &moves, &tracked)
+        };
+        assert!(judged("\"a.sh\", \"c.rs\"", "c.rs"), "follows the move");
+        assert!(!judged("\"a.sh\"", "c.rs"), "the new path is not declared");
+    }
+
     #[test]
     fn two_weakenings_of_one_kind_both_survive_dedup() {
         // The counting half of CLOUD-233, and the assertion whose absence let the

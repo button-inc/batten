@@ -666,6 +666,36 @@ mod tests {
         dir
     }
 
+    /// Fails by: an unnamed requirement inside the resolver's own body counted,
+    /// or one outside it missed; a `which` literal missed, or counted inside
+    /// the resolver. Outside: one non-literal call and two resolvers named as
+    /// values; inside: one of each, none of which count.
+    #[test]
+    fn the_require_census_counts_outside_the_resolver_and_not_within() {
+        let file: syn::File = syn::parse_str(concat!(
+            "fn caller(v: Vec<&str>) {\n",
+            "    require_tool(\"cargo\");\n",
+            "    require_bin(name);\n",
+            "    v.iter().map(require_tool);\n",
+            "    v.iter().map(require_bin);\n",
+            "    let w = \"whi",
+            "ch\";\n",
+            "    Command::new(\"git\");\n",
+            "}\n",
+            "fn require_bin(name: &str) {\n",
+            "    require_tool(name);\n",
+            "    Some(name).map(require_tool);\n",
+            "    let w = \"whi",
+            "ch\";\n",
+            "}\n",
+        ))
+        .expect("the fixture parses");
+        let census = require_census(&file);
+        assert_eq!(census.tools, ["cargo"]);
+        assert_eq!((census.unnamed, census.which_literals), (3, 1));
+        assert_eq!(census.spawned, ["git"]);
+    }
+
     /// A fixture with no repository of its own resolves to the enclosing checkout.
     #[test]
     fn a_fixture_with_no_repository_under_the_scratch_root_falls_through() {
@@ -841,7 +871,7 @@ mod tests {
     /// nowhere, or counted inside the resolver's own body.
     #[test]
     fn the_resolver_named_as_a_value_is_unnamed_outside_its_own_body() {
-        let census = |text: &str| require_census(&syn::parse_file(text).expect("parses"));
+        let census = |text: &str| require_census(&batten_facts::source::rust(text).expect("parses"));
         assert_eq!(
             census("fn f() { let _ = names.iter().map(require_tool); }").unnamed,
             1

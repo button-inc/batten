@@ -513,6 +513,38 @@ mod tests {
         assert_eq!(graph.len(), 4, "every declared path is a node");
     }
 
+    /// A three-file chain `a -> b -> c`, worked by hand. Reach: a 3, b 2, c 1,
+    /// so propagation cost is 6/9. DL: `a` is the last layer (no dependents),
+    /// 1/3. `b` (one dependent, depth 1) has `b` and `c` as upper modules no
+    /// deeper than it, leaving one lower file that depends on it: 1/3·(1 − 1).
+    /// `c` (two dependents, depth 0) has itself alone as upper, two lower
+    /// files, both dependents: 1/3·(1 − 1). DL is 1/3.
+    ///
+    /// Fails by: the cost's denominator not `files²`, a component's depth
+    /// counting its own members, or the upper set admitting a module without
+    /// dependents or one deeper than the module measured.
+    #[test]
+    fn a_chain_measures_as_worked_by_hand() {
+        let mut chain = FileGraph::new();
+        chain
+            .entry("a".to_owned())
+            .or_default()
+            .insert("b".to_owned());
+        chain
+            .entry("b".to_owned())
+            .or_default()
+            .insert("c".to_owned());
+        let measured = measure(&chain);
+        assert!(
+            (measured.propagation_cost - 6.0 / 9.0).abs() < 1e-9,
+            "{measured:?}"
+        );
+        assert!(
+            (measured.decoupling_level - 1.0 / 3.0).abs() < 1e-9,
+            "{measured:?}"
+        );
+    }
+
     /// Adding an unconnected file lowers propagation cost (the sensitivity the
     /// paper names) but cannot raise a tangled system's DL above an untangled one.
     #[test]

@@ -410,3 +410,28 @@ fn a_query_whose_family_no_record_row_declares_is_refused_at_load() {
         stderr(&refused)
     );
 }
+
+/// Fails by: a span refused only when BOTH its instants are unreadable, so a
+/// readable `from` lets an unreadable `to` through (and the reverse).
+#[test]
+fn a_span_with_either_instant_unreadable_is_refused_at_load() {
+    let linted = |name: &str, from: &str, to: &str| {
+        let dir = scratch(&format!("forge-query-span-{name}"));
+        init_repo(&dir);
+        let span = format!(
+            "\n[[forge.query.span]]\nname = \"age\"\nfrom = \"{from}\"\nto = \"{to}\"\nunit = \"days\"\n"
+        );
+        write(&dir, "batten.toml", &format!("{}{span}", config("")));
+        write(&dir, "policy/reads-the-runs.rego", READS_THE_RUNS);
+        git_in(&dir, &["add", "-A"]);
+        git_in(&dir, &["commit", "-qm", "declare the span"]);
+        let out = common::run(&dir, &["config", "lint"]);
+        (out.status.code(), stderr(&out))
+    };
+    let (clean, said) = linted("clean", "created_at", "created_at");
+    assert_ne!(clean, Some(1), "a readable span is no fault\n{said}");
+    for (name, from, to) in [("to", "created_at", "a..b"), ("from", "a..b", "created_at")] {
+        let (code, said) = linted(name, from, to);
+        assert_eq!(code, Some(1), "{name}: {said}");
+    }
+}
