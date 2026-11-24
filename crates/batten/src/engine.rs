@@ -407,11 +407,31 @@ pub const REPAIR: &str = "batten engine install";
 /// composition.
 pub const REPAIR_PINNED: &str = "mise exec -- batten engine install";
 
-/// Whether `command` is one of the repair's two whole spellings: equality, so
-/// no shell composition rides either.
+/// [`REPAIR_PINNED`] with mise held to its lockfile (CLOUD-2881).
+///
+/// `mise exec` installs every missing tool before it runs the command, and a
+/// project whose `[settings]` leave the lockfile off resolves those installs
+/// through the forges' release APIs. Measured in a cold container: the pinned
+/// spelling's install failed on 25 tools, each refused 403 by the proxy, and
+/// never reached the build; under these settings the install reads the lock's
+/// own URLs. The four assignments are mise's settings, not a consumer's: the
+/// lockfile read and enforced, and attestation lookups — API calls the lock's
+/// URLs do not cover — off, since the lock already pins each artifact's
+/// checksum. One whole string, as [`REPAIR_PINNED`] is, so no composition
+/// rides it.
+pub const REPAIR_LOCKED: &str = "env MISE_LOCKFILE=true MISE_LOCKED=true \
+     MISE_AQUA_GITHUB_ATTESTATIONS=false MISE_GITHUB_GITHUB_ATTESTATIONS=false \
+     mise exec -- batten engine install";
+
+/// The repair's whole spellings: the floor admits exactly these, bare or
+/// rooted at the authority.
+pub const REPAIRS: [&str; 3] = [REPAIR, REPAIR_PINNED, REPAIR_LOCKED];
+
+/// Whether `command` is one of the repair's whole spellings: equality, so no
+/// shell composition rides any of them.
 #[must_use]
 pub fn is_repair(command: &str) -> bool {
-    command == REPAIR || command == REPAIR_PINNED
+    REPAIRS.contains(&command)
 }
 
 /// [`REPAIR`] spelled to run from wherever the shell stands (CLOUD-2218).
@@ -434,7 +454,7 @@ pub fn repair_at(root: &std::path::Path, repair: &str) -> String {
 #[must_use]
 pub fn is_repair_at(command: &str, root: &std::path::Path) -> bool {
     is_repair(command)
-        || [REPAIR, REPAIR_PINNED]
+        || REPAIRS
             .iter()
             .any(|repair| command == repair_at(root, repair))
 }
@@ -2110,6 +2130,28 @@ mod tests {
         assert!(is_repair_at(&repair_at(root, REPAIR_PINNED), root));
         assert!(!is_repair_at(
             "cd /elsewhere && batten engine install",
+            root
+        ));
+    }
+
+    #[test]
+    fn the_locked_repair_holds_mise_to_its_lockfile_and_is_admitted_whole() {
+        // CLOUD-2881: the pinned spelling's own tool install ran unlocked and
+        // was refused 403 in a cold container, so the floor admits the locked
+        // spelling too — whole, bare or rooted, and nothing carrying it.
+        let root = Path::new("/work/my repo");
+        for setting in ["MISE_LOCKFILE=true", "MISE_LOCKED=true"] {
+            let (before, _) = REPAIR_LOCKED
+                .split_once(setting)
+                .unwrap_or_else(|| panic!("the locked repair sets {setting}"));
+            assert!(before.starts_with("env "), "{REPAIR_LOCKED}");
+        }
+        assert!(REPAIR_LOCKED.ends_with(REPAIR_PINNED), "{REPAIR_LOCKED}");
+        assert!(is_repair(REPAIR_LOCKED));
+        assert!(is_repair_at(&repair_at(root, REPAIR_LOCKED), root));
+        assert!(!is_repair(&format!("{REPAIR_LOCKED} && git push")));
+        assert!(!is_repair_at(
+            &repair_at(Path::new("/elsewhere"), REPAIR_LOCKED),
             root
         ));
     }

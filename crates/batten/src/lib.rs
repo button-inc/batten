@@ -2368,7 +2368,7 @@ fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCo
                 "engine install: `{}` failed ({why}); it builds on the ambient \
                  toolchain, so run `{}` to build on the project's",
                 build.join(" "),
-                engine::REPAIR_PINNED,
+                engine::REPAIR_LOCKED,
             ))
         })?;
         // The digest is read first, so a tree naming no source installs nothing.
@@ -21853,12 +21853,16 @@ fn unadjudicable_remedy() -> Fix {
     Fix::Run(format!(
         "a `Read` still answers and an `Edit` or `Write` of `{}` or `{}` still lands — \
          repair the file with those; where the config is newer than this binary, \
-         `{}` installs its pin, and `{}` builds a source pin on the project's toolchain; \
-         those two are the commands admitted",
+         `{}` installs its pin, and `{}` builds a source pin on the project's toolchain \
+         installed from its lockfile; those two, and `{}` unlocked, are the commands admitted",
         crate::config_model::CONFIG_FILE,
         resolve::LOCAL_CONFIG_FILE,
         engine::repair_at(&root, engine::REPAIR),
-        engine::repair_at(&root, engine::REPAIR_PINNED),
+        // LOCKED, NOT MERELY PINNED (CLOUD-2881): in a cold container the
+        // pinned spelling's own tool install resolved through the forges'
+        // APIs, was refused 403, and never reached the build it was named for.
+        engine::repair_at(&root, engine::REPAIR_LOCKED),
+        engine::REPAIR_PINNED,
     ))
 }
 
