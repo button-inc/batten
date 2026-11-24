@@ -694,11 +694,7 @@ fn a_watch_in_a_linked_worktree_mints_where_the_hook_clears() {
     finished.extend(events("shard-exit.json"));
     let mut source = Recorded::new(100).child(row("session_D02", "IDLE", None), finished);
     Watch::new(Vec::new())
-        .poll(
-            &mut source,
-            &cache("wt-mints"),
-            &Mints::new(&sink),
-        )
+        .poll(&mut source, &cache("wt-mints"), &Mints::new(&sink))
         .expect("the source answers");
     let minted = receipts(&worktree).join("child-state.session_D02");
     assert!(minted.exists(), "the read is in the worktree's own store");
