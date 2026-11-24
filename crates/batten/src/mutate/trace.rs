@@ -244,6 +244,17 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
             if library_lookup(&argument, line) {
                 continue;
             }
+            // A SYMLINK'S FIRST ARGUMENT IS THE TEXT IT HOLDS, NOT A PATH IT
+            // TOUCHES: `symlink("dangling", "l")` writes `l` alone. Resolved as
+            // a path, a link to a missing target read as a write of that name
+            // beside the step (CLOUD-2840's perf-gate: `dangling` at the root).
+            if matches!(syscall(line), "symlink" | "symlinkat") {
+                if let Some(next) = after.find('"') {
+                    let (link, _) = quoted_arg(&after[next + 1..])?;
+                    out.push((resolve(&link, &after[..next], cwd)?, Access::Write));
+                }
+                continue;
+            }
             out.push((
                 resolve(&argument, &line[open + 1..open + quote], cwd)?,
                 access,
@@ -912,6 +923,24 @@ mod tests {
             assert_eq!(
                 accessed(&[line]),
                 vec![(PathBuf::from("/repo/a"), Write)],
+                "{line}"
+            );
+        }
+    }
+
+    /// Fails by: a symlink's target text resolved as a path and recorded as a
+    /// write — measured, a link to `dangling` failed perf-gate's traced run on
+    /// a write at the repository root no process made.
+    #[test]
+    fn a_symlink_writes_its_link_and_never_its_target() {
+        use super::Access::Write;
+        for line in [
+            "7     symlink(\"dangling\", \"l\") = 0",
+            "7     symlinkat(\"dangling\", AT_FDCWD</repo>, \"l\") = 0",
+        ] {
+            assert_eq!(
+                accessed(&[line]),
+                vec![(PathBuf::from("/repo/l"), Write)],
                 "{line}"
             );
         }
