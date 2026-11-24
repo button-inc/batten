@@ -12213,6 +12213,29 @@ fn land_reference(root: &Path, named: Option<&str>, err: &mut dyn Write) -> Resu
     }
 }
 
+/// Refuse a shallow (or unreadable) clone, naming the remedy (CLOUD-2589).
+///
+/// `true` when the clone is refused: one `::error::` line is written and the
+/// caller exits `3`. Shared by `land linear`, `land replay` and the lap's entry
+/// gates, so each asks before it fetches or writes anything: ancestry over a
+/// truncated history answers wrong in one direction, and the in-process fetch
+/// cannot deepen (see [`run_land_linear`]).
+///
+/// # Errors
+///
+/// Only a write failure on `err`.
+fn shallow_refused(root: &Path, verb: &str, reference: &str, err: &mut dyn Write) -> Result<bool> {
+    if !git::is_shallow(root).unwrap_or(true) {
+        return Ok(false);
+    }
+    writeln!(
+        err,
+        "::error:: land {verb}: this clone is shallow (or unreadable), so ancestry against \
+         {reference} is unanswerable; deepen it with `git fetch --unshallow` and ask again"
+    )?;
+    Ok(true)
+}
+
 /// `batten land linear <reference>` (CLOUD-1991): is HEAD built on the reference's
 /// CURRENT tip, so its pull request can fast-forward-land?
 ///
@@ -12247,12 +12270,7 @@ fn run_land_linear(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    if git::is_shallow(root).unwrap_or(true) {
-        writeln!(
-            err,
-            "::error:: land linear: this clone is shallow (or unreadable), so ancestry against \
-             {reference} is unanswerable; deepen it with `git fetch --unshallow` and ask again"
-        )?;
+    if shallow_refused(root, "linear", reference, err)? {
         return Ok(ExitCode::Internal);
     }
     let tracking = land::tracking_ref(reference);
@@ -12984,6 +13002,12 @@ fn run_land_lap(
              it aside, then run the lap again."
         )?;
         return Ok(ExitCode::Violation);
+    }
+    // A SHALLOW CLONE NEXT, AND HERE RATHER THAN IN THE REPLAY (CLOUD-2589):
+    // the replay step's `BetSettled` precheck adopts, settles and places a bet,
+    // rebasing over the same truncated history, before `run_land_replay` runs.
+    if shallow_refused(root, "lap", reference, err)? {
+        return Ok(ExitCode::Internal);
     }
     if let Some(code) = run_land_entry_gates(root, branch, out, err)? {
         return Ok(code);
@@ -14991,6 +15015,12 @@ fn run_land_replay(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let ReplayAsk { resolve, propose } = ask;
+    // A SHALLOW CLONE FIRST (CLOUD-2589): before the disk admission, the fetch
+    // and any write, since a replay over a truncated range reports a false
+    // conflict whose `--resolve` route drops every commit below the boundary.
+    if shallow_refused(root, "replay", reference, err)? {
+        return Ok(ExitCode::Internal);
+    }
     // The pre-step admission `land verify` takes, before a replay writes (CLOUD-2197).
     if !disk_admits(root, "land replay", err)? {
         return Ok(ExitCode::Violation);

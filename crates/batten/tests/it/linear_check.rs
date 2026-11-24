@@ -50,53 +50,13 @@ fn said(out: &Output) -> String {
     )
 }
 
-/// An origin with `main` and a `feature` one commit ahead of it.
-fn origin(dir: &Path) -> PathBuf {
-    let origin = dir.join("origin");
-    let seed = dir.join("seed");
-    let git = |at: &Path, args: &[&str]| {
-        common::git_in(at, args);
-    };
-    std::fs::create_dir_all(&origin).expect("origin dir");
-    std::fs::create_dir_all(&seed).expect("seed dir");
-    // Both from the shared template rather than a spawned `git init`. The
-    // origin takes pushes to its unborn default branch as a bare one would.
-    common::init_repo(&origin);
-    git(&origin, &["config", "receive.denyCurrentBranch", "ignore"]);
-    common::init_repo(&seed);
-    git(&seed, &["config", "user.email", "t@example.com"]);
-    git(&seed, &["config", "user.name", "t"]);
-    git(&seed, &["config", "commit.gpgsign", "false"]);
-    git(&seed, &["commit", "-q", "--allow-empty", "-m", "one"]);
-    git(&seed, &["branch", "-M", "main"]);
-    let url = format!("file://{}", origin.display());
-    git(&seed, &["push", "-q", &url, "main"]);
-    git(&seed, &["checkout", "-q", "-b", "feature"]);
-    git(&seed, &["commit", "-q", "--allow-empty", "-m", "work"]);
-    git(&seed, &["push", "-q", &url, "feature"]);
-    origin
-}
-
-fn clone(dir: &Path, origin: &Path, name: &str, shallow: bool) -> PathBuf {
-    let into = dir.join(name);
-    let url = format!("file://{}", origin.display());
-    let mut args = vec!["clone", "-q", "--branch", "feature", "--single-branch"];
-    if shallow {
-        args.extend(["--depth", "1"]);
-    }
-    let into_str = into.display().to_string();
-    args.extend([url.as_str(), into_str.as_str()]);
-    common::git_in(dir, &args);
-    into
-}
-
 /// The trap the retired body's explicit refspec existed for, stated as a
 /// property of git — and the reason the verb fetches the reference by name.
 #[test]
 fn the_naive_fetch_exits_0_while_resolving_nothing_in_a_single_branch_clone() {
     let dir = common::scratch("linear-check-naive");
-    let origin = origin(&dir);
-    let clone = clone(&dir, &origin, "naive", false);
+    let origin = common::feature_origin(&dir);
+    let clone = common::feature_clone(&dir, &origin, "naive", false);
     common::git_in(&clone, &["fetch", "-q", "origin", "main"]);
     let resolved = common::git_command(&clone, &["rev-parse", "origin/main"])
         .streamed_output()
@@ -112,8 +72,8 @@ fn the_naive_fetch_exits_0_while_resolving_nothing_in_a_single_branch_clone() {
 #[test]
 fn a_shallow_clone_is_could_not_look_and_names_the_remedy() {
     let dir = common::scratch("linear-check-shallow");
-    let origin = origin(&dir);
-    let clone = clone(&dir, &origin, "shallow", true);
+    let origin = common::feature_origin(&dir);
+    let clone = common::feature_clone(&dir, &origin, "shallow", true);
     let out = linear(&clone);
     assert_eq!(
         out.status.code(),
@@ -131,8 +91,8 @@ fn a_shallow_clone_is_could_not_look_and_names_the_remedy() {
 #[test]
 fn a_fetch_that_cannot_complete_is_could_not_look_and_never_a_pass() {
     let dir = common::scratch("linear-check-unreachable");
-    let origin = origin(&dir);
-    let clone = clone(&dir, &origin, "unreachable", false);
+    let origin = common::feature_origin(&dir);
+    let clone = common::feature_clone(&dir, &origin, "unreachable", false);
     common::git_in(
         &clone,
         &[

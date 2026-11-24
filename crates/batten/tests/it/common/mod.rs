@@ -2232,6 +2232,52 @@ pub(crate) fn git_in(dir: &Path, args: &[&str]) -> String {
         .to_owned()
 }
 
+/// An origin with `main` and a `feature` one commit ahead of it.
+///
+/// Lifted from `linear_check.rs` (CLOUD-2589) so `land.rs` drives `land replay`
+/// and `land lap` over the same shallow and full clones `land linear` is driven
+/// over.
+pub(crate) fn feature_origin(dir: &Path) -> PathBuf {
+    let origin = dir.join("origin");
+    let seed = dir.join("seed");
+    let git = |at: &Path, args: &[&str]| {
+        git_in(at, args);
+    };
+    std::fs::create_dir_all(&origin).expect("origin dir");
+    std::fs::create_dir_all(&seed).expect("seed dir");
+    // Both from the shared template rather than a spawned `git init`. The
+    // origin takes pushes to its unborn default branch as a bare one would.
+    init_repo(&origin);
+    git(&origin, &["config", "receive.denyCurrentBranch", "ignore"]);
+    init_repo(&seed);
+    git(&seed, &["config", "user.email", "t@example.com"]);
+    git(&seed, &["config", "user.name", "t"]);
+    git(&seed, &["config", "commit.gpgsign", "false"]);
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    git(&seed, &["branch", "-M", "main"]);
+    let url = format!("file://{}", origin.display());
+    git(&seed, &["push", "-q", &url, "main"]);
+    git(&seed, &["checkout", "-q", "-b", "feature"]);
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "work"]);
+    git(&seed, &["push", "-q", &url, "feature"]);
+    origin
+}
+
+/// A `--single-branch` clone of [`feature_origin`]'s `feature`, `--depth 1`
+/// when `shallow`.
+pub(crate) fn feature_clone(dir: &Path, origin: &Path, name: &str, shallow: bool) -> PathBuf {
+    let into = dir.join(name);
+    let url = format!("file://{}", origin.display());
+    let mut args = vec!["clone", "-q", "--branch", "feature", "--single-branch"];
+    if shallow {
+        args.extend(["--depth", "1"]);
+    }
+    let into_str = into.display().to_string();
+    args.extend([url.as_str(), into_str.as_str()]);
+    git_in(dir, &args);
+    into
+}
+
 /// The fenced, identity-pinned `git` invocation [`git_in`] runs.
 ///
 /// # Two of the pins are about COST, and they reach every fork rather than a

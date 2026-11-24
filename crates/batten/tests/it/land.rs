@@ -843,6 +843,11 @@ fn land_lap(repo: &Path, laps: &str, gate: &str) -> (i32, String, String) {
         .env("LAND_MAX_LAPS", laps)
         .env("LAND_VERIFY", gate)
         .env("LAND_WORKFLOW", "fast-forward.yml")
+        // NO ENTRY GATES. `mise.toml`'s `[env]` declares this repository's own,
+        // and a `mise`-run suite inherits them, so the lap would read the forge
+        // for a pull request before its first lap (CLOUD-2589). The fixture is
+        // not that consumer.
+        .env_remove("LAND_ENTRY_GATES")
         .current_dir(repo)
         .streamed_output()
         .expect("run batten land lap");
@@ -851,6 +856,88 @@ fn land_lap(repo: &Path, laps: &str, gate: &str) -> (i32, String, String) {
         stdout(&output),
         stderr(&output),
     )
+}
+
+/// A `feature` clone of [`common::feature_origin`], shallow or full, with its
+/// premise asserted before any case reads a conclusion from it
+/// (`rules/rust.md`): `git rev-parse --is-shallow-repository` says which.
+fn feature_clone_asserted(name: &str, shallow: bool) -> std::path::PathBuf {
+    let dir = scratch(name);
+    let origin = common::feature_origin(&dir);
+    let clone = common::feature_clone(&dir, &origin, "clone", shallow);
+    assert_eq!(
+        common::git_in(&clone, &["rev-parse", "--is-shallow-repository"]),
+        if shallow { "true" } else { "false" },
+        "the premise: the clone's depth is the one this case names"
+    );
+    clone
+}
+
+/// `batten land replay main` under a `[prune]` band no volume meets, so
+/// `disk_admits` refuses anything that reaches it (CLOUD-2589).
+fn replay_under_a_refusing_disk(clone: &Path) -> (i32, String) {
+    std::fs::write(
+        clone.join("batten.toml"),
+        "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\nmin_free_mb = 100\nmax_free_mb = 200\n",
+    )
+    .expect("write batten.toml");
+    let output = batten()
+        .args(["land", "replay", "main"])
+        .env("TARGET_PRUNE_FREE_MB", "5")
+        .current_dir(clone)
+        .streamed_output()
+        .expect("run batten land replay");
+    (output.status.code().expect("exit code"), stderr(&output))
+}
+
+/// **A shallow clone is refused before the replay admits or fetches**
+/// (CLOUD-2589): exit 3 naming the remedy, and `disk_admits` never ran, so a
+/// guard placed after it, or none, reddens here on `disk-collected`.
+#[test]
+fn a_shallow_clone_is_refused_before_the_replay_admits_or_fetches() {
+    let clone = feature_clone_asserted("land-replay-shallow", true);
+    let (code, err) = replay_under_a_refusing_disk(&clone);
+    assert_eq!(code, batten::exit::ExitCode::Internal.code(), "{err}");
+    assert!(err.contains("land replay: this clone is shallow"), "{err}");
+    assert!(err.contains("git fetch --unshallow"), "{err}");
+    assert!(
+        !err.contains("disk-collected"),
+        "nothing after the guard runs: {err}"
+    );
+}
+
+/// The mirror: a full clone reaches the replay's disk admission, so a guard that
+/// refuses every clone reddens here.
+#[test]
+fn a_full_clone_reaches_the_replay_disk_admission() {
+    let clone = feature_clone_asserted("land-replay-full", false);
+    let (code, err) = replay_under_a_refusing_disk(&clone);
+    assert_eq!(code, batten::exit::ExitCode::Violation.code(), "{err}");
+    assert!(err.contains("min_free_mb 100"), "{err}");
+    assert!(!err.contains("--unshallow"), "{err}");
+}
+
+/// **A shallow lap is refused at its entry, before its first lap**
+/// (CLOUD-2589): the bet precheck runs before the replay, so a guard in
+/// `run_land_replay` alone prints `land: lap 1` first and reddens here.
+#[test]
+fn a_shallow_lap_is_refused_before_its_first_lap() {
+    let clone = feature_clone_asserted("land-lap-shallow", true);
+    let (code, out, err) = land_lap(&clone, "3", "/bin/true");
+    assert_eq!(code, batten::exit::ExitCode::Internal.code(), "{out}{err}");
+    assert!(err.contains("land lap: this clone is shallow"), "{err}");
+    assert!(err.contains("git fetch --unshallow"), "{err}");
+    assert!(!out.contains("land: lap "), "no lap opens: {out}");
+}
+
+/// The mirror: a full clone opens its first lap.
+#[test]
+fn a_full_clone_opens_its_first_lap() {
+    let clone = feature_clone_asserted("land-lap-full", false);
+    let (code, out, err) = land_lap(&clone, "3", "/bin/true");
+    assert!(out.contains("land: lap 1"), "{out}{err}");
+    assert!(!err.contains("--unshallow"), "{err}");
+    assert_ne!(code, batten::exit::ExitCode::Internal.code(), "{out}{err}");
 }
 
 /// **The loop reaches a clone it cannot read and stops carrying that step's own
