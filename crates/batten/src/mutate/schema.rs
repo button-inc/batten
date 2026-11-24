@@ -770,8 +770,9 @@ type Grouped = (Vec<String>, blake3::Hasher, BTreeSet<String>);
 /// helper moved every key in the crate, and #1276's sweep reused nothing.
 ///
 /// TOKENS, NOT TEXT (Ekstazi's smart checksum, Gligoric et al. ISSTA 2015):
-/// whitespace and comments, doc comments included, change no compiled
-/// behaviour, so the skeleton hashes the non-trivia tokens alone.
+/// whitespace, comments and inner doc comments change no compiled behaviour,
+/// so the skeleton hashes the rest alone ([`unkeyed`]). Outer doc comments are
+/// hashed, because derives read them into run-time text.
 ///
 /// EACH SKELETON ITEM ITS OWN DIGEST, under every name it answers to, and each
 /// probed function the names it mentions. `RustyRTS` (ICST 2025) sees a `const`
@@ -834,7 +835,7 @@ fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Sit
         .descendants_with_tokens()
         .filter_map(ra_ap_syntax::NodeOrToken::into_token)
     {
-        if matches!(token.kind(), SyntaxKind::WHITESPACE | SyntaxKind::COMMENT) {
+        if unkeyed(token.kind()) {
             continue;
         }
         let start = usize::from(token.text_range().start());
@@ -876,6 +877,23 @@ fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Sit
     }
     probed.skeleton = skeleton.finalize().to_hex().to_string();
     probed
+}
+
+/// Whether a token of `kind` changes no compiled behaviour, so no skeleton
+/// digest holds it: whitespace, a plain comment and an inner doc comment
+/// (`//!`), which `ra_ap_syntax` lexes as `INNER_DOC_COMMENT`, not `COMMENT`.
+/// An outer doc comment (`///`) is KEYED: derives compile it into run-time
+/// text, schemars' `JsonSchema` into the schema's descriptions and clap's
+/// `ValueEnum` into help text (CLOUD-2904).
+#[expect(
+    clippy::match_like_matches_macro,
+    reason = "a `match` arm is a mutant cargo-mutants can delete; `matches!` hides each kind from it"
+)]
+fn unkeyed(kind: SyntaxKind) -> bool {
+    match kind {
+        SyntaxKind::WHITESPACE | SyntaxKind::COMMENT | SyntaxKind::INNER_DOC_COMMENT => true,
+        _ => false,
+    }
 }
 
 /// The skeleton item `token` belongs to: its innermost item, past a macro
@@ -9644,6 +9662,39 @@ mod tests {
             );
             assert_ne!(moved[naming], held[naming], "names what it binds: {added}");
         }
+    }
+
+    /// T3 (CLOUD-2904): a `//!` edit at a file's head moves no case key, and
+    /// neither does a whitespace edit; a `///` edit on a struct a probed
+    /// function names moves that function's case, since derives compile outer
+    /// doc text into run-time text (schemars descriptions, clap help).
+    ///
+    /// Fails by: an inner doc comment hashed into the `""` item every case
+    /// carries (one word of a module doc moves every key in the sweep), an
+    /// outer one skipped (a changed `--help` or schema description reuses a
+    /// stale verdict), or whitespace hashed.
+    #[test]
+    fn a_module_doc_edit_moves_no_case_key_and_an_item_doc_edit_moves_its_cases() {
+        let (names_s, plain) = (case("names_s"), case("plain"));
+        let cases: BTreeSet<Case> = [names_s.clone(), plain.clone()].into();
+        let executed = [(names_s.clone(), [0].into()), (plain.clone(), [1].into())].into();
+        let base = "//! The module.\n/// The struct.\npub struct S;\n\
+                    pub fn names_s() -> S { S }\npub fn plain() -> u8 { 3 }\n";
+        let held = source_digests(&cases, &executed, base);
+        let module = source_digests(&cases, &executed, &base.replace("The module", "A module"));
+        assert_eq!(module, held, "a `//!` edit moves no case");
+        let spaced = source_digests(
+            &cases,
+            &executed,
+            &base.replace("pub struct S;", "pub  struct S ;"),
+        );
+        assert_eq!(spaced, held, "a whitespace edit moves no case");
+        let item = source_digests(&cases, &executed, &base.replace("The struct", "A struct"));
+        assert_ne!(
+            item[&names_s], held[&names_s],
+            "a `///` edit moves the case naming S"
+        );
+        assert_eq!(item[&plain], held[&plain], "and no other");
     }
 
     /// An impl answers to its header's unqualified names and its members' own
