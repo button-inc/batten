@@ -41,7 +41,7 @@ get() {
 	*) fail "could not download $1: ${got:-000}" ;;
 	esac
 }
-tag="${BATTEN_VERSION:-v0.0.220}"
+tag="${BATTEN_VERSION:-v0.0.221}"
 asset="batten-v${tag#v}-$target.tar.gz"
 want=
 if [ -n "${BATTEN_VERSION:-}" ]; then
@@ -52,12 +52,12 @@ if [ -n "${BATTEN_VERSION:-}" ]; then
 	missing=1
 else
 	case "$asset" in
-	batten-v0.0.220-x86_64-unknown-linux-gnu.tar.gz) want=d8b6c5e7d0d8d8a2bb6d4acc0b8acde2c61cc60bf717662a66ecb723111cff0a ;;
-	batten-v0.0.220-aarch64-unknown-linux-gnu.tar.gz) want=649b1635172c21e7a707e1bc9b20e87690f8a3c3b4742b579ecad849dfba4d50 ;;
-	batten-v0.0.220-x86_64-unknown-linux-musl.tar.gz) want=471f8033dc121f8de2a18bde30a8f03cf7024749c4edbde9b92fd51c2aa2384e ;;
-	batten-v0.0.220-aarch64-unknown-linux-musl.tar.gz) want=3b9993d166b32d73f0ca3273087b92e8b54b3a11b2bc9b31f92c82f3eaa17150 ;;
-	batten-v0.0.220-x86_64-apple-darwin.tar.gz) want=6878ac8619db7382f943b61f0f2fdb2e3e359f5d504098f5299376385e3ffaa9 ;;
-	batten-v0.0.220-aarch64-apple-darwin.tar.gz) want=3a07e8cf2285ede6f8358846bede6c7782a241d8e307dae7104d6ffdde3bdb6d ;;
+	batten-v0.0.221-x86_64-unknown-linux-gnu.tar.gz) want=fc5f7c0bd79be75199145d399c0a5a891f109d695ef8ed056ecf25a0bd9c86bc ;;
+	batten-v0.0.221-aarch64-unknown-linux-gnu.tar.gz) want=a3a7f4403f469aabe91c3d6c5328c8366b78bdcdc32bfd31e56e18156f286d1a ;;
+	batten-v0.0.221-x86_64-unknown-linux-musl.tar.gz) want=4c498412cf2a3aa12d80474c242d36562d37fa8c792054740cac193fafa497f5 ;;
+	batten-v0.0.221-aarch64-unknown-linux-musl.tar.gz) want=1ed50e2dc6aed46f45a108dc088421c7d3c3d23e915d8c99f32f3812ee1672e8 ;;
+	batten-v0.0.221-x86_64-apple-darwin.tar.gz) want=c5c883c84f6646d0c0b406928c2c14cf4f7f2b4d027d645296b11c66570c50dd ;;
+	batten-v0.0.221-aarch64-apple-darwin.tar.gz) want=d96dd539ae50127c5f2b7a451b9bb9f88f8cfee2eb033f9d10532959aa2529e2 ;;
 	esac
 	missing=2
 fi
