@@ -788,21 +788,17 @@ fn an_orphaned_sweep_ends_and_leaves_nothing_running() {
 
     kill(shell.id(), "KILL");
     let _ = shell.wait();
-    let started = std::time::Instant::now();
-    let sweep_gone = await_gone(sweep);
+    // THE BOUND IS AN INPUT, NOT AN ASSERTION (`wall_clock.rs`): the poll gives
+    // up at `ORPHAN_WITHIN`, and what is asserted is the outcome, gone or not.
+    let sweep_gone = await_gone_within(sweep, ORPHAN_WITHIN);
     let survivors = survivors_of(&note);
     if !sweep_gone {
         kill(sweep, "KILL");
     }
     assert!(
         sweep_gone && survivors.is_empty(),
-        "an orphaned sweep must end itself and its suite: sweep gone {sweep_gone}, \
-         survivors {survivors:?}"
-    );
-    assert!(
-        started.elapsed() < ORPHAN_WITHIN,
-        "the orphaned sweep took {:?} to end",
-        started.elapsed()
+        "an orphaned sweep must end itself and its suite within {ORPHAN_WITHIN:?}: sweep \
+         gone {sweep_gone}, survivors {survivors:?}"
     );
 }
 
@@ -891,7 +887,13 @@ fn gone(pid: u32) -> bool {
 /// Block until `pid` is [`gone`], reporting whether it got there in time.
 #[cfg(unix)]
 fn await_gone(pid: u32) -> bool {
-    let deadline = std::time::Instant::now() + PATIENCE;
+    await_gone_within(pid, PATIENCE)
+}
+
+/// Block until `pid` is [`gone`] or `bound` passes, reporting which.
+#[cfg(unix)]
+fn await_gone_within(pid: u32, bound: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + bound;
     while std::time::Instant::now() < deadline {
         if gone(pid) {
             return true;

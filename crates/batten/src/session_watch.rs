@@ -449,6 +449,14 @@ impl Report {
     }
 }
 
+/// The data channel's one funnel (CLOUD-371): `session watch` writes a report
+/// through `output::line`, never a bare `writeln!`.
+impl crate::output::Line for Report {
+    fn line(&self) -> String {
+        Report::line(self)
+    }
+}
+
 /// How a watch ended, ordered by precedence: one dead child is the answer
 /// whatever else ended, so `Dead` is declared last and outranks `Done`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
