@@ -655,3 +655,24 @@ fn this_repositorys_own_census_answers() {
         "{document}"
     );
 }
+
+/// A generated row's `check` is `<test file>::<test name>` with BOTH halves
+/// non-empty AND free of whitespace. Fails by: a half passing on one of the
+/// two conditions alone.
+#[test]
+fn a_generated_check_needs_both_halves_bare_and_present() {
+    use batten::config_model::check_parts;
+    assert_eq!(check_parts("it/a.rs::holds"), Some(("it/a.rs", "holds")));
+    assert_eq!(
+        check_parts("it/a b.rs::holds"),
+        None,
+        "whitespace in the file"
+    );
+    assert_eq!(
+        check_parts("it/a.rs::holds it"),
+        None,
+        "whitespace in the name"
+    );
+    assert_eq!(check_parts("::holds"), None, "an empty file");
+    assert_eq!(check_parts("it/a.rs::"), None, "an empty name");
+}

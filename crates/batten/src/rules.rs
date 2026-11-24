@@ -18358,4 +18358,29 @@ mod half_tests {
             "no committed row is tree, so the split would buy nothing"
         );
     }
+
+    /// Fails by: a token count carried on a comment or string span, or missed
+    /// on the `fn` a reader would be served.
+    #[test]
+    fn only_a_rust_fn_unit_carries_its_token_count() {
+        let crate::facts::Look::Is(nodes) =
+            super::rust_units("a.rs", "// lead\nfn f() { let s = \"hi\"; }\n")
+        else {
+            panic!("parses");
+        };
+        let (fns, spans): (Vec<_>, Vec<_>) = nodes.iter().partition(|node| node["kind"] == "fn");
+        assert_eq!(fns.len(), 1);
+        assert!(
+            fns[0]["counts"]["tokens"].as_u64().is_some_and(|n| n > 0),
+            "{}",
+            fns[0]
+        );
+        assert!(
+            !spans.is_empty(),
+            "the premise: a comment and a string span"
+        );
+        for span in spans {
+            assert!(span["counts"]["tokens"].is_null(), "{span}");
+        }
+    }
 }

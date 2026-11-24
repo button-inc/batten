@@ -250,4 +250,13 @@ violation contains \"x\" if {
     fn a_module_that_does_not_parse_is_could_not_look() {
         assert!(units("p.rego", "package").is_none());
     }
+
+    /// Fails by: a span inside an array skipped, so a construct whose earliest
+    /// token sits in a list is placed at a later line.
+    #[test]
+    fn the_first_line_reads_spans_inside_arrays() {
+        let node = json!({"line": 5, "args": [{"line": 7}, {"span": {"line": 3}}]});
+        assert_eq!(first_line(&node), Some(3));
+        assert_eq!(first_line(&json!([{"line": 4}, {"line": 2}])), Some(2));
+    }
 }
