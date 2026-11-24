@@ -577,6 +577,84 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
     }
 }
 
+/// The crates in the longest chain from `name` down through `deps`, `name`
+/// counted, memoised in `seen`.
+fn depth(
+    name: &str,
+    deps: &std::collections::BTreeMap<String, Vec<String>>,
+    seen: &mut std::collections::BTreeMap<String, usize>,
+) -> usize {
+    if let Some(known) = seen.get(name) {
+        return *known;
+    }
+    let below = deps
+        .get(name)
+        .into_iter()
+        .flatten()
+        .map(|dep| depth(dep, deps, seen))
+        .max()
+        .unwrap_or(0);
+    seen.insert(name.to_owned(), below + 1);
+    below + 1
+}
+
+/// The longest chain of workspace crates, each depending on the next, in this
+/// repository's own workspace: the crates under `crates/` and their `path`
+/// dependencies on one another.
+fn workspace_chain() -> usize {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/")
+        .to_path_buf();
+    let mut deps: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for entry in std::fs::read_dir(&crates).unwrap().flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path().join("Cargo.toml")) else {
+            continue;
+        };
+        let manifest: toml::Table = text.parse().expect("a manifest");
+        let name = manifest["package"]["name"].as_str().unwrap().to_owned();
+        let on: Vec<String> = ["dependencies", "dev-dependencies", "build-dependencies"]
+            .iter()
+            .filter_map(|table| manifest.get(*table).and_then(toml::Value::as_table))
+            .flat_map(|table| table.iter())
+            .filter(|(_, spec)| spec.get("path").is_some())
+            .map(|(dep, _)| dep.clone())
+            .collect();
+        deps.insert(name, on);
+    }
+    let mut seen = std::collections::BTreeMap::new();
+    deps.keys()
+        .map(|name| depth(name, &deps, &mut seen))
+        .max()
+        .unwrap_or(0)
+}
+
+/// THE ROUND BOUND COVERS THIS WORKSPACE (CLOUD-2882): a round sees a crate's
+/// refusals only once every crate it depends on builds clean, so the rounds a
+/// listing needs grow with the longest chain of workspace crates. #1276's
+/// cold build was clean in round 11 over a six-crate chain, two rounds a
+/// crate at most, and [`batten::mutate::schema::ROUNDS`] is that allowance.
+///
+/// Fails by: a crate split or a new dependency deepening the chain past what
+/// the bound was measured to cover. That fails here, before every `mutants`
+/// job fails at the cap; the remedy is a measured bound or a shallower
+/// chain, never a raised cap alone. Also fails if the chain is read as empty.
+#[test]
+fn the_round_bound_covers_the_workspace_chain() {
+    let chain = workspace_chain();
+    assert!(
+        chain >= 6,
+        "fsio, facts, base, core, batten, codemods: {chain}"
+    );
+    assert!(
+        2 * chain <= batten::mutate::schema::ROUNDS,
+        "a {chain}-crate chain needs up to {} rounds; the bound is {}",
+        2 * chain,
+        batten::mutate::schema::ROUNDS
+    );
+}
+
 /// THE ROUND BOUND'S GUARANTEE (CLOUD-2882): crates that share no dependency
 /// are refused in ONE round, however many there are and whichever cargo
 /// starts first. Built one job at a time, `cargo test --no-run` stopped at the
