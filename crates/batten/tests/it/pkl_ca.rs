@@ -10,6 +10,8 @@
 use std::ffi::OsString;
 use std::path::Path;
 
+use batten::capture::Streamed as _;
+
 use crate::common;
 
 /// The five selections the row names, then the authority's order.
@@ -86,8 +88,8 @@ fn the_ca_selection_matches_vars_pkl_ca() {
 ///
 /// The argv is driven with explicit candidates, never the environment: CI sets
 /// neither variable, so an argv read off `pkl_command()` there is `eval` either
-/// way (CLOUD-2917). The spawn is then held to that argv over the environment
-/// it does read, so it cannot drop what the argv carries.
+/// way (CLOUD-2917). `pkl_command()` itself is held over an environment that
+/// names files by [`pkl_command_reads_the_environment_in_order`].
 #[test]
 fn the_pkl_spawn_carries_the_selection_after_eval() {
     let dir = common::scratch("pkl-ca-spawn");
@@ -117,6 +119,77 @@ fn the_pkl_spawn_carries_the_selection_after_eval() {
             std::env::var_os("SSL_CERT_FILE"),
         ),
         "the one pkl spawn runs that argv over the environment"
+    );
+}
+
+/// The CA variables the re-spawned child reads, set by
+/// [`pkl_command_reads_the_environment_in_order`] alone.
+const CA_VARIABLES: [&str; 2] = ["BATTEN_CA_BUNDLE", "SSL_CERT_FILE"];
+
+/// `pkl_command()` ITSELF carries the selection, on any runner (CLOUD-2917).
+///
+/// CI sets neither CA variable, so an argv read off `pkl_command()` in this
+/// process is `eval` whatever the helper does with them. This test binary is
+/// spawned again, exact filter, with BOTH variables naming real, distinct files,
+/// and the child holds `pkl_command()`'s argv to `BATTEN_CA_BUNDLE`'s file: a
+/// helper that spawns bare `pkl eval`, passes neither variable, or swaps the
+/// two fails it here. The environment is the child's own, so no parallel case
+/// reads a mutated one.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only (CLOUD-2917): the subject is `pkl_command()` over an environment this process does not have, so this test binary runs again as a child that has it"
+)]
+fn pkl_command_reads_the_environment_in_order() {
+    let dir = common::scratch("pkl-ca-child");
+    common::write(&dir, "batten.pem", "batten\n");
+    common::write(&dir, "ssl.pem", "ssl\n");
+    let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "pkl_ca::pkl_command_child",
+            "--exact",
+            "--ignored",
+            "--test-threads=1",
+        ])
+        .env(CA_VARIABLES[0], dir.join("batten.pem"))
+        .env(CA_VARIABLES[1], dir.join("ssl.pem"))
+        .streamed_output()
+        .expect("spawn this test binary");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "pkl_command() carries BATTEN_CA_BUNDLE's file: {stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // A filter that matched nothing exits 0 too.
+    assert!(stdout.contains("1 passed"), "the child case ran: {stdout}");
+}
+
+/// The child half: `pkl_command()`'s argv over the environment the case above
+/// hands it.
+///
+/// Ignored, because it is not a case: run without that parent it has no two
+/// files to hold the order over, and fails rather than passing over nothing.
+#[test]
+#[ignore = "the child pkl_command_reads_the_environment_in_order spawns; it reads the files that case names"]
+fn pkl_command_child() {
+    let [batten, ssl] = CA_VARIABLES
+        .map(|name| std::env::var_os(name).expect("spawned by the parent, which sets it"));
+    assert!(
+        Path::new(&batten).is_file() && Path::new(&ssl).is_file() && batten != ssl,
+        "both variables name distinct files, so the order is observable"
+    );
+    assert_eq!(
+        common::pkl_command()
+            .get_args()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<OsString>>(),
+        vec![
+            OsString::from("eval"),
+            OsString::from("--ca-certificates"),
+            batten,
+        ],
+        "pkl_command() is `eval` with BATTEN_CA_BUNDLE's file, which outranks SSL_CERT_FILE"
     );
 }
 
