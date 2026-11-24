@@ -64,6 +64,12 @@ const OUTCOME: &str = "outcome";
 /// The outcome once a call has carried it: renamed, so it is said once.
 const SURFACED: &str = "outcome.surfaced";
 
+/// This session's parent, as the `parent` phase read it (CLOUD-2888).
+const PARENT: &str = "parent";
+
+/// The phase the task reads this session's parent in, ahead of `install`.
+const PARENT_PHASE: &str = "parent";
+
 /// Register `pid` as the setup task unless a record for it already exists.
 ///
 /// BOTH SIDES CALL THIS, AND NEITHER WAITS (CLOUD-2840). The hook registers the
@@ -149,6 +155,67 @@ pub fn start(root: &Path, git_dir: &Path, raw: &str, now: u64) -> Option<String>
     Some(pid)
 }
 
+/// Read this session's parent through the declared `[mcp] session_server`
+/// and record it (CLOUD-2888). Silent on every failure: no record is the
+/// `unverified` verdict, the safe direction. The transport is reached only
+/// with a listener, the bound `tests/it/mcp_dispatch.rs` states for every
+/// dispatch; [`record_parent`] is the part a case drives.
+fn read_parent(root: &Path, git_dir: &Path, mcp: Option<&crate::config_model::McpConfig>) {
+    let Some((config, server)) =
+        mcp.and_then(|config| Some((config, config.session_server.as_deref()?)))
+    else {
+        return;
+    };
+    let Some(session) = spooled_session(git_dir) else {
+        return;
+    };
+    let Ok(wiring) = crate::mcp::wiring(config, root, server) else {
+        return;
+    };
+    let params = serde_json::json!({ "name": "get_session", "arguments": {} });
+    let Ok(result) = crate::mcp::dispatch(&wiring, "tools/call", &params) else {
+        return;
+    };
+    let _ = record_parent(git_dir, &session, &crate::mcp::payload(&result).value);
+}
+
+/// The `session_id` of the `SessionStart` payload the hook spooled.
+fn spooled_session(git_dir: &Path) -> Option<String> {
+    let raw = crate::fsio::read_to_string(payload_path(git_dir)).ok()?;
+    let payload: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+/// Record the parent a `get_session` `payload` names, for `session` only
+/// (CLOUD-2888): `{"session", "ccr": {"parent_session_id"}}`, or `"ccr": {}`
+/// for a session with no parent. A payload that is no session record writes
+/// nothing, and that is the return: whether a record was written.
+#[must_use]
+pub fn record_parent(git_dir: &Path, session: &str, payload: &serde_json::Value) -> bool {
+    let ccr = match batten_facts::dispatch::parent_of(payload) {
+        batten_facts::dispatch::Parent::Unread => return false,
+        batten_facts::dispatch::Parent::Orphan => serde_json::json!({}),
+        batten_facts::dispatch::Parent::Is(id) => serde_json::json!({ "parent_session_id": id }),
+    };
+    let record = serde_json::json!({ "session": session, "ccr": ccr });
+    let here = dir(git_dir);
+    std::fs::create_dir_all(&here).is_ok()
+        && crate::durable::replace(here.join(PARENT), record.to_string()).is_ok()
+}
+
+/// The parent record, only when `session` wrote it (CLOUD-2888): a record
+/// another session left in the same checkout never answers, so a stale record
+/// can never yield a `parent` verdict.
+#[must_use]
+pub fn parent_record(git_dir: &Path, session: &str) -> Option<serde_json::Value> {
+    let raw = crate::fsio::read_to_string(dir(git_dir).join(PARENT)).ok()?;
+    let record: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    (record.get("session").and_then(serde_json::Value::as_str) == Some(session)).then_some(record)
+}
+
 /// What one finding is, recorded as the inputs its refusal is built from.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -189,6 +256,7 @@ pub fn run(
     handlers: &[crate::config_model::Handler],
     rows: &[crate::config_model::Startup],
     presets: &[&str],
+    mcp: Option<&crate::config_model::McpConfig>,
 ) -> bool {
     let pid = std::process::id().to_string();
     register_once(git_dir, &pid, crate::clock::now_unix());
@@ -199,6 +267,19 @@ pub fn run(
         return true;
     }
     let mut findings = Vec::new();
+
+    // THIS SESSION'S PARENT FIRST (CLOUD-2888): one `get_session` read, off
+    // the hook path whose budget a network round trip would break, so each
+    // cross-session message the child later reads is judged by a file read.
+    // A failed read records nothing, and every verdict is then `unverified`.
+    task::push(
+        git_dir,
+        &pid,
+        task::Signal::Phase,
+        PARENT_PHASE,
+        crate::clock::now_unix(),
+    );
+    read_parent(root, git_dir, mcp);
 
     // THE ENVIRONMENT MANAGER'S INSTALL FIRST (CLOUD-2840). A `[[startup]]` row
     // naming a `preset` runs that preset's declared install, and every later
@@ -501,5 +582,43 @@ mod tests {
             reason: Some(crate::startup::REPAIR_FAILED),
         };
         assert_eq!(Some(workspace.refusal()), inline.finding());
+    }
+
+    /// Fails by: a parent record believed by a session that did not write it
+    /// (a stale record in a shared checkout yielding a false `parent`), a
+    /// record that does not round-trip its parent, or an unread payload
+    /// recorded as if it had been read (CLOUD-2888).
+    #[test]
+    fn a_parent_record_is_believed_only_by_the_session_that_wrote_it() {
+        let git_dir = std::env::temp_dir()
+            .join("batten-session-setup-tests")
+            .join("parent-record");
+        let _ = std::fs::remove_dir_all(&git_dir);
+        assert!(std::fs::create_dir_all(&git_dir).is_ok());
+        let child =
+            serde_json::json!({"ccr": {"id": "c", "parent_session_id": "p"}, "lineage": {}});
+        assert!(record_parent(&git_dir, "s1", &child));
+        let believed = parent_record(&git_dir, "s1");
+        assert_eq!(
+            believed.as_ref().map(batten_facts::dispatch::parent_of),
+            Some(batten_facts::dispatch::Parent::Is("p"))
+        );
+        assert_eq!(parent_record(&git_dir, "s2"), None);
+
+        let orphan = serde_json::json!({"ccr": {"id": "t"}, "lineage": {}});
+        assert!(record_parent(&git_dir, "s3", &orphan));
+        assert_eq!(
+            parent_record(&git_dir, "s3")
+                .as_ref()
+                .map(batten_facts::dispatch::parent_of),
+            Some(batten_facts::dispatch::Parent::Orphan)
+        );
+
+        let _ = std::fs::remove_dir_all(&git_dir);
+        assert!(std::fs::create_dir_all(&git_dir).is_ok());
+        let unread = serde_json::json!({"content": [{"type": "text", "text": "x"}]});
+        assert!(!record_parent(&git_dir, "s1", &unread));
+        assert!(!git_dir.join(DIR).join(PARENT).exists());
+        assert_eq!(parent_record(&git_dir, "s1"), None);
     }
 }

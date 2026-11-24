@@ -3303,7 +3303,14 @@ fn run_session_setup(overrides: &Overrides) -> Result<ExitCode> {
         )
         .collect();
     Ok(
-        if session_setup::run(here, &git_dir, &handlers, &resolved.startup, &presets) {
+        if session_setup::run(
+            here,
+            &git_dir,
+            &handlers,
+            &resolved.startup,
+            &presets,
+            resolved.mcp.as_ref(),
+        ) {
             ExitCode::Success
         } else {
             ExitCode::Usage
@@ -23422,6 +23429,10 @@ fn rewrite_post_tool(
         .as_ref()
         .map(|(result, _)| result)
         .or(collapsed.as_ref());
+    // THE CROSS-SESSION ANNOTATION LAST (CLOUD-2888), over whatever the
+    // rewrites above left, so it joins the one document the host reads.
+    let annotated = annotate_peer_messages(harness, envelope, rewritten.unwrap_or(current));
+    let rewritten = annotated.as_ref().or(rewritten);
     let emitted = match rewritten {
         Some(result) => hook::encode_tool_output(harness, &envelope.raw_event, result)?,
         None => None,
@@ -23436,6 +23447,72 @@ fn rewrite_post_tool(
         (None, None) => {}
     }
     Ok(())
+}
+
+/// The tool a Claude Code child reads its peers' `send_message`s through
+/// (CLOUD-2888, measured on two dispatched shards' transcripts).
+const READ_NOTIFICATIONS: &str = "ReadNotifications";
+
+/// The notification origin a peer session's `send_message` arrives under.
+const PEER_MESSAGE_ORIGIN: &str = "mcp_send_message";
+
+/// Prefix each peer message a child reads with whether its own parent sent it
+/// (CLOUD-2888): one line of fixed words and session ids, then `\n`, then the
+/// content the earlier rewrites left. `None` where nothing is annotated.
+///
+/// THE SENDER IS READ FROM THE HOST'S ORIGINAL RESULT at the same index, so a
+/// content the bound replaced with a pointer still has its sender; a spilled
+/// leaf is a marker there, which reads no sender and so is `unverified`. The
+/// parent record is one file, read only when a peer message exists.
+fn annotate_peer_messages(
+    harness: crate::config_model::Harness,
+    envelope: &hook::Envelope,
+    current: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    use batten_facts::dispatch;
+    if harness != crate::config_model::Harness::ClaudeCode
+        || envelope.raw_tool != READ_NOTIFICATIONS
+    {
+        return None;
+    }
+    let peers: Vec<(usize, Option<&str>)> = envelope
+        .result
+        .get("notifications")?
+        .as_array()?
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| {
+            item.get("origin").and_then(serde_json::Value::as_str) == Some(PEER_MESSAGE_ORIGIN)
+        })
+        .map(|(at, item)| {
+            let content = item.get("content").and_then(serde_json::Value::as_str);
+            (at, content.and_then(dispatch::sender_of))
+        })
+        .collect();
+    if peers.is_empty() {
+        return None;
+    }
+    let record = envelope.session.as_deref().and_then(|session| {
+        session_setup::git_dir_of(hook_authority_root())
+            .and_then(|git_dir| session_setup::parent_record(&git_dir, session))
+    });
+    let parent = record
+        .as_ref()
+        .map_or(dispatch::Parent::Unread, dispatch::parent_of);
+    let mut annotated = current.clone();
+    let items = annotated
+        .get_mut("notifications")
+        .and_then(serde_json::Value::as_array_mut)?;
+    for (at, sender) in peers {
+        let Some(serde_json::Value::String(content)) =
+            items.get_mut(at).and_then(|item| item.get_mut("content"))
+        else {
+            continue;
+        };
+        let line = dispatch::verdict(sender, &parent).line(sender);
+        *content = format!("{line}\n{content}");
+    }
+    Some(annotated)
 }
 
 /// The `PostTool` half of [`run_hook`]: record what the call said, then rewrite

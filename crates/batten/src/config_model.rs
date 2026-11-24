@@ -2316,6 +2316,16 @@ pub struct McpConfig {
     /// engine inferring it from a selector written for dispatch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_aliases: Vec<String>,
+    /// The declared server that answers the host's session toolbox, whose
+    /// `get_session` names this session's parent (CLOUD-2888).
+    ///
+    /// The session setup task reads it once per session and records the
+    /// parent, so the hook can say of each cross-session message whether this
+    /// session's own parent sent it. Absent, nothing is read and every such
+    /// message is annotated as unverified: data, the safe direction. Which
+    /// server answers is the consumer's fact, never the engine's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_server: Option<String>,
 }
 
 /// One `[[mcp.result]]` row: what to hand back instead of a method's response.

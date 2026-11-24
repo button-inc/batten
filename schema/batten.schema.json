@@ -3150,6 +3150,14 @@
             "$ref": "#/$defs/ResultRow"
           }
         },
+        "session_server": {
+          "description": "The declared server that answers the host's session toolbox, whose\n`get_session` names this session's parent (CLOUD-2888).\n\nThe session setup task reads it once per session and records the\nparent, so the hook can say of each cross-session message whether this\nsession's own parent sent it. Absent, nothing is read and every such\nmessage is annotated as unverified: data, the safe direction. Which\nserver answers is the consumer's fact, never the engine's.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
         "source": {
           "description": "Where a harness keeps its MCP wiring, in precedence order.\n\nA LIST rather than one row because one repository is worked in from\nseveral harnesses, and each keeps its wiring somewhere else. The first row\nthat resolves a server wins, so the order is a statement about which\nharness to believe when two are installed.",
           "type": "array",

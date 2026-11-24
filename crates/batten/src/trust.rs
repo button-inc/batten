@@ -1401,6 +1401,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     // resolved from, and a `[[mcp.result]]` row decides what reaches the CALLER
     // of `mcp call` — no gate reads either, and the authority they are read from
     // is guarded structurally, the key being absent from `OverrideConfig`.
+    // `session_server` (CLOUD-2888) gains no weakening kind either: it names
+    // the server the setup task asks for this session's parent, and removing
+    // it can only turn a `parent` annotation into `unverified`, which tells the
+    // child a message is data — the safe direction, never a silence.
     FieldCoverage {
         field: "mcp",
         coverage: Coverage::Compared(&[WeakeningKind::McpPermissionAliasRemoved]),

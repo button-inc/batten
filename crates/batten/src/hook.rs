@@ -678,8 +678,16 @@ impl HarnessExt for Harness {
                 // hand-backs (`origin.kind = peer`), and the `UserPromptSubmit`
                 // payload carries the same text with no authorship field. Each
                 // opens with the host's own envelope, which is what
-                // `batten_base::background` already keys on.
-                injected_prompts: &["<task-notification>", "<agent-message "],
+                // `batten_base::background` already keys on. A peer session's
+                // `send_message` delivered as a user turn opens with
+                // `<cross-session-message ` (CLOUD-2749's measurement), and the
+                // host's own framing says it is data, not the operator
+                // (CLOUD-2888).
+                injected_prompts: &[
+                    "<task-notification>",
+                    "<agent-message ",
+                    "<cross-session-message ",
+                ],
             },
             Harness::Cursor => Capabilities {
                 // Searched 2026-09-01 and NOT fetched: the host has a Todos

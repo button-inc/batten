@@ -159,6 +159,7 @@ mod contract_drift;
 mod could_not_look_laundered;
 mod could_not_look_tree;
 mod cross_check;
+mod cross_session;
 mod dead_capability;
 mod decision_record;
 mod defects;
