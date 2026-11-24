@@ -11550,6 +11550,40 @@ mod tests {
         shell: None,
     };
 
+    /// Fails by: a row that is not a ratchet, or one configured off, judged at
+    /// the call because it carries a glob (CLOUD-2789).
+    #[test]
+    fn only_a_live_single_file_ratchet_is_judged_at_the_call() {
+        let ratchet = Rule {
+            glob: Some("src/**/*.rs".to_owned()),
+            pattern: Some("unwrap(".to_owned()),
+            direction: Some(Direction::NonIncreasing),
+            base: Some("origin/main".to_owned()),
+            ..blank("r", RuleKind::Ratchet)
+        };
+        assert!(judged_at_call(&ratchet), "premise: the whole row is judged");
+        let shape = Rule {
+            kind: RuleKind::Shape,
+            ..ratchet.clone()
+        };
+        assert!(!judged_at_call(&shape), "a shape row is not a ratchet");
+        let off = Rule {
+            severity: Some(RuleSeverity::Allow),
+            ..ratchet.clone()
+        };
+        assert!(!judged_at_call(&off), "an allow row is configured off");
+        let unbased = Rule {
+            base: None,
+            ..ratchet.clone()
+        };
+        assert!(!judged_at_call(&unbased), "no base, no count to hold");
+        let retiring = Rule {
+            retires_with: Some("# subject:".to_owned()),
+            ..ratchet
+        };
+        assert!(!judged_at_call(&retiring), "a subject read stays `check`'s");
+    }
+
     // The row a config would carry with only `id` and `kind` written: every
     // other column at its serde default, exactly as a consumer's blank row
     // loads. Built through serde rather than a literal listing every column,
