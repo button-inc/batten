@@ -3454,6 +3454,43 @@ pub fn refs(dir: &Path) -> Result<Vec<String>> {
     Ok(found)
 }
 
+/// The branch a plain `git push` from `HEAD` writes on its remote, as a short
+/// name (`claude/x`), or `None` when it writes none (CLOUD-2697).
+///
+/// Git's own resolution, read through gix: a push refspec on the remote, else
+/// `push.default` — `current`/`matching` push the local name, `upstream` pushes
+/// the upstream, and the default `simple` pushes only when the upstream carries
+/// the local name. So `git checkout -B mine origin/x` under the default answers
+/// `None`: nothing records that this checkout pushes to `x`. A detached `HEAD`
+/// pushes nothing and is `None` too.
+///
+/// # Errors
+///
+/// Internal only — no push target is `None`, not a failure.
+pub fn push_target_of_head(dir: &Path) -> Result<Option<String>> {
+    let Ok(repo) = open(dir) else {
+        return Ok(None);
+    };
+    let Some(name) = repo
+        .head()
+        .ok()
+        .and_then(|head| head.referent_name().map(std::borrow::ToOwned::to_owned))
+    else {
+        return Ok(None);
+    };
+    Ok(repo
+        .branch_remote_ref_name(name.as_ref(), gix::remote::Direction::Push)
+        .and_then(std::result::Result::ok)
+        .and_then(|target| {
+            target
+                .as_bstr()
+                .to_string()
+                .strip_prefix("refs/heads/")
+                .filter(|branch| !branch.is_empty())
+                .map(str::to_owned)
+        }))
+}
+
 /// The upstream `HEAD` tracks, as a full ref name, or `None` when it tracks
 /// nothing (including on a detached `HEAD`).
 ///

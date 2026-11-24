@@ -104,14 +104,14 @@ pub struct Issue {
     /// other are indistinguishable in the payload. Reporting a name comparison
     /// would be a check that looks like it discriminates and does not.
     pub assigned: bool,
-    /// Every **live** pull request attached to it, by the URL's number, in
-    /// attachment order.
+    /// Every **live** pull request attached to it, keyed by the forge, repository
+    /// and number its URL names, in attachment order.
     ///
     /// ALL OF THEM, NOT THE FIRST (CLOUD-2697). The own-claim test asks whether
     /// this branch's PR is the row's ONLY live one; reading the first alone let a
     /// row carrying this branch's PR first and a rival's live PR second past every
     /// competitor rule.
-    pub live_prs: Vec<String>,
+    pub live_prs: Vec<PullRef>,
     /// The body, when the caller supplied one.
     pub description: Option<String>,
     /// When the tracker says the row was created, for the prose-dialect cutover.
@@ -197,14 +197,15 @@ impl Issue {
 /// unpullable. Measured on CLOUD-479: Todo, unassigned, its own body inviting
 /// the next taker, refused on a PR that had merged the day before.
 ///
-/// **The state comes from the CALLER**, and that is forced rather than chosen:
-/// the tracker's attachment objects carry `id`, `title`, `subtitle` and `url`
-/// and no state at all (measured 2026-08-19), and this gate has no credential to
-/// look one up. **Absent refuses**, so a caller supplying nothing gets exactly
-/// the old behaviour — this narrowing can only ever turn a false refusal into a
-/// pull, never a real competitor into a silent pass. Malformed refuses too: a
-/// parse failure must not become a pass.
-fn live_pull_requests(value: &serde_json::Value) -> Vec<String> {
+/// **The tracker carries no state**: its attachment objects hold `id`, `title`,
+/// `subtitle` and `url` and nothing else (measured 2026-08-19). A state the
+/// CALLER puts on an attachment is read here; every PR still live after that is
+/// asked of the forge by `run_claim_check` (CLOUD-2697), in the repository its
+/// URL names, and dropped only when the forge answers merged or closed. **Absent
+/// refuses** at both steps, so this narrowing can only ever turn a false refusal
+/// into a pull, never a real competitor into a silent pass. Malformed refuses
+/// too: a parse failure must not become a pass.
+fn live_pull_requests(value: &serde_json::Value) -> Vec<PullRef> {
     let Some(attachments) = value
         .get("attachments")
         .and_then(serde_json::Value::as_array)
@@ -221,9 +222,70 @@ fn live_pull_requests(value: &serde_json::Value) -> Vec<String> {
             if crate::forge::PullState::of(attachment).is_finished() {
                 return None;
             }
-            Some(url.rsplit('/').next().unwrap_or(url).to_owned())
+            Some(PullRef::of_url(url))
         })
         .collect()
+}
+
+/// A pull request as an attachment URL names it: the forge's repository and the
+/// number (CLOUD-2697).
+///
+/// KEYED BY THE REPOSITORY, NOT THE NUMBER ALONE. Two repositories number their
+/// PRs independently, so `other/repo#42` and this repository's `#42` are
+/// different PRs; reading only the trailing number let a merged `#42` here
+/// retire an open `#42` elsewhere, and let another repository's `#1276` pass as
+/// this branch's own.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PullRef {
+    /// `host/owner/repo`, lowercased, or `None` when the URL names no such
+    /// path — which matches no repository and is never asked of a forge.
+    pub repository: Option<String>,
+    /// The PR's number, as the URL spells it.
+    pub number: String,
+}
+
+impl PullRef {
+    /// The PR the URL names: the `host/owner/repo` before `/pull/`, and the digits
+    /// after it.
+    #[must_use]
+    pub fn of_url(url: &str) -> Self {
+        let (before, after) = url.split_once("/pull/").unwrap_or(("", url));
+        let number: String = after.chars().take_while(char::is_ascii_digit).collect();
+        let path = before
+            .split_once("://")
+            .map_or(before, |(_, rest)| rest)
+            .trim_end_matches('/');
+        let segments: Vec<&str> = path.split('/').collect();
+        let repository = match segments.as_slice() {
+            [host, owner, repo] if [host, owner, repo].iter().all(|part| !part.is_empty()) => {
+                Some(format!("{host}/{owner}/{repo}").to_lowercase())
+            }
+            _ => None,
+        };
+        Self { repository, number }
+    }
+
+    /// The PR `number` in the GitHub repository `slug` (`owner/repo`).
+    #[must_use]
+    pub fn on_github(slug: &str, number: &str) -> Self {
+        Self {
+            repository: Some(format!("github.com/{slug}").to_lowercase()),
+            number: number.to_owned(),
+        }
+    }
+
+    /// The `owner/repo` to ask GitHub's API about, or `None` for a PR on any
+    /// other host, which that API cannot answer for.
+    #[must_use]
+    pub fn github_slug(&self) -> Option<&str> {
+        self.repository.as_deref()?.strip_prefix("github.com/")
+    }
+}
+
+impl std::fmt::Display for PullRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.number)
+    }
 }
 
 /// What the caller asked for, beyond the payloads.
@@ -243,7 +305,7 @@ pub struct Request {
     /// #1276). Those rows are this branch's claim, not a competitor's, so a row
     /// whose live PR is this one is judged past the competitor rules. `None` when
     /// the forge was not asked or did not answer, which changes nothing.
-    pub own_pr: Option<String>,
+    pub own_pr: Option<PullRef>,
 }
 
 /// What the gate decided.
@@ -316,7 +378,7 @@ pub fn judge(
             && issue
                 .live_prs
                 .iter()
-                .all(|number| request.own_pr.as_deref() == Some(number.as_str()));
+                .all(|pr| request.own_pr.as_ref() == Some(pr));
 
         if !own {
             if issue.status != ready_column {
@@ -1130,7 +1192,7 @@ mod tests {
             };
             assert_eq!(
                 parsed.live_prs,
-                [String::from("9")],
+                [PullRef::on_github("o/r", "9")],
                 "only an explicit merged/closed reading may stand down"
             );
         }
@@ -1205,13 +1267,13 @@ mod tests {
     fn a_row_held_only_by_this_branchs_own_pr_is_its_claim() {
         let held = Issue {
             assigned: true,
-            live_prs: vec![String::from("1276")],
+            live_prs: vec![PullRef::on_github("o/r", "1276")],
             ..issue("CLOUD-1", "In Progress")
         };
         let grammar = crate::ready::Grammar::committed();
         let judged = |own: Option<&str>| {
             let request = Request {
-                own_pr: own.map(str::to_owned),
+                own_pr: own.map(|number| PullRef::on_github("o/r", number)),
                 ..Request::default()
             };
             judge(
@@ -1259,10 +1321,13 @@ mod tests {
         };
         assert_eq!(
             parsed.live_prs,
-            [String::from("1276"), String::from("1300")]
+            [
+                PullRef::on_github("o/r", "1276"),
+                PullRef::on_github("o/r", "1300")
+            ]
         );
         let request = Request {
-            own_pr: Some(String::from("1276")),
+            own_pr: Some(PullRef::on_github("o/r", "1276")),
             ..Request::default()
         };
         let grammar = crate::ready::Grammar::committed();
@@ -1280,6 +1345,34 @@ mod tests {
             verdict.refusals[0].rule.starts_with("not-todo"),
             "{verdict:?}"
         );
+    }
+
+    /// CLOUD-2697: the key is the repository AND the number. Fails by: keeping
+    /// the trailing number alone (`other/repo#42` equal to `o/r#42`), keeping a
+    /// path segment as the number (`/pull/42/files` read as `files`), or a
+    /// host-less URL reading as a repository the forge could be asked about.
+    #[test]
+    fn an_attached_pr_is_keyed_by_its_repository_and_number() {
+        let here = PullRef::of_url("https://github.com/O/R/pull/42");
+        assert_eq!(here, PullRef::on_github("o/r", "42"));
+        assert_eq!(here.github_slug(), Some("o/r"));
+        assert_ne!(
+            here,
+            PullRef::of_url("https://github.com/other/repo/pull/42")
+        );
+        assert_eq!(
+            PullRef::of_url("https://github.com/o/r/pull/42/files"),
+            here
+        );
+        let elsewhere = PullRef::of_url("https://forge.example/o/r/pull/42");
+        assert_ne!(elsewhere, here);
+        assert_eq!(elsewhere.github_slug(), None);
+        let bare = PullRef::of_url("/pull/42");
+        assert_eq!(
+            (bare.repository.as_deref(), bare.number.as_str()),
+            (None, "42")
+        );
+        assert_eq!(bare.github_slug(), None);
     }
 
     #[test]
