@@ -280,6 +280,7 @@ pub fn validate_harness_surfaces(patterns: &[crate::pattern::NamedPattern]) -> a
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod harness_surface_tests {
     use super::*;
     use crate::hook::HarnessExt as _;
@@ -295,7 +296,7 @@ mod harness_surface_tests {
         crate::config_model::Harness::ALL
             .iter()
             .filter(|harness| harness.wiring().is_some())
-            .map(|harness| harness.as_str())
+            .map(crate::hook::HarnessExt::as_str)
             .filter(|name| Some(*name) != skip)
             .map(|name| row(&format!("{HARNESS_SURFACES}{name}")))
             .collect()

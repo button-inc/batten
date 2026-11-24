@@ -5191,6 +5191,14 @@ fn lap_held_schema() -> serde_json::Value {
     })
 }
 
+/// The call's two write keys: `lap-held` (CLOUD-2832) and `write-targets`
+/// (CLOUD-1636). One call from [`extend_call_schema`], which is at its line
+/// ceiling.
+fn insert_write_schemas(call: &mut serde_json::Map<String, serde_json::Value>) {
+    call.insert("lap-held".to_owned(), lap_held_schema());
+    call.insert("write-targets".to_owned(), write_targets_schema());
+}
+
 /// The call's `write-targets` key (CLOUD-1636): what a shell call writes by
 /// name, from `hook::write_targets`.
 fn write_targets_schema() -> serde_json::Value {
@@ -5239,8 +5247,7 @@ fn extend_call_schema(document: &mut serde_json::Value) {
         .and_then(serde_json::Value::as_object_mut)
     {
         call.insert("forge".to_owned(), forge);
-        call.insert("lap-held".to_owned(), lap_held_schema());
-        call.insert("write-targets".to_owned(), write_targets_schema());
+        insert_write_schemas(call);
         // CLOUD-2709: the kind of machine, as the environment declared it —
         // `disposable` where `BATTEN_ENVIRONMENT` says so, `machine` otherwise.
         call.insert(
