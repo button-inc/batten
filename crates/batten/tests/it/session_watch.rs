@@ -12,7 +12,8 @@ use crate::common;
 use std::collections::BTreeMap;
 
 use batten::session_watch::{
-    Cache, Ending, Inventory, Page, Row, Source, State, UNSTARTED_POLLS, Watch, refresh, state,
+    Cache, Ending, Inventory, Mints, Page, Row, Source, State, UNSTARTED_POLLS, Watch, refresh,
+    state,
 };
 use serde_json::Value;
 
@@ -145,7 +146,7 @@ fn cache(name: &str) -> Cache {
 fn single(name: &str, source: &mut Recorded) -> (State, Inventory, Option<Ending>) {
     let mut watch = Watch::new(Vec::new());
     let (reports, ending) = watch
-        .poll(source, &cache(name))
+        .poll(source, &cache(name), &Mints::none())
         .expect("the source answers");
     let report = reports.into_iter().next().expect("one child");
     (report.state, report.inventory, ending)
@@ -172,7 +173,9 @@ fn a_child_whose_every_launch_notified_is_done() {
     transcript.extend(events("shard-exit.json"));
     let mut source = Recorded::new(2).child(row("session_done", "IDLE", None), transcript);
     let mut watch = Watch::new(Vec::new());
-    let (reports, ending) = watch.poll(&mut source, &cache("done")).unwrap();
+    let (reports, ending) = watch
+        .poll(&mut source, &cache("done"), &Mints::none())
+        .unwrap();
     assert_eq!(reports[0].state, State::Done);
     assert_eq!(ending, Some(Ending::Done));
     assert_eq!(
@@ -204,7 +207,9 @@ fn a_disconnected_child_is_dead_whatever_is_open() {
         events("worker-events.json"),
     );
     let mut watch = Watch::new(vec!["session_archived".to_owned()]);
-    let (reports, _) = watch.poll(&mut source, &cache("archived-open")).unwrap();
+    let (reports, _) = watch
+        .poll(&mut source, &cache("archived-open"), &Mints::none())
+        .unwrap();
     assert_eq!(reports[0].state, State::Dead);
 }
 
@@ -257,7 +262,7 @@ fn a_cache_miss_pages_from_the_start_and_rebuilds_the_same_answer() {
     .unwrap();
     assert_eq!(store.load("session_paged"), None);
     let mut watch = Watch::new(Vec::new());
-    let (reports, _) = watch.poll(&mut source, &store).unwrap();
+    let (reports, _) = watch.poll(&mut source, &store, &Mints::none()).unwrap();
     assert_eq!(reports[0].inventory, rebuilt);
 }
 
@@ -275,7 +280,9 @@ fn an_archived_child_is_not_watched_unless_named() {
             events("worker-events.json"),
         );
     let mut watch = Watch::new(Vec::new());
-    let (reports, _) = watch.poll(&mut source, &cache("archived")).unwrap();
+    let (reports, _) = watch
+        .poll(&mut source, &cache("archived"), &Mints::none())
+        .unwrap();
     let sessions: Vec<&str> = reports.iter().map(|r| r.session.as_str()).collect();
     assert_eq!(sessions, ["session_live"]);
 }
@@ -288,14 +295,18 @@ fn an_unreadable_source_is_could_not_look_never_done() {
         Recorded::new(2).child(row("session_x", "IDLE", None), events("worker-events.json"));
     source.unreadable = true;
     let mut watch = Watch::new(Vec::new());
-    assert!(watch.poll(&mut source, &cache("unreadable")).is_none());
+    assert!(
+        watch
+            .poll(&mut source, &cache("unreadable"), &Mints::none())
+            .is_none()
+    );
 
     // Readable rows but an unreadable transcript is could-not-look too.
     source.unreadable = false;
     source.transcripts.clear();
     assert!(
         watch
-            .poll(&mut source, &cache("unreadable-events"))
+            .poll(&mut source, &cache("unreadable-events"), &Mints::none())
             .is_none()
     );
 }
@@ -313,7 +324,7 @@ fn a_child_whose_prompt_never_arrived_is_unstarted() {
     let mut watch = Watch::new(Vec::new());
     let store = cache("unstarted");
     for poll in 1..=UNSTARTED_POLLS {
-        let (reports, ending) = watch.poll(&mut source, &store).unwrap();
+        let (reports, ending) = watch.poll(&mut source, &store, &Mints::none()).unwrap();
         assert_eq!(reports[0].state, State::Unstarted);
         let expected = (poll == UNSTARTED_POLLS).then_some(Ending::Dead);
         assert_eq!(ending, expected, "poll {poll}");
@@ -342,7 +353,9 @@ fn an_ended_child_dispatches_its_state_as_a_child_session_event() {
             events("worker-events.json"),
         );
     let mut watch = Watch::new(Vec::new());
-    let (reports, _) = watch.poll(&mut source, &cache("events")).unwrap();
+    let (reports, _) = watch
+        .poll(&mut source, &cache("events"), &Mints::none())
+        .unwrap();
     let done = reports
         .iter()
         .find(|r| r.session == "session_done")
@@ -375,7 +388,7 @@ fn an_ended_child_dispatches_its_state_as_a_child_session_event() {
     let mut watch = Watch::new(Vec::new());
     let store = cache("events-unstarted");
     for poll in 1..=UNSTARTED_POLLS {
-        let (reports, _) = watch.poll(&mut source, &store).unwrap();
+        let (reports, _) = watch.poll(&mut source, &store, &Mints::none()).unwrap();
         assert_eq!(
             watch.ended(&reports[0]),
             poll == UNSTARTED_POLLS,
@@ -460,7 +473,9 @@ fn every_page_of_children_is_watched_and_no_more() {
         source = source.child(row(id, "IDLE", None), events("worker-events.json"));
     }
     let mut watch = Watch::new(Vec::new());
-    let (reports, _) = watch.poll(&mut source, &cache("paged-children")).unwrap();
+    let (reports, _) = watch
+        .poll(&mut source, &cache("paged-children"), &Mints::none())
+        .unwrap();
     let ids: Vec<&str> = reports.iter().map(|r| r.session.as_str()).collect();
     assert_eq!(ids, ["session_a", "session_b", "session_c"]);
     assert_eq!(source.session_calls, 2, "three children in pages of two");
@@ -481,7 +496,9 @@ fn a_dead_child_outranks_a_done_one_and_the_wait_backs_off() {
             events("worker-events.json"),
         );
     let mut watch = Watch::new(Vec::new());
-    let (_, ending) = watch.poll(&mut source, &cache("rank")).unwrap();
+    let (_, ending) = watch
+        .poll(&mut source, &cache("rank"), &Mints::none())
+        .unwrap();
     assert_eq!(ending, Some(Ending::Dead));
     assert!(Ending::Dead > Ending::Done && Ending::Done > Ending::Nothing);
 
@@ -501,7 +518,14 @@ fn a_dead_child_outranks_a_done_one_and_the_wait_backs_off() {
         );
     };
     let mut watch = Watch::new(Vec::new());
-    let (_, ending) = run(&mut watch, &mut source, &cache("backoff"), &mut wait).unwrap();
+    let (_, ending) = run(
+        &mut watch,
+        &mut source,
+        &cache("backoff"),
+        &Mints::none(),
+        &mut wait,
+    )
+    .unwrap();
     assert_eq!(ending, Ending::Dead);
     assert_eq!(waits, [FIRST_DELAY, FIRST_DELAY * 2]);
 }
@@ -532,7 +556,9 @@ fn the_inventory_capture_names_each_childs_state_and_tasks() {
         events("worker-events.json"),
     );
     let mut watch = Watch::new(Vec::new());
-    let (reports, _) = watch.poll(&mut source, &cache("capture")).unwrap();
+    let (reports, _) = watch
+        .poll(&mut source, &cache("capture"), &Mints::none())
+        .unwrap();
     let document = inventory_document(&reports);
     assert_eq!(document[0]["session"], "session_waiting");
     assert_eq!(document[0]["state"], "waiting");
@@ -541,4 +567,73 @@ fn the_inventory_capture_names_each_childs_state_and_tasks() {
 
     let dir = state_dir(&common::at_root(".")).expect("the state directory resolves");
     assert!(dir.ends_with("session-watch"), "{}", dir.display());
+}
+
+/// The receipt store of a fixture checkout.
+fn receipts(dir: &std::path::Path) -> std::path::PathBuf {
+    std::path::PathBuf::from(common::git_in(dir, &["rev-parse", "--absolute-git-dir"]).trim())
+        .join("batten-receipts")
+}
+
+/// Fails by: a poll that mints nothing, mints a page rather than the paired
+/// reading, or records the state and the open ids in the wrong fields — the
+/// `child-state` receipt the `archive_session` gate reads (CLOUD-2900).
+#[test]
+fn a_poll_mints_each_childs_state_through_the_declared_row() {
+    // A git checkout holding the committed rows: the mint writes nothing
+    // outside a repository, and `common::scratch` is not one.
+    let dir = common::Fixture::new("session-watch-mint-checkout")
+        .config(include_str!("../../../../batten.toml"))
+        .git()
+        .base_commit()
+        .build();
+    let resolved = batten::resolve::resolve(&dir, &batten::resolve::Overrides::default())
+        .expect("the committed rows resolve");
+    let mints = Mints::new(&dir, &resolved.mints);
+
+    let mut finished = events("worker-events.json");
+    finished.extend(events("shard-exit.json"));
+    let mut source = Recorded::new(100)
+        .child(
+            row("session_W01", "IDLE", Some("connected")),
+            events("worker-events.json"),
+        )
+        .child(row("session_D01", "IDLE", None), finished);
+    let mut watch = Watch::new(Vec::new());
+    let (reports, _) = watch
+        .poll(&mut source, &cache("mints"), &mints)
+        .expect("the source answers");
+    let states: Vec<State> = reports.iter().map(|report| report.state).collect();
+    assert_eq!(states, [State::Done, State::Waiting]);
+
+    let store = receipts(&dir);
+    let read = |id: &str| {
+        let text = std::fs::read_to_string(store.join(format!("child-state.{id}")))
+            .unwrap_or_else(|error| panic!("child-state.{id} was minted: {error}"));
+        let fields: Vec<String> = text
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .split(' ')
+            .map(str::to_owned)
+            .collect();
+        assert!(
+            fields[0].parse::<u64>().is_ok(),
+            "the first field is the instant: {text:?}"
+        );
+        fields[1..].to_vec()
+    };
+    assert_eq!(read("session_W01"), ["waiting", "bgwg3bqcd"]);
+    assert_eq!(read("session_D01"), ["done", "-"]);
+
+    // A poll handed no rows mints nothing.
+    std::fs::remove_dir_all(&store).expect("clear the store");
+    watch
+        .poll(&mut source, &cache("mints-none"), &Mints::none())
+        .expect("the source answers");
+    assert!(
+        !store.exists(),
+        "Mints::none() minted into {}",
+        store.display()
+    );
 }

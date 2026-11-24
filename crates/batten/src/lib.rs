@@ -4929,7 +4929,11 @@ fn run_session(
     // THE CRATE'S ONE CLOCK (`pr_watch::clock`), not a waived sleep: the poll is
     // bounded by each child's terminal state, and could-not-look ends it.
     let mut wait = |delay| pr_watch::clock::hold(delay, None);
-    let Some((reports, ending)) = session_watch::run(&mut watch, &mut source, &cache, &mut wait)
+    // CLOUD-2900: every poll mints each child's reading through the declared
+    // rows, into this checkout's store, as `mcp call` does.
+    let mints = session_watch::Mints::new(&repo, &resolved.mints);
+    let Some((reports, ending)) =
+        session_watch::run(&mut watch, &mut source, &cache, &mints, &mut wait)
     else {
         writeln!(
             err,
@@ -27021,9 +27025,11 @@ pub fn mint_receipts_for_test(
 
 /// Write every receipt these rows mint from one already-unframed result.
 ///
-/// **ONE minting authority, reached from two boundaries** (CLOUD-1264). The
-/// `PostToolUse` hook and `batten mcp call` both file a tool result, and before
-/// this only the first minted — so closing the raw read path would have bricked
+/// **ONE minting authority, reached from three boundaries** (CLOUD-1264,
+/// CLOUD-2900). The `PostToolUse` hook and `batten mcp call` both file a tool
+/// result, and `session watch` files each child's complete reading under the
+/// bare `list_events` method (`session_watch::Mints`). Before CLOUD-1264 only
+/// the first minted — so closing the raw read path would have bricked
 /// every gate that reads an `issue-read` receipt. A second copy of this loop
 /// would be a second authority, free to disagree with the first about
 /// `requires`, keying or mode.

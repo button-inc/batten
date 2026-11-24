@@ -3952,6 +3952,38 @@ requires = ["url"]
 mode = "clear"
 body = "{now} {url}"
 
+# EACH CHILD'S NEWEST COMPLETE READ (CLOUD-2900), keyed by the child's session
+# id: `<now> <state> <open ids, comma-joined, or ->`. `session watch` mints it on
+# every poll, handing the engine's one minting authority the bare `list_events`
+# method, the child's id as the input's `session_id`, and its paired reading
+# (`session_watch::Report::reading`) as the result. Neither other boundary hands
+# a raw `list_events` result a top-level `state`: the hook passes null for an
+# `<other-session>` text block and `mcp call` the unwrapped envelope, so
+# `requires` keeps a page of one transcript from minting a reading of it.
+#
+# A MESSAGE TO THE CHILD CLEARS IT. A message can start a turn there, so the
+# read taken before it no longer answers. Each `key_from_input` line carries a
+# trailing comment so a mutant anchored on the bare line matches one site.
+#MUTANT-SUITE crates/batten/tests/it/session_watch.rs
+#MUTANT child-state-unminted|s@^body = "[^"]*"[[:space:]]*# the paired reading$@body = "{now} {open} {state}"@|a_poll_mints_each_childs_state_through_the_declared_row
+[[mint]]
+name = "child-state"
+tool = "list_events"
+key = "named"
+key_from_input = "session_id" # the child the watch read
+key_shape = "^session_[0-9A-Za-z]+$"
+requires = ["state"]
+mode = "replace"
+body = "{now} {state} {open}" # the paired reading
+
+[[mint]]
+name = "child-state"
+tool = "send_message"
+key = "named"
+key_from_input = "session_id" # the child the message went to
+mode = "clear"
+body = "{now}"
+
 [[rule]]
 id = "review open twice"
 kind = "shape"

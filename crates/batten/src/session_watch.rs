@@ -431,6 +431,23 @@ pub struct Report {
 }
 
 impl Report {
+    /// The reading a `child-state` receipt is minted from (CLOUD-2900):
+    /// `{"state": <word>, "open": "<id>,<id>"}`, with `open` omitted when
+    /// nothing is open, so the row's `{open}` piece records the absent token.
+    ///
+    /// **The newest complete read, never a page of one.** It is built after the
+    /// whole transcript is paired, which is what a `[[mint]]` row over one raw
+    /// `list_events` result cannot do: a page shows only the launches on it.
+    #[must_use]
+    pub fn reading(&self) -> Value {
+        let mut reading = serde_json::json!({"state": self.state.as_str()});
+        let open = self.inventory.open();
+        if !open.is_empty() {
+            reading["open"] = Value::from(open.join(","));
+        }
+        reading
+    }
+
     /// The pointer line: `<session> <state> open=<n> exited=<ids,…>`.
     #[must_use]
     pub fn line(&self) -> String {
@@ -454,6 +471,61 @@ impl Report {
 impl crate::output::Line for Report {
     fn line(&self) -> String {
         Report::line(self)
+    }
+}
+
+/// Where a poll mints each child's reading (CLOUD-2900): the checkout's root
+/// and its resolved `[[mint]]` rows.
+///
+/// **The engine names no receipt.** Every poll hands each report to the crate's
+/// one minting authority under the bare method [`LIST_EVENTS`], with the child's
+/// id as the input's `session_id` and [`Report::reading`] as the result. Which
+/// receipt that writes, if any, is the consumer's row to declare.
+///
+/// **The store is the root's own git dir**, as `batten mcp call` mints. A watch
+/// run from another linked worktree mints where that worktree's gates read.
+#[derive(Debug, Clone, Copy)]
+pub struct Mints<'a> {
+    root: Option<&'a Path>,
+    declared: &'a [crate::config_model::MintDeclared],
+}
+
+impl<'a> Mints<'a> {
+    /// Mint through `declared` into `root`'s receipt store.
+    #[must_use]
+    pub const fn new(root: &'a Path, declared: &'a [crate::config_model::MintDeclared]) -> Self {
+        Self {
+            root: Some(root),
+            declared,
+        }
+    }
+
+    /// No rows and no store: a poll handed this mints nothing.
+    #[must_use]
+    pub const fn none() -> Mints<'static> {
+        Mints {
+            root: None,
+            declared: &[],
+        }
+    }
+
+    /// Mint `report`'s reading. Silent on every failure, as the mint boundary
+    /// has always been: the gate that reads the receipt simply refuses again.
+    fn mint(&self, report: &Report) {
+        let Some(root) = self.root else {
+            return;
+        };
+        if self.declared.is_empty() {
+            return;
+        }
+        crate::mint_receipts(
+            self.declared,
+            LIST_EVENTS,
+            &serde_json::json!({"session_id": report.session}),
+            &report.reading(),
+            root,
+            None,
+        );
     }
 }
 
@@ -491,21 +563,27 @@ impl Watch {
 
     /// One poll: every watched child's report, and the ending it reaches, if
     /// any. `None` is could-not-look, which is never an ending.
+    ///
+    /// Each child's report is minted through `mints` once its transcript is
+    /// stored (CLOUD-2900), so the newest receipt is the newest complete read.
     pub fn poll(
         &mut self,
         source: &mut dyn Source,
         cache: &Cache,
+        mints: &Mints<'_>,
     ) -> Option<(Vec<Report>, Option<Ending>)> {
         let rows = self.rows(source)?;
         let mut reports = Vec::new();
         for row in rows {
             let inventory = refresh(source, &row.id, cache.load(&row.id))?;
             cache.store(&row.id, &inventory);
-            reports.push(Report {
+            let report = Report {
                 state: state(&row, &inventory),
                 session: row.id,
                 inventory,
-            });
+            };
+            mints.mint(&report);
+            reports.push(report);
         }
         reports.sort_by(|a, b| a.session.cmp(&b.session));
         if reports.is_empty() {
@@ -582,11 +660,12 @@ pub fn run(
     watch: &mut Watch,
     source: &mut dyn Source,
     cache: &Cache,
+    mints: &Mints<'_>,
     wait: &mut dyn FnMut(std::time::Duration),
 ) -> Option<(Vec<Report>, Ending)> {
     let mut delay = FIRST_DELAY;
     loop {
-        let (reports, ending) = watch.poll(source, cache)?;
+        let (reports, ending) = watch.poll(source, cache, mints)?;
         if let Some(ending) = ending {
             return Some((reports, ending));
         }
@@ -808,6 +887,7 @@ mod tests {
             &mut Watch::new(Vec::new()),
             &mut Running { polls: 3 },
             &cache,
+            &Mints::none(),
             &mut |delay| {
                 waits.push(delay);
                 assert!(waits.len() <= 8, "the watch never ended: {waits:?}");
@@ -849,13 +929,19 @@ mod tests {
         );
         let mut waits = 0_u32;
         let mut watch = Watch::new(Vec::new());
-        let ended = run(&mut watch, &mut NeverStarted, &cache, &mut |_| {
-            waits += 1;
-            assert!(
-                waits <= UNSTARTED_POLLS,
-                "the unstarted child never ended it"
-            );
-        });
+        let ended = run(
+            &mut watch,
+            &mut NeverStarted,
+            &cache,
+            &Mints::none(),
+            &mut |_| {
+                waits += 1;
+                assert!(
+                    waits <= UNSTARTED_POLLS,
+                    "the unstarted child never ended it"
+                );
+            },
+        );
         let Some((reports, Ending::Dead)) = ended else {
             panic!("an unstarted child ends the watch dead: {ended:?}");
         };
