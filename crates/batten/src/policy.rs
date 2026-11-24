@@ -7420,6 +7420,32 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
         (sources, tests)
     }
 
+    /// Fails by: a rule two references from `input`, or from a `with`, left
+    /// unmarked (the spread stops a level short or never starts), or a rule
+    /// reaching neither marked anyway; or a spread that never settles.
+    #[test]
+    fn reads_and_with_spread_through_references_and_nowhere_else() {
+        const MODULE: &str = "package batten.p\nimport rego.v1\n\n\
+            a := input.x\n\nb := a\n\nc := b\n\nd := 1\n\n\
+            w if {\n\tcount([1]) == 1 with data.q as 1\n}\n\nv := w\n\nu := v\n";
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let engine = bundle.evaluator.engine().expect("an interpreter");
+        let ast = Ast::of(engine).expect("the AST serialises");
+        let packages = package_facts(&ast.0);
+        let rules = packages.values().next().expect("the package's facts");
+        let marked = |flag: fn(&RuleFacts) -> bool| -> Vec<&str> {
+            rules
+                .iter()
+                .filter(|(_, fact)| flag(fact))
+                .map(|(name, _)| name.as_str())
+                .collect()
+        };
+        // `w`'s `with data.q` reads `data` too, so its chain reads; `d` alone
+        // reaches neither.
+        assert_eq!(marked(|fact| fact.reads), ["a", "b", "c", "u", "v", "w"]);
+        assert_eq!(marked(|fact| fact.with), ["u", "v", "w"]);
+    }
+
     /// A module whose one case writes `with data.batten.patterns.<key>` as
     /// `key`, over a rule reading `data.batten.patterns.a.b`.
     fn patterns_case(key: &str, term: &str) -> String {

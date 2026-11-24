@@ -127,11 +127,6 @@ exclude_re = [
   # admitted `at`; and `at + 1` always is, after the ASCII `_` at `at`.
   # Pinned to the column: the splice's own `+` on the next line is killed (CLOUD-2789).
   'policy\.rs:\d+:72: replace \+ with \* in guarded_sources_of$',
-  # `!flag && reaches` read as `||` sets a flag that is already true to true:
-  # the value is the same, and only `changed` differs, which the pass bound
-  # now caps. Columns 31 and 32 are the `with` and `reads` lines' `&&`, never
-  # the reference filter's, which is killed (CLOUD-2789).
-  'policy\.rs:\d+:3[12]: replace && with \|\| in package_facts$',
   # Without the arm, a `super::` alias target recurses as a path whose crate is
   # `super`, a keyword no crate can be named, so its first module lookup misses
   # and answers `None`, as the arm does (CLOUD-2789).

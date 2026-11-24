@@ -6711,6 +6711,23 @@ mod tests {
         );
     }
 
+    /// Fails by: a suite's drop keeping its own leader listed and unlisting
+    /// every other, so an orphaned sweep signals a group that ended (its pid
+    /// free for reuse) and spares one still running.
+    #[test]
+    fn a_dropped_suite_unlists_only_its_own_group() {
+        let listed = |leader: u32| LIVE_SUITES.lock().unwrap().contains(&leader);
+        let (mine, other) = (u32::MAX - 11, u32::MAX - 12);
+        let first = LiveSuite::list(mine);
+        let second = LiveSuite::list(other);
+        assert!(listed(mine) && listed(other));
+        drop(first);
+        assert!(!listed(mine), "its own group is unlisted");
+        assert!(listed(other), "another group stays listed");
+        drop(second);
+        assert!(!listed(other));
+    }
+
     /// Every runner over the shared suite target builds WITHOUT DEBUG INFO
     /// (CLOUD-1746), the nextest arm included. Carries the build half of
     /// `main`'s `a_sources_build_is_exactly_the_targets_its_scope_runs`, whose
@@ -8747,6 +8764,28 @@ mod record_row_tests {
             std::fs::read_to_string(&record).unwrap(),
             "k3\tsurvived\tok\nk4\tcaught\n"
         );
+    }
+
+    /// Fails by: a survivor read back as caught (it is never judged again) or
+    /// a caught row as not (every caught row is judged on every sweep), or a
+    /// bypassed sweep reading a record at all.
+    #[test]
+    fn only_a_caught_row_is_read_back_as_caught() {
+        let dir = crate::scratch::scratch("mutate-recorded-and-caught");
+        let record = dir.join("record");
+        record_row(&record, "k1", &Verdict::Caught);
+        record_row(
+            &record,
+            "k2",
+            &Verdict::Survived {
+                want: "ok".to_owned(),
+            },
+        );
+        let (recorded, caught) = super::recorded_and_caught(&record, &dir, false);
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(caught, std::collections::HashSet::from(["k1".to_owned()]));
+        let (recorded, caught) = super::recorded_and_caught(&record, &dir, true);
+        assert!(recorded.is_empty() && caught.is_empty());
     }
 }
 
