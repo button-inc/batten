@@ -917,7 +917,9 @@ type Grouped = (Vec<String>, blake3::Hasher, BTreeSet<String>);
 /// the cases naming what it binds, which is the commit a mutant-fixing lap
 /// makes. A tree-wide skeleton in every key re-judged all 2386 viable mutants
 /// on #1276 after one commit of new tests; an impl, `use` or item macro that
-/// answered to its whole text moved every key on 304fa50b (CLOUD-2904).
+/// answered to its whole text moved every key on 304fa50b (CLOUD-2904). A
+/// name with several definitions, such as a type and its impls, is keyed on
+/// all of them but not followed further ([`Graph::new`]).
 fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Site>) -> Probed {
     let mut probed = Probed::default();
     let mut cuts: Vec<Range<usize>> = Vec::new();
@@ -4167,9 +4169,18 @@ impl<'g> Graph<'g> {
             .enumerate()
             .map(|(id, name)| (*name, id))
             .collect();
+        // A NAME WITH MORE THAN ONE DEFINITION IS KEYED, NEVER EXPANDED
+        // (CLOUD-2904): its token holds every definition's digest, but its
+        // edges are empty. Expanded, a type joined its impls' mentions to its
+        // own, and with `item_names` fixed the real edits on 304fa50b still
+        // reached 11,523 of 11,744 probed functions; cut, 125. The cost: an
+        // edit reached only through such a name's definitions moves nothing.
         let edges = names
             .iter()
             .map(|name| {
+                if depends.items.get(*name).map_or(0, BTreeSet::len) > 1 {
+                    return Vec::new();
+                }
                 depends
                     .mentions
                     .get(*name)
@@ -4252,8 +4263,11 @@ fn name_token(name: &str, items: &BTreeSet<String>) -> blake3::Hash {
 ///
 /// AND WHAT IT DEPENDS ON, NEVER THE TREE (Ekstazi, Gligoric et al., ISSTA
 /// 2015; RTS++; RustyRTS): each probed function the reach run saw the case
-/// run, by its digest; every skeleton item those functions name; and each file
-/// it touched with that file's content id, absent included. A case the reach
+/// run, by its digest; every skeleton item those functions name, followed
+/// through what each names while the name has one definition and keyed but
+/// not followed when it has several ([`Graph::new`], CLOUD-2904: a narrowing,
+/// not a soundness-preserving one); and each file it touched with that file's
+/// content id, absent included. A case the reach
 /// run could not trace keys on every non-Rust file instead, which is what
 /// every case keyed on before and is never less sound. On #1276 a tree-wide
 /// digest in every key moved every pair on a commit that added tests and two
@@ -9931,6 +9945,39 @@ mod tests {
             );
             assert_ne!(moved[naming], held[naming], "names what it binds: {added}");
         }
+    }
+
+    /// T2 (CLOUD-2904): a name with one definition is followed, so an edit
+    /// one hop on moves the case naming it; a name with more than one
+    /// definition is keyed on all of them but never expanded through.
+    ///
+    /// Fails by: an ambiguous name expanded (a type's impls join its mentions
+    /// to the type's, and with fix 1 alone the real edits on 304fa50b still
+    /// reached 11,523 of 11,744 probed functions), a unique one not followed
+    /// (`B`'s edit reuses a stale verdict), or an ambiguous one's own
+    /// definitions dropped (a field added to `S` moves nothing).
+    #[test]
+    fn a_unique_name_is_followed_and_an_ambiguous_one_is_keyed_but_not_expanded() {
+        let (f, g) = (case("f"), case("g"));
+        let cases: BTreeSet<Case> = [f.clone(), g.clone()].into();
+        let executed = [(f.clone(), [0].into()), (g.clone(), [1].into())].into();
+        let base = "const A: u32 = B;\nconst B: u32 = 1;\n\
+                    struct S { c: C }\nimpl S { const K: u32 = 0; }\nstruct C(u32);\n\
+                    fn f() -> u32 { A }\nfn g(s: S) -> S { s }\n";
+        let held = source_digests(&cases, &executed, base);
+        let hop = source_digests(&cases, &executed, &base.replace("B: u32 = 1", "B: u32 = 9"));
+        assert_ne!(hop[&f], held[&f], "A's one definition names B");
+        let beyond = source_digests(&cases, &executed, &base.replace("C(u32)", "C(u64)"));
+        assert_eq!(
+            beyond[&g], held[&g],
+            "S has two definitions: not expanded to C"
+        );
+        let own = source_digests(
+            &cases,
+            &executed,
+            &base.replace("struct S { c: C }", "struct S { c: C, d: u8 }"),
+        );
+        assert_ne!(own[&g], held[&g], "keyed on S's own definitions");
     }
 
     /// T3 (CLOUD-2904): a `//!` edit at a file's head moves no case key, and
