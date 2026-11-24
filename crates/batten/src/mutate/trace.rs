@@ -775,6 +775,18 @@ mod tests {
         assert_eq!(super::tracer(), expected);
     }
 
+    // Fails by: this process's own status not the one read (`traced_already`
+    // answering a constant), so a run under no tracer reads as traced and
+    // records every case untraced. Compared with `traced_in` over the same
+    // file rather than with `false`, so it holds under a reach run's tracer
+    // too (CLOUD-2789).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn traced_already_reads_this_process_status() {
+        let status = crate::fsio::read_to_string("/proc/self/status").unwrap();
+        assert_eq!(super::traced_already(), super::traced_in(&status));
+    }
+
     // Fails by: an escaped quote or backslash refused (the path cut short as
     // unreadable), or kept with its backslash.
     #[test]
@@ -809,6 +821,47 @@ mod tests {
         let text = whole(&[]);
         std::fs::write(&file, &text).unwrap();
         assert_eq!(super::await_trace(&file), Some(text));
+    }
+
+    // Fails by: the grace's deadline set before now (`+` read as `-`), so the
+    // wait reads once more and answers the second partial text; or the close
+    // watcher sending nothing once a read succeeds (`&&` read as `||`), so the
+    // wait sleeps out its grace and answers that same second read. A FIFO
+    // makes every read block until the writer's next round closes, so the
+    // writer, not a clock, decides which text each read sees: two partial
+    // traces, then the whole one (CLOUD-2789).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_trace_finished_after_a_partial_read_is_waited_for() {
+        use rustix::fs::{CWD, FileType, Mode, mknodat};
+        let dir = crate::scratch::scratch("trace-await-fifo");
+        let fifo = dir.join("trace");
+        mknodat(CWD, &fifo, FileType::Fifo, Mode::from_raw_mode(0o600), 0).unwrap();
+        let partial = String::from("7     execve(\"/bin/sh\", [\"sh\"], 0x0 /* 0 vars */) = 0\n");
+        let text = whole(&[]);
+        let rounds = [partial.clone(), partial, text.clone()];
+        // EACH ROUND WAITS FOR THE READER'S CLOSE: a writer opening while the
+        // last read is still open joins that read's stream, and the rounds run
+        // together into one text.
+        let closed = rustix::fs::inotify::init(rustix::fs::inotify::CreateFlags::CLOEXEC).unwrap();
+        rustix::fs::inotify::add_watch(
+            &closed,
+            &fifo,
+            rustix::fs::inotify::WatchFlags::CLOSE_NOWRITE,
+        )
+        .unwrap();
+        let writer = {
+            let fifo = fifo.clone();
+            std::thread::spawn(move || {
+                let mut events = [0_u8; 1024];
+                for round in rounds {
+                    std::fs::write(&fifo, round).unwrap();
+                    rustix::io::read(&closed, &mut events).unwrap();
+                }
+            })
+        };
+        assert_eq!(super::await_trace(&fifo), Some(text));
+        writer.join().unwrap();
     }
 
     // A SHELL PROBE NAMES NO DIRECTORY (CLOUD-2784): `test -e c` is `stat("c")`.

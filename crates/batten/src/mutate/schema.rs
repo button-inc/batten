@@ -9738,7 +9738,16 @@ mod tests {
             let site_keys: Vec<Option<String>> =
                 listing.iter().map(|m| site_key(&root, m)).collect();
             let keys = shard_keys(listing, &site_keys);
-            assert_eq!(keys.len(), listing.len(), "one key per listed mutant");
+            // EACH MUTANT ITS OWN KEY, not only one per mutant (CLOUD-2789):
+            // a single shared key repeated still lands every mutant in exactly
+            // one shard, and keeps them there when one is inserted, so neither
+            // the count nor the slices tell it from the real keys.
+            let each: Vec<String> = listing
+                .iter()
+                .zip(&site_keys)
+                .map(|(m, site)| shard_key(m, site.as_deref()))
+                .collect();
+            assert_eq!(keys, each, "one key per listed mutant, each its own");
             let ids: Vec<u32> = (0..u32::try_from(listing.len()).unwrap()).collect();
             let mut shard_of: std::collections::BTreeMap<String, usize> =
                 std::collections::BTreeMap::new();
