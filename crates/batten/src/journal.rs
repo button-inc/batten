@@ -1868,6 +1868,40 @@ mod tests {
         );
     }
 
+    /// A store with a merged log but no marks (written before marks existed)
+    /// takes the full replay, never an incremental fold of every shard byte
+    /// onto the log it already holds.
+    ///
+    /// Fails by: that store read as marked-and-grown, so every entry lands in
+    /// the merged log a second time and `seqno` counts it twice.
+    #[test]
+    fn a_log_with_no_marks_is_replayed_rather_than_appended_to() {
+        let dir = store("unmarked-log");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        for _ in 0..2 {
+            append(&dir, "shard-a", &entry_for("TODO", Disposition::Acted)).unwrap();
+        }
+        merge(&dir).unwrap();
+        let mut format = open(&dir).unwrap().format().clone();
+        assert_eq!(format.seqno, 2, "the premise: a log of two entries");
+        assert!(!format.folded.is_empty(), "the premise: the merge marked");
+        format.folded.clear();
+        write_format(&dir, &format).unwrap();
+        let Merge::Merged { format, .. } = merge(&dir).unwrap() else {
+            panic!("the lock is free");
+        };
+        assert_eq!(format.seqno, 2);
+        assert!(!format.folded.is_empty(), "the replay marks every shard");
+        assert_eq!(
+            crate::fsio::read_to_string(merged_path(&dir))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Fails by: a merge reporting a count other than the entries it applied.
     #[test]
     fn a_merge_counts_every_entry_it_applied() {

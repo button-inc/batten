@@ -401,6 +401,42 @@ mod tests {
         );
     }
 
+    /// Both measures on a graph worked by hand where the layers matter:
+    /// `a -> b`, `c` alone. DL: `a` and `c` are last-layer singletons (1/3
+    /// each); `b` is an upper module whose lower layer is `a` and `c`, one
+    /// dependent of two, so 1/3·(1 − 1/2) — 5/6 in all. A last-layer module is
+    /// never an upper one, however shallow. M-score: the cycle `u0 <-> u1` is
+    /// an upper module of two with `l0 -> u0` its one edge in of 2·2 possible,
+    /// so 2/4·(1 − 1/4), and `l0`, `l1` score 1/4 each — 7/8.
+    #[test]
+    fn layered_measures_match_their_formulas() {
+        let mut graph = FileGraph::new();
+        graph
+            .entry("a".to_owned())
+            .or_default()
+            .insert("b".to_owned());
+        graph.entry("c".to_owned()).or_default();
+        let level = measure(&graph).decoupling_level;
+        assert!((level - 5.0 / 6.0).abs() < 1e-9, "DL {level}");
+
+        let mut graph = FileGraph::new();
+        graph
+            .entry("u0".to_owned())
+            .or_default()
+            .insert("u1".to_owned());
+        graph
+            .entry("u1".to_owned())
+            .or_default()
+            .insert("u0".to_owned());
+        graph
+            .entry("l0".to_owned())
+            .or_default()
+            .insert("u0".to_owned());
+        graph.entry("l1".to_owned()).or_default();
+        let mscore = measure(&graph).mscore;
+        assert!((mscore - 7.0 / 8.0).abs() < 1e-9, "M-score {mscore}");
+    }
+
     /// The property M-score exists for: padding a tangle with isolated files
     /// cannot lift its size penalty. A 25-file cycle padded with 25 isolated
     /// files scores below 50 files in independent 5-file modules, and the

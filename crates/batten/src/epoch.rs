@@ -1266,6 +1266,67 @@ mod module_digest_tests {
         assert_ne!(before, after, "a module may read the step table");
     }
 
+    /// A module reading `input.tree.base-delta` keeps every row that declares a
+    /// delta (narrowed to its `base` and sources) and drops one that does not;
+    /// one reading `input.tree.records.<name>` keeps that store's rows only.
+    ///
+    /// Fails by: the delta filter inverted, a named record subpath read as
+    /// every store, a row's store matched by anything but its name, or the
+    /// record tables dropped for a module that reads them.
+    #[test]
+    fn a_tree_read_keeps_exactly_the_rows_that_build_it() {
+        let config = r#"version = 1
+[[rule]]
+id = "own"
+kind = "policy"
+module = "m.rego"
+[[rule]]
+id = "with"
+kind = "command"
+base = "origin/main"
+delta_sources = ["src/**"]
+[[rule]]
+id = "without"
+kind = "command"
+[[record]]
+id = "r1"
+record = "issue"
+[[record]]
+id = "r2"
+record = "other"
+"#;
+        let ids = |input: &[&str], table: &str| -> Vec<String> {
+            let answer = |_: &str| -> super::Result<super::Reads> {
+                Ok(super::Reads {
+                    patterns: Some(std::collections::BTreeSet::new()),
+                    input: Some(input.iter().map(|path| (*path).to_owned()).collect()),
+                })
+            };
+            let (projected, _) =
+                super::project_reading(config.as_bytes(), "own", "own", &answer).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&projected).unwrap();
+            value[table]
+                .as_array()
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| row["id"].as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(ids(&["tree.base-delta"], "rule"), ["own", "with"]);
+        assert_eq!(ids(&["tree.records.issue"], "record"), ["r1"]);
+        assert_eq!(ids(&["tree.records.issue.state"], "record"), ["r1"]);
+        assert_eq!(ids(&["tree.records"], "record"), ["r1", "r2"]);
+
+        let paths = ["tree.records.issue".to_owned()].into_iter().collect();
+        let tree = super::TreeReads::of(&paths).unwrap();
+        assert_eq!(
+            tree.records,
+            Some(["issue".to_owned()].into_iter().collect())
+        );
+    }
+
     /// Fails by: an id in a comment or a string read as a read, a computed id
     /// or the table bound whole read as reading nothing, or a path into another
     /// package read as reading every row.

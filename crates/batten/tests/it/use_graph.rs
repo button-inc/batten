@@ -320,3 +320,26 @@ fn the_documented_layerings_hold_over_this_tree() {
         "documented layerings this tree violates: {broken:#?}"
     );
 }
+
+/// A grouped `use crate::{…}` is one edge per leaf, each onto the module its
+/// own path names and carrying its own item.
+///
+/// Fails by: a leaf under a group read as naming its module rather than its
+/// item, the step index miscounted inside the group.
+#[test]
+fn a_grouped_crate_use_names_each_leafs_module_and_item() {
+    let Look::Is(edges) = use_edges("use crate::{model::Config, check::validate};") else {
+        panic!("the fixture parses");
+    };
+    let reached: Vec<(&str, &str, Origin)> = edges
+        .iter()
+        .map(|edge| (edge.to.as_str(), edge.item.as_str(), edge.origin))
+        .collect();
+    assert_eq!(
+        reached,
+        [
+            ("model", "Config", Origin::Internal),
+            ("check", "validate", Origin::Internal)
+        ]
+    );
+}

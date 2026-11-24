@@ -769,6 +769,26 @@ mod tests {
         );
     }
 
+    /// Fails by: a call inside a macro body unread, or an unnamed call not
+    /// counted once each.
+    #[test]
+    fn the_require_census_reads_macro_bodies_and_counts_each_unnamed_call() {
+        let file: syn::File = syn::parse_str(
+            r#"
+            fn f() {
+                assert!(require_tool("rg").is_ok());
+                let v = vec![common::require_bin("mise", x)];
+                require_tool(name);
+                require_bin(other, y);
+            }
+            "#,
+        )
+        .expect("the fixture parses");
+        let census = require_census(&file);
+        assert_eq!(census.tools, ["rg", "mise"]);
+        assert_eq!(census.unnamed, 2);
+    }
+
     /// Fails by: a census that miscounts cases, admits a bare early exit, refuses
     /// one under `cfg!`/`!cfg!`, lets a guard outlive its `if`, or misses an
     /// `rstest`, a qualified `test` or a case inside a nested module.

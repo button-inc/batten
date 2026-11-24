@@ -6330,4 +6330,12 @@ mod tests {
         assert!(declared.answered_here("T", "run me"));
         assert!(!declared.answered_here("T", "run you"));
     }
+
+    /// Fails by: an integer literal matching a different integer, or not its own.
+    #[test]
+    fn an_integer_literal_matches_its_own_value_only() {
+        assert!(Literal::Integer(3).matches(&serde_json::json!(3)));
+        assert!(!Literal::Integer(3).matches(&serde_json::json!(4)));
+        assert!(!Literal::Integer(3).matches(&serde_json::json!("3")));
+    }
 }

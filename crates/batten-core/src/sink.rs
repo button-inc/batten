@@ -376,3 +376,24 @@ fn write_record(at: &Path, text: &str, append: bool) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fails by: a branch-keyed sink not answering, so a branch-keyed record is
+    /// read and written under no branch; or a rule-keyed one paying the read.
+    #[test]
+    fn only_a_branch_keyed_sink_asks_for_the_branch() {
+        let rule = Sink {
+            kind: Production::Journal,
+            key: SinkKey::Rule,
+        };
+        let branch = Sink {
+            kind: Production::Baseline,
+            key: SinkKey::Branch,
+        };
+        assert!(any_branch_keyed([("a", &rule), ("b", &branch)].into_iter()));
+        assert!(!any_branch_keyed([("a", &rule)].into_iter()));
+    }
+}
