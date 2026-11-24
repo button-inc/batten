@@ -98,7 +98,11 @@ fn around_with(
 }
 
 /// Every spelling that writes the protected path without naming it is refused
-/// after the fact, naming the path and the override route.
+/// after the fact, naming the path, the `git restore` that undoes it, and the
+/// override route.
+///
+/// Fails by: `true` in place of `restorable.is_empty()`, which drops the restore
+/// clause for a path whose bytes differ from `HEAD` (CLOUD-2923).
 #[test]
 fn an_unnamed_protected_write_is_refused_after_the_fact() {
     let dir = fixture("protected-escape-refused");
@@ -118,6 +122,10 @@ fn an_unnamed_protected_write_is_refused_after_the_fact() {
         assert!(
             said.contains("path write refused at guarded.txt"),
             "{command}: the refusal names the path: {said}"
+        );
+        assert!(
+            said.contains("run git restore guarded.txt; "),
+            "{command}: the bytes differ from HEAD, so the restore is prescribed (CLOUD-2923): {said}"
         );
         assert!(
             said.contains("batten override request --rule 'protected-mutation'"),
@@ -419,11 +427,23 @@ fn publish_guarded(dir: &Path, body: Option<&str>) {
 
 /// When a remote-tracking ref moved, as its reflog stamps it.
 #[derive(Clone, Copy)]
-enum Published {
+enum Published<'call> {
     /// An hour before the call: history that was already on a remote.
     BeforeTheCall,
-    /// Now, inside the call.
-    InTheCall,
+    /// Inside the named call, stamped at the very second its pre-call snapshot
+    /// recorded as `at`: the boundary second, which must count as the call's.
+    InTheCall(&'call str),
+}
+
+/// The `at` the pending pre-call snapshot of `call` recorded, read from where
+/// `protected_snapshot_path` puts it (CLOUD-2923).
+fn snapshot_at(dir: &Path, call: &str) -> i64 {
+    let path = dir
+        .join(".git/batten-facts/protected-watch")
+        .join(format!("{call}.json"));
+    let text = std::fs::read_to_string(&path).expect("the pre-call snapshot is pending");
+    let snapshot: serde_json::Value = serde_json::from_str(&text).expect("a snapshot is JSON");
+    snapshot["at"].as_i64().expect("the snapshot records `at`")
 }
 
 /// Point `refs/remotes/origin/main` at `HEAD` the way `git fetch` does, through
@@ -431,15 +451,25 @@ enum Published {
 /// post-call check reads the pre-call tips from (CLOUD-2923). A fixture whose
 /// tip was written to the ref file directly has no reflog, and counts as no
 /// tip at all.
-fn publish_origin_main(dir: &Path, when: Published) {
-    let mut update = common::git_command(dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    if let Published::BeforeTheCall = when {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        update.env("GIT_COMMITTER_DATE", format!("@{} +0000", now - 3600));
-    }
+fn publish_origin_main(dir: &Path, when: Published<'_>) {
+    publish_ref(dir, "refs/remotes/origin/main", "HEAD", when);
+}
+
+/// Point `name` at `target` through `update-ref`, its reflog entry stamped as
+/// `when` says.
+fn publish_ref(dir: &Path, name: &str, target: &str, when: Published<'_>) {
+    let mut update = common::git_command(dir, &["update-ref", name, target]);
+    let stamp = match when {
+        Published::BeforeTheCall => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            i64::try_from(now).expect("the clock fits") - 3600
+        }
+        Published::InTheCall(call) => snapshot_at(dir, call),
+    };
+    update.env("GIT_COMMITTER_DATE", format!("@{stamp} +0000"));
     let output = update.streamed_output().expect("run git update-ref");
     assert!(output.status.success(), "{output:?}");
 }
@@ -508,15 +538,20 @@ fn a_protected_write_committed_in_the_call_is_still_refused() {
 /// THE TIPS ARE THE PRE-CALL ONES. A call that commits a protected write and
 /// then points a remote-tracking ref at it has not reached pushed history.
 ///
+/// The ref's move is stamped at the snapshot's own `at`, the second the call
+/// began in: reflog stamps are whole seconds, and that second is read the way
+/// that excuses less, on every run rather than only when the clock ticks.
+///
 /// Fails by: reading the remote tips as they stand after the call, rather than
-/// as their reflogs say they stood when it began.
+/// as their reflogs say they stood when it began; or `<=` in place of `<` at
+/// `tip_before`'s stamp comparison, which counts the boundary second as before.
 #[test]
 fn a_commit_published_to_a_remote_ref_inside_the_call_is_still_refused() {
     let dir = fixture("protected-escape-forged-tip");
     let (code, said) = around_with(&dir, "call-forge", "python3 tool.py", |dir| {
         std::fs::write(dir.join(GUARDED), "authored in the call\n").expect("the write lands");
         common::git_in(dir, &["commit", "-q", "-am", "laundered"]);
-        publish_origin_main(dir, Published::InTheCall);
+        publish_origin_main(dir, Published::InTheCall("call-forge"));
     });
     assert_eq!(code, Some(2), "{said}");
     assert!(said.contains("path write refused at guarded.txt"), "{said}");
@@ -554,4 +589,83 @@ fn a_reset_backwards_to_a_pushed_ancestor_is_still_refused() {
     });
     assert_eq!(code, Some(2), "{said}");
     assert!(said.contains("path write refused at guarded.txt"), "{said}");
+}
+
+/// FORWARD TO A STRICT ANCESTOR OF A PUSHED TIP. A move that lands short of the
+/// tip, on a commit the tip already reaches, is still only history that was on
+/// a remote before the call. The check reads `HEAD`, the refs and the file
+/// bytes, never the command, so this stands for `switch` and `rebase` too.
+///
+/// Fails by: anything that excuses only a `HEAD` equal to a tip, which leaves
+/// the walk below a tip (`head_moved_onto`'s hidden-tips walk) unreached.
+#[test]
+fn a_forward_move_to_a_strict_ancestor_of_a_pushed_tip_is_no_protected_write() {
+    let dir = fixture("protected-escape-forward-ancestor");
+    publish_guarded(&dir, Some("pushed elsewhere\n"));
+    std::fs::write(dir.join(ORDINARY), "pushed after it\n").expect("the ordinary write lands");
+    common::git_in(&dir, &["commit", "-q", "-am", "pushed after it"]);
+    publish_origin_main(&dir, Published::BeforeTheCall);
+    common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~2"]);
+    let command = "git reset -q --hard origin/main~1";
+    let (code, said) = around_with(&dir, "call-forward-ancestor", command, |dir| {
+        common::git_in(dir, &["reset", "-q", "--hard", "origin/main~1"]);
+    });
+    assert_eq!(code, Some(0), "a strict ancestor of a pushed tip: {said}");
+    assert!(!said.contains("path write refused"), "{said}");
+}
+
+/// A REF THE CALL MOVED COUNTS AT ITS VALUE BEFORE THE CALL. The remote tip was
+/// written with no reflog before the call; the call fast-forwards onto it and
+/// then moves the ref away. The ref's one reflog entry is the call's own, and
+/// its previous value is where the ref stood when the call began.
+///
+/// Fails by: reading a ref the call moved at its current value, or dropping the
+/// oldest entry's previous value (`tip_before`'s `earliest_previous`), either of
+/// which leaves no tip reaching `HEAD`.
+#[test]
+fn a_ref_the_call_moved_counts_at_its_value_before_the_call() {
+    let dir = fixture("protected-escape-ref-moved-in-call");
+    std::fs::write(dir.join(GUARDED), "pushed elsewhere\n").expect("the guarded write lands");
+    common::git_in(&dir, &["commit", "-q", "-am", "pushed by another session"]);
+    common::pin_origin_main(&dir);
+    common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
+    let call = "call-ref-moved";
+    let command = "git merge --ff-only -q origin/main";
+    let (code, said) = around_with(&dir, call, command, |dir| {
+        common::git_in(dir, &["merge", "--ff-only", "-q", "origin/main"]);
+        publish_ref(
+            dir,
+            "refs/remotes/origin/main",
+            "HEAD~1",
+            Published::InTheCall(call),
+        );
+    });
+    assert_eq!(
+        code,
+        Some(0),
+        "the tip stood at HEAD when the call began: {said}"
+    );
+    assert!(!said.contains("path write refused"), "{said}");
+}
+
+/// A SHELL DELETE OF A PROTECTED PATH `HEAD` STILL HAS is a change to it, even
+/// on a pushed `HEAD`: the file is absent here and present in the committed
+/// tree, so it differs from `HEAD`, and `git restore` brings it back.
+///
+/// Fails by: `||` in place of `&&` in `paths_at_head`'s absent-file arm, which
+/// reads any absent file as equal to `HEAD` — excusing the delete on a pushed
+/// `HEAD` and dropping the restore that undoes it.
+#[test]
+fn a_shell_delete_of_a_protected_path_head_still_has_is_refused() {
+    let dir = fixture("protected-escape-shell-delete");
+    publish_origin_main(&dir, Published::BeforeTheCall);
+    let (code, said) = around_with(&dir, "call-delete", "python3 tool.py", |dir| {
+        std::fs::remove_file(dir.join(GUARDED)).expect("the delete lands");
+    });
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
+    assert!(
+        said.contains("run git restore guarded.txt; "),
+        "HEAD still has the file, so the restore is prescribed: {said}"
+    );
 }
