@@ -602,12 +602,7 @@ pub fn destination(
     if let Some(named) = named {
         return named;
     }
-    // BY FILE, NOT BY SPELLING: a PATH entry naming the same directory another
-    // way (a symlinked HOME, a `..`) still reaches it, so it is never off PATH.
-    if on_path
-        .iter()
-        .any(|entry| *entry == user || crate::wiring::same_file(entry, &user))
-    {
+    if on_path_dirs(&user, on_path) {
         return user;
     }
     for dir in SYSTEM_BIN_DIRS.iter().map(Path::new) {
@@ -616,6 +611,16 @@ pub fn destination(
         }
     }
     user
+}
+
+/// Whether `dir` is one of the `on_path` entries, BY FILE, NOT BY SPELLING: an
+/// entry naming the same directory another way (a symlinked HOME, a `..`)
+/// still reaches it. The spelling test stands first because a directory not yet
+/// created cannot be resolved to compare.
+pub(crate) fn on_path_dirs(dir: &Path, on_path: &[std::path::PathBuf]) -> bool {
+    on_path
+        .iter()
+        .any(|entry| entry == dir || crate::wiring::same_file(entry, dir))
 }
 
 /// Every program the script runs, read as the first word of each command: a
@@ -774,12 +779,10 @@ mod tests {
     /// `/usr/local/bin` past a usable per-user directory.
     #[test]
     fn a_user_directory_spelled_differently_on_path_is_on_path() {
-        let user = std::env::temp_dir().join(format!("batten-dest-{}", std::process::id()));
-        std::fs::create_dir_all(&user).unwrap();
+        let user = crate::scratch::scratch("install-dest-respelled");
         let respelled = user.join("..").join(user.file_name().unwrap());
         let on_path = vec![respelled, std::path::PathBuf::from("/usr/local/bin")];
         assert_eq!(destination(None, user.clone(), &on_path, |_| true), user);
-        std::fs::remove_dir_all(&user).unwrap();
     }
 
     #[test]

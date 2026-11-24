@@ -1763,7 +1763,7 @@ fn place_download(
     writeln!(out, "version={tag}")?;
     writeln!(out, "target={}", engine::running_target())?;
     writeln!(out, "verified=sha256")?;
-    if !on_path.contains(&dest) {
+    if !install::on_path_dirs(&dest, &on_path) {
         if var("BATTEN_ALLOW_OFF_PATH").as_deref() == Some("1") {
             writeln!(out, "off-path={}", dest.display())?;
         } else {

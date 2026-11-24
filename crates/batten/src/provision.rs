@@ -802,11 +802,13 @@ fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
     let linked = dir.join(&entry.binary);
     fs::symlink_metadata(&linked).is_err()
         || is_launcher(&linked)
-        || recorded_as_ours(&linked, entry, cache_root)
+        || vouched_stamp(&linked, entry, cache_root).is_some()
 }
 
-/// Whether the link record names `linked` and either `linked`'s present stamp
-/// or, as an intent, this entry's own cached bytes.
+/// The stamp batten may keep for `linked`, when the link record names it and
+/// either `linked`'s present stamp or, as an intent, this entry's own cached
+/// bytes vouch for it; `None` when the file is not batten's. Read once, it
+/// answers both [`claimable`] and [`record_intent`].
 ///
 /// The record is three lines: the path, the stamp of the file batten last
 /// wrote there (empty if none), and [`INTENT`] while a write is under way.
@@ -823,25 +825,23 @@ fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
 ///
 /// The path is compared as the record wrote it, lossily, so a link path that is
 /// not UTF-8 still matches its own record.
-fn recorded_as_ours(linked: &Path, entry: &Provision, cache_root: &Path) -> bool {
-    let Ok(record) = fs::read_to_string(link_record(cache_root, entry)) else {
-        return false;
-    };
+fn vouched_stamp(linked: &Path, entry: &Provision, cache_root: &Path) -> Option<String> {
+    let record = fs::read_to_string(link_record(cache_root, entry)).ok()?;
     let mut lines = record.lines();
     if lines.next() != Some(&*linked.to_string_lossy()) {
-        return false;
+        return None;
     }
-    let stamp = lines.next().filter(|stamp| !stamp.is_empty());
-    if stamp.is_some() && written_stamp(linked).as_deref() == stamp {
-        return true;
+    let present = written_stamp(linked);
+    if let Some(stamp) = lines.next().filter(|stamp| !stamp.is_empty())
+        && present.as_deref() == Some(stamp)
+    {
+        return Some(stamp.to_owned());
     }
-    lines.next() == Some(INTENT)
-        && crate::wiring::same_bytes(
-            linked,
-            &entry_dir(cache_root, entry)
-                .join(BIN_DIR)
-                .join(&entry.binary),
-        )
+    let cached = entry_dir(cache_root, entry)
+        .join(BIN_DIR)
+        .join(&entry.binary);
+    (lines.next() == Some(INTENT) && crate::wiring::same_bytes(linked, &cached))
+        .then(|| present.unwrap_or_default())
 }
 
 /// The link record's third line while a write is under way.
@@ -857,14 +857,11 @@ fn link_record(cache_root: &Path, entry: &Provision) -> PathBuf {
 /// install that fails or is killed before [`record_written`] leaves batten's
 /// link claimable on either side of its rename.
 ///
-/// KEEPS THE STAMP THE RECORD ALREADY VOUCHES FOR, and only that: batten's
-/// earlier copy must stay batten's if this write never lands, and a stamp read
-/// fresh off whatever file is there now could vouch for one batten never wrote.
+/// KEEPS ONLY A STAMP [`vouched_stamp`] VOUCHES FOR: batten's earlier copy
+/// must stay batten's if this write never lands, and a stamp read off whatever
+/// file is there now could vouch for one batten never wrote.
 fn record_intent(cache_root: &Path, entry: &Provision, linked: &Path) -> Result<()> {
-    let kept = recorded_as_ours(linked, entry, cache_root)
-        .then(|| written_stamp(linked))
-        .flatten()
-        .unwrap_or_default();
+    let kept = vouched_stamp(linked, entry, cache_root).unwrap_or_default();
     write_link_record(
         cache_root,
         entry,
@@ -893,7 +890,7 @@ fn write_link_record(cache_root: &Path, entry: &Provision, body: &str) -> Result
     crate::durable::replace(record, body.as_bytes()).context("record the written link")
 }
 
-/// A written file's stamp for [`recorded_as_ours`]: [`crate::cache::stamp`]'s
+/// A written file's stamp for [`vouched_stamp`]: [`crate::cache::stamp`]'s
 /// identity tuple, whose change time moves on any later write, rename or
 /// `touch -d`, so a replacement cannot inherit batten's record.
 fn written_stamp(path: &Path) -> Option<String> {
