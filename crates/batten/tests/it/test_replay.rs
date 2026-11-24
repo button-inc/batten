@@ -327,6 +327,49 @@ fn a_union_build_that_failed_names_its_kept_output() {
     );
 }
 
+/// A `--structural` run builds nothing, so it names no log an earlier run kept.
+///
+/// Fails by: a kept log's pointer printed on a structural run.
+#[test]
+fn a_structural_run_names_no_kept_log() {
+    let structural = |dir: &Path, base: &str| {
+        common::batten()
+            .state_dir(&data_dir(dir))
+            .env_remove("NEXTEST_PROFILE")
+            .args(["test", "replay", "--structural", "--base", base])
+            .current_dir(dir)
+            .streamed_output()
+            .expect("run batten")
+    };
+    let (built, base) = repo("replay-structural-build-log");
+    head(
+        &built,
+        &BASE.replace("pub fn add(", "pub fn plus(").replace(
+            "super::add(2, 2), 4);",
+            "super::plus(2, 2), 4);\n        let _ = 0;",
+        ),
+    );
+    let (ran, ran_base) = repo("replay-structural-run-log");
+    narrowed(&ran);
+    for (dir, base, log) in [
+        (&built, &base, "a union build failed"),
+        (&ran, &ran_base, "a union test run failed"),
+    ] {
+        let full = replay(dir, base);
+        assert!(
+            String::from_utf8_lossy(&full.stdout).contains(log),
+            "premise: {}",
+            text(&full)
+        );
+        let after = structural(dir, base);
+        assert!(
+            !String::from_utf8_lossy(&after.stdout).contains(log),
+            "{}",
+            text(&after)
+        );
+    }
+}
+
 /// A crate whose test names an item through a path, for the item-move cases
 /// (CLOUD-2790): `value` lives in `a`, the test spells `crate::a::value`.
 const ITEMS_LIB: &str = "\
