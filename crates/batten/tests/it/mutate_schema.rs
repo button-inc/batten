@@ -577,16 +577,6 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
     }
 }
 
-/// `mise run mutant:rust` ON ITS OWN JUDGES A DECLARED BASE (CLOUD-2855): the
-/// task, not its caller, owns `origin/main`, so a standalone run no longer hands
-/// `batten mutate cargo` an empty base (the verb's usage refusal). A caller's
-/// own base wins, and under `mutant`'s `MUTANT_WHOLE_TREE` the default yields,
-/// so the whole-tree schedule is not turned into a base-and-tree usage error
-/// (CLOUD-2849). Fails by: the default deleted (`rust-base-undeclared`), a
-/// caller's base overridden, or the default leaking into the whole-tree run.
-///
-/// THE STUB IS A `#!/bin/sh` SCRIPT, which only a unix host executes, so the
-/// case returns early elsewhere and still compiles on every target (CLOUD-1148).
 /// THE ROUND BOUND'S GUARANTEE (CLOUD-2882): crates that share no dependency
 /// are refused in ONE round, however many there are and whichever cargo
 /// starts first. Built one job at a time, `cargo test --no-run` stopped at the
@@ -651,6 +641,16 @@ fn independent_crates_are_refused_in_one_round() {
     }
 }
 
+/// `mise run mutant:rust` ON ITS OWN JUDGES A DECLARED BASE (CLOUD-2855): the
+/// task, not its caller, owns `origin/main`, so a standalone run no longer hands
+/// `batten mutate cargo` an empty base (the verb's usage refusal). A caller's
+/// own base wins, and under `mutant`'s `MUTANT_WHOLE_TREE` the default yields,
+/// so the whole-tree schedule is not turned into a base-and-tree usage error
+/// (CLOUD-2849). Fails by: the default deleted (`rust-base-undeclared`), a
+/// caller's base overridden, or the default leaking into the whole-tree run.
+///
+/// THE STUB IS A `#!/bin/sh` SCRIPT, which only a unix host executes, so the
+/// case returns early elsewhere and still compiles on every target (CLOUD-1148).
 #[test]
 fn mutant_rust_runs_on_its_own_against_a_declared_base() {
     if !cfg!(unix) {

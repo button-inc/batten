@@ -15240,8 +15240,11 @@ pub fn rustc_wrapped(
     // `cargo auditable`, which every dist leg builds through, is one. Refused
     // as a verb, it failed `mise run dist` locally while CI, whose engine is
     // not the tree's, passed. A path followed by `rustc` is that wrapper: no
-    // verb carries a path separator.
-    let workspace_wrapper = Path::new(first).components().count() > 1
+    // verb carries a path separator. So is a bare name the environment names
+    // as the workspace wrapper (`RUSTC_WORKSPACE_WRAPPER=sccache`): cargo leaves
+    // it set for the wrappers it spawns.
+    let named = std::env::var_os("RUSTC_WORKSPACE_WRAPPER").is_some_and(|set| &set == first);
+    let workspace_wrapper = (Path::new(first).components().count() > 1 || named)
         && args
             .get(2)
             .is_some_and(|next| compiles(next) && !compiles(first));
@@ -18748,7 +18751,7 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     let handback = mutate::schema::Handback {
         runner: &runner,
         diff: listing,
-        disk: Some((mutate::JobCost::declared()?.disk_mb, floor)),
+        disk: Some((mutate::JobCost::declared_disk_mb()?, floor)),
     };
     let swept = mutate::schema::sweep(
         root,
