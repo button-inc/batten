@@ -1418,7 +1418,17 @@ mod tests {
             .into_iter(),
         );
         let paused = std::cell::RefCell::new(Vec::new());
-        let read = |_: &Config, _: Option<&str>| answers.borrow_mut().next();
+        // A poll past the replayed answers is a failure, never a `None`: the
+        // loop survives a could-not-look by design and the recorded pause never
+        // blocks, so a reading that never turns green would spin here forever.
+        let read = |_: &Config, _: Option<&str>| {
+            Some(
+                answers
+                    .borrow_mut()
+                    .next()
+                    .expect("the watch polled past its replayed answers"),
+            )
+        };
         let pause = |seconds: f64| paused.borrow_mut().push(seconds);
         let config = Config {
             interval: 0,
