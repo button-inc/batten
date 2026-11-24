@@ -8533,6 +8533,46 @@ mod tests {
         assert!(again.probes.is_empty(), "an unprobed file carries no probe");
     }
 
+    #[test]
+    fn a_line_the_journal_refuses_is_said_and_not_an_error() {
+        // Fails by: a failed journal write answered as written, so the sweep
+        // says nothing of the verdict the next sweep has to judge again.
+        let store = crate::scratch::scratch("schema-journal-or-say");
+        let mut out = Vec::new();
+        journal_or_say(&store, "k\tcaught\tm\n", &mut out).unwrap();
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.contains("could not be journaled"), "{said}");
+        assert!(said.contains("k\tcaught\tm"), "{said}");
+    }
+
+    #[test]
+    fn a_mutant_no_function_encloses_maps_to_its_files_probes() {
+        // Fails by: the empty-probe test inverted, so a file with probes maps
+        // nothing and one without maps an empty set.
+        let probed = Rendered {
+            probes: vec![String::from("d1"), String::from("d2")],
+            ..Rendered::default()
+        };
+        let schema = Schema {
+            files: [
+                (String::from("src/lib.rs"), probed),
+                (String::from("src/bare.rs"), Rendered::default()),
+            ]
+            .into(),
+            ..Schema::default()
+        };
+        let mut bare = listed("binary", "-", (1, 1), (1, 2));
+        bare.file = String::from("src/bare.rs");
+        let mutants = [listed("binary", "-", (1, 1), (1, 2)), bare];
+        assert_eq!(
+            file_fns(&mutants, &schema),
+            std::collections::BTreeMap::from([(
+                0,
+                BTreeSet::from([String::from("d1"), String::from("d2")])
+            )])
+        );
+    }
+
     /// An error is owned by the mutant whose region holds its primary span;
     /// a warning, a non-compiler line, or an error outside every region is not.
     #[test]
