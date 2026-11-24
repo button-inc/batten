@@ -6010,7 +6010,7 @@ pub fn list_mutants(
     runner: &Path,
     diff: Option<&Path>,
 ) -> Result<Vec<schema::Listed>> {
-    let args = cargo_mutants_argv(diff, ["--list", "--json"].map(String::from));
+    let args = cargo_mutants_argv((diff, None), ["--list", "--json"].map(String::from));
     let runner = runner.to_string_lossy();
     let ran = spawn(root, Program::Command(&runner), &args, &[], runner_bound())?;
     if !ran.passed() {
@@ -6022,18 +6022,29 @@ pub fn list_mutants(
     schema::listing(&ran.stdout)
 }
 
-/// cargo-mutants' argv over the change in `diff`, or over every package of the
-/// workspace where there is none (CLOUD-2849), then `rest`: BUILT HERE AND
-/// NOWHERE ELSE (`mutation_markers`), so the listing the schema judges and the
-/// run that judges what it hands back read one scope the one way.
-fn cargo_mutants_argv(diff: Option<&Path>, rest: impl IntoIterator<Item = String>) -> Vec<String> {
+/// cargo-mutants' argv for a listing over the change in `listed`, or over
+/// every package of the workspace where there is none (CLOUD-2849), then
+/// `rest`; a hand-back's run passes its `own` diff ([`target_diff`]) as well,
+/// which replaces `listed` as the `--in-diff` but never the package scope.
+/// BUILT HERE AND NOWHERE ELSE (`mutation_markers`), so the listing the schema
+/// judges and the run that judges what it hands back read one scope the one
+/// way: a whole-tree hand-back runs under `--workspace` as its listing did
+/// (CLOUD-2911), or a consumer whose root is a package, or that declares
+/// `default-members`, would have its member crates' hand-backs left out of
+/// cargo-mutants' own package choice and come back `error`.
+fn cargo_mutants_argv(
+    (listed, own): (Option<&Path>, Option<&Path>),
+    rest: impl IntoIterator<Item = String>,
+) -> Vec<String> {
     let mut args = vec![String::from("mutants")];
-    match diff {
-        Some(diff) => args.extend([
+    if listed.is_none() {
+        args.push(String::from("--workspace"));
+    }
+    if let Some(diff) = own.or(listed) {
+        args.extend([
             String::from("--in-diff"),
             diff.to_string_lossy().into_owned(),
-        ]),
-        None => args.push(String::from("--workspace")),
+        ]);
     }
     args.extend(rest);
     args
@@ -6056,7 +6067,8 @@ pub fn exactly(name: &str) -> String {
 }
 
 /// Run cargo-mutants IN PLACE in `tree` over the one mutant named `name`,
-/// listed from `diff`, which is [`target_diff`]'s for it: no copy and no
+/// from the listing over `listed` (`None` for the whole workspace), in that
+/// listing's package scope and from `own`, [`target_diff`]'s for it: no copy and no
 /// baseline, since the schema's reach run proved the unmutated suite on this
 /// source; its tests narrowed to the nextest filterset `filter` when one is
 /// given; its outcome files under `output`.
@@ -6067,13 +6079,16 @@ pub fn exactly(name: &str) -> String {
 ///
 /// A `runner` that cannot be spawned.
 pub fn cargo_mutant_in_place(
-    (tree, runner, diff): (&Path, &Path, &Path),
+    (tree, runner): (&Path, &Path),
+    (listed, own): (Option<&Path>, &Path),
     name: &str,
     filter: Option<&str>,
-    timeout: std::time::Duration,
-    output: &Path,
+    (timeout, output): (std::time::Duration, &Path),
 ) -> Result<Outcome> {
-    let args = cargo_mutants_argv(Some(diff), in_place_rest(name, filter, timeout, output));
+    let args = cargo_mutants_argv(
+        (listed, Some(own)),
+        in_place_rest(name, filter, timeout, output),
+    );
     let runner = runner.to_string_lossy();
     let ran = spawn_as(
         tree,
@@ -6458,6 +6473,44 @@ mod tests {
         assert_eq!(rest[at + 1], "9");
         let bare = in_place_rest(": no path", None, bound, output);
         assert!(!bare.iter().any(|arg| arg == "--"), "{bare:?}");
+    }
+
+    /// A hand-back's run reads its listing's package scope and its own diff:
+    /// a whole-tree hand-back runs under `--workspace` from its own line, one
+    /// over a change from its own line in the change's scope, and a listing
+    /// is unchanged (CLOUD-2849, CLOUD-2911).
+    ///
+    /// Fails by: a whole-tree hand-back run without `--workspace` (9675af017,
+    /// where cargo-mutants' own package choice left a consumer's member
+    /// crates out), the change's diff run in place of the target's, or a
+    /// `--workspace` added to a run over a change.
+    #[test]
+    fn a_handback_runs_in_its_listings_scope_from_its_own_line() {
+        let (change, own) = (Path::new("/c.diff"), Path::new("/t.diff"));
+        let rest = || [String::from("--re"), String::from("^x$")];
+        assert_eq!(
+            cargo_mutants_argv((None, Some(own)), rest()),
+            [
+                "mutants",
+                "--workspace",
+                "--in-diff",
+                "/t.diff",
+                "--re",
+                "^x$"
+            ]
+        );
+        assert_eq!(
+            cargo_mutants_argv((Some(change), Some(own)), rest()),
+            ["mutants", "--in-diff", "/t.diff", "--re", "^x$"]
+        );
+        assert_eq!(
+            cargo_mutants_argv((None, None), rest()),
+            ["mutants", "--workspace", "--re", "^x$"]
+        );
+        assert_eq!(
+            cargo_mutants_argv((Some(change), None), rest()),
+            ["mutants", "--in-diff", "/c.diff", "--re", "^x$"]
+        );
     }
 
     /// A target's diff changes nothing and spans its one line, under the
