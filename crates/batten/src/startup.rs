@@ -810,7 +810,7 @@ mod tests {
     /// such as `src` rather than reading it as configuring nothing (CLOUD-2789).
     #[test]
     fn a_name_without_inner_segments_configures_nothing() {
-        let names = [String::from("src"), String::from("mise.toml")];
+        let names = [String::from("src"), String::from("tool.toml")];
         assert!(!configured(&names, "src"));
         assert!(!configured(&names, "toml"));
     }
