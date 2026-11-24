@@ -511,6 +511,20 @@ mod tests {
         }
     }
 
+    /// Fails by: a shell's `-o`/`-O` read as taking no value, so the option
+    /// name after it reads as the script operand and the `-c` after that is
+    /// never reached (CLOUD-2789).
+    #[test]
+    fn a_shell_option_name_is_a_value_not_the_script() {
+        for flag in ["-o", "-O"] {
+            assert_eq!(
+                carried("bash", &[flag, "pipefail", "-c", "git push"]),
+                Carried::Inline,
+                "{flag}"
+            );
+        }
+    }
+
     /// Fails by: a shell's `-c` dropped from its inline options (shard 4/16's
     /// `inline` survivor), so `bash -c text` reads the text as a script file.
     #[test]
@@ -556,5 +570,15 @@ mod tests {
             );
         }
         assert_ne!(carried("tclsh", &["--verbose", "x"]), Carried::Inline);
+    }
+
+    /// Fails by: sed's `--expression` unknown to its grammar, so the script
+    /// it carries reads as the first operand (CLOUD-2789).
+    #[test]
+    fn sed_carries_a_script_in_its_long_expression_option() {
+        assert_eq!(
+            carried("sed", &["--expression", "s/a/b/", "file"]),
+            Carried::Inline
+        );
     }
 }

@@ -22990,6 +22990,25 @@ deny contains "refused by themodule" if {
         }
     }
 
+    /// An enclosed stage before any enclosed `cd` runs where the call placed
+    /// it, so a script it runs is read there.
+    ///
+    /// Fails by: an enclosed stage unplaced on being enclosed alone (`&&` for
+    /// `||`), so the script reads as opaque (CLOUD-2789).
+    #[test]
+    fn an_enclosed_stage_before_any_enclosed_cd_stays_placed() {
+        let root = crate::scratch::scratch("hook-enclosed-placed");
+        std::fs::write(root.join("s.sh"), "git push\n").unwrap();
+        for inner in ["(bash s.sh)", "echo $(bash s.sh)"] {
+            let command = format!("cd {} && {inner}", root.display());
+            let reach = program_reach(&command);
+            assert!(
+                reach.iter().any(|entry| entry["name"] == "git"),
+                "{command}: {reach:?}"
+            );
+        }
+    }
+
     /// `cargo run` reaches the binary it starts, named by `--bin`, `--example`
     /// or `-p`, handed what follows `--`; `batten step run` reaches the argv
     /// after its `--` (step 14).

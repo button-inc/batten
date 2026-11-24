@@ -1851,6 +1851,27 @@ mod tests {
         );
     }
 
+    /// Fails by: the shipped lifetime shorter than a month (`30 * 24` hours
+    /// read as `30 / 24`), so a pass a few days unread is collected and its
+    /// case runs again (CLOUD-2789).
+    #[test]
+    fn a_pass_lasts_a_month_unread() {
+        let pass = crate::scratch::scratch("test-run-collect-month");
+        let at = std::time::SystemTime::now();
+        std::fs::write(pass.join("pass"), "").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(pass.join("pass"))
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+        let day = std::time::Duration::from_hours(24);
+        collect_passes_at(&pass, PASS_LIFETIME, at + day * 29).unwrap();
+        assert!(pass.join("pass").is_file(), "29 days unread is kept");
+        collect_passes_at(&pass, PASS_LIFETIME, at + day * 31).unwrap();
+        assert!(!pass.join("pass").exists(), "31 days unread is collected");
+    }
+
     /// Fails by: an unknown tree read as one that stood, or two different
     /// trees read as the same.
     #[test]
