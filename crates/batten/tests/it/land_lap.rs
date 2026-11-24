@@ -812,8 +812,13 @@ fn held(dir: &std::path::Path, path: &str) -> bool {
 /// [`held`], judged as a call from inside the gate of the lap whose pid is
 /// `lap`, as every process that lap's gate spawns is.
 fn held_as(dir: &std::path::Path, path: &str, lap: Option<&str>) -> bool {
+    held_on(dir, path, lap, "PreToolUse")
+}
+
+/// [`held_as`] on the hook event `event`.
+fn held_on(dir: &std::path::Path, path: &str, lap: Option<&str>, event: &str) -> bool {
     let payload = serde_json::json!({
-        "hook_event_name": "PreToolUse",
+        "hook_event_name": event,
         "tool_name": "Write",
         "tool_input": {"file_path": path, "content": "x\n"},
     })
@@ -861,6 +866,12 @@ fn a_write_into_the_checkout_is_held_while_a_lap_is_live() {
     assert!(
         held(&dir, &inside),
         "a write inside the checkout is held while the lap is live"
+    );
+    // ONLY BEFORE IT RUNS (CLOUD-2789): a `PostToolUse` reports a write already
+    // made, so liveness is never read for it and nothing is held.
+    assert!(
+        !held_on(&dir, &inside, None, "PostToolUse"),
+        "a write already made is reported, never held"
     );
     assert!(
         !held(&dir, &outside),
