@@ -5543,17 +5543,20 @@ fn judge_handbacks(
             // room for its target can only fail, and that failure read as
             // `unviable` and was journaled. Measured before every run, since
             // each one's build grows the mirror's target; refused, it is this
-            // mutant's `error` below, journaled nowhere.
-            let outcome = match synced_run(live, tree, || {
-                handback_room(handback, tree)?;
-                super::cargo_mutant_in_place(
-                    (tree, handback.runner, handback.diff),
-                    &mutant.name,
-                    filter.as_deref(),
-                    bound,
-                    output,
-                )
-            }) {
+            // mutant's `error` below, journaled nowhere, and the mirror is not
+            // even synced.
+            let ran = handback_room(handback, tree).and_then(|()| {
+                synced_run(live, tree, || {
+                    super::cargo_mutant_in_place(
+                        (tree, handback.runner, handback.diff),
+                        &mutant.name,
+                        filter.as_deref(),
+                        bound,
+                        output,
+                    )
+                })
+            });
+            let outcome = match ran {
                 Ok(outcome) => outcome,
                 Err(why) => {
                     writeln!(
@@ -8420,13 +8423,12 @@ mod tests {
         assert!(said.contains("changed during the sweep"), "{said}");
     }
 
-    /// One hand-back judged with a declared cost no disk holds, by a stub
-    /// cargo-mutants that reports it `caught`, over a mirror that is `warm`
-    /// (its target built into) or cold. Its verdicts, what it said, and
-    /// whether anything was journaled.
-    #[cfg(unix)]
-    fn judged_with_no_room(name: &str, warm: bool) -> (Vec<(u32, Verdict)>, String, bool) {
-        use std::os::unix::fs::PermissionsExt as _;
+    /// One hand-back judged with a declared cost no disk holds, over a mirror
+    /// that is `warm` (its target built into) or cold, by a runner that does
+    /// not exist, so any run it reaches is an `error` and costs nothing. Its
+    /// verdicts, what it said, whether anything was journaled, and whether the
+    /// mirror was synced, which happens only for a hand-back that goes on to run.
+    fn judged_with_no_room(name: &str, warm: bool) -> (Vec<(u32, Verdict)>, String, bool, bool) {
         let base = crate::scratch::scratch(name);
         crate::gitwrite::init_on_main(&base).expect("a repository");
         std::fs::create_dir_all(base.join("src")).unwrap();
@@ -8456,21 +8458,9 @@ mod tests {
             red: &red,
             reuse: None,
         };
-        // A RUNNER THAT WOULD CATCH IT, so a refusal shows in the verdict and
-        // not only in what is said.
-        let runner = base.join("cargo-mutants-stub");
-        std::fs::write(
-            &runner,
-            format!(
-                "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --output ] && out=$2; shift; done\n\
-                 mkdir -p \"$out/mutants.out\"\nprintf '%s\\n' '{}' > \"$out/mutants.out/caught.txt\"\n",
-                mutants[0].name
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let nowhere = base.join("nowhere");
         let handback = Handback {
-            runner: &runner,
+            runner: &nowhere,
             diff: None,
             disk: Some((u64::MAX, 0)),
         };
@@ -8496,20 +8486,31 @@ mod tests {
         )
         .expect("no room degrades, it does not fail the call");
         assert_eq!(unviable, 0);
-        (verdicts, String::from_utf8(out).unwrap(), store.exists())
+        let synced = state.join("classic").join("src").join("lib.rs").is_file();
+        (
+            verdicts,
+            String::from_utf8(out).unwrap(),
+            store.exists(),
+            synced,
+        )
     }
 
     /// A hand-back whose cold build the disk cannot hold is refused, said,
-    /// and judged nothing (CLOUD-2882): no run, no journal line, an `error`.
+    /// and judged nothing (CLOUD-2882): no sync, no run, no journal line, an
+    /// `error`.
     ///
     /// Fails by: the build forced onto a full disk, which on #1276 failed and
-    /// was recorded `unviable` (here the runner would have said `caught`); the
+    /// was recorded `unviable`, seen here as the mirror synced for a run; the
     /// refusal journaled, so a later sweep reused it; or the refusal unsaid.
-    #[cfg(unix)]
     #[test]
     fn a_handback_the_disk_cannot_hold_is_refused_unjudged() {
-        let (verdicts, said, journaled) = judged_with_no_room("schema-handback-no-room", false);
+        let (verdicts, said, journaled, synced) =
+            judged_with_no_room("schema-handback-no-room", false);
         assert_eq!(verdicts, [(0, Verdict::Error)], "{said}");
+        assert!(
+            !synced,
+            "refused before the mirror was synced for a run: {said}"
+        );
         assert!(said.contains("no room: its build needs"), "{said}");
         assert!(!journaled, "a refusal is journaled nowhere");
     }
@@ -8519,12 +8520,16 @@ mod tests {
     ///
     /// Fails by: the cold cost charged on every run, which refused every
     /// hand-back in a container under ~10 GB free though each would have
-    /// built, so the local mutant tier went red where CI's did not.
-    #[cfg(unix)]
+    /// built, so the local mutant tier went red where CI's did not; seen here
+    /// as the mirror never synced for its run.
     #[test]
     fn a_warm_mirror_hands_back_under_the_cold_cost() {
-        let (verdicts, said, _) = judged_with_no_room("schema-handback-warm", true);
-        assert_eq!(verdicts, [(0, Verdict::Caught)], "{said}");
+        let (_, said, _, synced) = judged_with_no_room("schema-handback-warm", true);
+        assert!(
+            synced,
+            "the warm mirror was synced and its run reached: {said}"
+        );
+        assert!(!said.contains("no room"), "{said}");
     }
 
     /// A listed mutant of `fn f` in `src/lib.rs` whose function span is known,
