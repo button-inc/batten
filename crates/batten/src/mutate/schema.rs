@@ -1021,15 +1021,13 @@ fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Sit
 /// An outer doc comment (`///`) is KEYED: derives compile it into run-time
 /// text, schemars' schema derive into the schema's descriptions and clap's
 /// `ValueEnum` into help text (CLOUD-2904).
-#[expect(
-    clippy::match_like_matches_macro,
-    reason = "a `match` arm is a mutant cargo-mutants can delete; `matches!` hides each kind from it"
-)]
+///
+/// A comparison per kind, never `matches!`: each `==` is a mutant
+/// cargo-mutants can flip, which a `matches!` pattern hides from it.
 fn unkeyed(kind: SyntaxKind) -> bool {
-    match kind {
-        SyntaxKind::WHITESPACE | SyntaxKind::COMMENT | SyntaxKind::INNER_DOC_COMMENT => true,
-        _ => false,
-    }
+    kind == SyntaxKind::WHITESPACE
+        || kind == SyntaxKind::COMMENT
+        || kind == SyntaxKind::INNER_DOC_COMMENT
 }
 
 /// The skeleton item `token` belongs to: its innermost item, past a macro
