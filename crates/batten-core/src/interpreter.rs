@@ -464,3 +464,19 @@ pub const LOOKTHROUGH_WRAPPERS: [&str; 10] = [
 pub fn is_lookthrough_wrapper(token: &str) -> bool {
     LOOKTHROUGH_WRAPPERS.contains(&token)
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    /// Fails by: fish read through the fallback, which knows neither
+    /// `-C`/`--init-command` nor a bundle, so each of those carries no
+    /// command.
+    #[test]
+    fn fish_carries_a_command_in_its_init_option_and_in_a_bundle() {
+        for arguments in [&["-C", "x"][..], &["--init-command", "x"], &["-lc", "x"]] {
+            assert_eq!(carried("fish", arguments), Carried::Inline, "{arguments:?}");
+        }
+    }
+}
