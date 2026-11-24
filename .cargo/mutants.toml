@@ -51,10 +51,6 @@ exclude_re = [
   # a collector or a build and collects again, and its exit test is
   # `after >= min`, which already holds (#1276).
   'replace < with <= in disk_admits',
-  # The record pass's promoted policy drops the bundles only so as not to carry
-  # them: none of the five gates it runs (content, tool, ceiling, pipeline,
-  # shape) reads `bundles`, so keeping the caller's changes no verdict (#1276).
-  'delete field bundles from struct Policy expression in gate_nonblocking',
   # `moved`'s one caller, `option_acting_dir`, hands it only the (program,
   # option) pairs its `takes` table admits, and `--manifest-path` is the one
   # option `cargo` takes there: `name == "cargo"` already decides it (#1276).
@@ -106,4 +102,10 @@ exclude_re = [
   'policy\.rs:\d+:\d+: replace == with != in case$',
   # regorus 0.15 refuses an entry point only when undefined (recursion, conflicts, `with` all compile), so the guard never holds (CLOUD-2789).
   'policy\.rs:\d+:\d+: replace match guard !undefined_entry_point\(&err\) with false in Compiled::compile_guarded$',
+  # `OPEN.len() * body.len()` is under `+`'s bound only for a body of 0 or 1
+  # bytes, which holds no two-segment path, and over it only by the wrapper's
+  # trailing `\n}` (or an unclosed literal or comment swallowing it): never an
+  # identifier or a colon, so no path starts, continues or is glued there.
+  # Pinned to the column: the other `+` mutants in `token_paths` are killed.
+  'item_index\.rs:\d+:81: replace \+ with \* in token_paths$',
 ]
