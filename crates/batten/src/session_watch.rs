@@ -750,6 +750,19 @@ pub fn state_dir(repo_root: &Path) -> anyhow::Result<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Fails by: the transport answering a page where the dispatch failed, so
+    /// a source nothing answered reads as a child with no events.
+    #[test]
+    fn a_dispatch_that_fails_reads_as_could_not_look() {
+        let mut source = Mcp::new(crate::mcp::Wiring {
+            source: "s".to_owned(),
+            endpoint: "https://mcp.invalid/mcp".to_owned(),
+            headers: Vec::new(),
+            credential: None,
+        });
+        assert!(source.events("s1", None, None).is_none());
+    }
+
     #[test]
     fn an_exit_code_is_read_from_the_summary_and_absent_when_unnamed() {
         assert_eq!(
