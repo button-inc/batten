@@ -3011,6 +3011,65 @@ mod tests {
         );
     }
 
+    /// Fails by: a binary target (`main.rs`, `src/bin/`) read as part of the
+    /// library, so it imports the trait through `crate::`, which there names
+    /// the binary; each of the two spellings of a binary held on its own.
+    #[test]
+    fn a_binary_target_imports_the_extension_trait_by_the_crate_s_name() {
+        let files = tree(&[
+            ("src/lib.rs", "mod model;\nmod rules;\n"),
+            ("src/model.rs", "pub struct Rule { pub x: u8 }\n"),
+            (
+                "src/rules.rs",
+                "use crate::model::Rule;\nimpl Rule {\n    pub fn twice(&self) -> u8 { self.x * 2 }\n}\n",
+            ),
+            ("src/main.rs", "fn m(r: &app::model::Rule) -> u8 { r.twice() }\n"),
+            (
+                "src/bin/tool.rs",
+                "fn t(r: &app::model::Rule) -> u8 { r.twice() }\n",
+            ),
+        ]);
+        let changed = impls_to_extension_traits("src", "app", &files);
+        for binary in ["src/main.rs", "src/bin/tool.rs"] {
+            assert!(
+                changed[binary].starts_with("use app::rules::RuleExt as _;\n"),
+                "{binary}: {}",
+                changed[binary]
+            );
+        }
+    }
+
+    /// Fails by: an item the moving impl names that is already `pub` raised
+    /// again, giving `pub(crate) pub`, because its visibility went unread.
+    #[test]
+    fn an_already_public_item_a_moving_impl_names_is_left_as_it_is() {
+        let files = tree(&[
+            ("src/lib.rs", "mod a;\nmod b;\n"),
+            ("src/a.rs", "pub struct T { x: u8 }\n"),
+            (
+                "src/b.rs",
+                "use crate::a::T;\npub fn helper() -> u8 { 1 }\nimpl T {\n    pub fn get(&self) -> u8 { helper() + self.x }\n}\n",
+            ),
+        ]);
+        let moved = move_impls_home("src", &files);
+        let old = &moved["src/b.rs"];
+        assert!(old.contains("\npub fn helper()"), "{old}");
+        assert!(!old.contains("pub(crate) pub"), "{old}");
+    }
+
+    /// Fails by: a top-level `type` alias read as an associated type, so the
+    /// module declaring it is no home for its name and an impl through the
+    /// alias elsewhere goes unlisted.
+    #[test]
+    fn a_top_level_type_alias_is_a_home_for_its_name() {
+        let files = tree(&[
+            ("src/lib.rs", "mod a;\nmod b;\n"),
+            ("src/a.rs", "pub struct S;\npub type Alias = S;\n"),
+            ("src/b.rs", "impl crate::a::Alias { fn f() {} }\n"),
+        ]);
+        assert_eq!(impl_plan("src", &files), ["src/b.rs:1 Alias -> a (1 lines)"]);
+    }
+
     /// Fails by: a `mod.rs` read as the module `mod`, so its children land a
     /// directory too deep; or the two-module floor inverted, so a file of
     /// three is left whole and a file of one is split.

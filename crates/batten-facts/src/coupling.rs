@@ -623,4 +623,16 @@ mod tests {
             "{measured} vs {expected}"
         );
     }
+
+    /// Two upper layers over a last layer of 2: the depth-1 file's lower
+    /// layer is the 3 files outside it (1/4 · (1 − 1/3)), the depth-2 file's
+    /// the 2 outside both (1/4 · (1 − 1/2)). Fails by: the upper set taken as
+    /// every upper file OR every file no deeper, which counts the last layer
+    /// and the deeper upper file out of the lower layer.
+    #[test]
+    fn an_upper_file_s_lower_layer_excludes_only_upper_files_no_deeper() {
+        let level = decoupling_level_of(&[(2, 0, 0), (1, 1, 1), (1, 1, 2)], 4);
+        let expected = 0.5 + 0.25 * (1.0 - 1.0 / 3.0) + 0.25 * (1.0 - 1.0 / 2.0);
+        assert!((level - expected).abs() < 1e-9, "{level} vs {expected}");
+    }
 }
