@@ -197,4 +197,9 @@ exclude_re = [
   # label is never read. Column 13 is the early return's `label`; the final
   # literal's, at column 9, is read and stays judged (CLOUD-2789).
   'lib\.rs:\d+:13: delete field label from struct commit::ArmSequence expression in arm_sequence$',
+  # A fork whose result is not a positive pid (`-1` on failure, `?`) becomes a
+  # `parent` key that no traced line carries: every line's pid, and the root's,
+  # is the positive pid strace prints, so `walk_back` never looks one up, and a
+  # positive result is inserted either way (CLOUD-2789).
+  'trace\.rs:\d+:\d+: replace match guard result\.parse::<u32>\(\)\.is_ok_and\(\|child\| child > 0\) with true in Cwds::read$',
 ]
