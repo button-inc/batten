@@ -24455,6 +24455,15 @@ deny contains "refused by themodule" if {
                 pathspecs: vec![String::from("f")],
             }])
         );
+        // The source as the first word: a skip multiplied (`index *= 2`) from
+        // zero never leaves it.
+        assert_eq!(
+            bounded_pathspecs(&["git", "restore", "-s", "HEAD", "f"]),
+            Pathspecs::Placed(vec![PathspecCall {
+                dir: PathBuf::from("/r"),
+                pathspecs: vec![String::from("f")],
+            }])
+        );
     }
 
     /// Fails by: a parenthesised call's arguments ended at a newline, as only

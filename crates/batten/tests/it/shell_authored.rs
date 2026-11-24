@@ -104,19 +104,41 @@ fn a_write_creating_a_shell_suffixed_file_is_refused() {
     assert!(!refused(&dir, &write("x.txt", "echo hi\n")));
 }
 
+/// The policy input `adjudicate --show-input` stored for `payload`: the view
+/// its pointer names, one `## /path` heading per field.
+fn input_of(dir: &Path, payload: &str) -> String {
+    let output = common::run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "claude-code", "--show-input"],
+        payload,
+    );
+    let said = common::stderr(&output);
+    let view = said
+        .split("; read ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no pointer: {said}"));
+    std::fs::read_to_string(view).expect("the view reads")
+}
+
 /// The fact is resolved only for a write about to happen: the same write
-/// reported after it ran (`PostToolUse`) carries no `shell-introduced` fact,
-/// so the row that refuses on it says nothing.
+/// reported after it ran (`PostToolUse`) is never looked at, so its stored
+/// input says could-not-look.
 ///
-/// Fails by: `shell_introduced_for`'s event guard joined with `||`, so every
-/// pre-tool call or a post-tool write resolves the fact and a write already
-/// made is refused after the fact (CLOUD-2789).
+/// Fails by: either `&&` of `shell_introduced_for`'s guard read as `||`, so a
+/// post-tool write whose row reads pinned facts runs the detector over a
+/// write already made (CLOUD-2789).
 #[test]
-fn a_write_reported_after_it_ran_is_not_refused() {
+fn a_write_reported_after_it_ran_is_never_looked_at() {
     let dir = repo("shell-authored-post-tool", &[]);
+    // ANTI-VACUITY: the same write, about to happen, is looked at and refused.
     let before = write("x.sh", "echo hi\n");
-    // ANTI-VACUITY: the same write, about to happen, is refused.
     assert!(refused(&dir, &before));
+    let looked = input_of(&dir, &before);
+    assert!(
+        looked.contains("## /facts/shell-introduced/look\nis\n"),
+        "{looked}"
+    );
     let after = serde_json::json!({
         "hook_event_name": "PostToolUse",
         "tool_name": "Write",
@@ -124,11 +146,10 @@ fn a_write_reported_after_it_ran_is_not_refused() {
         "tool_response": {"filePath": "x.sh", "success": true},
     })
     .to_string();
-    let output = common::run_with_stdin(&dir, &["adjudicate", "--harness", "claude-code"], &after);
-    let said = format!("{}{}", common::stdout(&output), common::stderr(&output));
+    let stored = input_of(&dir, &after);
     assert!(
-        !said.contains(VERDICT),
-        "a post-tool write is past the gate: {said}"
+        stored.contains("## /facts/shell-introduced/look\ncould-not-look\n"),
+        "a post-tool write is never looked at: {stored}"
     );
 }
 
