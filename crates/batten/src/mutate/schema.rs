@@ -9861,6 +9861,80 @@ pub fn repo() -> u8 {{ scratch() }}
         assert_eq!(tree_digest(&work).unwrap(), rendered);
     }
 
+    /// A judging run reuses a pack over its own rendering without asking cargo
+    /// to record it again, and says so.
+    ///
+    /// Fails by: the restored pack dropped (every judging run rebuild-checks
+    /// the build a shard took as made), or a pack over another rendering put
+    /// back.
+    #[test]
+    fn a_pack_over_this_rendering_is_announced_as_reused() {
+        let work = crate::scratch::scratch("schema-announce-work");
+        let state = crate::scratch::scratch("schema-announce-state");
+        std::fs::write(work.join("lib.rs"), "pub fn f() {}\n").unwrap();
+        let target = state.join("target");
+        std::fs::create_dir_all(target.join("debug/deps")).unwrap();
+        std::fs::write(target.join("debug/deps/x-1"), "test binary").unwrap();
+        let document = format!(
+            r#"{{"rust-build-meta":{{"target-directory":"{}"}},"rust-binaries":{{"x":{{"binary-path":"{}"}}}}}}"#,
+            target.display(),
+            target.join("debug/deps/x-1").display()
+        );
+        let dir = state.join("reuse");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("binaries.json"), &document).unwrap();
+        std::fs::write(dir.join("cargo-metadata.json"), "{}").unwrap();
+        let tree = tree_digest(&work).unwrap();
+        pack(&state, &document, &tree, &Known::default()).unwrap();
+        let mut out = Vec::new();
+        let reuse = announce_reuse(&work, &target, (&[], &Known::default()), &state, &mut out)
+            .unwrap()
+            .expect("the packed build's binaries");
+        assert_eq!(reuse.ids, BTreeSet::from([String::from("x")]));
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "mutate schema: judging runs reuse the packed build's binaries\n"
+        );
+    }
+
+    /// The clean build is recorded for every judging run to reuse, and packed
+    /// with the sets its tree was rendered with, which a shard reads back.
+    ///
+    /// Fails by: nothing recorded (every judging run rebuild-checks, and no
+    /// shard has a pack to take), or the pack missing the rendered sets (a CI
+    /// shard renders every refused mutant switched and rebuilds cold).
+    #[test]
+    fn the_clean_build_is_recorded_and_packed_with_its_sets() {
+        let work = crate::scratch::scratch("schema-record-work");
+        let state = crate::scratch::scratch("schema-record-state");
+        std::fs::create_dir_all(work.join("src")).unwrap();
+        std::fs::write(
+            work.join("Cargo.toml"),
+            "[package]\nname = \"p\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(work.join("src/lib.rs"), "#[test]\nfn t() {}\n").unwrap();
+        let target = state.join("target");
+        let mut mutant = listed("FnValue", "()", (1, 1), (1, 2));
+        mutant.package = String::from("p");
+        let known = Known {
+            unviable: BTreeSet::from([3]),
+            handed: BTreeSet::from([4]),
+            unprobed: BTreeSet::from([String::from("src/lib.rs")]),
+        };
+        let reuse = record_reuse((&work, &target, &state), &[mutant], ("tree-1", &known))
+            .expect("the clean build's binaries");
+        assert_eq!(reuse.ids, BTreeSet::from([String::from("p")]));
+        let dir = state.join("reuse");
+        assert_eq!(std::fs::read_to_string(dir.join(PACKED_TREE)).unwrap(), "tree-1");
+        let packed: Known =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(PACKED_KNOWN)).unwrap())
+                .unwrap();
+        assert_eq!(packed.unviable, known.unviable);
+        assert_eq!(packed.handed, known.handed);
+        assert_eq!(packed.unprobed, known.unprobed);
+    }
+
     /// A shard judges only its own ids, from the whole listing's build: its
     /// switched mutants, its hand-backs and its unviable count, partitioning
     /// the listing with every other shard; no shard judges everything.
