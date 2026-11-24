@@ -29,6 +29,7 @@ row here, so a new module lands with its line.
 - `outcome.rs` (crate `batten-base`) — the post-tool outcome, normalized (CLOUD-945).
 - `handler.rs` — the `[[hook.handler]]` dispatch surface (CLOUD-898), the door that lets `batten hook` be the ONLY registration on every surface while a repository still runs whatever it likes behind it.
 - `baseline.rs` — the adoption path for an already-dirty repository (CLOUD-67), surfaced as `baseline [--prune]`: the persisted set of finding identities that already existed, so `check` stops failing on them and still fails on anything new.
+- `build_identity.rs` — the build's own identity (CLOUD-2903): the release build reports its package version, every other build a dev pre-release of the next patch (`-dev.<line>.<ts>+<digest>`); `build.rs` includes it by `#[path]` and stamps `BATTEN_BUILD_VERSION`, and no library code calls it.
 - `budget.rs` — declared file-set budgets (CLOUD-50), surfaced as `policy budget` and enforced on `check`; a set total in tokens, and a per-file byte ceiling for files read on demand (CLOUD-1934).
 - `arm.rs` (crate `batten-base`) — the declared-arm harness (CLOUD-1714): run N declared things, reduce each to a named `Observable`, hand back one `Outcome` per arm.
 - `attribution.rs` — what produced commits may carry about the tooling that made them (CLOUD-274), the mechanism for the attribution decision record (CLOUD-268).
