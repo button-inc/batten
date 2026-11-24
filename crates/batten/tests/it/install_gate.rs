@@ -85,6 +85,25 @@ fn call(dir: &Path, command: &str) -> String {
     format!("{}{}", common::stdout(&answer), common::stderr(&answer))
 }
 
+/// The same Bash call reported AFTER it ran (`PostToolUse`): what the door said.
+fn after(dir: &Path, command: &str) -> String {
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "cwd": dir,
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_response": {"stdout": "", "stderr": "", "interrupted": false},
+    })
+    .to_string();
+    let answer = common::stdin_run(
+        &mut common::batten(),
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    format!("{}{}", common::stdout(&answer), common::stderr(&answer))
+}
+
 fn held(said: &str) -> bool {
     said.contains("tool install pending")
 }
@@ -106,6 +125,22 @@ fn a_pending_program_is_held_while_the_setup_task_runs() {
         said.contains("session-setup running") && said.contains("batten task alive"),
         "the hold names the task, says it is still running, and points at it: {said}"
     );
+}
+
+/// Only a call about to run can be held: one reported after it ran has
+/// nothing left to wait for, so the fact is never resolved for it.
+///
+/// Fails by: `install_pending_for`'s event guard joined with `&&`, so a
+/// post-tool call whose row reads pinned facts resolves the install state
+/// and is held after the program already ran (CLOUD-2789).
+#[test]
+fn a_call_reported_after_it_ran_is_never_held() {
+    let dir = bench("install-gate-post-tool");
+    setup(&dir, &std::process::id().to_string(), "repair");
+    // ANTI-VACUITY: the same program, about to run, is held.
+    assert!(held(&call(&dir, &format!("{ABSENT} --version"))));
+    let said = after(&dir, &format!("{ABSENT} --version"));
+    assert!(!held(&said), "a post-tool call is past the gate: {said}");
 }
 
 /// Fails by: a program that resolves outside every install root held as
