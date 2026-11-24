@@ -158,6 +158,25 @@ fn a_cut_run_over_the_tree_on_disk_plans_what_the_fixture_plans() {
 }
 
 /// Fails by: the second run moving or rewriting anything.
+/// Fails by: the workspace walk descending into nothing but a build output
+/// directory, so a cut over a real tree finds no source to move.
+#[test]
+fn a_dry_run_over_a_directory_plans_from_its_sources() {
+    let (files, manifests) = tree();
+    let root = crate::common::scratch("crate-cut-dry-run");
+    for (path, text) in files.iter().chain(&manifests) {
+        let target = root.join(path);
+        std::fs::create_dir_all(target.parent().expect("a parent")).expect("mkdir");
+        std::fs::write(&target, text).expect("write");
+    }
+    let mut out = Vec::new();
+    let code = batten::crate_cut::run_cut(&root, &CUT, true, &mut out).expect("the cut runs");
+    assert_eq!(code, batten::exit::ExitCode::Success);
+    let said = String::from_utf8(out).expect("utf-8");
+    assert!(said.contains("write crates/small/src/a.rs"), "{said}");
+    assert!(said.contains("remove crates/big/src/a.rs"), "{said}");
+}
+
 #[test]
 fn a_cut_run_on_its_own_output_plans_nothing() {
     let (files, manifests) = tree();
@@ -203,6 +222,19 @@ fn a_body_is_respelled_as_the_cut_respells_a_file() {
         Some(
             "{\n    // crate::git::run\n    let _ = \"crate::git\";\n    assert_eq!(two::git::run(), 1);\n    m!(two::git::run);\n    crate::other::run();\n}"
         )
+    );
+    // A lone `:` in a macro's token tree is no path separator: the root after
+    // it is a path's root, respelled. The tokens are placed so a separator
+    // test that looked anywhere but two back would land on the first `:`.
+    assert_eq!(
+        respell_body(
+            "{ m!(a: b c d e f g h: crate::git::run); }",
+            "crate",
+            &modules,
+            "two"
+        )
+        .as_deref(),
+        Some("{ m!(a: b c d e f g h: two::git::run); }")
     );
     // A use group mixing a moved and a kept module is the cut's remainder.
     assert_eq!(

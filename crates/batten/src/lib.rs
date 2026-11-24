@@ -24126,10 +24126,14 @@ fn key_facts(base: &str) -> hook::KeyFacts {
 ///
 /// `#[expect]` rather than `#[allow]` for the spawn census's reason: the day a
 /// caller returns, this annotation is unfulfilled and goes red, so the licence
-/// is deleted by whoever restores the call instead of outliving it.
-#[expect(
-    dead_code,
-    reason = "CLOUD-906: the only consumer is unreachable until CLOUD-892 moves the Stop surface into Rego; the semantics are what is being kept"
+/// is deleted by whoever restores the call instead of outliving it. Outside
+/// test builds only: the semantics kept are a case's subject there.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "CLOUD-906: the only consumer is unreachable until CLOUD-892 moves the Stop surface into Rego; the semantics are what is being kept"
+    )
 )]
 fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
     let here = Path::new(".");
@@ -33446,6 +33450,54 @@ mod tests {
             said.contains(&format!(" {interpreted} interpreted evaluation(s)")),
             "{said}"
         );
+    }
+
+    /// Fails by: a torn transcript line passed over in silence, so a rule that
+    /// reads for an absence answers over less than the session unannounced.
+    #[test]
+    fn a_torn_transcript_line_is_reported_by_its_line() {
+        let mut stream = crate::transcript::parse("", "t", crate::hook::RecordShape::Jsonl)
+            .expect("an empty transcript parses");
+        stream.torn = vec![3, 7];
+        let mut err = Vec::new();
+        super::report_transcript_capability(
+            &crate::transcript::Capability::Present(Box::new(stream)),
+            crate::Mode::default(),
+            &mut err,
+        )
+        .expect("the notice writes");
+        let said = String::from_utf8(err).expect("utf-8");
+        assert!(
+            said.contains(crate::transcript::TORN_NOTICE) && said.contains("(3,7)"),
+            "{said}"
+        );
+    }
+
+    /// Fails by: the host's MCP log directory for this project not resolved,
+    /// so `mcp posture` reads no logs where the host wrote them.
+    #[test]
+    fn the_mcp_log_root_is_keyed_by_the_working_directory() {
+        let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+        assert!(home.is_some(), "THE PREMISE: the suite runs with a HOME");
+        let key = std::env::current_dir()
+            .expect("a working directory")
+            .to_string_lossy()
+            .replace('/', "-");
+        let root = super::mcp_log_root().expect("a log root under HOME");
+        assert!(
+            root.starts_with(home.expect("checked above")),
+            "{}",
+            root.display()
+        );
+        assert!(root.ends_with(&key), "{}", root.display());
+    }
+
+    /// Fails by: a checkout answered as "not asked", so its at-risk half is
+    /// never read where the suite runs inside one.
+    #[test]
+    fn a_checkout_has_its_at_risk_half_read() {
+        let facts = super::stop_facts(&crate::Overrides::default()).expect("the stop facts read");
+        assert!(facts.at_risk.is_some());
     }
 
     /// A config change no arm-shaped line moved is answered without a parse:

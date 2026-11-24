@@ -7331,6 +7331,116 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
         }
     }
 
+    /// The desugared sources, and each case by name with how it is decided.
+    type Plans = (
+        Vec<(String, String)>,
+        Vec<(String, std::result::Result<String, String>)>,
+    );
+
+    /// Each case of one module by name with how it is decided, and the
+    /// desugared sources the suite program compiles.
+    fn planned(source: &str) -> Plans {
+        let bundle = bundle_of("row", &[("policy/a.rego", source)]);
+        let engine = bundle.evaluator.engine().expect("an interpreter");
+        let ast = Ast::of(engine).expect("the AST serialises");
+        let (sources, tests) = plan_suite(&ast).expect("the suite plans");
+        let tests = tests
+            .into_iter()
+            .map(|test| (test.name, test.decided_by))
+            .collect();
+        (sources, tests)
+    }
+
+    /// A module whose one case writes `with data.batten.patterns.<key>` as
+    /// `key`, over a rule reading `data.batten.patterns.a.b`.
+    fn patterns_case(key: &str, term: &str) -> String {
+        format!(
+            "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
+violation contains {{\"rule\": \"a\", \"verdict\": \"a\"}} if {{\n\tdata.batten.patterns.a.b == 1\n}}\n\n\
+test_patterns if {{\n\tcount(violation) == 1 with data.batten.patterns.{key} as {term}\n}}\n"
+        )
+    }
+
+    /// Fails by: a `with` on a DOTTED key under the pattern table taken as a
+    /// key of the table itself, which the desugaring cannot override.
+    #[test]
+    fn a_with_on_a_dotted_pattern_key_keeps_the_interpreter() {
+        let (_, whole) = planned(&patterns_case("a", "{\"b\": 1}"));
+        assert!(
+            whole[0].1.is_ok(),
+            "THE PREMISE: a single key plans: {whole:?}"
+        );
+        let (_, dotted) = planned(&patterns_case("a.b", "1"));
+        let why = dotted[0].1.as_ref().expect_err("a dotted key cannot plan");
+        assert!(why.contains("data.batten.patterns.a.b"), "{why}");
+    }
+
+    /// Fails by: a helper's own `with`, which sits inside its body's list of
+    /// statements, not seen, so a case reading the helper is desugared and
+    /// the helper's `with` reaches the bytecode compiler.
+    #[test]
+    fn a_helper_writing_its_own_with_keeps_the_interpreter() {
+        let source = "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
+violation contains {\"rule\": \"a\", \"verdict\": \"a\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
+writes_with if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n\n\
+test_helper if {\n\twrites_with\n}\n";
+        let (_, tests) = planned(source);
+        let why = tests[0]
+            .1
+            .as_ref()
+            .expect_err("the helper's `with` cannot plan");
+        assert!(why.contains("helper"), "{why}");
+    }
+
+    /// Fails by: a string literal's opening quote cut off its span, so the
+    /// desugared case is no longer Rego.
+    #[test]
+    fn a_string_keeps_both_quotes_in_the_desugared_case() {
+        let source = "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
+violation contains {\"rule\": \"a\", \"verdict\": \"a\"} if {\n\tinput == \"write\"\n}\n\n\
+test_string if {\n\t\"x\" == \"x\"\n\tcount(violation) == 1 with input as \"write\"\n}\n";
+        let (sources, tests) = planned(source);
+        assert!(tests[0].1.is_ok(), "{tests:?}");
+        let text = &sources[0].1;
+        assert!(text.contains(":= \"write\""), "{text}");
+        assert!(text.contains("\t\"x\" == \"x\""), "{text}");
+    }
+
+    /// Fails by: a suite program not written to its cache, so every run
+    /// compiles it again.
+    #[test]
+    fn a_suite_program_is_read_back_from_its_cache() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let engine = bundle.evaluator.engine().expect("an interpreter");
+        let root = crate::scratch::scratch("policy-suite-cache");
+        let Ok(first) = SuiteProgram::load("row", (engine, bundle.ast()), Some(&root)) else {
+            panic!("the suite program compiles");
+        };
+        assert!(!first.cached, "THE PREMISE: an empty cache holds nothing");
+        let Ok(second) = SuiteProgram::load("row", (engine, bundle.ast()), Some(&root)) else {
+            panic!("the suite program loads");
+        };
+        assert!(second.cached);
+    }
+
+    /// Fails by: a split invented, or a case-only rule taken as an entry, in
+    /// the parity diagnostics over a bundle whose engines agree.
+    #[test]
+    fn agreeing_engines_report_no_split_and_name_only_non_test_input() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        assert_eq!(suite_splits(&bundle, "{}"), Vec::<String>::new());
+        assert_eq!(
+            rule_splits(&bundle, &serde_json::json!({}), "{}"),
+            Vec::<String>::new()
+        );
+        let paths = input_paths(&bundle);
+        assert!(
+            !paths.is_empty() && paths.iter().all(|path| !path.is_empty()),
+            "{paths:?}"
+        );
+        assert_eq!(bytecode(bundle).fallback_detail(), None);
+    }
+
     fn suite_of(bundle: &Bundle, mediated: bool) -> Suite {
         match test(bundle, "{}", mediated, None).expect("the input parses") {
             Look::Is(suite) => suite,
