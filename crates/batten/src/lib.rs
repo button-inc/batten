@@ -22759,15 +22759,40 @@ fn paths_at_head(root: &Path, paths: &[String]) -> std::collections::BTreeSet<St
         .collect()
 }
 
-/// Whether the call moved `HEAD` only forward onto history that was already on
-/// a remote when the pre-call snapshot was taken (CLOUD-2923). A snapshot
-/// without `head` and `at` answers `false`, which excuses nothing.
-fn pushed_forward(root: &Path, snapshot: &serde_json::Value) -> bool {
+/// The `paths` the call's own `HEAD` move changed, when it moved `HEAD` only
+/// forward onto history that was already on a remote as the pre-call snapshot
+/// was taken (CLOUD-2923): each one's blob at the pre-call `HEAD` differs from
+/// its blob at the current one, absence counting as a value.
+///
+/// Empty when `HEAD` did not move onto pushed history, and for a path the move
+/// left alone: a file rolled back to `HEAD`'s bytes alongside a fast-forward
+/// that never touched it, or an untracked file deleted, is the call's own act,
+/// not history arriving. A snapshot without `head` and `at`, or a tree that
+/// cannot be read, answers empty, which excuses nothing.
+fn moved_in_by_history(
+    root: &Path,
+    snapshot: &serde_json::Value,
+    paths: &[String],
+) -> std::collections::BTreeSet<String> {
     let (Some(before), Some(at)) = (snapshot["head"].as_str(), snapshot["at"].as_i64()) else {
-        return false;
+        return std::collections::BTreeSet::new();
     };
     let tips = git::remote_tips_before(root, at);
-    git::head_moved_onto(root, before, &tips) == Some(true)
+    if git::head_moved_onto(root, before, &tips) != Some(true) {
+        return std::collections::BTreeSet::new();
+    }
+    let names: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let (Ok(was), Some(now)) = (
+        git::blob_ids_at(root, before, &names),
+        git::head_blob_ids(root, &names),
+    ) else {
+        return std::collections::BTreeSet::new();
+    };
+    paths
+        .iter()
+        .filter(|path| was.get(path.as_str()) != now.get(path.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// A protected path a shell call changed without naming it (step 14): its
@@ -22841,10 +22866,12 @@ fn protected_escape(
             unnamed.push(changed_path);
         }
     }
+    // EXCUSED ONLY WHERE HISTORY BROUGHT IT (CLOUD-2923): a path the pushed
+    // move changed, left at `HEAD`'s bytes. `HEAD` unmoved, or a path the move
+    // left alone, is the call's own write however it equals `HEAD`.
     let at_head = paths_at_head(&root, &unnamed);
-    if pushed_forward(&root, &snapshot) {
-        unnamed.retain(|path| !at_head.contains(path));
-    }
+    let moved_in = moved_in_by_history(&root, &snapshot, &unnamed);
+    unnamed.retain(|path| !(at_head.contains(path) && moved_in.contains(path)));
     let Some(first) = unnamed.first() else {
         return Ok(None);
     };

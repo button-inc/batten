@@ -5114,14 +5114,17 @@ fn tip_before(reference: &gix::Reference<'_>, at: i64) -> Option<gix::ObjectId> 
 }
 
 /// Whether the CURRENT `HEAD` moved only FORWARD onto history `tips` already
-/// reached (CLOUD-2923): it equals or descends from `before`, and it is one of
+/// reached (CLOUD-2923): it strictly descends from `before`, and it is one of
 /// `tips` or an ancestor of one.
 ///
 /// `before` and `tips` are what the caller recorded EARLIER, never the refs as
 /// they stand: the question is whether `HEAD` was already history before some
 /// act, and a ref that act moved must not answer it. Forward-only, because a
 /// move back to an older pushed commit rolls a file back to content nobody
-/// wrote in this act, and that is still a change to it.
+/// wrote in this act, and that is still a change to it. And a MOVE: a `HEAD`
+/// equal to `before` answers `false`, because an act that left `HEAD` where it
+/// was brought no history in, so nothing it did to a file is history's doing —
+/// `git checkout .` on a pushed `HEAD` rolls an edit back all the same.
 ///
 /// Opened fresh: the act may have moved `HEAD` after this process's memo was
 /// filled. `None` when it could not look; the caller reads that as "no".
@@ -5134,8 +5137,8 @@ pub fn head_moved_onto(dir: &Path, before: &str, tips: &[String]) -> Option<bool
     for tip in tips {
         hidden.push(gix::ObjectId::from_hex(tip.as_bytes()).ok()?);
     }
-    let forward = head == before
-        || repo
+    let forward = head != before
+        && repo
             .merge_base(before, head)
             .is_ok_and(|base| base.is_some_and(|base| base.detach() == before));
     if !forward || hidden.is_empty() {
