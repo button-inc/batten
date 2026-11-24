@@ -1453,7 +1453,7 @@ fn a_workspace_wrapper_between_is_run_with_the_compiler() {
         .arg("cargo-auditable")
         .arg(&rustc)
         .args(["-vV"])
-        .env("PATH", path)
+        .env("PATH", &path)
         .env("RUSTC_WORKSPACE_WRAPPER", "cargo-auditable")
         .stdin(std::process::Stdio::null())
         .streamed_output_keeping(batten::capture::Keep {
@@ -1464,6 +1464,34 @@ fn a_workspace_wrapper_between_is_run_with_the_compiler() {
         .expect("the binary runs");
     assert_eq!(bare.status.code(), Some(7), "{}", common::stderr(&bare));
     assert!(bin.join("wrapped").is_file(), "the bare-named wrapper ran");
+    // THE SAME BARE NAME, UNNAMED by the environment: one path component and
+    // no `RUSTC_WORKSPACE_WRAPPER` naming it, so it is a verb, never a
+    // wrapper, and is neither run nor handed the compiler (CLOUD-2789).
+    std::fs::remove_file(bin.join("wrapped")).unwrap();
+    let unnamed = common::batten()
+        .current_dir(&dir)
+        .arg("cargo-auditable")
+        .arg(&rustc)
+        .args(["-vV"])
+        .env("PATH", path)
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_ne!(
+        unnamed.status.code(),
+        Some(7),
+        "{}",
+        common::stderr(&unnamed)
+    );
+    assert!(
+        !bin.join("wrapped").exists(),
+        "a bare name the environment does not name is not a wrapper"
+    );
 }
 
 /// The probe `mise.toml` sets `RUSTC_WRAPPER` from: this binary answers with
