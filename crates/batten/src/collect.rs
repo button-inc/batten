@@ -1474,6 +1474,30 @@ pub fn collect_toward_max(
     deadline: Option<Instant>,
     wait: bool,
 ) -> Option<Collected> {
+    collect_toward_max_in(
+        repo,
+        prune,
+        kept,
+        free,
+        free_mb,
+        (deadline, wait),
+        &std::env::temp_dir(),
+    )
+}
+
+/// [`collect_toward_max`] with the directory an unbounded pass reads mutant
+/// copies from named, rather than the process's temp directory: a case drives
+/// the unbounded pass over a directory of its own, where no copy another
+/// suite's sweep left can be freed first (CLOUD-2789).
+fn collect_toward_max_in(
+    repo: &Path,
+    prune: &crate::config_model::Prune,
+    kept: &[Kept],
+    free: u64,
+    free_mb: &mut dyn FnMut() -> anyhow::Result<u64>,
+    (deadline, wait): (Option<Instant>, bool),
+    temp: &Path,
+) -> Option<Collected> {
     if within_mutant_copy(repo) {
         return None;
     }
@@ -1499,13 +1523,12 @@ pub fn collect_toward_max(
     // THE COPIES ARE READ BY AN UNBOUNDED PASS ONLY: dating a copy walks it
     // whole, and a hook or a compile is bounded by a deadline that walk would
     // spend before a single unit went.
-    let temp = std::env::temp_dir();
     // ANYTHING WRITTEN SINCE THIS PASS BEGAN IS IN USE, whatever the process
     // table said: a window of `None` (no writer alive at the scan) let a pass
     // remove a fixture a suite created after it looked.
     let scanned = std::time::SystemTime::now();
     let pass = collect(&Request {
-        copies: deadline.is_none().then_some(temp.as_path()),
+        copies: deadline.is_none().then_some(temp),
         trees: &trees,
         keep_generations: prune.keep,
         kept: &kept,
@@ -2466,12 +2489,14 @@ mod tests {
     /// Fails by: the bytes to free misread from the band's MiB. 1 MiB is asked
     /// for, and two 600 KiB units are needed to free it.
     ///
-    /// BOUNDED, SO THE PASS READS NO MUTANT COPIES (CLOUD-2789). An unbounded
-    /// pass also takes every `cargo-mutants-*.tmp` copy in the temp directory
-    /// whole, and the suite's temp directory is shared: a stale copy a nested
-    /// sweep left there was freed first, met the 1 MiB alone, and the case read
-    /// one unit where two were needed, deleting a directory it never made. A
-    /// bound it never reaches leaves the arithmetic under test unchanged.
+    /// OVER A TEMP DIRECTORY OF ITS OWN (CLOUD-2789). An unbounded pass also
+    /// takes every `cargo-mutants-*.tmp` copy in the temp directory whole, and
+    /// the suite's temp directory is shared: a stale copy a nested sweep left
+    /// there was freed first, met the 1 MiB alone, and the case read one unit
+    /// where two were needed, deleting a directory it never made. Its own empty
+    /// directory holds no copy, so the arithmetic under test is all the pass
+    /// sees — without a deadline read off the clock, which `wall_clock`
+    /// refuses in anything an assertion reads.
     #[test]
     fn a_collection_frees_toward_max_in_mebibytes() {
         let repo = scratch("toward-max");
@@ -2492,14 +2517,15 @@ mod tests {
             "libnewer-9999999999999999.rlib",
             600 * 1024,
         );
-        let done = super::collect_toward_max(
+        let temp = scratch("toward-max-temp");
+        let done = super::collect_toward_max_in(
             &repo,
             &band(Some((0, 1))),
             &[],
             0,
             &mut || Ok(5),
-            Some(std::time::Instant::now() + Duration::from_secs(3600)),
-            false,
+            (None, false),
+            &temp,
         )
         .expect("a declared band collects");
         assert_eq!(done.units, 2);
