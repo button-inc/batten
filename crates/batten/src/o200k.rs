@@ -301,12 +301,16 @@ mod tests {
     #[test]
     fn a_stream_counts_in_windows_ending_on_a_character() {
         use super::{Chunked, WINDOW, chunked_tokens, tokens};
+        // THE WINDOW IS THE CONTRACT (CLOUD-2284): a count is 64 KiB windows'
+        // sum, so the measure below spells the size rather than reading
+        // `WINDOW`, and a changed constant is a changed count (CLOUD-2789).
+        let window = 64 * 1024;
         // 9 bytes a repeat, so a window's end falls inside the 3-byte `€`.
         let text = "words€ ".repeat(30_000);
         let mut expected = 0;
         let mut at = 0;
         while at < text.len() {
-            let mut end = (at + WINDOW).min(text.len());
+            let mut end = (at + window).min(text.len());
             while !text.is_char_boundary(end) {
                 end -= 1;
             }
@@ -325,8 +329,8 @@ mod tests {
         bytes.push(0xFF);
         bytes.extend(b"b ".repeat(40_000));
         let lossy: u64 = bytes
-            .chunks(WINDOW)
-            .map(|window| tokens(&String::from_utf8_lossy(window)))
+            .chunks(window)
+            .map(|bytes| tokens(&String::from_utf8_lossy(bytes)))
             .sum();
         assert_eq!(chunked_tokens(&bytes), lossy);
     }
