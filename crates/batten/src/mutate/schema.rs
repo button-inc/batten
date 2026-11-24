@@ -8421,7 +8421,6 @@ mod tests {
     /// whether anything was journaled.
     #[cfg(unix)]
     fn judged_with_no_room(name: &str, warm: bool) -> (Vec<(u32, Verdict)>, String, bool) {
-        use std::os::unix::fs::PermissionsExt as _;
         let base = crate::scratch::scratch(name);
         crate::gitwrite::init_on_main(&base).expect("a repository");
         std::fs::create_dir_all(base.join("src")).unwrap();
@@ -8454,16 +8453,18 @@ mod tests {
         // A RUNNER THAT WOULD CATCH IT, so a refusal shows in the verdict and
         // not only in what is said.
         let runner = base.join("cargo-mutants-stub");
-        std::fs::write(
+        crate::exec::stub_at(
             &runner,
-            format!(
-                "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --output ] && out=$2; shift; done\n\
-                 mkdir -p \"$out/mutants.out\"\nprintf '%s\\n' '{}' > \"$out/mutants.out/caught.txt\"\n",
-                mutants[0].name
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+            &serde_json::json!([{ "steps": [
+                { "mkdir": "{argv-after:--output}/mutants.out" },
+                {
+                    "write": [
+                        "{argv-after:--output}/mutants.out/caught.txt",
+                        format!("{}\n", mutants[0].name),
+                    ]
+                },
+            ] }]),
+        );
         let handback = Handback {
             runner: &runner,
             diff: None,
