@@ -1891,6 +1891,8 @@ env = { MUTANT_WHOLE_TREE = "1" }
 run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
 
 [tasks."mutant:changed"]
+#MUTANT-SUITE crates/batten/tests/it/mutate_schema.rs
+#MUTANT changed-base-overrides-caller|s@^env = { MUTANT_CHANGED_SINCE = .*@env = { MUTANT_CHANGED_SINCE = "origin/main" }@|mutant_changed_hands_a_callers_base_to_both_runners
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change is caught, and every declared Rego, Pkl or manifest gate it touched has a mutation its suite catches"
 # ON ADMISSION, AT LANDING (CLOUD-1746, the owner's 2026-10-16 ruling, with
 # local and CI parity). `hk.pkl`'s `mutant:changed` step runs it in `verify`; CI
@@ -1933,7 +1935,10 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 # time so they do not compete for the box.
 # THE CHANGE BOTH RUNNERS JUDGE, declared once: a subtask inherits the
 # environment `mise run` hands it. Ownership is `[env]`'s `MUTANT_RUNNERS`.
-env = { MUTANT_CHANGED_SINCE = "origin/main" }
+# `origin/main` IS THE DEFAULT, NEVER AN OVERRIDE (CLOUD-2918): an operator who
+# narrowed the base gets that base judged, as `mutant:rust` already keeps it,
+# rather than the whole branch.
+env = { MUTANT_CHANGED_SINCE = "{{ get_env(name='MUTANT_CHANGED_SINCE', default='origin/main') }}" }
 run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
 
 [tasks."mutant:declared"]

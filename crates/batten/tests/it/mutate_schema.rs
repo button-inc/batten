@@ -772,6 +772,64 @@ fn mutant_rust_runs_on_its_own_against_a_declared_base() {
     assert!(whole.contains("base=[] whole=[1]"), "{whole}");
 }
 
+/// `mise run mutant:changed` HANDS A CALLER'S BASE TO BOTH RUNNERS (CLOUD-2918):
+/// `origin/main` is its default, so an operator who narrowed the base gets that
+/// base judged by `mutant:declared` and `mutant:rust` alike, never the whole
+/// branch. Fails by: the task setting `origin/main` unconditionally
+/// (`changed-base-overrides-caller`), which overwrote the caller's value before
+/// either subtask read it.
+///
+/// THE STUB IS A `#!/bin/sh` SCRIPT, which only a unix host executes, so the
+/// case returns early elsewhere and still compiles on every target (CLOUD-1148).
+/// `MISE_TASK_SKIP_DEPENDS` reaches the nested `mise run` too, so neither
+/// subtask provisions the pkl package this case never reads.
+#[test]
+fn mutant_changed_hands_a_callers_base_to_both_runners() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = common::scratch_repo("mutant-changed-base");
+    let stub = dir.join("batten-stub");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf 'base=[%s] argv=[%s]\\n' \"$MUTANT_CHANGED_SINCE\" \"$*\"\n",
+    )
+    .expect("plant the stub engine");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+            .expect("make the stub executable");
+    }
+    let bin = stub.to_string_lossy().into_owned();
+    let run = |env: &[(&str, &str)]| {
+        let mut all = vec![
+            ("BATTEN_BIN", bin.as_str()),
+            ("MISE_TASK_SKIP_DEPENDS", "1"),
+        ];
+        all.extend_from_slice(env);
+        let output = common::mise_task(&dir, "--skip-deps mutant:changed", &all, "");
+        let said = common::stdout(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{said}{}",
+            common::stderr(&output)
+        );
+        said
+    };
+    for (env, base) in [
+        (&[][..], "origin/main"),
+        (&[("MUTANT_CHANGED_SINCE", "HEAD~1")][..], "HEAD~1"),
+    ] {
+        let said = run(env);
+        for runner in ["mutate sweep", "mutate cargo"] {
+            let line = format!("base=[{base}] argv=[{runner}]");
+            assert!(said.contains(&line), "{line:?} in {said}");
+        }
+    }
+}
+
 /// The reach recorder refuses to run a case with nowhere to record it: a
 /// wrapper run outside a reach run exits 101 and says why, never 0.
 ///
