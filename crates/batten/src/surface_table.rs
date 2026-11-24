@@ -8521,4 +8521,15 @@ mod tests {
         assert!(!FlagDecl::valued("w", "w", "a valued flag").required);
         assert!(required("w", "w", "a required flag").required);
     }
+
+    /// Fails by: `switch` dropping its `value` (shard 4/16's survivor), so a
+    /// switch inherits `valued`'s string value and demands an argument.
+    #[test]
+    fn a_switch_takes_no_value() {
+        assert!(matches!(
+            FlagDecl::switch("s", "s", "a switch").value,
+            ValueDecl::Bool
+        ));
+        assert!(matches!(ENFORCE_INPUTS_DIGEST.value, ValueDecl::Bool));
+    }
 }

@@ -498,4 +498,35 @@ mod tests {
             );
         }
     }
+
+    /// Fails by: a shell's `-c` dropped from its inline options (shard 4/16's
+    /// `inline` survivor), so `bash -c text` reads the text as a script file.
+    #[test]
+    fn a_shells_dash_c_carries_an_inline_program() {
+        let bash = grammar("bash");
+        assert_eq!(script_operand(&bash, &["-c", "run.sh"]), None);
+        assert_eq!(script_operand(&bash, &["run.sh"]), Some("run.sh"));
+    }
+
+    /// Fails by: node's `--eval` or `--print` dropped from its inline long
+    /// options, or the lone-dash-or-inline test's `||` read as `&&` (shard
+    /// 4/16's survivors), so the code or stdin reads as a script file.
+    #[test]
+    fn nodes_eval_print_and_a_lone_dash_name_no_script() {
+        let node = grammar("node");
+        for inline in ["--eval", "--print", "-"] {
+            assert_eq!(script_operand(&node, &[inline, "app.js"]), None, "{inline}");
+        }
+        assert_eq!(script_operand(&node, &["app.js"]), Some("app.js"));
+    }
+
+    /// Fails by: ruby's valued `-r` dropped (shard 4/16's `valued` survivor),
+    /// so the library it loads reads as the script.
+    #[test]
+    fn rubys_dash_r_takes_its_library_before_the_script() {
+        assert_eq!(
+            script_operand(&grammar("ruby"), &["-r", "json", "app.rb"]),
+            Some("app.rb")
+        );
+    }
 }
