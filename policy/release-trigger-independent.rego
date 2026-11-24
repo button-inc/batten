@@ -1,7 +1,7 @@
 #MUTANT-SUITE crates/batten/tests/it/release_trigger_independent.rs
 #MUTANT clock-alone-passes|s@^\tnot independent(path)$@\tfalse@|the_engine_refuses_a_clock_alone
-#MUTANT push-not-independent|s@^independent(path) if _ := triggers(path).push$@independent(path) if false@|the_engine_reads_a_push_trigger_as_independent
-#MUTANT workflow-run-not-independent|s@^independent(path) if _ := triggers(path).workflow_run$@independent(path) if false@|the_engine_reads_a_workflow_run_trigger_as_independent
+#MUTANT push-not-independent|s@^independent(path) if _ = triggers(path).push$@independent(path) if false@|the_engine_reads_a_push_trigger_as_independent
+#MUTANT workflow-run-not-independent|s@^independent(path) if _ = triggers(path).workflow_run$@independent(path) if false@|the_engine_reads_a_workflow_run_trigger_as_independent
 #MUTANT every-workflow-watched|s@^\tcontains(step.run, "release-assets-check")$@\ttrue@|the_engine_leaves_a_workflow_watching_nothing_untouched
 
 # METADATA
