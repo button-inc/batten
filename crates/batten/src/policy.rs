@@ -9483,6 +9483,26 @@ test_c if {\n\t\"n\" in rules\n}\n";
         assert!(dropped.as_interpreted().is_none(), "the hot path drops it");
     }
 
+    /// A bytecode bundle read as interpreted evaluates on its interpreter, not
+    /// on the bytecode it was compiled to (CLOUD-2789).
+    ///
+    /// Fails by: the interpreter evaluator dropped from `as_interpreted`'s
+    /// bundle, so the parity check compares bytecode against itself.
+    #[test]
+    fn a_bundle_read_as_interpreted_evaluates_on_its_interpreter() {
+        let data = serde_json::json!({});
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let compiled = Compiled::from_bundle(&bundle, &data).expect("compiles to bytecode");
+        let kept = compiled.into_bundle(bundle, true);
+        assert!(kept.is_bytecode());
+        let interpreted = kept.as_interpreted().expect("the interpreter is kept");
+        assert!(!interpreted.is_bytecode());
+        assert_eq!(
+            interpreted.execution(),
+            Execution::Interpreted(Fallback::NotOffered)
+        );
+    }
+
     /// Fails by: a case writing `input` twice desugared as its last write
     /// rather than refused (the `context.input.is_none()` guard of
     /// `with_terms` read as `true`).

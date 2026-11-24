@@ -16267,25 +16267,55 @@ fn spend_the_matrix(
             Ok(ExitCode::Success)
         }
         land::Spend::Ready => fired(land::mark_ready(&repo, &pr, &node), ledger, out, err),
-        land::Spend::Refire => {
-            // DRAFT FIRST, and a draft that will not happen is a stop: readying an
-            // already-ready pull request is a no-op the forge reports as success,
-            // so proceeding would report a matrix it never bought.
-            if !land::redraft(&repo, &pr, &node) {
-                writeln!(
-                    err,
-                    "::error:: land: {branch} is ready over a head that can never grade, and it \
-                     would not go back to draft, so no fresh run can be minted for it"
-                )?;
-                return Ok(ExitCode::Internal);
-            }
-            writeln!(
-                out,
-                "land: {branch} carried no answer and no run in flight; re-firing its ready"
-            )?;
-            fired(land::mark_ready(&repo, &pr, &node), ledger, out, err)
-        }
+        land::Spend::Refire => refire(
+            &Fired {
+                repo: &repo,
+                pr: &pr,
+                node: &node,
+                branch,
+            },
+            ledger,
+            out,
+            err,
+        ),
     }
+}
+
+/// The pull request a [`refire`] drafts and readies again.
+struct Fired<'a> {
+    repo: &'a str,
+    pr: &'a str,
+    node: &'a str,
+    branch: &'a str,
+}
+
+/// [`spend_the_matrix`]'s `Refire` arm: a ready pull request over a head that
+/// can never grade goes back to draft, then is readied, so the forge mints a
+/// fresh run (CLOUD-2910).
+///
+/// DRAFT FIRST, and a draft that will not happen is a stop: readying an
+/// already-ready pull request is a no-op the forge reports as success, so
+/// proceeding would report a matrix it never bought.
+fn refire(
+    at: &Fired<'_>,
+    ledger: &mut land::Ledger,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let branch = at.branch;
+    if !land::redraft(at.repo, at.pr, at.node) {
+        writeln!(
+            err,
+            "::error:: land: {branch} is ready over a head that can never grade, and it \
+             would not go back to draft, so no fresh run can be minted for it"
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+    writeln!(
+        out,
+        "land: {branch} carried no answer and no run in flight; re-firing its ready"
+    )?;
+    fired(land::mark_ready(at.repo, at.pr, at.node), ledger, out, err)
 }
 
 /// One report for both places a ready is fired.
@@ -34768,6 +34798,55 @@ mod tests {
             2,
             "nothing past the draft read: {asked}"
         );
+    }
+
+    /// A re-fire readies only a pull request it put back to draft, and a draft
+    /// the forge refused stops the lap (CLOUD-2910).
+    ///
+    /// Fails by: the redraft's outcome read inverted, so a refused draft
+    /// readies an already-ready pull request and reports a matrix never bought,
+    /// and a draft that took stops the lap.
+    #[test]
+    fn a_refire_readies_only_after_the_draft_took() {
+        let at = Fired {
+            repo: "o/r",
+            pr: "7",
+            node: "PR_7",
+            branch: "work",
+        };
+        let lap = |forge: &Path| {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let mut ledger = land::Ledger::default();
+            let code =
+                crate::rest::with_fixture(forge, || refire(&at, &mut ledger, &mut out, &mut err))
+                    .unwrap();
+            let said = format!(
+                "{}{}",
+                String::from_utf8(out).unwrap(),
+                String::from_utf8(err).unwrap()
+            );
+            (code, said)
+        };
+
+        let took = crate::rest::routed("refire-took-forge", &[("graphql", 200, r#"{"data": {}}"#)]);
+        let (code, said) = lap(&took);
+        assert_eq!(code, ExitCode::Success, "{said}");
+        assert!(said.contains("re-firing its ready"), "{said}");
+        assert!(said.contains("the matrix is bought"), "{said}");
+        assert_eq!(
+            crate::rest::asked(&took).lines().count(),
+            2,
+            "a draft, then a ready"
+        );
+
+        let refused = crate::rest::routed(
+            "refire-refused-forge",
+            &[("graphql", 200, r#"{"errors": [{"message": "no"}]}"#)],
+        );
+        let (code, said) = lap(&refused);
+        assert_eq!(code, ExitCode::Internal, "{said}");
+        assert!(said.contains("would not go back to draft"), "{said}");
+        assert!(!said.contains("re-firing"), "{said}");
     }
 
     #[test]
