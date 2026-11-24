@@ -1235,10 +1235,24 @@ pub fn seed_passes(root: &Path) -> Result<usize> {
     let resources = schema::resource_ids(root)?;
     let tree = schema::tree_ids_digest(&resources);
     let held = held_cases(root, &resources, env.trim())?;
+    key_ran_passes(&state, &tree, &held)
+}
+
+/// [`seed_passes`]' keying over the run state `state`: a pass for each case of
+/// `held` whose [`RAN`] note was written over `tree`. How many it keyed.
+///
+/// # Errors
+///
+/// A pass cannot be written.
+fn key_ran_passes(
+    state: &Path,
+    tree: &str,
+    held: &std::collections::BTreeMap<(String, String), String>,
+) -> Result<usize> {
     let pass = state.join(PASS);
     std::fs::create_dir_all(&pass)?;
     let mut keyed = 0;
-    for ((name, binary), expected) in &held {
+    for ((name, binary), expected) in held {
         let Ok(ran) = crate::fsio::read_to_string(state.join(RAN).join(expect_name(name, binary)))
         else {
             continue;
@@ -1651,6 +1665,44 @@ mod tests {
             );
             assert!(!state.join(PENDING).exists(), "pending outlives its run");
         }
+    }
+
+    /// Fails by: a case keyed whose run passed it over another tree, one whose
+    /// run left no note keyed, or the count of keyed passes misreported.
+    #[test]
+    fn a_seed_keys_and_counts_each_pass_its_tree_ran() {
+        let state = crate::scratch::scratch("test-run-seed-keys");
+        std::fs::create_dir_all(state.join(RAN)).unwrap();
+        // `a` ran over this tree, `b` too with no argv, `c` over another, and
+        // `d` left no note.
+        let held: std::collections::BTreeMap<(String, String), String> = ["a", "b", "c", "d"]
+            .into_iter()
+            .map(|name| ((name.to_owned(), "bin".to_owned()), format!("dep-{name}")))
+            .collect();
+        for (name, over, args) in [
+            ("a", "tree-1", "--exact\x1fa"),
+            ("b", "tree-1", ""),
+            ("c", "tree-0", "--exact\x1fc"),
+        ] {
+            std::fs::write(
+                state.join(RAN).join(expect_name(name, "bin")),
+                format!("{over}\n{args}"),
+            )
+            .unwrap();
+        }
+        assert_eq!(key_ran_passes(&state, "tree-1", &held).unwrap(), 2);
+        let keyed = |name: &str, test: &[&str]| {
+            let test: Vec<String> = test.iter().map(|word| (*word).to_owned()).collect();
+            let dep = format!("dep-{name}");
+            state
+                .join(PASS)
+                .join(case_key(Key::Dep(&dep), &test))
+                .is_file()
+        };
+        assert!(keyed("a", &["", "--exact", "a"]));
+        assert!(keyed("b", &[""]));
+        assert!(!keyed("c", &["", "--exact", "c"]), "another tree");
+        assert_eq!(std::fs::read_dir(state.join(PASS)).unwrap().count(), 2);
     }
 
     /// Fails by: a pass older than its lifetime kept (the store grows a head

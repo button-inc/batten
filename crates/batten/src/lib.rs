@@ -8088,14 +8088,23 @@ fn pull_log(
     number: &str,
     shared: &std::collections::BTreeSet<String>,
 ) -> Option<String> {
-    bot::forge::commits(slug, number).ok().map(|listing| {
-        listing
-            .into_iter()
-            .filter(|(sha, _)| !shared.contains(sha))
-            .map(|(_, message)| message)
-            .collect::<Vec<_>>()
-            .join("\n")
-    })
+    bot::forge::commits(slug, number)
+        .ok()
+        .map(|listing| unshared_log(listing, shared))
+}
+
+/// The messages of `listing`'s commits that this branch does not also hold,
+/// joined: a stacked pull request's inherited commits are subtracted by SHA.
+fn unshared_log(
+    listing: Vec<(String, String)>,
+    shared: &std::collections::BTreeSet<String>,
+) -> String {
+    listing
+        .into_iter()
+        .filter(|(sha, _)| !shared.contains(sha))
+        .map(|(_, message)| message)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn run_claim_race(
@@ -33385,6 +33394,58 @@ mod tests {
             super::install_want(None, None, Some(release)).unwrap(),
             super::Want::Release(String::from("v0.0.1"))
         );
+    }
+
+    /// Fails by: a stacked pull request's inherited commits read as its own
+    /// claims, or its own commits dropped as though this branch held them.
+    #[test]
+    fn a_rivals_log_keeps_only_the_commits_this_branch_does_not_hold() {
+        let shared = std::collections::BTreeSet::from(["a1".to_owned()]);
+        let listing = vec![
+            ("a1".to_owned(), "inherited Refs: CLOUD-1".to_owned()),
+            ("b2".to_owned(), "own Refs: CLOUD-2".to_owned()),
+            ("c3".to_owned(), "own Refs: CLOUD-3".to_owned()),
+        ];
+        assert_eq!(
+            super::unshared_log(listing, &shared),
+            "own Refs: CLOUD-2\nown Refs: CLOUD-3"
+        );
+    }
+
+    /// Fails by: the reach seed's hold dropped without releasing its
+    /// singleton or its registry entry, so every later seed reads one held
+    /// by a process that finished.
+    #[test]
+    fn a_dropped_seed_hold_releases_its_singleton_and_its_entry() {
+        let git_dir = crate::scratch::scratch("seed-hold");
+        let pid = std::process::id().to_string();
+        let task_name = super::mutate::resume::SEED_TASK;
+        assert!(matches!(
+            super::task::singleton_acquire(
+                &git_dir,
+                task_name,
+                &pid,
+                std::time::Duration::from_millis(1)
+            ),
+            super::task::Claim::Taken
+        ));
+        super::task::register(&git_dir, task_name, &pid, "reach", 1);
+        let hold = super::SeedHold {
+            git_dir: git_dir.clone(),
+            pid: pid.clone(),
+        };
+        // ITS OWN PREMISE: held and registered before the drop.
+        assert_eq!(
+            super::task::singleton_holder(&git_dir, task_name).as_deref(),
+            Some(pid.as_str())
+        );
+        assert_eq!(
+            super::task::read_field(&git_dir, &pid, "phase").as_deref(),
+            Some("reach")
+        );
+        drop(hold);
+        assert_eq!(super::task::singleton_holder(&git_dir, task_name), None);
+        assert_eq!(super::task::read_field(&git_dir, &pid, "phase"), None);
     }
 
     /// Fails by: the decided-mechanism line said for a claim that recorded

@@ -701,6 +701,10 @@ fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
         .expect("seed the failure");
     assert_eq!(seeded.status.code(), Some(5), "{}", stderr(&seeded));
     let marker = repo.join("gate.pid");
+    // THE WEDGE IS BOUNDED (CLOUD-2789): the cancel ends it within a beat of the
+    // red step, long before 12 s. A red never read then ends the gate green on
+    // its own, which the exit and record below refuse, instead of holding the
+    // case for ten minutes until the suite's timeout.
     let gate = script(
         &repo,
         "red.sh",

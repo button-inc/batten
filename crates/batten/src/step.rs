@@ -2066,51 +2066,61 @@ fn schedule(
     run: &(dyn Fn(&Step) -> (i32, Option<String>) + Sync),
     emit: &mut dyn FnMut(String),
 ) -> Scheduled {
-    let mut waiting: Vec<&Step> = rows.to_vec();
+    // EACH ROW BY ITS POSITION, and what runs is the SET of positions in
+    // flight, never a count (CLOUD-2789): a count a change stops decrementing
+    // left the loop waiting on an arrival no thread would ever send, which hung
+    // the suite instead of failing a case.
+    let mut waiting: Vec<(usize, &Step)> = rows.iter().copied().enumerate().collect();
     let mut lines = Vec::new();
-    let (mut running, mut peak) = (0_usize, 0_usize);
+    let mut running: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    let mut peak = 0_usize;
     let mut worst = 0_i32;
     std::thread::scope(|scope| {
-        let (finished, arrivals) = std::sync::mpsc::channel::<(&str, i32, f64, Option<String>)>();
+        let (finished, arrivals) =
+            std::sync::mpsc::channel::<(usize, &str, i32, f64, Option<String>)>();
         loop {
             // A ROW WHOSE DEPENDENCY FAILED NEVER STARTS, and neither does any
             // row waiting on it: repeat until no skip uncovers another.
-            while let Some((at, dependency)) = waiting.iter().enumerate().find_map(|(at, row)| {
-                row.depends_on
-                    .iter()
-                    .find(|dependency| done.get(dependency.as_str()).is_some_and(|code| *code != 0))
-                    .map(|dependency| (at, dependency.clone()))
-            }) {
-                let row = waiting.remove(at);
+            while let Some((at, dependency)) =
+                waiting.iter().enumerate().find_map(|(at, (_, row))| {
+                    row.depends_on
+                        .iter()
+                        .find(|dependency| {
+                            done.get(dependency.as_str()).is_some_and(|code| *code != 0)
+                        })
+                        .map(|dependency| (at, dependency.clone()))
+                })
+            {
+                let (_, row) = waiting.remove(at);
                 lines.push(format!("{} skipped ({dependency} failed)", row.id));
                 done.insert(row.id.clone(), SKIPPED);
             }
-            while running < bound {
-                let Some(at) = waiting.iter().position(|row| {
+            while running.len() < bound {
+                let Some(at) = waiting.iter().position(|(_, row)| {
                     row.depends_on
                         .iter()
                         .all(|dependency| done.get(dependency.as_str()) == Some(&0))
                 }) else {
                     break;
                 };
-                let row = waiting.remove(at);
-                running += 1;
-                peak = peak.max(running);
+                let (position, row) = waiting.remove(at);
+                running.insert(position);
+                peak = peak.max(running.len());
                 let finished = finished.clone();
                 scope.spawn(move || {
                     let started = std::time::Instant::now();
                     let (code, log) = run(row);
                     let seconds = started.elapsed().as_secs_f64();
-                    let _ = finished.send((row.id.as_str(), code, seconds, log));
+                    let _ = finished.send((position, row.id.as_str(), code, seconds, log));
                 });
             }
-            if running == 0 {
+            if running.is_empty() {
                 break;
             }
-            let Ok((id, code, seconds, log)) = arrivals.recv() else {
+            let Ok((position, id, code, seconds, log)) = arrivals.recv() else {
                 break;
             };
-            running -= 1;
+            running.remove(&position);
             emit(verdict_line(group, id, code, seconds, log.as_deref()));
             lines.push(format!("{id} ran {code} {seconds:.3}"));
             worst = worst.max(code);

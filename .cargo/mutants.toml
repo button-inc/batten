@@ -133,4 +133,8 @@ exclude_re = [
   # `super`, a keyword no crate can be named, so its first module lookup misses
   # and answers `None`, as the arm does (CLOUD-2789).
   'item_index\.rs:\d+:\d+: delete match arm Some\(.super.\) in Index::resolve_through$',
+  # Every splice offset is a regorus span edge or one past a closing quote, a
+  # char boundary, and only a renamed `_` (one ASCII byte) replaces any bytes, so
+  # `at` and `at + replaced` are boundaries alike: `||` and `&&` agree (CLOUD-2789).
+  'policy\.rs:\d+:43: replace \|\| with && in guarded_sources_of$',
 ]
