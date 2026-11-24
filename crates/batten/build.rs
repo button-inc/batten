@@ -14,16 +14,25 @@
 //! No test target compiles this file; what it writes is judged where it is
 //! read, by `o200k`'s parity case against tiktoken itself.
 //!
+//! It STAMPS THE BUILD'S IDENTITY (CLOUD-2903) as `BATTEN_BUILD_VERSION`, the
+//! one value `config::VERSION` reads: the package version for the release
+//! build `BATTEN_RELEASE_TAG` marks, a dev pre-release for every other build
+//! (`build/identity.rs` decides; this script only gathers the facts).
+//!
 //! It also REFUSES TO BUILD a crate carrying a hand-written Rust mutation
 //! marker or a second cargo-mutants argv ([`mutation_markers`], CLOUD-2253):
 //! the Rust tier is cargo-mutants' alone, and a build is the one step nothing
 //! skips.
 
+use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 #[path = "src/mutation_markers.rs"]
 mod mutation_markers;
+
+#[path = "build/identity.rs"]
+mod identity;
 
 /// The two special tokens: never produced by ordinary encoding, so never in
 /// the merge table.
@@ -36,6 +45,9 @@ fn main() -> Built {
     let manifest = PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR").ok_or("cargo sets CARGO_MANIFEST_DIR")?,
     );
+    // BEFORE the tables' early return below: a rerun that returned there first
+    // would leave `env!("BATTEN_BUILD_VERSION")` unset.
+    stamp_identity(&manifest)?;
     refuse_hand_rolled_mutation(&manifest)?;
     let out = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("cargo sets OUT_DIR")?);
     // THE TABLES ARE BUILT ONCE PER `OUT_DIR`, which cargo keys on this package
@@ -98,6 +110,121 @@ fn main() -> Built {
         tiktoken_rs::O200K_BASE_PAT_STR
     )?;
     Ok(())
+}
+
+/// Emit `BATTEN_BUILD_VERSION`, and the rerun triggers that keep it current.
+///
+/// The marked release build runs no git at all. Any other build gathers HEAD's
+/// branch, committer second and source digest; where git answers nothing the
+/// identity is `<next>-dev.unknown`, so no build fails for want of git, and a
+/// tracked input that will not read drops only the digest, with one warning.
+fn stamp_identity(manifest: &Path) -> Built {
+    for name in [identity::RELEASE_MARKER, identity::BUILD_PR, "GITHUB_REF"] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    let mut facts = identity::Facts {
+        package: std::env::var("CARGO_PKG_VERSION")?,
+        marker: std::env::var(identity::RELEASE_MARKER)
+            .ok()
+            .filter(|marker| !marker.is_empty()),
+        line: None,
+        committed: None,
+        digest: None,
+    };
+    if facts.marker.is_none()
+        && let Some(top) = git_text(manifest, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
+    {
+        watch(&top);
+        let branch = git_text(&top, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+        facts.line = Some(identity::line(
+            std::env::var(identity::BUILD_PR).ok().as_deref(),
+            std::env::var("GITHUB_REF").ok().as_deref(),
+            branch.as_deref(),
+        )?);
+        facts.committed =
+            git_text(&top, &["show", "-s", "--format=%ct", "HEAD"]).and_then(|ct| ct.parse().ok());
+        facts.digest = digest(&top);
+    }
+    println!(
+        "cargo:rustc-env=BATTEN_BUILD_VERSION={}",
+        identity::identity(&facts)?
+    );
+    Ok(())
+}
+
+/// Watch every input the identity reads, ONLY WHERE IT EXISTS: cargo reads a
+/// missing `rerun-if-changed` path as stale on every build. HEAD's ref file is
+/// never named (it is missing exactly when the ref is packed): `refs/heads` is
+/// watched as a directory, which cargo scans recursively, so a commit on any
+/// branch is seen, and a detached commit rewrites `HEAD`.
+fn watch(top: &Path) {
+    let mut watched: Vec<PathBuf> = ["crates", "Cargo.toml", "Cargo.lock"]
+        .iter()
+        .map(|path| top.join(path))
+        .collect();
+    let named = ["HEAD", "index", "packed-refs", "refs/heads", "reftable"];
+    let mut argv = vec!["rev-parse"];
+    for path in named {
+        argv.extend(["--git-path", path]);
+    }
+    if let Some(paths) = git_text(top, &argv) {
+        watched.extend(paths.lines().map(|path| top.join(path)));
+    }
+    for path in watched.iter().filter(|path| path.exists()) {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
+/// The first [`identity::DIGEST_HEX`] hex of the source digest over the
+/// INDEX's engine inputs, as `engine stamp` computes it: tracked membership,
+/// the bytes on disk. `None` when git answers nothing, there is no input, or a
+/// tracked input will not read (deleted but not yet `git rm`'d), which prints
+/// one warning naming it.
+fn digest(top: &Path) -> Option<String> {
+    let listed = git(
+        top,
+        &["ls-files", "-z", "--", "crates", "Cargo.toml", "Cargo.lock"],
+    )?;
+    let mut inputs = BTreeMap::new();
+    for raw in listed
+        .split(|byte| *byte == 0)
+        .filter(|raw| !raw.is_empty())
+    {
+        let Ok(path) = std::str::from_utf8(raw) else {
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(top.join(path)) else {
+            println!(
+                "cargo:warning=batten's build identity carries no source digest: {path} is tracked and will not read"
+            );
+            return None;
+        };
+        inputs.insert(path.to_owned(), bytes);
+    }
+    identity::source_digest(&inputs).map(|digest| digest[..identity::DIGEST_HEX].to_owned())
+}
+
+/// `git -C dir args`'s stdout, trimmed, or `None` for a failure or nothing.
+fn git_text(dir: &Path, args: &[&str]) -> Option<String> {
+    let text = String::from_utf8(git(dir, args)?).ok()?;
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// `git -C dir args`'s stdout, or `None` when git will not run or fails.
+fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: a build script reaches neither `crate::git` nor `batten::stream`, and `gix` as a build-dependency would compile a second copy for the host (CLOUD-2903)"
+    )]
+    let mut command = std::process::Command::new("git");
+    command.arg("-C").arg(dir).args(args);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "stays: the one spawn above, read to completion; the build script has no stream wrapper (CLOUD-2903)"
+    )]
+    let output = command.output().ok()?;
+    output.status.success().then_some(output.stdout)
 }
 
 /// Refuse the build where the crate's Rust carries a mutation marker anywhere, or
