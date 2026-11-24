@@ -334,6 +334,38 @@ fn ordinary_prose_and_non_source_colons_do_not_fire() {
     }
 }
 
+/// Fails by: `record decide` deciding with the whole ruleset rather than the
+/// rules it names, so a rule that never reads the turn refuses a clean one
+/// (CLOUD-2789).
+#[test]
+fn the_decision_is_the_named_rules_alone() {
+    let turns = Turns::new("named-rules");
+    let mut config = std::fs::read_to_string(turns.repo.join("batten.toml")).expect("the config");
+    config.push_str(
+        "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nseverity = \"deny\"\n\
+         glob = \"**/*.rs\"\npattern = \"TODO\"\nno_fix_reason = \"delete the marker\"\n",
+    );
+    common::write(&turns.repo, "batten.toml", &config);
+    common::write(&turns.repo, "src/a.rs", "fn main() {}\n// TODO fix me\n");
+    common::git_in(&turns.repo, &["add", "-A"]);
+    common::git_in(
+        &turns.repo,
+        &["commit", "-qm", "a rule that refuses the tree"],
+    );
+    let bystander = common::run(&turns.repo, &["check", "--rule", "no-todo"]);
+    assert_eq!(
+        bystander.status.code(),
+        Some(2),
+        "the premise: the other rule refuses"
+    );
+    clean(
+        &turns
+            .prompt()
+            .say("Rebased onto main and pushed. The gate is green.")
+            .check(),
+    );
+}
+
 #[test]
 fn a_comment_alone_is_not_a_home() {
     let turns = Turns::new("comment")
