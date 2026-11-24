@@ -10061,6 +10061,32 @@ mod tests {
     #[cfg(test)]
     use crate::rules::RuleKindExt as _;
 
+    /// Fails by: a function's token count read from a slice that does not end
+    /// at `offset + bytes` (`*` for `+`), so a unit past the first byte counts
+    /// another span's tokens or none.
+    #[test]
+    fn a_function_counts_the_tokens_of_its_own_span() {
+        let text = "struct Pad;\n\n\
+                    fn f() {\n    let alpha = 1;\n}\n\
+                    fn g() {\n    let beta = vec![1, 2, 3];\n    let gamma = beta.len();\n}\n";
+        let crate::facts::Look::Is(nodes) = super::rust_units("src/x.rs", text) else {
+            panic!("a rust file is read");
+        };
+        let functions: Vec<&serde_json::Value> =
+            nodes.iter().filter(|node| node["kind"] == "fn").collect();
+        assert_eq!(functions.len(), 2, "{nodes:?}");
+        for node in functions {
+            let offset = usize::try_from(node["offset"].as_u64().unwrap()).unwrap();
+            let bytes = usize::try_from(node["bytes"].as_u64().unwrap()).unwrap();
+            assert!(offset > 1, "the premise: a span past the first byte");
+            assert_eq!(
+                node["counts"]["tokens"],
+                serde_json::json!(crate::o200k::tokens(&text[offset..offset + bytes])),
+                "{node}"
+            );
+        }
+    }
+
     /// CLOUD-1578 / CLOUD-310: a backend admitted to a verdict must abstain on a
     /// language it does not own, with `IsNot`, rather than parse it and answer
     /// (or fail and read as could-not-look). Every routed backend is handed every

@@ -3025,4 +3025,63 @@ mod tests {
             ExitCode::Usage
         );
     }
+
+    /// Fails by: `--ref-env` read as an unknown word, so a line naming the
+    /// variable a CI run overrides the ref through keys nothing.
+    #[test]
+    fn a_base_line_reads_its_ref_env() {
+        assert_eq!(
+            base_ask(&base_words(&[
+                "--ref-env",
+                "BASE_REF",
+                "--ref",
+                "origin/main",
+                "--",
+                "src"
+            ])),
+            Some(BaseAsk {
+                reference: String::from("origin/main"),
+                ref_env: Some(String::from("BASE_REF")),
+                paths: vec![String::from("src")],
+            })
+        );
+    }
+
+    /// Fails by: every exit code recorded as a verdict over the inputs,
+    /// including a clean exit, a signal (`128 + N`) and a shell that could not
+    /// run the command (`126`, `127`).
+    #[test]
+    fn only_a_childs_own_failing_code_is_recordable() {
+        for code in [1, 2, 125] {
+            assert!(recordable_failure(code), "{code}");
+        }
+        for code in [0, 126, 127, 130, 137, -1] {
+            assert!(!recordable_failure(code), "{code}");
+        }
+    }
+
+    /// Fails by: the capture-handle filter joined with `||`, so any `exec:`
+    /// line, or any line mentioning `byte(s)`, contributes its last word.
+    #[test]
+    fn only_an_exec_capture_line_names_a_handle() {
+        let report = b"exec: stdout 12 byte(s) h1\n\
+                       exec: did not reach EOF in time\n\
+                       other 3 byte(s) h2\n\
+                       exec: stderr 4 byte(s) h3\n";
+        assert_eq!(logged(report).as_deref(), Some("h1 h3"));
+        assert_eq!(logged(b"exec: no capture here\n"), None);
+    }
+
+    /// Fails by: the git-dir exclusion joined with `&&`, so `.git` itself or a
+    /// path beneath it counts as a written declared input.
+    #[test]
+    fn a_write_under_the_git_dir_is_never_a_written_input() {
+        let root = std::path::Path::new("/r");
+        let written = [".git", ".git/index", "src/a.rs"].map(|path| root.join(path));
+        let inputs = [String::from("."), String::from(".git")];
+        assert_eq!(
+            written_inputs(root, &inputs, &written, &mut |_| false),
+            ["src/a.rs"]
+        );
+    }
 }

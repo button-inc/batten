@@ -396,4 +396,21 @@ mod tests {
         };
         assert_eq!(Some(workspace.refusal()), inline.finding());
     }
+
+    /// Fails by: a crash read as said only once it HAS an outcome, so a task
+    /// that died before writing one is never surfaced.
+    #[test]
+    fn a_task_gone_without_an_outcome_is_surfaced_once_as_a_crash() -> std::io::Result<()> {
+        let git_dir = crate::scratch::scratch("session-setup-crashed");
+        std::fs::create_dir_all(dir(&git_dir))?;
+        task::register(&git_dir, TASK, "999999999", "start", 100);
+        if cfg!(unix) {
+            assert_eq!(
+                surface(&git_dir),
+                vec![crate::doctor::workspace_finding(TASK, "crashed", &[])]
+            );
+            assert!(surface(&git_dir).is_empty(), "said once");
+        }
+        Ok(())
+    }
 }

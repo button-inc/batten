@@ -1876,6 +1876,81 @@ mod tests {
         );
     }
 
+    /// Fails by: an array-valued selector column (`sources`) read as no
+    /// selector at all, so a list that only follows a move is still charged.
+    #[test]
+    fn a_sources_list_that_only_follows_a_move_is_not_a_weakening() {
+        let rule = |sources: &str| {
+            format!(
+                "version = 1\n[[rule]]\nid = \"r\"\nkind = \"policy\"\nscope = \"tree\"\n\
+                 sources = {sources}\nbundle = \"policy/set\"\nseverity = \"deny\"\n\
+                 no_fix_reason = \"class 3 (x): y\"\n"
+            )
+        };
+        let base = config::parse(&rule("[\"crates/a/src/**/*.rs\"]"), "base").unwrap();
+        let working = config::parse(&rule("[\"crates/{a,b}/src/**/*.rs\"]"), "test").unwrap();
+        let moves = std::collections::BTreeMap::from([(
+            "crates/a/src/x.rs".to_owned(),
+            "crates/b/src/x.rs".to_owned(),
+        )]);
+        let tracked: std::collections::BTreeSet<String> =
+            ["crates/a/src/kept.rs", "crates/b/src/x.rs", "docs.md"]
+                .map(str::to_owned)
+                .into();
+        let changed = smell(
+            SmellId::Weakening(trust::WeakeningKind::RulePredicateChanged),
+            "rule[r].sources",
+        );
+        assert!(explained_by_moves(
+            &changed, &base, &working, &moves, &tracked
+        ));
+    }
+
+    /// Fails by: `run`'s move filter inverted, keeping only the findings a
+    /// move explains and dropping every other one.
+    #[test]
+    fn run_drops_only_the_findings_a_move_explains() {
+        let dir = crate::scratch::scratch("lint-run-moves");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let rule = |glob: &str, extra: &str| {
+            format!(
+                "version = 1\n{extra}[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"{glob}\"\n\
+                 pattern = \"x\"\nseverity = \"deny\"\nscope = \"tree\"\n\
+                 no_fix_reason = \"class 3 (x): y\"\n"
+            )
+        };
+        let config = crate::config_model::CONFIG_FILE;
+        std::fs::create_dir_all(dir.join("crates/a/src")).unwrap();
+        std::fs::create_dir_all(dir.join("crates/b/src")).unwrap();
+        std::fs::write(dir.join(config), rule("crates/a/src/**/*.rs", "")).unwrap();
+        std::fs::write(dir.join("crates/a/src/x.rs"), "x").unwrap();
+        std::fs::write(dir.join("crates/a/src/kept.rs"), "k").unwrap();
+        let paths = |list: &[&str]| list.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+        crate::gitwrite::commit_paths(
+            &dir,
+            &paths(&[config, "crates/a/src/x.rs", "crates/a/src/kept.rs"]),
+            "base",
+        )
+        .unwrap();
+        std::fs::remove_file(dir.join("crates/a/src/x.rs")).unwrap();
+        std::fs::write(dir.join("crates/b/src/x.rs"), "x").unwrap();
+        std::fs::write(
+            dir.join(config),
+            rule("crates/{a,b}/src/**/*.rs", "protected = []\n"),
+        )
+        .unwrap();
+        crate::gitwrite::commit_paths(
+            &dir,
+            &paths(&[config, "crates/b/src/x.rs", "crates/a/src/kept.rs"]),
+            "move",
+        )
+        .unwrap();
+        let found = run(&dir, Some("HEAD~1"), today()).unwrap();
+        let ids: Vec<&str> = found.iter().map(|smell| smell.id.as_str()).collect();
+        assert!(ids.contains(&EMPTY_PROTECTED_SET), "{ids:?}");
+        assert!(!ids.contains(&"rule-predicate-changed"), "{ids:?}");
+    }
+
     #[test]
     fn two_weakenings_of_one_kind_both_survive_dedup() {
         // The counting half of CLOUD-233, and the assertion whose absence let the
