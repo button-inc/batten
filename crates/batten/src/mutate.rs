@@ -5888,10 +5888,11 @@ impl JobCost {
 
 /// A declared megabyte count from the environment variable `name`, refused as
 /// a usage error when absent or not a whole number, as the sibling variables
-/// of `mutate cargo` are.
+/// of `mutate cargo` are. Read through [`overlay_var`], the module's one
+/// environment seam, so a unit case can declare it without `set_var`.
 fn declared_mb(name: &str) -> Result<u64> {
-    let raw = std::env::var(name)
-        .map_err(|_| crate::error::UsageError::raise(format!("`{name}` is not declared")))?;
+    let raw = overlay_var(name)
+        .ok_or_else(|| crate::error::UsageError::raise(format!("`{name}` is not declared")))?;
     raw.trim().parse().map_err(|_| {
         crate::error::UsageError::raise(format!("`{name}` is not a whole number of megabytes"))
     })
@@ -6893,6 +6894,27 @@ mod tests {
         assert_eq!(
             argv.get(at + 1).map(String::as_str),
             Some(root.join(NEXTEST_CONFIG).to_string_lossy().as_ref())
+        );
+    }
+
+    /// Fails by: a hand-back's room check sized against anything but the
+    /// declared `MUTANT_JOB_DISK_MB` (`declared_disk_mb -> Ok(1)` admitted every
+    /// build to any disk), or an absent or fractional count admitted.
+    #[test]
+    fn a_job_cost_is_the_declared_megabytes() {
+        let declared = [
+            ("MUTANT_JOB_DISK_MB", " 6200 "),
+            ("MUTANT_JOB_MEMORY_MB", "4000"),
+        ];
+        assert_eq!(
+            with_overlay_vars(&declared, JobCost::declared_disk_mb).expect("declared"),
+            6200
+        );
+        let cost = with_overlay_vars(&declared, JobCost::declared).expect("declared");
+        assert_eq!((cost.disk_mb, cost.memory_mb), (6200, 4000));
+        assert!(with_overlay_vars(&[], JobCost::declared_disk_mb).is_err());
+        assert!(
+            with_overlay_vars(&[("MUTANT_JOB_DISK_MB", "6.2")], JobCost::declared_disk_mb).is_err()
         );
     }
 
