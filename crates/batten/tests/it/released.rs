@@ -536,3 +536,59 @@ fn the_committed_task_records_then_checks_the_one_row() {
     assert_eq!(common::task_value(&block, "dir"), "{{cwd}}");
     assert!(common::task_value(&block, "shell").is_empty(), "{argv}");
 }
+
+/// THE CALL SHAPE BEFORE THE RELEASE GLOB EXISTED (CLOUD-2906): `tag` and
+/// `hold` alone still record, the glob read from the tag's own prefix. A
+/// consumer task written against that shape must not start exiting 1.
+#[test]
+fn the_tag_and_hold_call_shape_still_records() {
+    let dir = repo("old-shape");
+    let output = common::run(
+        &dir,
+        &[
+            "record",
+            "derive",
+            "released",
+            "--input",
+            "tag=v0.0.2",
+            "--input",
+            "hold=released-hold-marker",
+        ],
+    );
+    let text = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{text}");
+    assert!(text.contains("range\tv0.0.1..v0.0.2\n"), "{text}");
+}
+
+/// `batten release previous` (CLOUD-2906): the nearest ancestor RELEASE under
+/// the glob. A pre-release and a `dev/` tag nearer the head are never the
+/// predecessor; the first release has none (an empty line); a tag that is not
+/// a release is exit 2.
+#[test]
+fn release_previous_names_the_nearest_ancestor_release_only() {
+    let dir = repo("previous");
+    commit(&dir, "feat: a candidate", "Refs: CLOUD-4");
+    git(&dir, &["tag", "v0.0.3-rc.1"]);
+    commit(&dir, "feat: a dev build", "Refs: CLOUD-5");
+    git(&dir, &["tag", "dev/v0.0.3-dev.pr1.20261124050057"]);
+    git(&dir, &["tag", "v0.0.3-dev.pr1.20261124050057"]);
+    commit(&dir, "fix: the release", "Refs: CLOUD-6");
+    git(&dir, &["tag", "v0.0.3"]);
+    let previous = |tag: &str| {
+        let output = common::run(
+            &dir,
+            &["release", "previous", "--tag", tag, "--pattern", "v[0-9]*"],
+        );
+        (output.status.code(), said(&output))
+    };
+    let (code, text) = previous("v0.0.3");
+    assert_eq!((code, text.as_str()), (Some(0), "v0.0.2\n"), "{text}");
+    let (code, text) = previous("v0.0.1");
+    assert_eq!((code, text.as_str()), (Some(0), "\n"), "{text}");
+    let (code, text) = previous("v0.0.3-rc.1");
+    assert_eq!(
+        code,
+        Some(batten::exit::ExitCode::Violation.code()),
+        "{text}"
+    );
+}
