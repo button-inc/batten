@@ -735,6 +735,26 @@ mod tests {
         assert!(!super::traced_in("Name:\tcase\n"));
     }
 
+    /// Fails by: no tracer offered to an untraced process on Linux whose
+    /// `PATH` holds `strace`, which leaves every case untraced and keyed on
+    /// every file (CLOUD-2789). Off Linux, or already traced, it is `None`.
+    #[test]
+    fn an_untraced_process_is_offered_the_strace_on_its_path() {
+        let refused = super::traced_already();
+        let on_path = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("strace"))
+                .find(|candidate| candidate.is_file())
+                .map(|found| found.to_string_lossy().into_owned())
+        });
+        let expected = if cfg!(target_os = "linux") && !refused {
+            on_path
+        } else {
+            None
+        };
+        assert_eq!(super::tracer(), expected);
+    }
+
     // Fails by: an escaped quote or backslash refused (the path cut short as
     // unreadable), or kept with its backslash.
     #[test]
