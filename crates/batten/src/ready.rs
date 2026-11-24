@@ -894,6 +894,14 @@ pub fn workspace_version(root: &Path) -> Result<String> {
     )))
 }
 
+/// Whether `version` is a `0.0.x` version — Cargo's no-compatibility range,
+/// where release-plz bumps the patch whatever the type says — read through the
+/// one semver parse (CLOUD-2906), so `0.0.221-dev.…` counts and `0.00.1` (no
+/// version at all) does not.
+fn below_minor_one(version: &str) -> bool {
+    crate::version::parse(version).is_some_and(|version| version.major == 0 && version.minor == 0)
+}
+
 // CLOUD-806's two arms, carried off the retired `mise-tasks/ready-lint.sh`
 // (CLOUD-1221). The first drops the body emission, so a consumer reading the
 // derived fact silently gets nothing and cannot tell that from an empty body. The
@@ -1221,7 +1229,7 @@ fn check_bump(
     // releases nothing at any version, so folding it into patch would demand a
     // bump the tool never produces, the same error in the other direction.
     let mut why = String::new();
-    if version.starts_with("0.0.") && expected != "no bump" {
+    if below_minor_one(&version) && expected != "no bump" {
         "patch".clone_into(&mut expected);
         " below 0.1.0".clone_into(&mut why);
     }
@@ -1586,7 +1594,7 @@ fn check_claimed_type(
     // reason the prose path's arm gives — folding it into patch would demand a
     // bump the tool never produces.
     let version = workspace_version(root)?;
-    if version.starts_with("0.0.") && bump != NO_RELEASE {
+    if below_minor_one(&version) && bump != NO_RELEASE {
         bump = "patch";
     }
     report.emissions.push(format!("bump {bump}"));
@@ -2071,8 +2079,8 @@ mod issue_key_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod lint_tests {
     use super::{
-        Grammar, Payload, Report, adjudicate, body_text, filled, lint, named_paths, owed_from,
-        tokens_in, verdict_token, workspace_version,
+        Grammar, Payload, Report, adjudicate, below_minor_one, body_text, filled, lint,
+        named_paths, owed_from, tokens_in, verdict_token, workspace_version,
     };
     #[cfg(test)]
     use serde_json::{Value, json};
@@ -2080,6 +2088,18 @@ mod lint_tests {
     use std::path::{Path, PathBuf};
 
     use super::issue_key_tests::key;
+
+    /// The `0.0.x` collapse reads the parsed version (CLOUD-2906).
+    #[test]
+    fn the_patch_collapse_reads_a_parsed_zero_zero_version() {
+        assert!(below_minor_one("0.0.221"));
+        assert!(below_minor_one(
+            "0.0.221-dev.pr1.20261124T050057Z+3f9c2a1b7d04"
+        ));
+        assert!(!below_minor_one("0.1.0"));
+        assert!(!below_minor_one("0.00.1"));
+        assert!(!below_minor_one("0.0"));
+    }
 
     /// Here rather than beside the other key cases because a consumer's own
     /// expression has to be compiled, and this module is the one that may

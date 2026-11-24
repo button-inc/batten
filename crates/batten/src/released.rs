@@ -73,7 +73,7 @@ fn could_not_run(why: &anyhow::Error) -> anyhow::Error {
 fn only(inputs: &BTreeMap<String, String>) -> Result<()> {
     match inputs
         .keys()
-        .find(|key| !["tag", "hold"].contains(&key.as_str()))
+        .find(|key| !["tag", "hold", "released"].contains(&key.as_str()))
     {
         Some(key) => Err(refuse(&format!("reads no input `{key}`"))),
         None => Ok(()),
@@ -149,6 +149,19 @@ pub fn reading(
         .map(String::as_str)
         .filter(|tag| !tag.is_empty())
         .ok_or_else(|| refuse("needs `--input tag=<release tag>`"))?;
+    // THE CONSUMER'S RELEASE GLOB (CLOUD-2906): the predecessor is the nearest
+    // RELEASE under it, and a tag that is not one records no release.
+    let glob = inputs
+        .get("released")
+        .map(String::as_str)
+        .filter(|glob| !glob.is_empty())
+        .ok_or_else(|| refuse("needs `--input released=<release tag glob>`"))?;
+    if !crate::version::is_release_under(tag, glob) {
+        return Err(refuse(&format!(
+            "{tag} is not a release under `{glob}`: a pre-release or a tag that is not semver \
+             ships nothing"
+        )));
+    }
     let hold = held_by(patterns, inputs)?;
     let tip = format!("refs/tags/{tag}");
     if crate::git::resolve_ref(root, &tip)?.is_none() {
@@ -157,7 +170,7 @@ pub fn reading(
         )));
     }
     let grammar = Grammar::resolve(patterns)?;
-    let previous = crate::git::previous_tag(root, tag)?;
+    let previous = crate::git::previous_tag(root, tag, glob)?;
     let range = previous
         .as_deref()
         .map_or_else(|| tag.to_owned(), |prev| format!("{prev}..{tag}"));
@@ -338,6 +351,7 @@ mod tests {
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
         assert!(only(&inputs(&["tag", "hold"])).is_ok());
+        assert!(only(&inputs(&["tag", "hold", "released"])).is_ok());
         assert!(only(&inputs(&["tag", "since"])).is_err());
     }
 

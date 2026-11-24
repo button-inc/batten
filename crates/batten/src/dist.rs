@@ -74,7 +74,15 @@ pub fn is_windows_target(target: &str) -> bool {
 /// The asset stem: `name-vVERSION-TARGET`. The contract binstall reads.
 #[must_use]
 pub fn archive_stem(name: &str, version: &str, target: &str) -> String {
-    format!("{name}-v{version}-{target}")
+    tag_archive_stem(name, &format!("v{version}"), target)
+}
+
+/// [`archive_stem`] for a release TAG as written (`v1.2.3`): the stem names the
+/// tag verbatim, so a reader holding the tag never strips its `v` to rebuild it
+/// (CLOUD-2906).
+#[must_use]
+pub fn tag_archive_stem(name: &str, tag: &str, target: &str) -> String {
+    format!("{name}-{tag}-{target}")
 }
 
 /// The archive extension for a target: `.zip` for Windows, `.tar.gz` otherwise.

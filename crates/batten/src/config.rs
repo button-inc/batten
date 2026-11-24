@@ -2084,13 +2084,20 @@ fn floor_is_above_this_build(text: &str) -> bool {
 /// `check_min_version` turns into its own named refusal and the pruning arm
 /// treats as no evidence of skew.
 fn build_is_below(required: &str) -> bool {
-    let (Ok(required), Ok(running)) = (
-        semver::Version::parse(required),
-        semver::Version::parse(VERSION),
-    ) else {
-        return false;
-    };
-    running < required
+    version_is_below(VERSION, required)
+}
+
+/// Whether `running` orders below `required` by semver precedence (CLOUD-2906):
+/// a dev build (`0.0.221-dev.…`) is below its release floor `0.0.221`, and build
+/// metadata is never a floor. An unparsable side answers `false`.
+fn version_is_below(running: &str, required: &str) -> bool {
+    match (
+        crate::version::parse(running),
+        crate::version::parse(required),
+    ) {
+        (Some(running), Some(required)) => crate::version::precedence(&running, &required).is_lt(),
+        _ => false,
+    }
 }
 
 /// Whether this failure is a value naming a VARIANT this build does not have.
@@ -4150,6 +4157,16 @@ mod tests {
             "min_batten_version = \"{VERSION}\"\n"
         )));
         assert!(!floor_is_above_this_build("[unclosed"));
+    }
+
+    #[test]
+    fn a_dev_build_is_below_its_release_floor_and_build_metadata_is_not_a_floor() {
+        let dev = "0.0.221-dev.pr1.20261124T050057Z+3f9c2a1b7d04";
+        assert!(version_is_below(dev, "0.0.221"));
+        assert!(!version_is_below(dev, "0.0.220"));
+        assert!(!version_is_below("1.0.0+a", "1.0.0+b"));
+        assert!(!version_is_below("1.0.0", "1.0.0+b"));
+        assert!(!version_is_below("1.0.0", "not a version"));
     }
 
     #[test]

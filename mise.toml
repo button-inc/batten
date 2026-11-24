@@ -2777,7 +2777,7 @@ description = "Which CLOUD-* issues did a release tag ship? Resolves refs from t
 dir = "{{cwd}}"
 usage = 'arg "[tag]" help="the release tag whose commit range is judged"'
 run = [
-  "{{vars.batten}} record derive released --input tag={{usage.tag}} --input hold=released-hold-marker",
+  "{{vars.batten}} record derive released --input tag={{usage.tag}} --input hold=released-hold-marker --input 'released=v[0-9]*'",
   "{{vars.batten}} check --rule 'issue state other'",
 ]
 

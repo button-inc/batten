@@ -532,6 +532,7 @@ mod verdict_vocabulary;
 mod verify_chain;
 mod verify_placement;
 mod verify_unprovisioned;
+mod version_census;
 mod waivers;
 mod walker;
 mod wall_clock;

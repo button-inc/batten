@@ -276,17 +276,22 @@ fn done(inputs: &BTreeMap<String, String>, root: &Path, stdin: &str) -> Result<S
             &format!("`{landed}` does not resolve, so landedness cannot be read"),
         ));
     }
+    // ONLY A RELEASE SHIPS (CLOUD-2906): a pre-release the glob matches
+    // (`v1.1.0-rc.1` under `v[0-9]*`) or a tag that is not semver under the
+    // glob's prefix shipped nothing, so its reach is no release's.
     let tags: Vec<String> = crate::git::tag_facts(root, &[glob.to_owned()])?
         .remove(glob)
         .unwrap_or_default()
         .into_iter()
+        .filter(|tag| crate::version::is_release_under(&tag.tag, glob))
         .map(|tag| tag.commit)
         .collect();
     if tags.is_empty() {
         return Err(refuse(
             FAMILY,
             &format!(
-                "no tag matches `{glob}` in this clone, so releasedness cannot be read; fetch tags"
+                "no release tag matches `{glob}` in this clone, so releasedness cannot be read; \
+                 fetch tags"
             ),
         ));
     }
