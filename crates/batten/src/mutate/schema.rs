@@ -1971,6 +1971,13 @@ fn prebuilt(
     Ok(None)
 }
 
+/// What the clean build's listing removes from its inherited environment:
+/// every `NEXTEST_*` and `MUTANT_*`, as the reach and judge runs do. It names
+/// its profile and directories by argument, so an inherited `NEXTEST_PROFILE`
+/// (`mutant:rust` sets `mutants`) asked for a profile the listed tree may not
+/// declare, nextest refused, and the reuse record was never written (CLOUD-2897).
+const RECORD_SCRUB: super::Scrub = super::suite_scrubbed;
+
 /// Record the clean schema build's binaries under `state` for every judging
 /// run to reuse. Best effort: `None` leaves each run to build as it always did,
 /// which is slower and never wrong.
@@ -1984,12 +1991,14 @@ fn record_reuse(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).ok()?;
     let document = |args: &[String], into: &std::path::Path| -> Option<String> {
-        let ran = super::spawn(
+        let ran = super::spawn_scrubbed(
             work,
             super::Program::Cargo,
             args,
             &[],
             super::runner_bound(),
+            super::Said::Captured,
+            RECORD_SCRUB,
         )
         .ok()?;
         let line = ran.stdout.lines().find(|line| line.starts_with('{'))?;
@@ -9957,6 +9966,23 @@ pub fn repo() -> u8 {{ scratch() }}
         assert_eq!(packed.unviable, BTreeSet::from([3]));
         assert_eq!(packed.handed, BTreeSet::from([4]));
         assert_eq!(packed.unprobed, unprobed);
+    }
+
+    /// The clean build's listing inherits no `NEXTEST_*` or `MUTANT_*`, though
+    /// it sets no env of its own, and keeps everything else.
+    ///
+    /// Fails by: the sweep's `NEXTEST_PROFILE=mutants` reaching the listing,
+    /// which nextest refuses over a tree that declares no such profile, so no
+    /// reuse record is written and every judging run builds cold (CLOUD-2897).
+    #[test]
+    fn the_record_listing_inherits_no_nextest_or_mutant_variable() {
+        let inherited = ["NEXTEST_PROFILE", "MUTANT_SHARD", "PATH", "CARGO_HOME"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            RECORD_SCRUB(inherited.into_iter(), &[]),
+            ["NEXTEST_PROFILE", "MUTANT_SHARD"]
+        );
     }
 
     /// A shard judges only its own ids, from the whole listing's build: its
