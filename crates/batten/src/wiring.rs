@@ -196,8 +196,6 @@ pub(crate) fn same_file(one: &Path, two: &Path) -> bool {
 
 /// Whether two files hold the same BYTES, where [`same_file`] asks whether they
 /// are the same file; an unreadable side is never "same".
-//MUTANT-SUITE crates/batten/src/perf.rs
-//MUTANT identical-arms-unguarded|s@^        (Ok(left_bytes), Ok(right_bytes)) => left_bytes == right_bytes,$@        (Ok(_), Ok(_)) => false,@|identical_arms_are_the_same_bytes
 pub(crate) fn same_bytes(left: &Path, right: &Path) -> bool {
     match (std::fs::read(left), std::fs::read(right)) {
         (Ok(left_bytes), Ok(right_bytes)) => left_bytes == right_bytes,
