@@ -465,6 +465,52 @@ mod tests {
         assert_eq!(checks.len(), 2, "{checks:?}");
         assert!(!checks.contains_key("lonely"), "{checks:?}");
     }
+
+    /// A canned forge answer: a status, a validator, and a body.
+    fn reading(status: u16, etag: Option<&str>, body: &str) -> crate::rest::Answer {
+        crate::rest::Answer {
+            status,
+            etag: etag.map(str::to_owned),
+            poll_floor: None,
+            backoff: None,
+            body: body.to_owned(),
+            headers: BTreeMap::new(),
+        }
+    }
+
+    /// Fails by: the validator store kept anywhere but under the git directory
+    /// it was asked about, so one checkout's validator is sent, and its body
+    /// served for a `304`, on behalf of another.
+    #[test]
+    fn a_validator_one_git_directory_stored_never_answers_for_another() {
+        let first = crate::scratch::scratch("forge-validator-first");
+        let second = crate::scratch::scratch("forge-validator-second");
+        let url = "repos/o/r/check-runs?page=1";
+        let stored = conditional_get(&first, url, &|_, _| {
+            Some(reading(200, Some("W/\"v1\""), "[1]"))
+        });
+        assert_eq!(stored, Some((200, String::from("[1]"))));
+
+        let sent = std::cell::RefCell::new(Vec::new());
+        let other = conditional_get(&second, url, &|_, etag| {
+            sent.borrow_mut().push(etag.map(str::to_owned));
+            Some(reading(304, None, ""))
+        });
+        assert_eq!(*sent.borrow(), [None], "no validator is stored for it");
+        assert_eq!(other, None, "a 304 with nothing cached is could-not-look");
+
+        sent.borrow_mut().clear();
+        let own = conditional_get(&first, url, &|_, etag| {
+            sent.borrow_mut().push(etag.map(str::to_owned));
+            Some(reading(304, None, ""))
+        });
+        assert_eq!(*sent.borrow(), [Some(String::from("W/\"v1\""))]);
+        assert_eq!(
+            own,
+            Some((200, String::from("[1]"))),
+            "its own store answers"
+        );
+    }
 }
 
 // --- the producer's half: one windowed read, and truncation is a verdict -----

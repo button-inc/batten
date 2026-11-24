@@ -10451,6 +10451,15 @@ pub fn repo() -> u8 {{ scratch() }}
         }
     }
 
+    /// Fails by: a `static` answering to every word inside it (its type, the
+    /// function its initialiser calls), which reruns every case naming any.
+    #[test]
+    fn a_static_answers_to_its_own_name_alone() {
+        let source = "static LIMIT: Bound = Bound::new(8);\n";
+        let names: Vec<Vec<String>> = items_of(source).iter().map(item_names).collect();
+        assert_eq!(names, [vec![String::from("LIMIT")]]);
+    }
+
     /// Fails by: an item-position macro skipped as if it were a call in an
     /// expression, which leaves what it binds owned by nothing.
     #[test]
