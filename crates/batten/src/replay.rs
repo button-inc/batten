@@ -290,6 +290,12 @@ pub fn translate(body: &str, test_path: &str, moves: &BTreeMap<String, String>) 
     };
     let mut spellings: Vec<(String, String)> = Vec::new();
     for (old, new) in moves {
+        // AN EMPTY PATH NAMES NO FILE (CLOUD-2789), and it is a prefix of
+        // every text, so the scan below would splice its target in forever
+        // without consuming a byte.
+        if old.is_empty() {
+            continue;
+        }
         spellings.push((old.clone(), new.clone()));
         if let (Some(old), Some(new)) = (relative(old), relative(new)) {
             spellings.push((old, new));
@@ -2073,6 +2079,12 @@ mod tests {
             r#"{ read("crates/batten-facts/src/facts.rs"); read(dir.join("../batten-facts/src/facts.rs")); }"#
         );
         assert_eq!(translate(body, "README.md", &BTreeMap::new()), body);
+        let empty = BTreeMap::from([(String::new(), "xyzzy".to_owned())]);
+        assert_eq!(
+            translate(body, "crates/batten/tests/it/x.rs", &empty),
+            body,
+            "an empty path names no file, so nothing is respelled"
+        );
     }
 
     /// Fails by: a body that differs only by a moved path judged modified, a
