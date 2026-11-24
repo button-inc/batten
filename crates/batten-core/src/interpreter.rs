@@ -529,4 +529,20 @@ mod tests {
             Some("app.rb")
         );
     }
+
+    /// Fails by: the fallback's long options dropped, so an interpreter no
+    /// family describes reads `--eval code` or `--command=code` as carrying
+    /// nothing, and the program text in it goes unread (CLOUD-2789).
+    #[test]
+    fn the_fallback_carries_a_program_in_its_long_inline_options() {
+        assert_eq!(family("tclsh"), "tclsh", "no family describes it");
+        for arguments in [&["--eval", "x"][..], &["--command=x"]] {
+            assert_eq!(
+                carried("tclsh", arguments),
+                Carried::Inline,
+                "{arguments:?}"
+            );
+        }
+        assert_ne!(carried("tclsh", &["--verbose", "x"]), Carried::Inline);
+    }
 }
