@@ -71,4 +71,9 @@ exclude_re = [
   # two-colon arm is the one `a_crate_path_inside_a_macro_names_the_root`
   # exercises (#1276).
   'module_graph\.rs:\d+:\d+: delete match arm Some\(SyntaxKind::COLON2\) in token_paths$',
+  # The trace wait's exit test with `&&` never blocks on the tracer's close:
+  # it re-reads until the trace is whole or the grace runs out, then reads
+  # once more, which is the text the blocking wait returns too. Only wall time
+  # and CPU differ, and time is never what a case asserts.
+  'replace \|\| with && in await_trace',
 ]

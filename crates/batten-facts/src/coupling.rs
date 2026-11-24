@@ -594,4 +594,33 @@ mod tests {
         let level = decoupling_level_of(&[(2, 0, 0), (2, 1, 1)], 4);
         assert!((level - 0.75).abs() < 1e-12, "{level}");
     }
+
+    /// CLDDP's density on a module wider than one file: `a <-> b` depended on
+    /// by `c`, beside an isolated `d`. The pair's lower layer is `c` and `d`,
+    /// one edge in of 2·2 possible, so it scores 2/4 · (1 − 1/4); `c` and `d`
+    /// score 1/4 each. Fails by: the possible edges taken as the lower layer
+    /// over the module's size rather than times it.
+    #[test]
+    fn cross_layer_density_counts_every_lower_file_into_every_module_file() {
+        let mut graph = FileGraph::new();
+        graph
+            .entry("a".to_owned())
+            .or_default()
+            .insert("b".to_owned());
+        graph
+            .entry("b".to_owned())
+            .or_default()
+            .insert("a".to_owned());
+        graph
+            .entry("c".to_owned())
+            .or_default()
+            .insert("a".to_owned());
+        graph.entry("d".to_owned()).or_default();
+        let expected = 0.5 * (1.0 - 0.25) + 0.25 + 0.25;
+        let measured = measure(&graph).mscore;
+        assert!(
+            (measured - expected).abs() < 1e-9,
+            "{measured} vs {expected}"
+        );
+    }
 }

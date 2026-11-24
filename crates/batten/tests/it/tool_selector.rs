@@ -34,7 +34,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, run_with_stdin, stderr};
+use common::{Fixture, run, run_with_stdin, stderr};
 
 /// A repository whose one row refuses whatever tool `selector` names.
 ///
@@ -253,5 +253,60 @@ reason = "this tool is refused here; use the sanctioned path instead"
     assert!(
         !rendered.contains(secret),
         "the refusal carried a byte of the tool input: {rendered}"
+    );
+}
+
+/// `policy tools` names every tool a mediated row selects, sorted and once,
+/// and nothing a row keyed on a command line declares.
+///
+/// Fails by: the scope filter inverted, so only rows that are NOT mediated
+/// are read and every tool a mediated row names goes unlisted.
+#[test]
+fn policy_tools_names_each_tool_a_mediated_row_selects() {
+    let repo = Fixture::new("tool-selector-policy-tools")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "no-save"
+kind = "shape"
+scope = "mediated_call"
+tool = "save_issue"
+severity = "deny"
+reason = "this tool is refused here; use the sanctioned path instead"
+
+[[rule]]
+id = "no-read"
+kind = "shape"
+scope = "mediated_call"
+tool = "get_issue"
+severity = "deny"
+reason = "this tool is refused here; use the sanctioned path instead"
+
+[[rule]]
+id = "no-save-again"
+kind = "shape"
+scope = "mediated_call"
+tool = "save_issue"
+severity = "warn"
+reason = "a second row on the same tool is still one name"
+
+[[rule]]
+id = "no-merge"
+kind = "shape"
+scope = "mediated_call"
+pattern = "gh pr merge"
+severity = "deny"
+reason = "a command-line row names no tool"
+"#,
+        )
+        .git()
+        .build();
+    let output = run(&repo, &["policy", "tools"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "get_issue\nsave_issue\n"
     );
 }

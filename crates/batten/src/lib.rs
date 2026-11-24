@@ -34731,6 +34731,25 @@ mod tests {
         assert!(!super::shows_a_capture("batten check --lines"));
         assert!(!super::shows_a_capture("echo capture show abc --lines 1:5"));
     }
+
+    /// The digest cache sits beside the protected-path snapshots, in the git
+    /// dir of the repository it was asked about.
+    ///
+    /// Fails by: the cache path answered as an empty path, which no read
+    /// finds and whose missing parent keeps every write from landing, so each
+    /// pre-call snapshot re-hashes the whole protected set.
+    #[test]
+    fn the_protected_digest_cache_sits_beside_the_snapshots() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cache = super::protected_digest_cache(root).expect("the crate is in a repository");
+        let dir = crate::git::git_dir(root).expect("the crate is in a repository");
+        assert_eq!(
+            cache,
+            dir.join("batten-facts")
+                .join("protected-watch")
+                .join("digests")
+        );
+    }
 }
 
 /// The lap's engine bookkeeping (CLOUD-2783).

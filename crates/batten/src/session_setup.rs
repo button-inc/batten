@@ -361,6 +361,18 @@ pub fn surface(git_dir: &Path) -> Vec<Refusal> {
 mod tests {
     use super::*;
 
+    /// Fails by: the spooled payload's path answered as an empty path, so the
+    /// handlers read nothing where `start` wrote the host's payload.
+    #[test]
+    fn the_spooled_payload_is_the_file_start_writes() {
+        let git_dir = Path::new("/repo/.git");
+        assert_eq!(
+            payload_path(git_dir),
+            git_dir.join("batten-session-setup").join("payload")
+        );
+        assert_eq!(payload_path(git_dir), dir(git_dir).join(PAYLOAD));
+    }
+
     /// Fails by: a recorded finding that does not come back as the refusal the
     /// inline path built from the same inputs.
     #[test]
