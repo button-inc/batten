@@ -1134,6 +1134,34 @@ fn a_step_run_build_is_watched() {
     assert!(said.contains("step run probe: disk-collected "), "{said}");
 }
 
+/// `BATTEN_DISK_TRACE=1` writes each sample the watcher takes to stderr, the
+/// one record of how often the volume was read.
+///
+/// Fails by: the trace line never written, so a trace-on run reads as one the
+/// watcher never sampled.
+#[test]
+fn a_traced_watch_writes_its_samples_to_stderr() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("step-run-traced", true);
+    let ran = common::batten()
+        .current_dir(&dir)
+        .args(["step", "run", "probe", "--", "sh", "-c", "sleep 0.5"])
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .env("BATTEN_DISK_TRACE", "1")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    let said = common::stderr(&ran);
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    assert!(said.contains("disk-sample"), "{said}");
+}
+
 /// Cargo's `RUSTC_WRAPPER` (CLOUD-2197): every compile unit, whoever started
 /// the build, passes the collector first and then runs the compiler with its
 /// own argv and exit code. A fake `rustc` stands in, so the case pays no build.

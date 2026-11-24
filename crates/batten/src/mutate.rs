@@ -8449,6 +8449,30 @@ mod tests {
             "the suite does not touch the gate"
         );
     }
+    /// Fails by: no target answered for a suite the recorded metadata
+    /// compiles, which runs every mutant's filter unscoped over the workspace.
+    #[test]
+    fn a_suite_names_the_deepest_target_whose_root_holds_it() {
+        let staged = crate::scratch::scratch("mutate-suite-binary");
+        let root = |path: &str| staged.join(path).to_string_lossy().into_owned();
+        let metadata = staged.join("metadata.json");
+        let doc = serde_json::json!({"packages": [{
+            "name": "toy",
+            "targets": [
+                {"name": "toy", "kind": ["lib"], "src_path": root("crates/toy/src/lib.rs")},
+                {"name": "it", "kind": ["test"], "src_path": root("crates/toy/tests/it/main.rs")},
+            ],
+        }]});
+        std::fs::write(&metadata, doc.to_string()).unwrap();
+        assert_eq!(
+            suite_binary(&metadata, &staged, "crates/toy/tests/it/mutate.rs").as_deref(),
+            Some("toy::it")
+        );
+        assert_eq!(
+            suite_binary(&metadata, &staged, "crates/toy/src/x.rs").as_deref(),
+            Some("toy")
+        );
+    }
 }
 
 /// The sweep's row record (#1276).

@@ -9402,6 +9402,27 @@ mod tests {
         );
     }
 
+    /// The reach is a closure, so a helper declared ABOVE the item that names
+    /// it is taken on a later pass, not missed by the one pass that found it.
+    ///
+    /// Fails by: the walk stopping after the first pass that took anything.
+    #[test]
+    fn a_helper_declared_before_its_caller_is_reached() {
+        let test = [String::from("fn t() { repo(); }")];
+        let common = |helper: &str| {
+            format!(
+                "fn scratch() -> u8 {{ {helper} }}
+pub fn repo() -> u8 {{ scratch() }}
+"
+            )
+        };
+        assert_ne!(
+            common_reached(&common("1"), &test),
+            common_reached(&common("2"), &test),
+            "a helper reached through a later item moves the key"
+        );
+    }
+
     /// A handed-back verdict is read from the outcome file that names the
     /// mutant, never the run's exit; unviable wins; a survivor no case observed
     /// is uncovered; a mutant no file names is an error, never a kill.

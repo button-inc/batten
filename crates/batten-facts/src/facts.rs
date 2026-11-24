@@ -6361,4 +6361,12 @@ mod tests {
             Some(named)
         );
     }
+
+    /// Fails by: an integer literal matching every integer but itself.
+    #[test]
+    fn an_integer_literal_matches_only_its_own_value() {
+        assert!(Literal::Integer(3).matches(&serde_json::json!(3)));
+        assert!(!Literal::Integer(3).matches(&serde_json::json!(4)));
+        assert!(!Literal::Integer(3).matches(&serde_json::json!("3")));
+    }
 }

@@ -34525,3 +34525,20 @@ mod rebuilt_at_tests {
         assert_eq!(rebuilt_at(EngineUse::Fallback, "d"), None);
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod mcp_log_root_tests {
+    /// Fails by: an empty path answered as the log root, which reads the
+    /// working directory's own files as the host's connection logs.
+    #[test]
+    fn the_log_root_is_the_project_keyed_tree_under_home() {
+        let home = std::env::var_os("HOME").expect("the suite runs with a HOME");
+        let project = std::env::current_dir().expect("a working directory");
+        let key = project.to_string_lossy().replace('/', "-");
+        let root = super::mcp_log_root().expect("a home and a working directory");
+        assert!(root.starts_with(&home), "{}", root.display());
+        assert!(root.ends_with(&key), "{}", root.display());
+        assert_ne!(root.as_os_str(), home.as_os_str(), "{}", root.display());
+    }
+}

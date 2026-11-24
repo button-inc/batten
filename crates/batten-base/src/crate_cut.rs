@@ -804,4 +804,19 @@ mod tests {
         found.sort();
         assert_eq!(found, ["Cargo.toml", "a.rs", "sub/b.RS"]);
     }
+
+    /// Fails by: an empty group (`old::{}`) read as a reach that names only
+    /// moved modules, so a path that moves nothing is respelled.
+    #[test]
+    fn an_empty_group_is_never_spliced() {
+        let tree = rust_parse(
+            "use old::{};\nuse old::m;\n",
+            ra_ap_syntax::Edition::Edition2024,
+        )
+        .tree();
+        let modules = BTreeSet::from(["m"]);
+        let (splices, mixed) = root_splices(&tree, "old", &modules);
+        assert_eq!(splices, vec![17..20], "only `old::m` moves");
+        assert!(mixed.is_empty());
+    }
 }

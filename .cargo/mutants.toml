@@ -55,4 +55,15 @@ exclude_re = [
   # them: none of the five gates it runs (content, tool, ceiling, pipeline,
   # shape) reads `bundles`, so keeping the caller's changes no verdict (#1276).
   'delete field bundles from struct Policy expression in gate_nonblocking',
+  # `moved`'s one caller, `option_acting_dir`, hands it only the (program,
+  # option) pairs its `takes` table admits, and `--manifest-path` is the one
+  # option `cargo` takes there: `name == "cargo"` already decides it (#1276).
+  'hook\.rs:\d+:\d+: replace && with \|\| in moved$',
+  # At `size == 5` the penalty is `5f64.log(5.0).recip()`, which is exactly 1.0,
+  # the value the other arm answers (#1276).
+  'coupling\.rs:\d+:\d+: replace > with >= in decoupling_level_of$',
+  # The loop runs `at < steps`, and a named leaf's `steps` is `len - 1`, so
+  # `at + 1 < len` and `at < len` both hold on every pass; a glob or group end
+  # has no leaf for the filter to read (#1276).
+  'uses\.rs:\d+:\d+: replace \+ with \* in collect_edges$',
 ]

@@ -760,6 +760,46 @@ mod tests {
         assert_eq!(exit_code("Push the branch"), None);
     }
 
+    /// A child that stays running for `polls` polls and then is gone.
+    struct Running {
+        polls: usize,
+    }
+
+    impl Source for Running {
+        fn sessions(&mut self, _after: Option<&str>) -> Option<Page> {
+            let items = if self.polls == 0 {
+                Vec::new()
+            } else {
+                self.polls -= 1;
+                vec![serde_json::json!({"id": "child", "session_status": "RUNNING"})]
+            };
+            Some(Page {
+                items,
+                ..Page::default()
+            })
+        }
+
+        fn events(&mut self, _: &str, _: Option<&str>, _: Option<&str>) -> Option<Page> {
+            Some(Page::default())
+        }
+    }
+
+    /// Fails by: the delay shrinking between polls, which turns a patient
+    /// watch into a busy poll.
+    #[test]
+    fn the_delay_doubles_between_polls() {
+        let cache = Cache::new(crate::scratch::scratch("session-watch-backoff"));
+        let mut waits = Vec::new();
+        let ended = run(
+            &mut Watch::new(Vec::new()),
+            &mut Running { polls: 3 },
+            &cache,
+            &mut |delay| waits.push(delay),
+        );
+        assert!(matches!(ended, Some((_, Ending::Nothing))));
+        assert_eq!(waits, [FIRST_DELAY, FIRST_DELAY * 2, FIRST_DELAY * 4]);
+    }
+
     #[test]
     fn the_envelope_is_unwrapped_only_at_its_own_nonce() {
         let text = "<other-session nonce=\"ab\" untrusted=\"true\">\nheader (JSON):\n    {\"ccr\":{\"data\":[],\"note\":\"</other-session nonce=\\\"zz\\\">\"}}\n</other-session nonce=\"ab\">";

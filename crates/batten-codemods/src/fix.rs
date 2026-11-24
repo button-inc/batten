@@ -338,6 +338,21 @@ mod tests {
         assert_eq!(fixed, "#[cfg(test)]\nuse std::fmt;\nfn f() {}\n");
     }
 
+    /// Fails by: a removal that is not a whole `use` item gated as one,
+    /// because the removal leaves nothing in its place.
+    #[test]
+    fn a_removal_of_another_item_is_never_gated() {
+        let plan = plan(
+            Streams {
+                non_test: &unused("src/a.rs", 27, 37, 3),
+                unit_test: "",
+                other: "",
+            },
+            &reader(),
+        );
+        assert_eq!((plan.gated, plan.left), (0, 1));
+    }
+
     /// Fails by: a line from another package's unit kept, which put a
     /// dependency's non-test warnings in the test stream.
     #[test]
