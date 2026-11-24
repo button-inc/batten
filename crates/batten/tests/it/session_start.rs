@@ -152,7 +152,15 @@ fn setup_alive(repo: &Path) -> bool {
         .args(["task", "alive"])
         .streamed_output()
         .expect("the binary runs");
-    stdout(&alive).contains("session-setup") && !setup_exited(repo)
+    // A CRASHED RECORD NAMES THE TASK TOO (CLOUD-2789): `session-setup
+    // crashed(start) …` matched a bare name test, so a setup process gone
+    // short of a terminal phase read as running and `settle` waited out its
+    // whole bound, which a mutation judge reported as a hang.
+    let running = stdout(&alive).lines().any(|line| {
+        line.strip_prefix("session-setup ")
+            .is_some_and(|rest| !rest.starts_with("crashed("))
+    });
+    running && !setup_exited(repo)
 }
 
 /// Whether the setup task's registered process has exited and waits to be

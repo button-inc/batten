@@ -480,6 +480,18 @@ mod tests {
         }
     }
 
+    /// Python's `-m` names a module, not program text, so the call carries
+    /// its program elsewhere; `-c` carries it inline (CLOUD-2789).
+    ///
+    /// Fails by: the module letter dropped from Python's grammar, so `-m`
+    /// falls through to its inline letters and the module name is read as a
+    /// program.
+    #[test]
+    fn python_dash_m_names_a_module_and_dash_c_carries_text() {
+        assert_eq!(carried("python3", &["-m", "json.tool"]), Carried::Elsewhere);
+        assert_eq!(carried("python3", &["-c", "print(1)"]), Carried::Inline);
+    }
+
     /// Fails by: awk's `-f` read as no option, so the program file it names
     /// is taken for the program text (`Operand`) rather than a file the
     /// program is read from (CLOUD-2789).
