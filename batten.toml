@@ -19824,6 +19824,8 @@ inputs = [
   "policy",
   "fuzz/properties.rs",
   "bench/rust-suites/RESULTS.md",
+  # `test:skill-contract`'s reason: the loader's unwinder probe.
+  "libgcc_s.so.1",
 ]
 tools = [
   ["rustc", "--version"],
@@ -19882,6 +19884,8 @@ inputs = [
   # The tree walk its cases make honours both ignore files.
   ".gitignore",
   ".ignore",
+  # `test:skill-contract`'s reason: the loader's unwinder probe.
+  "libgcc_s.so.1",
 ]
 tools = [
   ["rustc", "--version"],
