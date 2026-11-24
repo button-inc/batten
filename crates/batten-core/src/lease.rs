@@ -894,7 +894,7 @@ fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
     while cursor < delta.len() {
         let instruction = delta[cursor];
         cursor += 1;
-        if instruction & 0x80 == 0 {
+        let piece = if instruction & 0x80 == 0 {
             // INSERT. A zero-length insert is not a no-op, it is a malformed
             // stream — git never emits one and treating it as harmless would let
             // a corrupt delta loop.
@@ -907,42 +907,24 @@ fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
             let bytes = delta
                 .get(cursor..cursor + length)
                 .ok_or_else(|| anyhow::anyhow!("lease: a delta's insert runs off its end"))?;
-            out.extend_from_slice(bytes);
             cursor += length;
-            continue;
+            bytes
+        } else {
+            delta_copy(base, delta, instruction, &mut cursor)?
+        };
+        out.extend_from_slice(piece);
+        // THE DECLARED SIZE BOUNDS THE WORK, NOT ONLY THE VERDICT. Every
+        // instruction yields at least one byte, so refusing the first one past
+        // `declared` ends any stream within `declared + 1` instructions — where
+        // the check after the loop alone let a one-byte copy (offset 0, length
+        // 0x10000) amplify every byte of a delta into 64 KiB of allocation
+        // before the length was ever compared.
+        if out.len() > declared {
+            return Err(anyhow::anyhow!(
+                "lease: a delta produced {} bytes and declared {declared}",
+                out.len()
+            ));
         }
-        // COPY. Offset and length are each assembled from whichever of the four
-        // and three following bytes the instruction's low bits say are present,
-        // so an absent byte means that octet is zero rather than that the stream
-        // is short.
-        let mut offset = 0_usize;
-        for shift in 0..4 {
-            if instruction & (1 << shift) != 0 {
-                let byte = *delta
-                    .get(cursor)
-                    .ok_or_else(|| anyhow::anyhow!("lease: a delta's copy runs off its end"))?;
-                offset |= usize::from(byte) << (shift * 8);
-                cursor += 1;
-            }
-        }
-        let mut length = 0_usize;
-        for shift in 0..3 {
-            if instruction & (0x10 << shift) != 0 {
-                let byte = *delta
-                    .get(cursor)
-                    .ok_or_else(|| anyhow::anyhow!("lease: a delta's copy runs off its end"))?;
-                length |= usize::from(byte) << (shift * 8);
-                cursor += 1;
-            }
-        }
-        // The one magic number in the format: a length of zero means 0x10000.
-        if length == 0 {
-            length = 0x1_0000;
-        }
-        let span = base
-            .get(offset..offset + length)
-            .ok_or_else(|| anyhow::anyhow!("lease: a delta copies a span outside its base"))?;
-        out.extend_from_slice(span);
     }
     if out.len() != declared {
         return Err(anyhow::anyhow!(
@@ -951,6 +933,49 @@ fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
         ));
     }
     Ok(out)
+}
+
+/// One COPY instruction's span of `base`, with `cursor` past its operand bytes.
+///
+/// # Errors
+///
+/// The operands run off the stream's end, or the span lies outside `base`.
+fn delta_copy<'a>(
+    base: &'a [u8],
+    delta: &[u8],
+    instruction: u8,
+    cursor: &mut usize,
+) -> Result<&'a [u8]> {
+    // COPY. Offset and length are each assembled from whichever of the four
+    // and three following bytes the instruction's low bits say are present,
+    // so an absent byte means that octet is zero rather than that the stream
+    // is short.
+    let mut offset = 0_usize;
+    for shift in 0..4 {
+        if instruction & (1 << shift) != 0 {
+            let byte = *delta
+                .get(*cursor)
+                .ok_or_else(|| anyhow::anyhow!("lease: a delta's copy runs off its end"))?;
+            offset |= usize::from(byte) << (shift * 8);
+            *cursor += 1;
+        }
+    }
+    let mut length = 0_usize;
+    for shift in 0..3 {
+        if instruction & (0x10 << shift) != 0 {
+            let byte = *delta
+                .get(*cursor)
+                .ok_or_else(|| anyhow::anyhow!("lease: a delta's copy runs off its end"))?;
+            length |= usize::from(byte) << (shift * 8);
+            *cursor += 1;
+        }
+    }
+    // The one magic number in the format: a length of zero means 0x10000.
+    if length == 0 {
+        length = 0x1_0000;
+    }
+    base.get(offset..offset + length)
+        .ok_or_else(|| anyhow::anyhow!("lease: a delta copies a span outside its base"))
 }
 
 /// One of a delta header's two little-endian varint sizes.
@@ -6378,6 +6403,33 @@ mod tests {
         assert!(
             apply_delta(base, &delta(10, 2, &[0x02, b'a'])).is_err(),
             "short insert"
+        );
+    }
+
+    /// Fails by: a cursor that does not move past every byte it read — an
+    /// instruction or a copy operand read twice — or a delta producing past its
+    /// declared size kept running, so the refusal names every byte the stream
+    /// amplified rather than the first instruction over the bound.
+    #[test]
+    fn a_delta_is_refused_at_the_first_instruction_past_its_declared_size() {
+        let digits = b"0123456789";
+        let mut walked = varint(digits.len());
+        walked.extend(varint(5));
+        // A copy with an offset and a length operand, then a two-byte insert.
+        walked.extend([0x91, 2, 3, 0x02, b'x', b'y']);
+        assert_eq!(
+            apply_delta(digits, &walked).ok().as_deref(),
+            Some(&b"234xy"[..])
+        );
+        let base = vec![b'b'; 0x1_0000];
+        let mut delta = varint(base.len());
+        delta.extend(varint(1));
+        // Four bare copies, each offset 0 and the 0x10000 default length.
+        delta.extend([0x80; 4]);
+        let refused = apply_delta(&base, &delta).err().map(|err| err.to_string());
+        assert_eq!(
+            refused.as_deref(),
+            Some("lease: a delta produced 65536 bytes and declared 1")
         );
     }
 
