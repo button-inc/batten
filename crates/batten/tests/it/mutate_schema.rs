@@ -658,17 +658,12 @@ fn mutant_rust_runs_on_its_own_against_a_declared_base() {
     }
     let dir = common::scratch_repo("mutant-rust-base");
     let stub = dir.join("batten-stub");
-    std::fs::write(
+    common::stub_at(
         &stub,
-        "#!/bin/sh\nprintf 'base=[%s] whole=[%s] argv=[%s]\\n' \"$MUTANT_CHANGED_SINCE\" \"$MUTANT_WHOLE_TREE\" \"$*\"\n",
-    )
-    .expect("plant the stub engine");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-            .expect("make the stub executable");
-    }
+        &serde_json::json!([{ "steps": [{
+            "stdout": "base=[{env:MUTANT_CHANGED_SINCE}] whole=[{env:MUTANT_WHOLE_TREE}] argv=[{argv}]\n"
+        }] }]),
+    );
     let bin = stub.to_string_lossy().into_owned();
     let run = |env: &[(&str, &str)]| {
         let mut all = vec![("BATTEN_BIN", bin.as_str())];

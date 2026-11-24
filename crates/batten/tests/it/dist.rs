@@ -42,6 +42,7 @@ use crate::common::{at_root, batten, scratch_outside_tree, stderr, stdout, write
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+use batten::capture::Streamed as _;
 use batten::exit::ExitCode;
 
 /// The Windows triples the cases build for: a target named here gets `.exe`.
@@ -96,7 +97,7 @@ fn the_package_ships_exactly_one_binary() {
     let output = std::process::Command::new(env!("CARGO"))
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .current_dir(at_root("."))
-        .output()
+        .streamed_output()
         .expect("cargo metadata runs");
     assert!(
         output.status.success(),

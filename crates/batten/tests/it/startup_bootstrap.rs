@@ -334,7 +334,7 @@ fn status_from_a_checkout_build_still_judges_the_link() {
     let (dir, _artifact) = linked_fixture(
         "provision-status-in-tree",
         dest.to_str().expect("the scratch path is UTF-8"),
-        b"#!/bin/sh\nexit 0\n",
+        NEVER_RUN,
     );
     // AN ENVIRONMENT ROW, so the link is a LAUNCHER: a plain-copy link reads
     // `missing` whoever asks (CLOUD-2210), which would make the fresh reading
@@ -405,7 +405,7 @@ fn apply_from_a_checkout_build_never_writes_the_host_link() {
     let (dir, _artifact) = linked_fixture(
         "provision-apply-in-tree",
         dest.to_str().expect("the scratch path is UTF-8"),
-        b"#!/bin/sh\nexit 0\n",
+        NEVER_RUN,
     );
     let engine = in_tree_engine(&dir);
     let out = common::batten_as(&engine)

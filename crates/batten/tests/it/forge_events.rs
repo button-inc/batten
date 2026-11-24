@@ -12,7 +12,6 @@
 
 use crate::common;
 
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -23,17 +22,14 @@ fn repo(name: &str, code: i32, extra: &str) -> PathBuf {
     let dir = common::scratch(name);
     let marker = dir.join("dispatched");
     let script = dir.join("handler");
-    std::fs::write(
-        &script,
-        // A refusal states its reason on stderr, as the handler contract
-        // requires: a silent exit 2 is a broken handler, not a deny.
-        format!(
-            "#!/bin/sh\necho x >> '{}'\n[ {code} -eq 0 ] || echo 'forge-pr refused' 1>&2\nexit {code}\n",
-            marker.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A refusal states its reason on stderr, as the handler contract
+    // requires: a silent exit 2 is a broken handler, not a deny.
+    let mut steps = vec![serde_json::json!({ "append": [marker.display().to_string(), "x\n"] })];
+    if code != 0 {
+        steps.push(serde_json::json!({ "stderr": "forge-pr refused\n" }));
+    }
+    steps.push(serde_json::json!({ "exit": code }));
+    common::stub_at(&script, &serde_json::json!([{ "steps": steps }]));
     common::write(
         &dir,
         "batten.toml",
@@ -243,16 +239,14 @@ fn poll_repo(name: &str, sources: &str) -> PathBuf {
     let dir = common::scratch(name);
     let log = dir.join("events");
     let script = dir.join("logger");
-    std::fs::write(
+    let log_path = log.display().to_string();
+    common::stub_at(
         &script,
-        format!(
-            "#!/bin/sh\ncat >> '{}'\necho >> '{}'\nexit 0\n",
-            log.display(),
-            log.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        &serde_json::json!([{ "steps": [
+            { "append-stdin": log_path },
+            { "append": [log_path, "\n"] },
+        ] }]),
+    );
     common::write(
         &dir,
         "batten.toml",

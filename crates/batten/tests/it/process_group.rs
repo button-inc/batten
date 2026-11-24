@@ -22,7 +22,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::capture::StreamedChild as _;
+use batten::capture::{Streamed as _, StreamedChild as _};
 
 use std::fs;
 use std::os::unix::process::ExitStatusExt as _;
@@ -86,7 +86,10 @@ fn pgid(pid: &str) -> String {
     let out = Command::new("ps")
         .args(["-o", "pgid=", "-p", pid])
         .stderr(Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::capture::Keep {
+            stderr: true,
+            ..batten::capture::Keep::NONE
+        })
         .expect("run ps");
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
