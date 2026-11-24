@@ -2914,4 +2914,103 @@ mod tests {
     fn a_super_chain_inside_a_macro_reaches_the_root_name() {
         assert_eq!(names("fn f() { m!(super::super::a); }", &["x", "y"]), ["a"]);
     }
+
+    /// Fails by: an impl at its type's home listed, or one outside it left
+    /// off; a binary's `main.rs` read as a module; `self::T` or a `super::`
+    /// that climbs to the root left unresolved, or that `super::` read as a
+    /// sibling; a root re-export's `a::T` not resolved to the module `a`; or
+    /// generic arguments kept in the self type's name (`W<u8>` is `W`).
+    #[test]
+    fn the_impl_plan_lists_each_impl_outside_its_home_by_how_it_names_its_type() {
+        let files = tree(&[
+            (
+                "src/lib.rs",
+                "mod a;\nmod b;\npub struct R;\npub use a::T;\n",
+            ),
+            (
+                "src/a.rs",
+                "pub struct T;\npub struct W<X>(X);\nimpl T { fn f() {} }\nimpl self::T { fn g() {} }\nimpl super::R { fn h() {} }\n",
+            ),
+            (
+                "src/b.rs",
+                "impl crate::T { fn f() {} }\nimpl crate::a::W<u8> { fn g() {} }\n",
+            ),
+            ("src/main.rs", "impl crate::a::T { fn m() {} }\n"),
+        ]);
+        assert_eq!(
+            impl_plan("src", &files),
+            [
+                "src/a.rs:5 R -> lib (1 lines)",
+                "src/b.rs:1 T -> a (1 lines)",
+                "src/b.rs:2 W -> a (1 lines)",
+            ]
+        );
+    }
+
+    /// Fails by: a file declaring the type's name in ANOTHER module taken as
+    /// a second home, which leaves the impl unmoved.
+    #[test]
+    fn an_impl_moves_to_the_one_file_of_its_home_declaring_the_type() {
+        let files = tree(&[
+            ("src/lib.rs", "mod a;\nmod b;\nmod c;\n"),
+            ("src/a.rs", "pub struct T;\n"),
+            ("src/b.rs", "pub struct T;\n"),
+            ("src/c.rs", "impl crate::a::T { fn f() {} }\n"),
+        ]);
+        let moved = move_impls_home("src", &files);
+        assert!(
+            moved["src/a.rs"].contains("impl crate::a::T { fn f() {} }"),
+            "{moved:?}"
+        );
+        assert!(!moved["src/c.rs"].contains("impl"), "{moved:?}");
+        assert!(!moved.contains_key("src/b.rs"), "{moved:?}");
+    }
+
+    /// Fails by: a `const` or a `union` the impl names neither imported into
+    /// its new file nor raised in its old one; or a private method nothing
+    /// outside the impl calls raised anyway, because the impl's own span was
+    /// not the one excluded.
+    #[test]
+    fn an_impl_moving_home_carries_the_consts_and_unions_it_names() {
+        let files = tree(&[
+            ("src/lib.rs", "mod a;\nmod b;\n"),
+            ("src/a.rs", "pub struct T;\n"),
+            (
+                "src/b.rs",
+                "use crate::a::T;\nconst LIMIT: u8 = 3;\nunion U { x: u8 }\nimpl T {\n    fn g(&self) {}\n    pub fn f(&self, _u: U) -> u8 { LIMIT }\n}\n",
+            ),
+        ]);
+        let moved = move_impls_home("src", &files);
+        let (home, old) = (&moved["src/a.rs"], &moved["src/b.rs"]);
+        assert!(home.contains("use crate::b::LIMIT;\n"), "{home}");
+        assert!(home.contains("use crate::b::U;\n"), "{home}");
+        assert!(home.contains("\n    fn g(&self) {}\n"), "{home}");
+        assert!(!home.contains("pub(crate) fn g"), "{home}");
+        assert!(old.contains("pub(crate) const LIMIT"), "{old}");
+        assert!(old.contains("pub(crate) union U"), "{old}");
+    }
+
+    /// Fails by: a `mod name;` declaration read as an inline module, which
+    /// leaves a file of two inline modules and one declaration unsplit.
+    #[test]
+    fn a_declared_module_beside_inline_ones_does_not_stop_the_split() {
+        let files = tree(&[(
+            "src/check.rs",
+            "pub mod a {\n    pub fn f() {}\n}\npub mod b {\n    pub fn g() {}\n}\nmod c;\n",
+        )]);
+        let split = split_inline_modules(&files);
+        assert_eq!(split["src/check.rs"], "pub mod a;\npub mod b;\nmod c;\n");
+        assert_eq!(split["src/check/a.rs"], "pub fn f() {}\n");
+    }
+
+    /// Fails by: a trait or a `macro_rules!` the root defines not collected,
+    /// so a module calling it has no edge to `lib`.
+    #[test]
+    fn a_lib_trait_and_macro_are_lib_items() {
+        let items: Vec<String> = lib_items("pub trait Tr {}\nmacro_rules! m { () => {} }\n")
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(items, ["Tr", "m"]);
+    }
 }

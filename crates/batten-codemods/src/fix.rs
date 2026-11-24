@@ -410,4 +410,43 @@ mod tests {
             "use std::io;\nfn f() {}\n"
         );
     }
+
+    /// Fails by: a removal that is one leaf of a group, which cannot be
+    /// gated, counted as gated or not counted as left for a person.
+    #[test]
+    fn a_group_leaf_only_tests_use_is_left_for_a_person() {
+        const GROUP: &str = "use std::{fmt, io};\nfn f() {}\n";
+        let line = unused("src/a.rs", 10, 15, 1);
+        let plan = plan(
+            Streams {
+                non_test: &line,
+                unit_test: "",
+                other: "",
+            },
+            &|_: &str| Some(GROUP.to_owned()),
+        );
+        assert_eq!((plan.gated, plan.left), (0, 1));
+        assert!(plan.edits.is_empty());
+    }
+
+    /// Fails by: the gate's indentation read past the removal's leading
+    /// newline, which puts the gated `use` at column zero inside a module.
+    #[test]
+    fn a_gated_import_keeps_its_indentation() {
+        const NESTED: &str = "mod m {\n    use std::fmt;\n}\n";
+        let line = unused("src/a.rs", 7, 25, 1);
+        let plan = plan(
+            Streams {
+                non_test: &line,
+                unit_test: "",
+                other: "",
+            },
+            &|_: &str| Some(NESTED.to_owned()),
+        );
+        assert_eq!(plan.gated, 1);
+        assert_eq!(
+            apply(NESTED, &plan.edits["src/a.rs"]).expect("applies"),
+            "mod m {\n    #[cfg(test)]\n    use std::fmt;\n}\n"
+        );
+    }
 }
