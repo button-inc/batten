@@ -1466,7 +1466,7 @@ record = "other"
     #[test]
     fn a_module_reading_every_row_keeps_every_row_whole() {
         let forge = projected(&["tree.forge"]);
-        let rows = forge["rule"].as_array().expect("the rule table stays");
+        let rows = forge["rule"].as_array().unwrap();
         assert_eq!(rows.len(), 2, "{forge}");
         assert_eq!(rows[1]["id"], "other", "{forge}");
         assert_eq!(rows[1]["delta_sources"][0], "x", "kept whole: {forge}");
