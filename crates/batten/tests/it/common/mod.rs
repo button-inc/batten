@@ -1613,31 +1613,36 @@ pub(crate) fn pkl_ca_selection(
 #[must_use]
 #[expect(
     clippy::disallowed_types,
-    reason = "stays, and test-only (CLOUD-2841): the suite's one `pkl` spawn — `pkl eval` evaluates hk's config and the fix-selection predicate, which the engine does not host; a read with no effect"
+    reason = "stays, and test-only (CLOUD-2841): returns the suite's one `pkl` spawn, which `pkl_command_with` builds"
 )]
 pub(crate) fn pkl_command() -> Command {
-    let mut command = Command::new(require_tool("pkl"));
-    command.args(pkl_eval_args(
+    pkl_command_with(
         std::env::var_os("BATTEN_CA_BUNDLE"),
         std::env::var_os("SSL_CERT_FILE"),
-    ));
-    command
+    )
 }
 
-/// The argv [`pkl_command`] spawns `pkl` with, given the two CA candidates:
-/// `eval`, then [`pkl_ca_selection`]'s flag.
+/// [`pkl_command`] over explicit CA candidates rather than the environment:
+/// `pkl eval`, then [`pkl_ca_selection`]'s flag. The whole spawn is built here
+/// and [`pkl_command`] only forwards the two variables.
 ///
 /// APART FROM THE ENVIRONMENT so `pkl_ca.rs` can show the spawn carries the
-/// selection on a runner whose environment sets neither variable, where an
-/// argv read off [`pkl_command`] is `eval` with or without it (CLOUD-2917).
+/// selection on a runner whose environment sets neither variable, where a bare
+/// `pkl eval` and one with the selection read the same (CLOUD-2917).
 #[must_use]
-pub(crate) fn pkl_eval_args(
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only (CLOUD-2841): the suite's one `pkl` spawn — `pkl eval` evaluates hk's config and the fix-selection predicate, which the engine does not host; a read with no effect"
+)]
+pub(crate) fn pkl_command_with(
     batten_ca: Option<std::ffi::OsString>,
     ssl_cert: Option<std::ffi::OsString>,
-) -> Vec<std::ffi::OsString> {
-    std::iter::once(std::ffi::OsString::from("eval"))
-        .chain(pkl_ca_selection(batten_ca, ssl_cert))
-        .collect()
+) -> Command {
+    let mut command = Command::new(require_tool("pkl"));
+    command
+        .arg("eval")
+        .args(pkl_ca_selection(batten_ca, ssl_cert));
+    command
 }
 
 /// A path the committed protected set guards TODAY: the policy authority while the
