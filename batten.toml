@@ -11,7 +11,7 @@
 
 # The config schema version. This build supports version 1.
 version = 1
-engine = { source = "10223f6dc8fb6ccb51031da0bebc38b0cd538b8c7c07c7397a004ec89750819a" }
+engine = { source = "cb2859bf8f7fe2fffee8836ddebe8c982c05c3d9e2dcf0c0e4fde7b57091b1ef" }
 
 # Minimum Batten version permitted to read this file (semver). Enforced: a binary
 # older than this refuses to run rather than reporting green over rules it does
