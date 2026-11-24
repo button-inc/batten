@@ -249,7 +249,7 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
             && let Some(quote) = line[open..].find('"')
         {
             let (argument, after) = quoted_arg(&line[open + quote + 1..])?;
-            if library_lookup(&argument, line) {
+            if library_lookup(&argument, line) || url_lookup(&argument, line) {
                 continue;
             }
             if !LINK_CONTENT.contains(&syscall(line)) {
@@ -299,6 +299,35 @@ fn library_lookup(argument: &str, line: &str) -> bool {
         Access::Write => false,
     };
     searched && !argument.contains('/') && soname(argument)
+}
+
+/// Whether `line` is a tool asking whether a URL is a local path, and finding
+/// it is not (CLOUD-2789): a path argument spelled `scheme://…` (an RFC 3986
+/// scheme, then `://` as written, before the walk folds the `//`), named by a
+/// read-only open or a probe ([`PROBES`]) that returned `-1 ENOENT`.
+///
+/// MEASURED, `cargo deny check` on a cold advisory cache: gix, handed the
+/// advisory database's URL to clone, first stats it as a path against the
+/// working directory, `newfstatat(AT_FDCWD</repo>,
+/// "https://github.com/RustSec/advisory-db.git", …) = -1 ENOENT`, with its
+/// `/.git`, `.git/.git` and `.bundle` variants. The walk read those as five
+/// files under `https:/` in the step's tree, and `deny` refused on every cold
+/// container — CI's every run — and passed warm, where the clone is opened,
+/// not looked up.
+///
+/// The ARGUMENT names a remote, not a file, so it is dropped, and only where
+/// dropping it loses nothing: a lookup that found something is kept (a tree
+/// really holding `https:/…` reads it), and a write is never dropped.
+fn url_lookup(argument: &str, line: &str) -> bool {
+    let missed = access_of(line) != Access::Write
+        && result_of(line).is_some_and(|result| result.starts_with("-1 ENOENT"));
+    missed
+        && argument.split_once("://").is_some_and(|(scheme, _)| {
+            scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        })
 }
 
 /// Whether `name` is a shared object's name: a nonempty stem, `.so`, then
@@ -966,6 +995,72 @@ mod tests {
             assert_eq!(
                 accessed(&[line]),
                 vec![(PathBuf::from("/repo/a"), Write)],
+                "{line}"
+            );
+        }
+    }
+
+    /// A URL LOOKED UP AS A PATH IS NO TOUCH (CLOUD-2789): gix, cloning the
+    /// advisory database on a cold `cargo deny`, stats the URL against its
+    /// working directory first (the first line below, as that run traced it),
+    /// and the walk read `/repo/https:/github.com/…` as a file in the tree.
+    ///
+    /// Fails by: dropping the `url_lookup` skip (the URL resolves under
+    /// `/repo/https:`); dropping its ENOENT clause (the found lookup vanishes);
+    /// dropping its not-a-write clause (the failed create vanishes); or
+    /// loosening the scheme to any text before `://` (the digit-led, the
+    /// slashed and the spaced paths vanish) or to `:/` (the single-slash path
+    /// vanishes).
+    #[test]
+    fn a_url_looked_up_as_a_path_is_no_touch() {
+        use super::Access::{Probe, Read, Write};
+        for line in [
+            "7     newfstatat(AT_FDCWD</repo>, \"https://github.com/RustSec/advisory-db.git\", \
+             0x1, 0) = -1 ENOENT (No such file or directory)",
+            "7     stat(\"git+ssh://host/a.bundle\", 0x1) = -1 ENOENT (No such file or directory)",
+            "7     openat(AT_FDCWD</repo>, \"file://x/y\", O_RDONLY) = -1 ENOENT (No such file or \
+             directory)",
+        ] {
+            assert_eq!(accessed(&[line]), vec![], "{line}");
+        }
+        let kept = [
+            (
+                "7     newfstatat(AT_FDCWD</repo>, \"https://h/x\", 0x1, 0) = 0",
+                "/repo/https:/h/x",
+                Probe,
+            ),
+            (
+                "7     openat(AT_FDCWD</repo>, \"https://h/x\", O_WRONLY|O_CREAT, 0644) = -1 \
+                 ENOENT (No such file or directory)",
+                "/repo/https:/h/x",
+                Write,
+            ),
+            (
+                "7     stat(\"1x://h\", 0x1) = -1 ENOENT (No such file or directory)",
+                "/repo/1x:/h",
+                Probe,
+            ),
+            (
+                "7     stat(\"d/https://h\", 0x1) = -1 ENOENT (No such file or directory)",
+                "/repo/d/https:/h",
+                Probe,
+            ),
+            (
+                "7     stat(\"a b://h\", 0x1) = -1 ENOENT (No such file or directory)",
+                "/repo/a b:/h",
+                Probe,
+            ),
+            (
+                "7     openat(AT_FDCWD</repo>, \"https:/h\", O_RDONLY) = -1 ENOENT (No such file \
+                 or directory)",
+                "/repo/https:/h",
+                Read,
+            ),
+        ];
+        for (line, path, access) in kept {
+            assert_eq!(
+                accessed(&[line]),
+                vec![(PathBuf::from(path), access)],
                 "{line}"
             );
         }
