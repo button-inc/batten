@@ -136,7 +136,10 @@ fn no_hand_rolled_version_reading_outside_the_parser() {
         let Ok(text) = std::fs::read_to_string(common::at_root(file)) else {
             continue;
         };
-        for needle in hits(&code_of(&text, file.ends_with(".rs"))) {
+        let rust = Path::new(file)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"));
+        for needle in hits(&code_of(&text, rust)) {
             match KNOWN
                 .iter()
                 .position(|(path, index, _)| *path == file && *index == needle)
