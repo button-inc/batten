@@ -3923,12 +3923,19 @@ reason = "Re-read the row with `batten mcp call Linear get_issue` (the raw tool 
 # arm asserted an authority it did not hold while a human paid one approval click per
 # landing. What replaced it is an actor rather than a louder claim — `pr-unsubscribed
 # drop` makes the call from a task, where no permission control applies.
+#
+# A MODULE SINCE CLOUD-2889, AND ONLY SO ITS REFUSAL CAN LIST THE OPEN CHILDREN.
+# A shape row cannot read `minted`, and the owner's ruling has every timer-family
+# refusal name the open child sessions a dispatcher may wait on. The tool match is
+# `facts::selects_tool_name`'s, spelled in the module; the id, the class and this
+# reason are unchanged.
 [[rule]]
 id = "review watch refused"
-kind = "shape"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
 scope = "mediated_call"
+module = "policy/review-watch.rego"
 severity = "deny"
-tool = "subscribe_pr_activity"
 reason = "No webhook babysitting. To land, run `mise run land` (backgrounded): it stops only for a conflict, a failed `verify` or red CI. To watch forge events, run `batten forge poll --every N` as a `[[startup]]` row."
 
 # ONE PR ALL OF IT, AS A MECHANISM RATHER THAN A SENTENCE (CLOUD-1891).
@@ -4006,11 +4013,34 @@ while_marker = "pr-open"
 reason = "This branch already has an unlanded pull request; the rule is one PR for all of it. Put the new commits on that PR's branch, or land it with `mise run land`. Landing or closing it unmerged sweeps this marker."
 
 # `timer mint refused` (`send_later`) and `event mint refused` (`create_trigger`)
-# were shape rows here that refused the tool outright. They retired into
-# `policy/run-shape.rego` under CLOUD-2889, keeping their ids and their
-# `call name refused` class: a timer is admitted only when its own arguments name
-# an open child session (`children-open` on `commit read missing`), so a PR
-# heartbeat names none and is refused as before.
+# were shape rows here that refused the tool outright. Under CLOUD-2889 each is a
+# module of its own, keeping its id and the `call name refused` class: a timer is
+# admitted only when its own arguments name an open child session (`children-open`
+# on `commit read missing`), so a PR heartbeat names none and is refused as before.
+#
+# ONE MODULE EACH, FOR THE REMEDY. A module's finding id resolves to the row that
+# binds its module (`owning_row`), and that row's `reason` is the deny line's `Do:`.
+# As arms of `policy/run-shape.rego` both resolved to `commit read missing`, which
+# declares none, so the two refusals lost the remedies these rows carried.
+#MUTANT-SUITE crates/batten/tests/it/connector_verbs.rs
+#MUTANT timer-remedy-dropped|s@act on its exit: a backgrounded task@wait: a backgrounded task@|each_refusal_names_its_own_remedy
+[[rule]]
+id = "timer mint refused"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/timer-mint.rego"
+severity = "deny"
+reason = "No timer to babysit a PR. Background the long command and act on its exit: a backgrounded task re-invokes this session when it ends. A wait on a child session names its id; the refusal lists the open ones."
+
+[[rule]]
+id = "event mint refused"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/event-mint.rego"
+severity = "deny"
+reason = "No Routine to babysit a PR: `mise run land` drives the landing loop. Background the task and act on its exit. A wait on a child session names its id in the prompt; the refusal lists the open ones."
 
 # CLOUD-312 row 6: `fanout-guard` retired into two rows over the `Agent` call, and
 # ONE remains. The spawn is gated at all for CLOUD-287's reason: it commits a whole

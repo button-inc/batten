@@ -7,7 +7,10 @@
 //! `create_trigger` or a backgrounded wait only when the call's own arguments
 //! name one of them. A PR heartbeat names none and is refused by construction.
 //! These cases run the committed config and modules over the binary, so they
-//! break if the mint pair, the minted row or an arm is edited away.
+//! break if the mint pair, the minted row or an arm is edited away. The two
+//! timer tools and the webhook are modules of their own
+//! (`policy/timer-mint.rego`, `policy/event-mint.rego`,
+//! `policy/review-watch.rego`), and each refusal lists the open children.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -124,6 +127,13 @@ fn refused_by(output: &std::process::Output, rule: &str) {
     );
 }
 
+/// The refusal names the open child, so a dispatcher refused here can bind its
+/// wait to one (the owner's ruling: each refusal lists the open-child ids).
+fn names_child(output: &std::process::Output) {
+    let text = stderr(output);
+    assert!(text.contains(CHILD), "the refusal lists {CHILD}: {text}");
+}
+
 fn not_refused_by(output: &std::process::Output, rules: &[&str]) {
     let text = stderr(output);
     let by = common::refusing_rule(&text);
@@ -218,14 +228,13 @@ fn send_later_naming_no_open_child_is_refused() {
     let dir = repo("child-wait-send-later-pr");
     create_child(&dir, CHILD);
     for prefix in SPELLINGS {
-        refused_by(
-            &call(
-                &dir,
-                &format!("{prefix}send_later"),
-                &serde_json::json!({"delay_minutes": 5, "message": "check CI on PR #1282"}),
-            ),
-            "timer mint refused",
+        let refusal = call(
+            &dir,
+            &format!("{prefix}send_later"),
+            &serde_json::json!({"delay_minutes": 5, "message": "check CI on PR #1282"}),
         );
+        refused_by(&refusal, "timer mint refused");
+        names_child(&refusal);
     }
 }
 
@@ -249,29 +258,30 @@ fn create_trigger_naming_an_open_child_is_admitted() {
 fn create_trigger_naming_no_open_child_is_refused() {
     let dir = repo("child-wait-trigger-pr");
     create_child(&dir, CHILD);
-    refused_by(
-        &call(
-            &dir,
-            "mcp__Claude_Code_Remote__create_trigger",
-            &serde_json::json!({"name": "babysit", "prompt": "check PR #1282", "initiation": "own_followup"}),
-        ),
-        "event mint refused",
+    let refusal = call(
+        &dir,
+        "mcp__Claude_Code_Remote__create_trigger",
+        &serde_json::json!({"name": "babysit", "prompt": "check PR #1282", "initiation": "own_followup"}),
     );
+    refused_by(&refusal, "event mint refused");
+    names_child(&refusal);
 }
 
-/// A webhook is never a wait on a child, so an open child admits nothing here.
+/// A webhook is never a wait on a child, so an open child admits nothing here;
+/// the refusal still lists it, as the two timer refusals do.
+///
+/// MUTANT `watch-children-unlisted`.
 #[test]
 fn subscribe_pr_activity_stays_refused_with_a_child_open() {
     let dir = repo("child-wait-subscribe");
     create_child(&dir, CHILD);
-    refused_by(
-        &call(
-            &dir,
-            "mcp__Claude_Code_Remote__subscribe_pr_activity",
-            &serde_json::json!({"owner": "o", "repo": "r", "pullNumber": 1}),
-        ),
-        "review watch refused",
+    let refusal = call(
+        &dir,
+        "mcp__Claude_Code_Remote__subscribe_pr_activity",
+        &serde_json::json!({"owner": "o", "repo": "r", "pullNumber": 1}),
     );
+    refused_by(&refusal, "review watch refused");
+    names_child(&refusal);
 }
 
 /// No store, an empty store, an archived child and a stale receipt each admit

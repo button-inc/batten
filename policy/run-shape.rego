@@ -70,10 +70,6 @@ rules contains "task run blocked"
 
 rules contains "redirect write unread"
 
-rules contains "timer mint refused"
-
-rules contains "event mint refused"
-
 # CLOUD-613's three, and none of them is over a program NAME — a mutation on the
 # `sleep` or `git` token survives, because every ALLOW row already fails some
 # other conjunct. Each of these corrupts the conjunct that carries the verdict.
@@ -109,11 +105,6 @@ rules contains "event mint refused"
 #MUTANT-SUITE crates/batten/tests/it/child_wait.rs
 #MUTANT children-watch-unread|s@^\tcontains(text, id)$@\tfalse@|a_backgrounded_wait_naming_an_open_child_is_admitted
 #MUTANT timer-children-unread|s@^\tnot names_open_child(input.call.command)$@\ttrue@|a_backgrounded_wait_naming_an_open_child_is_admitted
-#MUTANT send-later-children-unread|s@^\tnot names_open_child(input.call.arguments.message)$@\ttrue@|send_later_naming_an_open_child_is_admitted_under_every_spelling
-#MUTANT trigger-children-unread|s@^\tnot names_open_child(input.call.arguments.prompt)$@\ttrue@|create_trigger_naming_an_open_child_is_admitted
-#MUTANT send-later-unrefused|s@^\tcalls("send_later")$@\tfalse@|send_later_naming_no_open_child_is_refused
-#MUTANT trigger-unrefused|s@^\tcalls("create_trigger")$@\tfalse@|create_trigger_naming_no_open_child_is_refused
-#MUTANT connector-spelling-unread|s@^\tendswith(input.call.tool, concat("", \["__", name\]))$@\tfalse@|send_later_naming_no_open_child_is_refused
 
 violation contains {
 	"rule": "commit write missing",
@@ -171,54 +162,20 @@ violation contains {
 	not names_open_child(input.call.command)
 }
 
-# A TIMER IS JUDGED BY WHAT IT IS FOR, READ OFF ITS OWN ARGUMENTS (CLOUD-2889).
+# A BACKGROUNDED WAIT IS JUDGED BY WHAT IT NAMES (CLOUD-2889).
 #
 # The owner's ruling (2026-11-24): a dispatcher watching its children may wait,
-# and a session babysitting a PR may not. The two are the same call with
-# different payloads, so the question is what the timer names. A timer naming a
-# session this session created and has not archived — a `child-open` receipt
-# under a day old, projected as `input.facts.minted["children-open"]` — is a
-# wait on that child. Anything else, a PR heartbeat above all, names none of
-# them and is refused by construction.
+# and a session babysitting a PR may not. A backgrounded wait whose command names
+# a session this session created and has not archived — a `child-open` receipt
+# under a day old, projected as `input.facts.minted["children-open"]` — is a wait
+# on that child, and `timer run refused` above admits it. Null, absent and empty
+# all refuse: `open_children` is empty and `names_open_child` undefined.
 #
-# NULL, ABSENT AND EMPTY ALL REFUSE. On a fresh clone or a CI runner the store is
-# empty, the fact is null, `open_children` is empty, and `names_open_child` is
-# undefined, so `not` holds and every arm refuses exactly as before. The ids
-# travel back as artifact subjects so the caller can bind its timer to one.
-#
-# `send_later` and `create_trigger` were each a `kind = "shape"` row that refused
-# the tool outright. They retire into the arms below, which keep their ids and the
-# `call name refused` class, so an admission written against either still binds.
-# `subscribe_pr_activity` stays a shape row: a forge webhook is never a wait on a
-# child, so it has nothing to name.
-violation contains {
-	"rule": "timer mint refused",
-	"verdict": "call name refused",
-	"subjects": child_subjects,
-} if {
-	calls("send_later")
-	not names_open_child(input.call.arguments.message)
-}
-
-violation contains {
-	"rule": "event mint refused",
-	"verdict": "call name refused",
-	"subjects": child_subjects,
-} if {
-	calls("create_trigger")
-	not names_open_child(input.call.arguments.prompt)
-}
-
-# The host's spelling of a tool, bare or behind a connector prefix, matched as
-# `facts::selects_tool_name` matches a shape row's `tool`: the bare name, or any
-# name ending in `__` and the bare name.
-calls(name) if {
-	input.call.tool == name
-}
-
-calls(name) if {
-	endswith(input.call.tool, concat("", ["__", name]))
-}
+# The two timer TOOLS are their own modules, `policy/timer-mint.rego`
+# (`send_later`) and `policy/event-mint.rego` (`create_trigger`), and the webhook
+# is `policy/review-watch.rego`: a module's finding id resolves to the row that
+# binds its module, so as arms here they reached `commit read missing`, which
+# declares no remedy, and the refusal lost the one its shape row had carried.
 
 # Every open child of this session, by session id.
 open_children contains id if {
@@ -232,7 +189,6 @@ names_open_child(text) if {
 	contains(text, id)
 }
 
-child_subjects := [{"artifact": id} | some id in sort(open_children)]
 
 # A backgrounded wait that polls the LOCAL PROCESS TABLE (CLOUD-1337).
 #
@@ -1150,71 +1106,14 @@ test_a_foreground_redirect_is_not_this_rule if {
 # AN INPUT REDIRECT IS UNTOUCHED: reading a file INTO a backgrounded command
 # discards nothing. Judged on the redirection TOKENS, and `<` is not one of them.
 # ---------------------------------------------------------------------------
-# CLOUD-2889: a timer is admitted only when its own arguments name an open
-# child. Every case carries a `command`, for the reason the section above gives.
+# CLOUD-2889: a backgrounded wait is admitted only when its command names an
+# open child. The two timer tools' cases moved with their arms, to
+# `policy/timer-mint.rego` and `policy/event-mint.rego`.
 # ---------------------------------------------------------------------------
 
 child := "session_01ChildAbc"
 
 open_child := {"minted": {"children-open": {"session_01ChildAbc": "open"}}}
-
-# `command` is the empty string, as the engine emits it for a call that is not a
-# shell: the field is a `String`, never null.
-timer_call(tool, arguments) := {"call": {
-	"command": "",
-	"tool": tool,
-	"arguments": arguments,
-	"run-in-background": null,
-	"segments": [],
-}}
-
-test_send_later_naming_an_open_child_is_admitted if {
-	count(violation) == 0 with input as object.union(
-		timer_call("mcp__Claude_Code_Remote__send_later", {"message": concat(" ", ["check", child])}),
-		{"facts": open_child},
-	)
-}
-
-test_send_later_naming_no_open_child_is_refused if {
-	some v in violation with input as object.union(
-		timer_call("send_later", {"message": "check CI on PR #1282"}),
-		{"facts": open_child},
-	)
-	v.rule == "timer mint refused"
-	v.subjects == [{"artifact": child}]
-}
-
-# NULL IS COULD-NOT-LOOK, AND IT REFUSES: a fresh clone has no receipt store.
-test_send_later_with_no_store_is_refused if {
-	some v in violation with input as object.union(
-		timer_call("send_later", {"message": concat(" ", ["check", child])}),
-		{"facts": {"minted": null}},
-	)
-	v.rule == "timer mint refused"
-}
-
-test_create_trigger_naming_an_open_child_is_admitted if {
-	count(violation) == 0 with input as object.union(
-		timer_call("create_trigger", {"prompt": concat(" ", ["poll", child])}),
-		{"facts": open_child},
-	)
-}
-
-test_create_trigger_naming_no_open_child_is_refused if {
-	some v in violation with input as object.union(
-		timer_call("mcp__x__create_trigger", {"prompt": "babysit PR #1282"}),
-		{"facts": open_child},
-	)
-	v.rule == "event mint refused"
-}
-
-# A tool that merely ENDS in the name, with no `__` before it, is another tool.
-test_a_tool_ending_in_the_name_is_not_the_timer if {
-	count(violation) == 0 with input as object.union(
-		timer_call("not_send_later", {"message": "x"}),
-		{"facts": open_child},
-	)
-}
 
 test_a_backgrounded_wait_naming_an_open_child_is_admitted if {
 	count(violation) == 0 with input as {
