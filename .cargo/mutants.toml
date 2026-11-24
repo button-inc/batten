@@ -189,8 +189,9 @@ exclude_re = [
   # for a `GIT_VALUE_OPTIONS` word, else one), so the scan lands on `end` only
   # where that walk stopped: the subcommand, a word not starting `-`, which no
   # arm reads, or past the last word, where `get` answers `None`. `< end` and
-  # `<= end` agree (CLOUD-2789).
-  'hook\.rs:\d+:\d+: replace < with <= in git_dir_operands$',
+  # `<= end` agree (CLOUD-2789). Column 65 is that `< end`, the function's only
+  # `<`, so one added there later is judged rather than excluded unread.
+  'hook\.rs:\d+:65: replace < with <= in git_dir_operands$',
   # `arm_sequence`'s early return is taken only when `introduced` is empty, and
   # `judge_arm_sequencing`, the one reader of its sequences, reads `label` only
   # inside its loop over `introduced`: an empty map runs no pass, so a default
