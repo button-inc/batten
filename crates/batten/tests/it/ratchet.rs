@@ -53,6 +53,21 @@ fn check(dir: &Path) -> Output {
     run(dir, &["check"])
 }
 
+/// Fails by: a ratchet row's measure never checked (`self.kind !=
+/// RuleKind::Ratchet` read as `==`), so a row counting both a token measure
+/// and a literal loads and counts one of them silently (CLOUD-2789).
+#[test]
+fn a_ratchet_counting_tokens_and_a_literal_is_refused() {
+    let alone = ratchet_config("#[test]", "non_decreasing", "deny");
+    batten::config::parse(&alone, "test").expect("the premise: a literal ratchet loads");
+    let both = format!("{alone}counts = \"tokens\"\n");
+    let err = batten::config::parse(&both, "test").expect_err("two measures are refused");
+    assert!(
+        format!("{err:#}").contains("are alternatives; a ratchet"),
+        "{err:#}"
+    );
+}
+
 #[test]
 fn deleting_a_test_is_a_violation_naming_the_two_counts() {
     // The headline case: the working tree drops one of the two `#[test]` fns.
