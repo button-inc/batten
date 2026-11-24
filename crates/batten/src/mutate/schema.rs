@@ -1297,9 +1297,11 @@ pub fn sync(
     // it and grew to 6.5 GB on #1276, which put the disk under the pruner's
     // floor and made every build start cold. Cleared at the start, so a run
     // killed mid-sweep leaves nothing the next one carries.
-    match std::fs::remove_dir_all(work.join("target").join("tmp")) {
-        Err(gone) if gone.kind() != std::io::ErrorKind::NotFound => return Err(gone.into()),
-        _ => {}
+    for scratch in ["tmp", JUDGE_SCRATCH] {
+        match std::fs::remove_dir_all(work.join("target").join(scratch)) {
+            Err(gone) if gone.kind() != std::io::ErrorKind::NotFound => return Err(gone.into()),
+            _ => {}
+        }
     }
     sync_dir(root, work, std::path::Path::new(""), rendered)
 }
@@ -2536,6 +2538,18 @@ fn mirror_trusted(work: &std::path::Path) -> (String, String) {
 
 /// The directory beside the mirror that holds each judging run's `TMPDIR`.
 const JUDGE_TEMP: &str = "judge-tmp";
+
+/// The directory under the mirror's target holding each judging run's own
+/// scratch: its `nextest.toml`, its report store and its fixtures.
+///
+/// NEVER UNDER `target/tmp` (CLOUD-2789). The suite's `clear-scratch` setup
+/// script removes `target/tmp` whenever no other nextest of the checkout is
+/// running, and a worker writes its config BEFORE its nextest starts, so a
+/// sibling's setup script could remove it in between: 11 of 713 judgements on
+/// shard 15/16 erred "failed to parse nextest config … No such file". Still
+/// inside the mirror, which W2 requires of the fixtures; each run removes its
+/// own when it ends, and the sweep clears the rest at the start.
+const JUDGE_SCRATCH: &str = "judge";
 
 /// One judging run's `TMPDIR`: under [`JUDGE_TEMP`] BESIDE the mirror at
 /// `work`, never inside it (CLOUD-2789).
@@ -5737,7 +5751,7 @@ pub fn sweep(
     let judging = Judging {
         work: &work,
         target: &target,
-        scratch: &target.join("tmp").join("judge"),
+        scratch: &target.join(JUDGE_SCRATCH),
         root: &root,
         mutants,
         reach: &reach.sites,
@@ -7047,6 +7061,74 @@ mod tests {
                 .collect();
             assert_eq!(got, want, "from {start:?}");
         }
+    }
+
+    /// The suite's committed `clear-scratch` run alone over a mirror's target
+    /// takes `target/tmp` and leaves a judging run's own scratch: a worker
+    /// writes its `nextest.toml` there BEFORE its nextest starts, so no
+    /// sibling's setup script may take it (CLOUD-2789).
+    ///
+    /// Fails by: the judge's scratch moved back under a directory the lone-run
+    /// collector removes, where 11 of 713 judgements on shard 15/16 erred
+    /// "failed to parse nextest config".
+    ///
+    /// Unix only, inside the case: the subject is the `sh` command nextest
+    /// runs, behind a `pgrep` stub that must be executable.
+    #[test]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the subject is the shell command nextest runs, so asserting it means running `sh`"
+    )]
+    fn a_lone_runs_clear_scratch_leaves_the_judge_scratch() {
+        if !cfg!(unix) {
+            return;
+        }
+        let root = crate::scratch::scratch("schema-judge-scratch-survives");
+        let target = root.join("target");
+        let kept = target.join(JUDGE_SCRATCH).join("3").join("nextest.toml");
+        let taken = target.join("tmp").join("sentinel");
+        for file in [&kept, &taken] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "").unwrap();
+        }
+        // NO OTHER RUN: a `pgrep` that finds none, so the collector takes
+        // `target/tmp` (the premise asserted below).
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let stub = bin.join("pgrep");
+        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let config: toml::Table = crate::fsio::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.config/nextest.toml"),
+        )
+        .unwrap()
+        .parse()
+        .unwrap();
+        let command = config["scripts"]["setup"]["clear-scratch"]["command"]
+            .as_str()
+            .unwrap();
+        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(&root)
+            .env("CARGO_TARGET_DIR", &target)
+            .env_remove("CARGO_BUILD_BUILD_DIR")
+            .env("TMPDIR", root.join("tmpdir"))
+            .env("NEXTEST_ENV", root.join("nextest-env"))
+            .env("PATH", path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "the collector exits 0");
+        assert!(!taken.exists(), "the premise: a lone run takes target/tmp");
+        assert!(kept.is_file(), "the judge's config is left");
     }
 
     #[test]

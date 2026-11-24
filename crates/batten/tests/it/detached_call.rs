@@ -128,6 +128,39 @@ fn an_advise_row_speaks_and_a_record_row_stays_silent() {
     assert!(!out.contains("turn watch dropped"), "never spoken\n{out}");
 }
 
+/// A `record` row's finding is silent on the call and KEPT: the findings store
+/// holds it, so its record can show whether the row decides (CLOUD-2707).
+///
+/// Fails by: the finding never written (`record_findings` emptied), which the
+/// silence alone cannot tell from a recorded trial (CLOUD-2789).
+#[test]
+fn a_record_row_keeps_its_finding_in_the_store() {
+    let dir = repo(
+        "detach-record-kept",
+        &common::native_row("detach", "record"),
+    );
+    let bound = run_with_stdin(&dir, &["state", "record"], "");
+    assert_eq!(bound.status.code(), Some(0), "{}", stderr(&bound));
+    let listed = || {
+        let out = run_with_stdin(&dir, &["state", "list", "-J"], "");
+        assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+        serde_json::from_str::<Vec<serde_json::Value>>(&stdout(&out)).unwrap()
+    };
+    let before = listed().len();
+    let out = judged(&dir, "claude-code", "true &");
+    assert!(!out.contains("\"deny\""), "{out}");
+    assert!(!out.contains("could not be recorded"), "{out}");
+    let after = listed();
+    assert_eq!(after.len(), before + 1, "one finding kept: {after:?}");
+    assert!(
+        after
+            .iter()
+            .any(|record| record["tier"] != serde_json::Value::Null
+                && record.to_string().contains("record/Bash")),
+        "kept at its grade, for the call that raised it: {after:?}"
+    );
+}
+
 /// A harness with no supported background option has no better shape to name.
 #[test]
 fn a_harness_without_a_background_option_is_not_refused() {
