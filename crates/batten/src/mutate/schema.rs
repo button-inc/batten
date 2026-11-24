@@ -2397,7 +2397,7 @@ fn run_cases(
     let (ran, xml) = judge_run(judging, &id.to_string(), mutant, cases);
     let report = xml.as_deref().and_then(junit_cases);
     let ran = ran?;
-    let judged = verdict_of_run(ran.outcome, report.as_deref(), cases);
+    let judged = verdict_of_run(ran.outcome, report.as_deref(), cases, &ran.output);
     if judged.0 == Verdict::Error {
         // THE RUN'S OWN WORDS, KEPT: on #1276 2,213 runs failed before a
         // case started and said nothing anywhere, so an error now leaves
@@ -2632,10 +2632,18 @@ fn junit_cases(xml: &str) -> Option<Vec<(Case, CaseEnd)>> {
 /// COULD-NOT-LOOK IS AN ERROR, NEVER A MISS: a run with no report, a report
 /// naming no case, or a passing exit missing one of `cases` from its report
 /// decided nothing about the mutant.
+///
+/// A KILL OUTRANKS THE BOUND (CLOUD-2908, CLOUD-2909): nextest 0.9.104's
+/// `fail-fast` stops scheduling at the first failure but waits for the cases
+/// already running, so a sibling the mutant hangs holds the run until the
+/// judge's bound ends it, with no report written. The run's own `said` still
+/// carries the `FAIL` line of the case that failed first, and a timed-out run
+/// that names one of `cases` there is caught by it.
 fn verdict_of_run(
     outcome: super::Outcome,
     report: Option<&[(Case, CaseEnd)]>,
     cases: &BTreeSet<Case>,
+    said: &str,
 ) -> (Verdict, Option<Case>, Vec<Case>) {
     let passed: Vec<Case> = report
         .into_iter()
@@ -2644,6 +2652,9 @@ fn verdict_of_run(
         .map(|(case, _)| case.clone())
         .collect();
     if matches!(outcome, super::Outcome::TimedOut) {
+        if let Some(killer) = failed_in(said, cases) {
+            return (Verdict::Caught, Some(killer), passed);
+        }
         return (Verdict::Timeout, None, passed);
     }
     let Some(rows) = report.filter(|rows| !rows.is_empty()) else {
@@ -2661,6 +2672,23 @@ fn verdict_of_run(
         return (Verdict::Missed, None, passed);
     }
     (Verdict::Error, None, Vec::new())
+}
+
+/// The first of `cases` a run's output reports `FAIL`, from nextest's status
+/// line `FAIL [ <duration>] <binary> <case>` ([`super::case_of`]). A case
+/// outside `cases` is never one: the run selected only those.
+fn failed_in(said: &str, cases: &BTreeSet<Case>) -> Option<Case> {
+    said.lines().find_map(|line| {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words.first() != Some(&"FAIL") {
+            return None;
+        }
+        let [binary, name] = super::case_of(&words)[..] else {
+            return None;
+        };
+        let case: Case = (name.to_owned(), binary.to_owned());
+        cases.contains(&case).then_some(case)
+    })
 }
 
 /// Keep what an erring run of mutant `id` said under the sweep's `errors/`,
@@ -4433,7 +4461,11 @@ fn common_reached(common: &str, texts: &[String]) -> String {
         })
         .collect();
     let mut taken = vec![false; items.len()];
-    loop {
+    // BOUNDED BY THE ITEM COUNT (CLOUD-2789): a pass that grows takes at least
+    // one item, so `items.len()` passes and one more that takes nothing reach
+    // the fixpoint. A change that keeps re-taking ends with a wrong key rather
+    // than spinning.
+    for _ in 0..=items.len() {
         let mut grew = false;
         for (at, (name, _, names)) in items.iter().enumerate() {
             if taken[at] || name.as_ref().is_some_and(|name| !wanted.contains(name)) {
@@ -5135,17 +5167,21 @@ fn mentioners(
     mentions: &std::collections::BTreeMap<String, BTreeSet<String>>,
 ) -> BTreeSet<String> {
     let mut found: BTreeSet<String> = [name.to_owned()].into();
-    loop {
+    // BOUNDED BY THE ITEM COUNT (CLOUD-2789): a pass that grows adds at least
+    // one item, so `mentions.len()` passes reach the fixpoint. A change that
+    // keeps re-adding ends with a wrong set rather than spinning.
+    for _ in 0..mentions.len() {
         let grown: Vec<String> = mentions
             .iter()
             .filter(|(item, mentioned)| !found.contains(*item) && !mentioned.is_disjoint(&found))
             .map(|(item, _)| item.clone())
             .collect();
         if grown.is_empty() {
-            return found;
+            break;
         }
         found.extend(grown);
     }
+    found
 }
 
 /// The cases that can observe handed-back mutant `id`: each that ran its
@@ -5175,7 +5211,11 @@ fn handback_cases(
         .function
         .as_ref()
         .and_then(|function| function_ident(&function.function_name));
-    if enclosing.is_empty() && name.is_none() {
+    // A FILE BUILT WITHOUT PROBES IS BLIND (CLOUD-2911): none of its
+    // functions records a reach, so a case in it that calls the mutant's
+    // function directly is in no record and would be left out. Every case
+    // judges a hand-back there.
+    if (enclosing.is_empty() && name.is_none()) || !schema.probed.contains(&mutant.file) {
         return None;
     }
     let observers = name.map_or_else(BTreeSet::new, |name| mentioners(&name, &schema.mentions));
@@ -7992,6 +8032,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&state);
     }
 
+    /// The judging the control run hands on carries the control's red cases,
+    /// and every other field unchanged.
+    ///
+    /// Fails by: the `red` override dropped, so a case the control run found
+    /// red is still run against every mutant and read as its kill.
+    #[test]
+    fn judging_with_red_carries_the_control_red_cases() {
+        let base = std::path::Path::new("/w");
+        let mutants = [listed("BinaryOperator", "!=", (2, 7), (2, 9))];
+        let (reach, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let (none, control): (Red, Red) =
+            (Red::new(), [(case("flaky"), String::from("red"))].into());
+        let judging = Judging {
+            work: base,
+            target: base,
+            scratch: base,
+            root: base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: base,
+            red: &none,
+            reuse: None,
+        };
+        let judged = judging.with_red(&control);
+        assert_eq!(judged.red, &control);
+        assert_eq!(judged.mutants.len(), 1);
+    }
+
     /// A checkout that moved during the sweep makes each hand-back not
     /// already journaled an `error`, and the call still answers, so the
     /// report of everything the schema judged is printed.
@@ -10383,6 +10459,7 @@ mod tests {
             ],
             mutant_fns: [(2, String::from("f-body"))].into(),
             mentions,
+            probed: [String::from("src/lib.rs")].into(),
             ..Schema::default()
         };
         let (chain, plain, body) = (case("chain"), case("plain"), case("body"));
@@ -10418,6 +10495,15 @@ mod tests {
             handback_cases(1, &named(None), &schema, &reach),
             None,
             "nothing to go on"
+        );
+        // CLOUD-2911: in a file built without probes, a case calling the
+        // function directly is in no record, so every case judges it.
+        let mut blind = named(Some("seed"));
+        blind.file = String::from("src/unprobed.rs");
+        assert_eq!(
+            handback_cases(0, &blind, &schema, &reach),
+            None,
+            "an unprobed file's hand-back is judged by every case"
         );
     }
 
@@ -11379,37 +11465,68 @@ pub fn repo() -> u8 {{ scratch() }}
         let cases: BTreeSet<Case> = [a.clone(), b.clone()].into();
         let caught = junit_cases(JUNIT_FIXTURE).expect("XML");
         let (verdict, killer, passed) =
-            verdict_of_run(Outcome::Failed(Some(100)), Some(&caught), &cases);
+            verdict_of_run(Outcome::Failed(Some(100)), Some(&caught), &cases, "");
         assert_eq!((verdict, killer), (Verdict::Caught, Some(b.clone())));
         assert!(passed.contains(&a) && !passed.contains(&b), "{passed:?}");
         let timed = [(a.clone(), CaseEnd::Passed), (b.clone(), CaseEnd::TimedOut)];
         assert_eq!(
-            verdict_of_run(Outcome::Failed(Some(100)), Some(&timed), &cases).0,
+            verdict_of_run(Outcome::Failed(Some(100)), Some(&timed), &cases, "").0,
             Verdict::Timeout
         );
         assert_eq!(
-            verdict_of_run(Outcome::TimedOut, None, &cases).0,
+            verdict_of_run(Outcome::TimedOut, None, &cases, "").0,
             Verdict::Timeout
         );
         let clean = [(a.clone(), CaseEnd::Passed), (b.clone(), CaseEnd::Passed)];
-        let missed = verdict_of_run(Outcome::Passed, Some(&clean), &cases);
+        let missed = verdict_of_run(Outcome::Passed, Some(&clean), &cases, "");
         assert_eq!((missed.0, missed.2.len()), (Verdict::Missed, 2));
         // Could-not-look: no report, an empty one, or one missing a case.
         assert_eq!(
-            verdict_of_run(Outcome::Passed, None, &cases).0,
+            verdict_of_run(Outcome::Passed, None, &cases, "").0,
             Verdict::Error
         );
         assert_eq!(
-            verdict_of_run(Outcome::Passed, Some(&[]), &cases).0,
+            verdict_of_run(Outcome::Passed, Some(&[]), &cases, "").0,
             Verdict::Error
         );
         assert_eq!(
-            verdict_of_run(Outcome::Passed, Some(&clean[..1]), &cases).0,
+            verdict_of_run(Outcome::Passed, Some(&clean[..1]), &cases, "").0,
             Verdict::Error
         );
         assert_eq!(
-            verdict_of_run(Outcome::Failed(Some(101)), Some(&clean), &cases).0,
+            verdict_of_run(Outcome::Failed(Some(101)), Some(&clean), &cases, "").0,
             Verdict::Error
+        );
+    }
+
+    /// A run the judge's bound ended, with no report, is caught by the case
+    /// its own output reports failed first (CLOUD-2908, CLOUD-2909).
+    ///
+    /// Fails by: the bound read before the output, so a kill that a hanging
+    /// sibling held past the bound is filed a timeout; a `FAIL` of a case the
+    /// run did not select, or a `PASS`, read as the kill.
+    #[test]
+    fn a_kill_held_past_the_bound_by_a_hanging_sibling_is_caught() {
+        use super::super::Outcome;
+        let pair = |name: &str, binary: &str| (String::from(name), String::from(binary));
+        let a = pair("tests::a", "batten");
+        let b = pair("m::b", "batten::it");
+        let cases: BTreeSet<Case> = [a, b.clone()].into();
+        let said = "        START             batten tests::a\n        \
+                    PASS [   0.004s] batten tests::other\n        \
+                    FAIL [   0.600s] batten::it m::b\n        \
+                    SLOW [> 60.000s] batten tests::a\n";
+        let (verdict, killer, _) = verdict_of_run(Outcome::TimedOut, None, &cases, said);
+        assert_eq!((verdict, killer), (Verdict::Caught, Some(b)));
+        let foreign = "        FAIL [   0.600s] batten tests::other\n";
+        assert_eq!(
+            verdict_of_run(Outcome::TimedOut, None, &cases, foreign),
+            (Verdict::Timeout, None, Vec::new())
+        );
+        let passed = "        PASS [   0.600s] batten::it m::b\n";
+        assert_eq!(
+            verdict_of_run(Outcome::TimedOut, None, &cases, passed).0,
+            Verdict::Timeout
         );
     }
 
