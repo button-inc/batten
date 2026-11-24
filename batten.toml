@@ -11,7 +11,7 @@
 
 # The config schema version. This build supports version 1.
 version = 1
-engine = { release = "v0.0.221" }
+engine = { source = "ad406f4e4bfd37cca3255b6849be81a0e9fac79e3c5ecb5085a7f454b223c485" }
 
 # Minimum Batten version permitted to read this file (semver). Enforced: a binary
 # older than this refuses to run rather than reporting green over rules it does
@@ -3951,6 +3951,90 @@ selects = "closed"
 requires = ["url"]
 mode = "clear"
 body = "{now} {url}"
+
+# EACH CHILD'S NEWEST COMPLETE READ (CLOUD-2900), keyed by the child's session
+# id: `<now> <state> <open ids, comma-joined, or ->`. `session watch` mints it on
+# every poll, handing the engine's one minting authority the bare `list_events`
+# method, the child's id as the input's `session_id`, and its paired reading
+# (`session_watch::Report::reading`) as the result. Neither other boundary hands
+# a raw `list_events` result a top-level `state`: the hook passes null for an
+# `<other-session>` text block and `mcp call` the unwrapped envelope, so
+# `requires` keeps a page of one transcript from minting a reading of it.
+#
+# A MESSAGE TO THE CHILD CLEARS IT. A message can start a turn there, so the
+# read taken before it no longer answers. Each `key_from_input` line carries a
+# trailing comment so a mutant anchored on the bare line matches one site.
+#MUTANT-SUITE crates/batten/tests/it/session_watch.rs
+#MUTANT child-state-unminted|s@^body = "[^"]*"[[:space:]]*# the paired reading$@body = "{now} {open} {state}"@|a_poll_mints_each_childs_state_through_the_declared_row
+[[mint]]
+name = "child-state"
+tool = "list_events"
+key = "named"
+key_from_input = "session_id" # the child the watch read
+key_shape = "^session_[0-9A-Za-z]+$"
+requires = ["state"]
+mode = "replace"
+body = "{now} {state} {open}" # the paired reading
+
+[[mint]]
+name = "child-state"
+tool = "send_message"
+key = "named"
+key_from_input = "session_id" # the child the message went to
+mode = "clear"
+body = "{now}"
+
+# CLOUD-2900. An archive releases the child's container with every background
+# run still open there; silence is the designed state of a backgrounded run, so
+# the archive waits on `session watch`'s newest read of that child saying done.
+# The read is the `child-state` pair above, one line per child, under a day old.
+#MUTANT-SUITE crates/batten/tests/it/archive_held.rs
+#MUTANT child-state-clear-dropped|s@^tool = "send_message"$@tool = "never_a_tool"@|a_message_to_the_child_after_its_read_holds_the_archive_again
+[[rule]]
+id = "task watch pending"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call held before it runs, so nothing persists for a command to repair; the refusal's route names the watch to run"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/archive-held.rego"
+severity = "deny"
+
+[[rule.minted]]
+id = "children-state"
+mint = "child-state"
+field = 1
+recency = 0
+max_age_days = 1
+
+[[rule.minted]]
+id = "children-tasks"
+mint = "child-state"
+field = 2
+recency = 0
+max_age_days = 1
+
+# CLOUD-2900. Two routes and no third: a dead child is asked too, because a
+# message brings up a worker for a child that has none (measured on 2/16 of the
+# #1276 fleet). `task watch first` reuses `tool install pending`'s step id on
+# purpose: a route id names a step, and waiting on a background task is one.
+[[verdict]]
+id = "task watch pending"
+gloss = "an archive would release a child that may still be working"
+class = """
+Archiving releases the child's container with every open background run and \
+unpushed commit, and a backgrounded run is silent until it exits. Admitted only \
+after `session watch`'s newest read of that child, under a day old and taken \
+since your last message to it, says done. The subjects are its open tasks.
+"""
+
+[[verdict.route]]
+id = "task watch first"
+kind = "command"
+target = "mise run session-watch -- --session <the child's id>, backgrounded: it exits 0 once the child is done"
+
+[[verdict.route]]
+id = "task ask first"
+kind = "command"
+target = "send_message to the child asking whether it is stuck on the open tasks, telling it to stop nothing; then watch it again"
 
 [[rule]]
 id = "review open twice"
@@ -12075,6 +12159,7 @@ gates = [
   "profile-read-first",
   "profile-stripped",
   "sed-line-address",
+  "archive-held",
 ]
 
 # WHICH RECEIPTS A HEAD MUST CARRY TO BE CALLED VERIFIED (CLOUD-1338).

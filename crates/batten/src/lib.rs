@@ -4929,7 +4929,22 @@ fn run_session(
     // THE CRATE'S ONE CLOCK (`pr_watch::clock`), not a waived sleep: the poll is
     // bounded by each child's terminal state, and could-not-look ends it.
     let mut wait = |delay| pr_watch::clock::hold(delay, None);
-    let Some((reports, ending)) = session_watch::run(&mut watch, &mut source, &cache, &mut wait)
+    // CLOUD-2900: every poll mints each child's reading through the declared
+    // rows, into the store the hook clears and the archive gate reads.
+    let store = session_watch::store_root(Path::new("."))?;
+    let sink = |input: &serde_json::Value, reading: &serde_json::Value| {
+        mint_receipts(
+            &resolved.mints,
+            session_watch::LIST_EVENTS,
+            input,
+            reading,
+            &store,
+            None,
+        );
+    };
+    let mints = session_watch::Mints::new(&sink);
+    let Some((reports, ending)) =
+        session_watch::run(&mut watch, &mut source, &cache, &mints, &mut wait)
     else {
         writeln!(
             err,
@@ -20507,9 +20522,14 @@ struct CallFacts {
     prospective: hook::ProspectiveFacts,
     budgeted: hook::BudgetFacts,
     ratcheted: hook::RatchetFacts,
+    minted: facts::Look<hook::MintedFields>,
 }
 
-fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
+fn call_facts(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    instant: std::time::SystemTime,
+) -> CallFacts {
     let (discards, singleton) = destructive_call_facts(envelope);
     let land_live = land_live_for(policy, envelope);
     let lap_held = land_live
@@ -20531,7 +20551,38 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         prospective: prospective_for(policy, envelope),
         budgeted: budgeted_for(policy, envelope),
         ratcheted: ratcheted_for(policy, envelope),
+        minted: minted_for(policy, envelope, instant),
     }
+}
+
+/// Each declared `[[rule.minted]]` field, read off the receipt store at the
+/// mediated boundary (CLOUD-2889).
+///
+/// Behind [`pinned_for`]'s narrowing plus a declaration: a call no module
+/// selects, or a repository declaring no `[[rule.minted]]` row, lists nothing.
+/// The clock is the boundary's own instant, never a caller's, for
+/// `rules::minted_facts`' reason: a supplied "now" could make a stale receipt
+/// answer, the one direction this fact must not fail in. A clock before the
+/// epoch reads as `0`, so every receipt looks ancient and nothing is admitted.
+fn minted_for(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    instant: std::time::SystemTime,
+) -> facts::Look<hook::MintedFields> {
+    if !policy.reads_pinned(envelope) {
+        return facts::Look::CouldNotLook;
+    }
+    let declared = policy.declared_minted();
+    if declared.is_empty() {
+        return facts::Look::CouldNotLook;
+    }
+    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+        return facts::Look::CouldNotLook;
+    };
+    let now = instant
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    facts::Look::Is(minted::fields(&git_dir, &declared, now))
 }
 
 /// The status of every pathspec a checkout or restore names (CLOUD-2684),
@@ -21121,7 +21172,7 @@ fn dispatch_envelope(
     // git and opens nothing. `None` is could-not-look and allows.
     let manifest = manifest_for(&policy, &envelope);
     let ((tasks, task_bodies), extracted) = session_facts(&policy, &envelope);
-    let call = call_facts(&policy, &envelope);
+    let call = call_facts(&policy, &envelope, instant);
     let facts = hook::Facts {
         singleton: &call.singleton,
         land_live: &call.land_live,
@@ -21144,6 +21195,7 @@ fn dispatch_envelope(
         tasks: &tasks,
         task_bodies: &task_bodies,
         extracted: &extracted,
+        minted: &call.minted,
         dispatch: &call.dispatch,
         red_head: &call.red_head,
         pathspec_status: &call.pathspec_status,
@@ -27071,9 +27123,11 @@ pub fn mint_receipts_for_test(
 
 /// Write every receipt these rows mint from one already-unframed result.
 ///
-/// **ONE minting authority, reached from two boundaries** (CLOUD-1264). The
-/// `PostToolUse` hook and `batten mcp call` both file a tool result, and before
-/// this only the first minted — so closing the raw read path would have bricked
+/// **ONE minting authority, reached from three boundaries** (CLOUD-1264,
+/// CLOUD-2900). The `PostToolUse` hook and `batten mcp call` both file a tool
+/// result, and `session watch` files each child's complete reading under the
+/// bare `list_events` method (`session_watch::Mints`). Before CLOUD-1264 only
+/// the first minted — so closing the raw read path would have bricked
 /// every gate that reads an `issue-read` receipt. A second copy of this loop
 /// would be a second authority, free to disagree with the first about
 /// `requires`, keying or mode.

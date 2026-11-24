@@ -4635,6 +4635,20 @@ impl Policy {
             .collect()
     }
 
+    /// Every `[[rule.minted]]` row a mediated-call module declares (CLOUD-2889).
+    ///
+    /// [`Policy::declared_extracts`]' sibling, and not narrowed by an envelope
+    /// for its reason: the receipt store is a property of the checkout, not of
+    /// one call. A repository declaring none lists nothing.
+    #[must_use]
+    pub fn declared_minted(&self) -> Vec<crate::facts::MintedQuery> {
+        self.shapes
+            .iter()
+            .filter(|rule| rule.kind == RuleKind::Policy)
+            .flat_map(|rule| rule.minted.iter().cloned())
+            .collect()
+    }
+
     /// Every task manifest this policy declares, for the session-start mint.
     ///
     /// Not narrowed by an envelope, and that asymmetry with [`Policy::reads_tasks`]
@@ -6244,6 +6258,12 @@ fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
 /// same reason [`ReceiptFacts`] and [`ProspectiveFacts`] are named.
 pub type ManifestFacts = Option<usize>;
 
+/// Each declared `[[rule.minted]]` id, mapped from subject to its field's token
+/// (CLOUD-2889): [`crate::minted::fields`]' answer, held under its own name for
+/// [`ManifestFacts`]' reason.
+pub type MintedFields =
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>;
+
 /// The resolved fact set one mediated call is adjudicated against (CLOUD-834).
 ///
 /// **A struct rather than six parameters, and the compiler asked for it.** The
@@ -6389,6 +6409,11 @@ pub struct Facts<'a> {
     /// is the COMMON case (CLOUD-388) and allows: a session with no transcript
     /// has not established that nothing was stranded.
     pub extracted: &'a crate::facts::Look<std::collections::BTreeMap<String, usize>>,
+    /// Each declared `[[rule.minted]]` field, by id then subject (CLOUD-2889):
+    /// [`crate::minted::fields`]' answer, one token per subject. Could-not-look —
+    /// no row declared, no git directory, no module on this call — projects
+    /// `null`, which a module must read as no receipt rather than as agreement.
+    pub minted: &'a crate::facts::Look<MintedFields>,
     /// The brief lint's report on this call's session-management message
     /// (CLOUD-2858): `IsNot` for any other call, and could-not-look, like
     /// `IsNot`, raises nothing.
@@ -6456,6 +6481,9 @@ impl<'a> Facts<'a> {
             // Could-not-look, never an empty count set: a caller that resolved
             // nothing has not established that this session did nothing.
             extracted: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never an empty map: a caller that resolved nothing
+            // has not listed the receipt store.
+            minted: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never `false`: a caller that resolved nothing has
             // not established that a prompt is uncleared.
             dispatch: &crate::facts::Look::CouldNotLook,
@@ -9654,7 +9682,16 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // adjudicating a validator is a `batten check` run by construction,
             // so no mediated-call consumer is being turned away.
             crate::facts::Fact::ToolVerdict => None,
-            crate::facts::Fact::Minted => None,
+            // CLOUD-2889. NULL FOR EVERY NON-ANSWER — no `[[rule.minted]]` row,
+            // no git directory, no module on this call — and never an empty map,
+            // which is the store listed and holding nothing. Both refuse in a
+            // module that asks whether a receipt exists; only the second says so.
+            crate::facts::Fact::Minted => Some(match facts.minted {
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+                crate::facts::Look::Is(fields) => serde_json::json!(fields),
+            }),
             // The dispatch tier is `Surface::Check` (CLOUD-472): `run_static`
             // refuses a spawning kind on the mediated path, so a projection here
             // would offer a module a key the hook surface can never fill.
@@ -14665,6 +14702,7 @@ mod tests {
                 tasks: &crate::facts::Look::CouldNotLook,
                 task_bodies: &crate::facts::Look::CouldNotLook,
                 extracted: &crate::facts::Look::CouldNotLook,
+                minted: &crate::facts::Look::CouldNotLook,
                 pinned: &crate::facts::Look::CouldNotLook,
                 dispatch: &crate::facts::Look::CouldNotLook,
                 red_head: &crate::facts::Look::CouldNotLook,

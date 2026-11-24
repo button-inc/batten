@@ -71,6 +71,7 @@ mod agent_facts;
 mod agentic_record;
 mod ambient_authority;
 mod answer_operator;
+mod archive_held;
 mod artifacts_write;
 mod ask_disposition;
 mod assertion_gates;
