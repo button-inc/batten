@@ -6918,7 +6918,14 @@ fn unexercised(
         sweep.set_input(document.clone());
         let mut swept = 0;
         let mut batch = 1;
-        while swept < discovered.len() && !unexercised.is_empty() {
+        // BOUNDED BY THE CASE COUNT (CLOUD-2789): every pass runs at least one
+        // case, so `discovered.len()` passes reach the end. A batch that stops
+        // growing then ends the sweep with a wrong answer a case can see,
+        // rather than spinning until the suite's timeout.
+        for _ in 0..discovered.len() {
+            if swept == discovered.len() || unexercised.is_empty() {
+                break;
+            }
             let upto = (swept + batch).min(discovered.len());
             for (_, path) in &discovered[swept..upto] {
                 let _ = sweep.eval_rule(path.clone());
