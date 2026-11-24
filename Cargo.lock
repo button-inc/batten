@@ -152,7 +152,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "batten"
-version = "0.0.220"
+version = "0.0.221"
 dependencies = [
  "anyhow",
  "batten-base",
@@ -228,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "batten-base"
-version = "0.0.220"
+version = "0.0.221"
 dependencies = [
  "anyhow",
  "batten-facts",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "batten-codemods"
-version = "0.0.220"
+version = "0.0.221"
 dependencies = [
  "batten",
  "rustfix",
@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "batten-core"
-version = "0.0.220"
+version = "0.0.221"
 dependencies = [
  "anyhow",
  "batten-base",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "batten-facts"
-version = "0.0.220"
+version = "0.0.221"
 dependencies = [
  "anyhow",
  "batten-fsio",
@@ -322,14 +322,14 @@ dependencies = [
 
 [[package]]
 name = "batten-fsio"
-version = "0.0.220"
+version = "0.0.221"
 dependencies = [
  "compio",
 ]
 
 [[package]]
 name = "batten-stream"
-version = "0.0.220"
+version = "0.0.221"
 
 [[package]]
 name = "bit-set"
