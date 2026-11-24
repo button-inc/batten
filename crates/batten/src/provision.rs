@@ -826,15 +826,9 @@ fn recorded_as_ours(linked: &Path, entry: &Provision, cache_root: &Path) -> bool
 }
 
 /// Whether two files hold the same bytes; `false` when either cannot be read.
-/// Sizes first, so a file of another length costs two `stat`s.
+/// Only the crash path reaches it, so the plain read is the whole cost.
 fn same_bytes(left: &Path, right: &Path) -> bool {
-    let size = |path: &Path| fs::metadata(path).map(|meta| meta.len()).ok();
-    match (size(left), size(right)) {
-        (Some(a), Some(b)) if a == b => {
-            matches!((fs::read(left), fs::read(right)), (Ok(a), Ok(b)) if a == b)
-        }
-        _ => false,
-    }
+    matches!((fs::read(left), fs::read(right)), (Ok(a), Ok(b)) if a == b)
 }
 
 /// Where `entry`'s last written link is recorded: beside its versioned cache
