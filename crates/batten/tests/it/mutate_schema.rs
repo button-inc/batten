@@ -693,3 +693,19 @@ fn mutant_rust_runs_on_its_own_against_a_declared_base() {
     let whole = run(&[("MUTANT_WHOLE_TREE", "1")]);
     assert!(whole.contains("base=[] whole=[1]"), "{whole}");
 }
+
+/// The reach recorder refuses to run a case with nowhere to record it: a
+/// wrapper run outside a reach run exits 101 and says why, never 0.
+///
+/// Fails by: `record` answering `Ok(0)` without running anything, which reads
+/// as a passing case and seals a reach that recorded nothing (CLOUD-2789).
+#[test]
+fn a_record_run_with_no_reach_directory_fails() {
+    let dir = common::Fixture::new("schema-record-no-reach").build();
+    let ran = common::run(&dir, &[batten::mutate::schema::RECORD_ARG, "false"]);
+    assert_eq!(ran.status.code(), Some(101), "{ran:?}");
+    assert!(
+        String::from_utf8_lossy(&ran.stderr).contains("no reach directory"),
+        "{ran:?}"
+    );
+}

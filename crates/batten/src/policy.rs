@@ -9483,6 +9483,25 @@ test_c if {\n\t\"n\" in rules\n}\n";
         assert!(dropped.as_interpreted().is_none(), "the hot path drops it");
     }
 
+    /// A bundle compiled without its AST keeps no reading of the AST it
+    /// dropped: what an interpreter rendered before the compile goes with it.
+    ///
+    /// Fails by: `into_bundle` carrying the `described` or `ast` cell across a
+    /// `keep_ast = false` compile (either field left to `..bundle`), so the hot
+    /// path holds a rendered AST for an engine it no longer has (CLOUD-2789).
+    #[test]
+    fn a_bundle_compiled_without_its_ast_keeps_no_reading_of_it() {
+        let data = serde_json::json!({});
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        assert!(bundle.ast().is_some(), "premise: the interpreter renders");
+        assert!(bundle.described().is_some(), "premise: and describes");
+        let compiled = Compiled::from_bundle(&bundle, &data).expect("compiles to bytecode");
+        let dropped = compiled.into_bundle(bundle, false);
+        assert!(dropped.is_bytecode());
+        assert!(dropped.ast().is_none(), "no AST outlives its interpreter");
+        assert!(dropped.described().is_none(), "nor a description of it");
+    }
+
     /// A bytecode bundle read as interpreted evaluates on its interpreter, not
     /// on the bytecode it was compiled to (CLOUD-2789).
     ///
