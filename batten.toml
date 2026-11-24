@@ -19196,16 +19196,11 @@ tools = [["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
 id = "perf-gate"
-# `.cargo`: cargo probes `.cargo/config{,.toml}` on every run (CLOUD-2835).
-inputs = [
-  "crates",
-  "Cargo.toml",
-  "Cargo.lock",
-  ".config/nextest.toml",
-  "bench",
-  "batten.toml",
-  ".cargo",
-]
+# `.`, as `policy-test` keeps it (CLOUD-2784), and the trace is why: a traced
+# miss on CLOUD-2840's branch read 940 paths outside the seven entries this row
+# declared, across most top-level entries (the ignore-file walk of the whole
+# checkout). Keyed on seven, a receipt answered for trees the gate never read.
+inputs = ["."]
 tools = [
   [
     "rustc",
