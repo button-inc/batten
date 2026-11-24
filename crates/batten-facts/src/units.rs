@@ -406,6 +406,20 @@ mod tests {
         assert_eq!(counts.nesting, 2);
     }
 
+    /// Fails by: a span's line count read from anything but its first and last
+    /// line, for a unit that does not start the file.
+    #[test]
+    fn a_unit_spans_the_lines_from_its_first_to_its_last() {
+        let found = functions("\n\nfn f() {\n    g();\n}\n");
+        let unit = found.first().expect("one function");
+        assert_eq!((unit.line, unit.counts.lines), (3, 3));
+        let crate::facts::Look::Is(found) = units("\n// one line\n") else {
+            panic!("parses");
+        };
+        let comment = found.first().expect("one comment");
+        assert_eq!((comment.line, comment.counts.lines), (2, 1));
+    }
+
     /// Fails by: a run of one operator counted per operand, the first match
     /// arm counted, or a change of operator merged into the run.
     #[test]
