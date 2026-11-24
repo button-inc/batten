@@ -9511,6 +9511,21 @@ mod tests {
         assert_eq!(position_free("a::b:7"), "a::b:7", "a lone number stays");
     }
 
+    /// Fails by: a listing's keys not each mutant's own [`shard_key`] in
+    /// listing order, so `slice` reads another mutant's shard (CLOUD-2789).
+    #[test]
+    fn shard_keys_are_each_mutants_key_in_order() {
+        let named = |name: &str| Listed {
+            name: name.to_owned(),
+            ..listed("FnValue", "0", (1, 1), (1, 2))
+        };
+        let mutants = [named("src/a.rs:1:1: x"), named("src/b.rs:2:2: y")];
+        assert_eq!(
+            shard_keys(&mutants, &[Some(String::from("site")), None]),
+            ["site", "src/b.rs: y"]
+        );
+    }
+
     #[test]
     fn a_sweep_exit_maps_onto_the_contract_and_the_graver_one_wins() {
         use crate::exit::ExitCode;
@@ -11161,6 +11176,14 @@ pub fn repo() -> u8 {{ scratch() }}
         // Each expectation from the key rule: shard 1 of 3 holds the ids whose
         // key's blake3 falls there.
         let ours = |id: &u32| shard_index(&keys[*id as usize], 3) == 1;
+        // The rule itself spreads them, or every partition check below holds
+        // of a rule that sends every key to one shard.
+        let spread: BTreeSet<usize> = keys.iter().map(|key| shard_index(key, 3)).collect();
+        assert_eq!(
+            spread,
+            BTreeSet::from([0, 1, 2]),
+            "the keys fall in every shard"
+        );
         let (mine, handed, dead) =
             scope(Some((1, 3))).slice(&keys, todo.clone(), &classic, &unviable);
         assert_eq!(mine, todo.iter().copied().filter(ours).collect::<Vec<_>>());
@@ -11769,8 +11792,15 @@ pub fn repo() -> u8 {{ scratch() }}
             red: &red,
             reuse: None,
         };
-        let verdicts = judge_all(&judging, &[0], 1, &mut Vec::new());
+        let mut out = Vec::new();
+        let verdicts = judge_all(&judging, &[0], 1, &mut out);
         assert_eq!(verdicts, [(0, Verdict::Unjudged)]);
+        assert!(
+            !String::from_utf8(out)
+                .unwrap()
+                .contains("could not be written"),
+            "a journal that took every line reports no failed write"
+        );
         assert_eq!(
             std::fs::read_to_string(&store).unwrap(),
             journal_line(Some(&over_green), "unjudged", "poisoned")
