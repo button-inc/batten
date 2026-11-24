@@ -104,6 +104,34 @@ fn a_write_creating_a_shell_suffixed_file_is_refused() {
     assert!(!refused(&dir, &write("x.txt", "echo hi\n")));
 }
 
+/// The fact is resolved only for a write about to happen: the same write
+/// reported after it ran (`PostToolUse`) carries no `shell-introduced` fact,
+/// so the row that refuses on it says nothing.
+///
+/// Fails by: `shell_introduced_for`'s event guard joined with `||`, so every
+/// pre-tool call or a post-tool write resolves the fact and a write already
+/// made is refused after the fact (CLOUD-2789).
+#[test]
+fn a_write_reported_after_it_ran_is_not_refused() {
+    let dir = repo("shell-authored-post-tool", &[]);
+    let before = write("x.sh", "echo hi\n");
+    // ANTI-VACUITY: the same write, about to happen, is refused.
+    assert!(refused(&dir, &before));
+    let after = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "x.sh", "content": "echo hi\n"},
+        "tool_response": {"filePath": "x.sh", "success": true},
+    })
+    .to_string();
+    let output = common::run_with_stdin(&dir, &["adjudicate", "--harness", "claude-code"], &after);
+    let said = format!("{}{}", common::stdout(&output), common::stderr(&output));
+    assert!(
+        !said.contains(VERDICT),
+        "a post-tool write is past the gate: {said}"
+    );
+}
+
 /// Only a target that does not exist is a creation: a target the disk cannot
 /// answer for — a path beneath a regular file — is could-not-look.
 ///
