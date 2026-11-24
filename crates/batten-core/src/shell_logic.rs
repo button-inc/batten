@@ -495,28 +495,32 @@ const XARGS_VALUED: &[&str] = &["-E", "-I", "-L", "-n", "-s", "-a", "-d", "-P"];
 /// `env`'s utility: the first word after its options and assignments, or the
 /// `-S` string split into words, followed by whatever comes after it.
 /// <https://man7.org/linux/man-pages/man1/env.1.html>
+///
+/// THE WALK CONSUMES A SLICE, NEVER A CURSOR: each pass drops at least the word
+/// it read, so it always ends. A cursor's `at += 1` let one slip (`at *= 1`)
+/// spin every caller forever (#1276).
 fn env_utility<'a>(arguments: &[&'a str]) -> Option<Vec<&'a str>> {
-    let mut at = 0;
-    while let Some(word) = arguments.get(at) {
+    let mut rest = arguments;
+    while let Some((word, after)) = rest.split_first() {
         let split = match *word {
-            "-S" | "--split-string" => arguments.get(at + 1).copied().map(|text| (text, at + 2)),
+            "-S" | "--split-string" => after.split_first().map(|(text, tail)| (*text, tail)),
             _ => word
                 .strip_prefix("--split-string=")
                 .or_else(|| word.strip_prefix("-S").filter(|text| !text.is_empty()))
-                .map(|text| (text, at + 1)),
+                .map(|text| (text, after)),
         };
-        if let Some((text, rest)) = split {
+        if let Some((text, tail)) = split {
             let mut utility: Vec<&str> = text.split_whitespace().collect();
-            utility.extend(arguments.get(rest..).unwrap_or_default());
+            utility.extend(tail);
             return Some(utility);
         }
-        if matches!(*word, "-u" | "-C" | "--unset" | "--chdir") {
-            at += 2;
+        rest = if matches!(*word, "-u" | "-C" | "--unset" | "--chdir") {
+            after.get(1..).unwrap_or_default()
         } else if word.starts_with('-') || word.contains('=') {
-            at += 1;
+            after
         } else {
-            return Some(arguments.get(at..).unwrap_or_default().to_vec());
-        }
+            return Some(rest.to_vec());
+        };
     }
     None
 }
@@ -1358,6 +1362,15 @@ mod tests {
         assert_eq!(argv("awk -f p.awk f"), ["awk", "-f", "p.awk", "f"]);
         assert_eq!(argv("sed -f p.sed f"), ["sed", "-f", "p.sed", "f"]);
         assert_eq!(argv("gawk --file=p.awk f").len(), 3);
+        // gawk's long program-file options take the program, so the operand
+        // after them is data rather than program text.
+        for option in ["--file", "--exec"] {
+            assert_eq!(
+                crate::interpreter::carried("gawk", &[option, "p.awk", "f"]),
+                crate::interpreter::Carried::File,
+                "{option}"
+            );
+        }
         // A program-file option does not hide an inline one.
         assert_eq!(shell("gawk -f lib.awk -e 'x'"), "interpreter-script");
         // An inline-only interpreter's first operand is a file.
@@ -1408,6 +1421,21 @@ mod tests {
             env_utility(&["-i", "-S", "sh -c", "x"]),
             Some(vec!["sh", "-c", "x"])
         );
+    }
+
+    /// Fails by: a skipped option, a valued option's value or an assignment
+    /// read as the utility, or a valued option skipping one word too few or
+    /// too many.
+    #[test]
+    fn every_skipped_option_and_assignment_advances_to_the_utility() {
+        assert_eq!(
+            env_utility(&["-i", "-u", "HOME", "A=1", "cmd", "y"]),
+            Some(vec!["cmd", "y"])
+        );
+        assert_eq!(env_utility(&["--chdir", "/d", "cmd"]), Some(vec!["cmd"]));
+        // A valued option or a `-S` with nothing after it leaves no utility.
+        assert_eq!(env_utility(&["-u"]), None);
+        assert_eq!(env_utility(&["-i", "-S"]), None);
     }
 
     #[test]
