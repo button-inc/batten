@@ -5355,6 +5355,11 @@ continue_on_error = false
 # DISPATCH (`mcp call`), not for this.
 [mcp]
 permission_aliases = ["Claude_Code_Remote"]
+# The server whose `get_session` names this session's parent (CLOUD-2888): the
+# setup task reads it once, and each cross-session message a child reads is
+# annotated with whether its own parent sent it. Removing it only turns
+# `parent` into `unverified`, the safe direction.
+session_server = "Claude_Code_Remote"
 
 # Claude Code's own local wiring.
 [[mcp.source]]
