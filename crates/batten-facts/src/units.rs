@@ -463,6 +463,21 @@ mod tests {
         );
     }
 
+    /// Fails by: an empty arm counted as a swallow whatever it matches, so an
+    /// empty `Err(_)` arm is missed and an empty `Ok(_)` arm is counted.
+    #[test]
+    fn only_an_empty_err_arm_is_a_swallow() {
+        let swallows = |source| one(source).swallows;
+        assert_eq!(
+            swallows("fn f(r: Result<u8, ()>) { match r { Ok(v) => g(v), Err(_) => {} } }"),
+            1
+        );
+        assert_eq!(
+            swallows("fn f(r: Result<u8, ()>) { match r { Ok(_) => {}, Err(_) => g(0) } }"),
+            0
+        );
+    }
+
     /// Fails by: `self` counted, a short name missed, the doc or visibility
     /// misread, or the line or span wrong.
     #[test]

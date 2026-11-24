@@ -6640,23 +6640,30 @@ pub fn suite_splits(bundle: &Bundle, input: &str) -> Vec<String> {
             reference.eval_rule(format!("data.{package}.{}", test.name)),
             Ok(regorus::Value::Bool(true))
         );
-        match (decided, &test.decided_by) {
-            (Some(verdict), _) if verdict == expected => {}
-            (Some(verdict), _) => splits.push(format!(
-                "{}: {} {}: bytecode {verdict} interpreter {expected}",
-                bundle.id, test.module, test.name
-            )),
-            (None, Err(why)) => splits.push(format!(
-                "{}: {} {}: not on bytecode: {why}",
-                bundle.id, test.module, test.name
-            )),
-            (None, Ok(_)) => splits.push(format!(
-                "{}: {} {}: not on bytecode: a term or a rule faulted",
-                bundle.id, test.module, test.name
-            )),
-        }
+        splits.extend(case_split(&bundle.id, test, decided, expected));
     }
     splits
+}
+
+/// One case's [`suite_splits`] line: `None` where the bytecode `decided` the
+/// interpreter's `expected` verdict, else what split them.
+///
+/// Apart from the evaluation so a case can hand it a disagreement: both
+/// engines are given one data and one input, so no fixture makes them differ,
+/// and the line a real miscompile would print is decided here.
+fn case_split(
+    bundle: &str,
+    test: &PlannedTest,
+    decided: Option<bool>,
+    expected: bool,
+) -> Option<String> {
+    let at = format!("{bundle}: {} {}", test.module, test.name);
+    match (decided, &test.decided_by) {
+        (Some(verdict), _) if verdict == expected => None,
+        (Some(verdict), _) => Some(format!("{at}: bytecode {verdict} interpreter {expected}")),
+        (None, Err(why)) => Some(format!("{at}: not on bytecode: {why}")),
+        (None, Ok(_)) => Some(format!("{at}: not on bytecode: a term or a rule faulted")),
+    }
 }
 
 /// How many cases the coverage sweep ran on the interpreter (#1276): a
@@ -6922,7 +6929,7 @@ fn unexercised(
             // read did not happen, which is a different answer from "no test
             // entered anything" and must not be reported as one (CLOUD-251).
             if report.files.iter().all(|file| file.covered.is_empty()) {
-                if swept == discovered.len() {
+                if sweep_spent(swept, discovered.len()) {
                     return None;
                 }
                 continue;
@@ -6936,6 +6943,18 @@ fn unexercised(
         }
     }
     Some(unexercised)
+}
+
+/// Whether a sweep that has run `swept` of `total` cases and read an empty
+/// coverage report is done: only once every case has run. Before that a later
+/// batch may yet report.
+///
+/// Apart from the sweep so a case can reach it: a bundle that compiles runs
+/// only cases that cover at least their own line (measured: a constant, a
+/// `false`, a `default` and a `true` case each cover theirs), and one that
+/// faults is refused at compile, so no fixture produces the empty report.
+const fn sweep_spent(swept: usize, total: usize) -> bool {
+    swept == total
 }
 
 /// Whether a case entered the rule raising predicate `id`: its HEAD line is
@@ -7497,6 +7516,38 @@ test_string if {\n\t\"x\" == \"x\"\n\tcount(violation) == 1 with input as \"writ
         assert!(
             splits[0].contains("only bytecode [\"a\"] only interpreter []"),
             "{splits:?}"
+        );
+    }
+
+    /// Fails by: an empty coverage report read as final before every case has
+    /// run (a later batch may yet report), or swept on past the last case, so
+    /// a coverage read that never happened reads as "no case entered anything".
+    #[test]
+    fn an_empty_coverage_report_is_final_only_once_every_case_ran() {
+        assert!(super::sweep_spent(3, 3));
+        assert!(!super::sweep_spent(1, 3));
+    }
+
+    /// Fails by: a bytecode verdict that differs from the interpreter's read
+    /// as agreement, so the parity gate never reports the miscompile it exists
+    /// for; or one that agrees reported as a split.
+    #[test]
+    fn a_case_split_is_reported_only_where_the_verdicts_differ() {
+        let test = PlannedTest {
+            module: String::from("policy/a.rego"),
+            name: String::from("test_a"),
+            decided_by: Ok(String::from("data.a.test_a")),
+            contexts: Vec::new(),
+        };
+        assert_eq!(super::case_split("row", &test, Some(true), true), None);
+        assert_eq!(super::case_split("row", &test, Some(false), false), None);
+        assert_eq!(
+            super::case_split("row", &test, Some(true), false).as_deref(),
+            Some("row: policy/a.rego test_a: bytecode true interpreter false")
+        );
+        assert_eq!(
+            super::case_split("row", &test, Some(false), true).as_deref(),
+            Some("row: policy/a.rego test_a: bytecode false interpreter true")
         );
     }
 

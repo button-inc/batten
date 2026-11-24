@@ -4910,6 +4910,37 @@ mod tests {
         Ok(())
     }
 
+    /// Fails by: a subject whose last line has no newline taking the staged
+    /// line glued onto that last line, so the fixture's diff edits a line
+    /// rather than adding one.
+    #[test]
+    fn a_subject_without_a_final_newline_takes_the_line_on_its_own() -> Result<()> {
+        const COMMIT_TOML: &str = "tools.toml";
+        let repo = perf_scratch("commit-unterminated");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::create_dir_all(repo.join("crates/batten/src"))?;
+        std::fs::write(repo.join(COMMIT_SOURCE), "fn main() {}\n")?;
+        std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
+        std::fs::write(repo.join(COMMIT_TOML), "[tools]")?;
+        crate::gitwrite::commit_paths(
+            &repo,
+            &[
+                COMMIT_SOURCE.to_owned(),
+                String::from("batten.toml"),
+                COMMIT_TOML.to_owned(),
+            ],
+            "base\n",
+        )?;
+        pin_trunk(&repo)?;
+        let out = perf_scratch("commit-unterminated-out");
+        let commit = stage_commit(&repo, &out, COMMIT_TOML)?;
+        assert_eq!(
+            crate::fsio::read_to_string(commit.join(COMMIT_TOML))?,
+            "[tools]\n# perf: one staged line\n"
+        );
+        Ok(())
+    }
+
     /// Point `origin/main` at `repo`'s `HEAD`, as a fetched checkout has it.
     fn pin_trunk(repo: &Path) -> Result<()> {
         let head = crate::git::resolve_ref(repo, "HEAD")?
