@@ -2134,6 +2134,24 @@ fn drop_set(
 mod tests {
     use super::*;
 
+    /// Fails by: the committer's own zone kept, so two hosts replaying one
+    /// range mint different ids; or its instant replaced, so a supplied date
+    /// is lost. Kolkata's half-hour offset keeps a sign-only bug visible.
+    #[test]
+    fn a_stamped_committer_keeps_its_instant_and_identity_in_utc() {
+        let who = gix::actor::Signature {
+            name: "Fixture".into(),
+            email: "fixture@example.invalid".into(),
+            time: gix::date::Time::new(1_700_000_000, 19_800),
+        };
+        let stamped = stamped_in_utc(&who);
+        assert_eq!(
+            (stamped.time.seconds, stamped.time.offset),
+            (1_700_000_000, 0)
+        );
+        assert_eq!((stamped.name, stamped.email), (who.name, who.email));
+    }
+
     /// CLOUD-2526: an ancestry question opens fresh but writes nothing, so it
     /// leaves the hook call's remembered opens standing.
     #[test]

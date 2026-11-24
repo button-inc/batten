@@ -2932,6 +2932,62 @@ mod tests {
         assert_eq!(token_paths("a:: b"), []);
     }
 
+    /// Fails by: a joined `::` token answered as ending before itself (`-` for
+    /// `+`), so the path after an unbalanced brace, which the parser reads as
+    /// items and glues into one `::` token, loses every segment past its first.
+    #[test]
+    fn a_path_after_an_unbalanced_brace_is_still_read() {
+        use ra_ap_syntax::{AstNode as _, SyntaxKind};
+        let body = "}\nfn f() { a::b(); }";
+        let glued =
+            batten_facts::source::rust_parse(&format!("m!{{{body}\n}}"), Edition::Edition2024)
+                .tree()
+                .syntax()
+                .descendants_with_tokens()
+                .any(|token| token.kind() == SyntaxKind::COLON2);
+        assert!(glued, "the premise: the parser glued a `::` token");
+        assert_eq!(
+            token_paths(body),
+            [(11, vec!["a".to_owned(), "b".to_owned()], 4)]
+        );
+    }
+
+    /// Fails by: the identifier-byte test joined by `&&`, so a path is read
+    /// starting inside a comment's word (`1a::b` yielding `a::b`).
+    #[test]
+    fn a_comment_path_starts_only_after_a_non_identifier_byte() {
+        assert_eq!(paths_in("// 1a::b"), []);
+        assert_eq!(
+            paths_in("// a::b"),
+            [(3, vec!["a".to_owned(), "b".to_owned()], 4)]
+        );
+    }
+
+    /// Fails by: the segments a glob re-export consumed counted one short
+    /// (`at * 1` for `at + 1`), so an old home whose OWN glob binds the moved
+    /// item reads as a partial resolution and pairs with nothing.
+    #[test]
+    fn an_old_home_whose_own_glob_binds_the_moved_item_pairs_it() {
+        let lib = ("src/lib.rs", "pub mod old;\npub mod new;\n");
+        let base = index(&[
+            ROOT,
+            lib,
+            ("src/old.rs", "pub fn f(x: u8) -> u8 { x }\n"),
+            ("src/new.rs", ""),
+        ]);
+        let head = index(&[
+            ROOT,
+            lib,
+            ("src/old.rs", "pub use crate::new::*;\n"),
+            ("src/new.rs", "pub fn f(x: u8, y: u8) -> u8 { x + y }\n"),
+        ]);
+        let moves = moved_through_uses(&base, &head);
+        assert_eq!(
+            moves.get(&("src/old.rs".to_owned(), "f".to_owned())),
+            Some(&("src/new.rs".to_owned(), "f".to_owned()))
+        );
+    }
+
     /// Fails by: a `use` already gated to test builds gated again, its own
     /// `#[cfg(test)]` read as no reason to leave it alone.
     #[test]
