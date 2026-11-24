@@ -776,7 +776,7 @@ mod tests {
         assert_eq!(super::tracer(), expected);
     }
 
-    /// `test:traced` (mise.toml) sets `BATTEN_TEST_TRACED_REQUIRED` on the one
+    /// The `test:traced` task sets `BATTEN_TEST_TRACED_REQUIRED` on the one
     /// lane that runs these cases untraced with `strace` present, so each takes
     /// the arm that expects a tracer there; a host that cannot is a
     /// misprovisioned lane, never a pass on the `None` arm (CLOUD-2789).
