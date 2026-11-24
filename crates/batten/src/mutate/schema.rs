@@ -10974,4 +10974,22 @@ pub fn repo() -> u8 {{ scratch() }}
         assert_eq!(package_dir_of("pkg/tests/it/main.rs"), Some("pkg"));
         assert_eq!(package_dir_of("README.md"), None);
     }
+
+    /// Fails by: a type alias read as every identifier it holds rather than
+    /// its own name, so its target's name is charged with it (the
+    /// `TypeAlias` arm of `item_names` deleted).
+    #[test]
+    fn a_type_alias_answers_to_its_own_name_only() {
+        let parse = batten_facts::source::rust_parse(
+            "type Alias = Target;\n",
+            ra_ap_syntax::Edition::Edition2024,
+        );
+        let item = parse
+            .tree()
+            .syntax()
+            .descendants()
+            .find_map(ast::Item::cast)
+            .expect("an item");
+        assert_eq!(item_names(&item), [String::from("Alias")]);
+    }
 }

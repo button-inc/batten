@@ -3161,6 +3161,44 @@ mod tests {
         assert_eq!(self_type_path(&found).unwrap(), ["crate", "Wrap"]);
     }
 
+    /// Fails by: a generic argument's closing `>` never closing it, so every
+    /// segment after it is dropped (the `'>'` arm of `self_type_path`
+    /// deleted).
+    #[test]
+    fn an_impl_on_a_path_through_a_generic_segment_keeps_what_follows_it() {
+        let file = parse("impl Outer<u8>::Inner {}\n").unwrap();
+        let found = file
+            .items()
+            .find_map(|item| match item {
+                ast::Item::Impl(found) => Some(found),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(self_type_path(&found).unwrap(), ["Outer", "Inner"]);
+    }
+
+    /// Fails by: `super::` read from a nested module landing on the crate
+    /// root rather than on its top-level module, or from a top-level module
+    /// landing on itself (`>=` read as `<` on `super`'s module depth in
+    /// `node_of`).
+    #[test]
+    fn super_from_a_nested_module_names_its_top_level_module() {
+        let modules = BTreeSet::from([String::from("a")]);
+        let homes = BTreeMap::from([(String::from("S"), BTreeSet::from([String::from("a")]))]);
+        let lib_aliases = BTreeMap::new();
+        let resolver = Resolver {
+            modules: &modules,
+            homes: &homes,
+            lib_aliases: &lib_aliases,
+        };
+        let path = [String::from("super"), String::from("S")];
+        assert_eq!(
+            resolver.node_of(&path, &[String::from("a"), String::from("inner")], 2),
+            Some(String::from("a"))
+        );
+        assert_eq!(resolver.node_of(&path, &[String::from("a")], 2), None);
+    }
+
     /// Fails by: a binary's `main.rs` located as a module named `main`.
     #[test]
     fn a_binary_root_has_no_module() {

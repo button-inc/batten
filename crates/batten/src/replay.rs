@@ -3125,3 +3125,46 @@ mod cut_tests {
         );
     }
 }
+
+/// The structural tier of `run` (CLOUD-2789).
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod structural_tests {
+    use super::{ExitCode, run};
+
+    /// Fails by: `--structural` running the modified test's replay, which
+    /// stages a tree and waits for a build it promised not to (`&&` read as
+    /// `||` in `run`).
+    #[test]
+    fn the_structural_tier_stages_no_replay_for_a_modified_test() {
+        let root = crate::scratch::scratch("replay-structural-tier");
+        crate::gitwrite::init_on_main(&root).expect("init");
+        let commit = |text: &str, message: &str| {
+            std::fs::create_dir_all(root.join("src")).expect("src");
+            std::fs::write(root.join("src/lib.rs"), text).expect("write");
+            crate::gitwrite::commit_paths(&root, &[String::from("src/lib.rs")], message)
+                .expect("commit");
+            crate::git::head_commit(&root).expect("head")
+        };
+        let base = commit(
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() {\n        assert_eq!(1, 1);\n    }\n}\n",
+            "base",
+        );
+        commit(
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() {\n        assert_eq!(1, 2);\n    }\n}\n",
+            "head",
+        );
+        let staged = crate::state::repo_state_dir(&root)
+            .expect("a state directory")
+            .join("replay");
+        let _ = std::fs::remove_dir_all(&staged);
+        let mut out = Vec::new();
+        let code = run(&root, &base, true, true, &mut out).expect("the structural tier answers");
+        assert_eq!(code, ExitCode::Success, "{}", String::from_utf8_lossy(&out));
+        assert!(
+            !staged.exists(),
+            "the structural tier stages no replay tree"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

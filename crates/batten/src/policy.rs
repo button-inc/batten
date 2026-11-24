@@ -9312,4 +9312,44 @@ test_c if {\n\t\"n\" in rules\n}\n";
         assert_eq!(suite.unexercised, vec!["n".to_owned()]);
         assert_eq!(coverage_cases() - before, 3);
     }
+
+    /// Fails by: a bundle already on bytecode, compiled again with its AST
+    /// kept, dropping the interpreter it held (`keep_ast` read as `false` on
+    /// the compiled arm of `into_bundle`).
+    #[test]
+    fn a_compiled_bundle_compiled_again_keeps_its_interpreter_where_asked() {
+        let data = serde_json::json!({});
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let first = Compiled::from_bundle(&bundle, &data).expect("compiles to bytecode");
+        let second = Compiled::from_bundle(&bundle, &data).expect("compiles to bytecode");
+        let third = Compiled::from_bundle(&bundle, &data).expect("compiles to bytecode");
+        let kept = first.into_bundle(bundle, true);
+        assert!(kept.as_interpreted().is_some(), "the interpreter is kept");
+        let again = second.into_bundle(kept, true);
+        assert!(again.is_bytecode());
+        assert!(
+            again.as_interpreted().is_some(),
+            "a compiled bundle keeps the interpreter it held"
+        );
+        let dropped = third.into_bundle(again, false);
+        assert!(dropped.as_interpreted().is_none(), "the hot path drops it");
+    }
+
+    /// Fails by: a case writing `input` twice desugared as its last write
+    /// rather than refused (the `context.input.is_none()` guard of
+    /// `with_terms` read as `true`).
+    #[test]
+    fn a_case_writing_input_twice_is_refused_bytecode() {
+        let twice = "package batten.w\nimport rego.v1\n\n\
+            violation contains \"w\" if {\n\tinput.go\n}\n\n\
+            test_once if {\n\tcount(violation) == 1 with input as {\"go\": true}\n}\n\n\
+            test_twice if {\n\tcount(violation) == 1 with input as {\"go\": false} with input as {\"go\": true}\n}\n";
+        let splits = suite_splits(&bundle_of("row", &[("policy/w.rego", twice)]), "{}");
+        assert!(
+            splits
+                .iter()
+                .any(|line| line.contains("test_twice") && line.contains("a `with` on `input`")),
+            "a second `with input` is refused, never desugared: {splits:?}"
+        );
+    }
 }
