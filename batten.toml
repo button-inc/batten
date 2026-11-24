@@ -19223,7 +19223,15 @@ tools = [["rustc", "--version"], ["cargo", "--version"]]
 [[step]]
 id = "perf-gate"
 # `.cargo`: cargo probes `.cargo/config{,.toml}` on every run (CLOUD-2835).
-inputs = ["crates", "Cargo.toml", "Cargo.lock", ".config/nextest.toml", "bench", "batten.toml", ".cargo"]
+inputs = [
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  ".config/nextest.toml",
+  "bench",
+  "batten.toml",
+  ".cargo",
+]
 tools = [
   [
     "rustc",
