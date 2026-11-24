@@ -15678,6 +15678,32 @@ pub fn rustc_wrapped(
     // reaches the wrapper without it, and refusing it there broke every build.
     // The compiler's name in `argv[1]` is the whole test; no verb is named so.
     guard_compile(&args[2..]);
+    // THE DECLARED NEXT WRAPPER, AFTER THE GUARD (CLOUD-2907): the collector
+    // stays first for every unit, and a compiler cache sees only the units it
+    // can share. A next wrapper that cannot be started is passed over, so a
+    // missing cache costs a compile, never the build.
+    // `argv[1]`'s name, never the compiler's behind a workspace wrapper: cargo
+    // runs that wrapper for workspace members only, which are never chained.
+    let stem = Path::new(first)
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default();
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR");
+    let next = std::env::var_os(RUSTC_NEXT);
+    if let Some(next) = chained_wrapper(
+        stem,
+        manifest_dir.as_deref().map(Path::new),
+        cargo_home().as_deref(),
+        next.as_deref(),
+    ) {
+        let chained: Vec<&std::ffi::OsStr> = std::iter::once(next)
+            .chain(args[1..].iter().map(std::ffi::OsString::as_os_str))
+            .collect();
+        match exec::become_argv(&chained) {
+            Ok(never) => match never {},
+            Err(_unstartable) => {}
+        }
+    }
     // THROUGH `exec::become_argv`, the spawn the inventory already holds for
     // becoming a named program: a wrapper adds no spawn of its own.
     match exec::become_argv(&args[1..]) {
@@ -15687,6 +15713,43 @@ pub fn rustc_wrapped(
             Some(std::process::ExitCode::from(101))
         }
     }
+}
+
+/// The variable naming the wrapper [`rustc_wrapped`] hands a shareable unit to
+/// after its guard (CLOUD-2907): `<next> <rustc> <args>`. The consumer names
+/// the tool; the core names none.
+pub const RUSTC_NEXT: &str = "BATTEN_RUSTC_NEXT";
+
+/// The wrapper a compile is chained through, or `None` to run the compiler
+/// directly (CLOUD-2907).
+///
+/// ONLY A REGISTRY OR GIT UNIT, AND ONLY `rustc`: a unit whose manifest sits
+/// under `CARGO_HOME` has one cwd in every tree, so a cache keyed on it hits
+/// across target dirs. A workspace unit is incremental, which a compiler cache
+/// passes through, or a one-shot mutant render no build reads again; a
+/// `clippy-driver` compile is a check, never a unit a build shares. Nothing
+/// declared, or declared empty, is today's direct compile.
+#[must_use]
+pub fn chained_wrapper<'a>(
+    compiler_stem: &str,
+    manifest_dir: Option<&Path>,
+    cargo_home: Option<&Path>,
+    next: Option<&'a std::ffi::OsStr>,
+) -> Option<&'a std::ffi::OsStr> {
+    let next = next.filter(|next| !next.is_empty())?;
+    if compiler_stem != "rustc" {
+        return None;
+    }
+    let (manifest_dir, cargo_home) = (manifest_dir?, cargo_home?);
+    (cargo_home.is_absolute() && manifest_dir.starts_with(cargo_home)).then_some(next)
+}
+
+/// Cargo's home as cargo resolves it: `CARGO_HOME`, else `~/.cargo`.
+fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
 }
 
 /// The collection half of [`rustc_wrapped`]: best-effort, silent, and never

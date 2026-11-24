@@ -802,6 +802,7 @@ mod tests {
             regrowable: None,
             min_free_mb: Some(0),
             max_free_mb: Some(1),
+            caches: Vec::new(),
         };
         let (second, observed) = std::sync::mpsc::channel();
         let reads = AtomicUsize::new(0);
@@ -922,6 +923,7 @@ mod tests {
             regrowable: None,
             min_free_mb: Some(10),
             max_free_mb: Some(11),
+            caches: Vec::new(),
         };
         // READINGS ARE THE EVENTS THE CASE WAITS ON, never a clock. The first
         // starts the collection; the 200th releases the other collector's lock;
@@ -981,6 +983,7 @@ mod tests {
             regrowable: None,
             min_free_mb: Some(10),
             max_free_mb: Some(11),
+            caches: Vec::new(),
         };
         (repo, stale, config)
     }

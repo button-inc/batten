@@ -1215,6 +1215,7 @@ mod tests {
             regrowable: None,
             min_free_mb: min,
             max_free_mb: max,
+            caches: Vec::new(),
         };
         assert!(table(None, None).validate().is_ok(), "the arm switched off");
         assert!(table(Some(10), Some(20)).validate().is_ok());
@@ -1506,6 +1507,7 @@ mod tests {
         let banded = Prune {
             min_free_mb: Some(1),
             max_free_mb: Some(2),
+            caches: Vec::new(),
             ..empty
         };
         assert!(banded.validate().is_ok());
