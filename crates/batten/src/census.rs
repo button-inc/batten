@@ -1589,6 +1589,27 @@ mod tests {
         names.iter().map(|name| (*name).to_owned()).collect()
     }
 
+    /// Fails by: the reader's shell candidates answered empty or otherwise
+    /// than the tracked files a shell name or a `#!` makes shell, so a tree
+    /// fact reads no script it was never handed.
+    #[test]
+    fn a_readers_candidates_are_its_shell_named_and_hash_bang_files() {
+        let root = crate::scratch::scratch("census-reader-candidates");
+        std::fs::write(root.join("run.sh"), "echo\n").unwrap();
+        std::fs::write(root.join("tool"), "#!/bin/sh\necho\n").unwrap();
+        std::fs::write(root.join("notes.txt"), "echo\n").unwrap();
+        let tracked = keys(&["notes.txt", "run.sh", "tool"]);
+        let reader = TreeReader::new(&root, &tracked);
+        assert_eq!(
+            reader
+                .candidates()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["run.sh", "tool"]
+        );
+    }
+
     /// Fails by: every file read as opening with `#!`, so any untracked text
     /// file is taken for a script.
     #[test]
