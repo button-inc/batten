@@ -50,14 +50,79 @@ fn a_dev_tag_is_never_the_newest_release_tag() {
         batten::git::newest_version_tag(&dir).unwrap().as_deref(),
         Some(RELEASE)
     );
-    // ANTI-VACUITY: the same version under `v*` would be read as the release.
+    // ANTI-VACUITY: the reader does read `v*`, so a newer RELEASE beside the
+    // dev tag is the answer. And the same dev version under `v*` is still not:
+    // a pre-release is never a release (CLOUD-2906), the second guard.
+    let newer = tagged("dev-tags-newest-newer", &[&dev_tag(), "v0.0.222"]);
+    assert_eq!(
+        batten::git::newest_version_tag(&newer).unwrap().as_deref(),
+        Some("v0.0.222")
+    );
     let unspaced = dev_tag()
         .trim_start_matches(batten::engine::DEV_TAG_PREFIX)
         .to_owned();
     let exposed = tagged("dev-tags-newest-exposed", &[&unspaced]);
     assert_eq!(
-        batten::git::newest_version_tag(&exposed).unwrap(),
-        Some(unspaced)
+        batten::git::newest_version_tag(&exposed)
+            .unwrap()
+            .as_deref(),
+        Some(RELEASE)
+    );
+}
+
+/// A history where a dev tag and a pre-release sit NEARER a release than its
+/// predecessor: `v0.0.221`, then a commit carrying the dev tag and
+/// `v0.0.222-rc.1`, then `v0.0.222`. The review of #1291 (HIGH 2): dev tags
+/// reach `main`'s history by fast-forward, so every predecessor reader meets
+/// exactly this.
+fn nearer(name: &str) -> PathBuf {
+    let dir = tagged(name, &[]);
+    common::write(&dir, "README.md", "y\n");
+    common::git_in(&dir, &["commit", "-q", "-am", "dev head"]);
+    common::git_in(&dir, &["tag", &dev_tag()]);
+    common::git_in(&dir, &["tag", "v0.0.222-rc.1"]);
+    common::write(&dir, "README.md", "z\n");
+    common::git_in(&dir, &["commit", "-q", "-am", "release"]);
+    common::git_in(&dir, &["tag", "v0.0.222"]);
+    // ANTI-VACUITY: a describe over every tag answers a nearer one here.
+    let any = common::git_in(&dir, &["describe", "--abbrev=0", "--tags", "v0.0.222^"]);
+    assert_ne!(any.trim(), RELEASE, "the fixture carries a nearer tag");
+    dir
+}
+
+/// `git::previous_tag`, which `record derive released` (`mise run released`)
+/// ranges from: the predecessor is the previous RELEASE, never a nearer dev
+/// or pre-release tag.
+#[test]
+fn a_dev_or_pre_release_tag_is_never_the_previous_release() {
+    let dir = nearer("dev-tags-previous");
+    assert_eq!(
+        batten::git::previous_tag(&dir, "v0.0.222", "v[0-9]*")
+            .unwrap()
+            .as_deref(),
+        Some(RELEASE)
+    );
+}
+
+/// `batten release previous`, which `linear-release-backfill.yml` reads its
+/// `base_ref` from (it described over every tag before CLOUD-2906).
+#[test]
+fn the_backfill_base_is_never_a_dev_or_pre_release_tag() {
+    let dir = nearer("dev-tags-backfill");
+    let output = common::run(
+        &dir,
+        &[
+            "release",
+            "previous",
+            "--tag",
+            "v0.0.222",
+            "--pattern",
+            "v[0-9]*",
+        ],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("{RELEASE}\n")
     );
 }
 
