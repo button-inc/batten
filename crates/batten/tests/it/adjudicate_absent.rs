@@ -503,6 +503,46 @@ fn a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it() {
 }
 
 #[test]
+fn the_locked_repair_reaches_a_skewed_pin_and_the_refusal_names_it() {
+    // CLOUD-2881's second entry point. In a cold container the pinned
+    // spelling's `mise exec` installed its tools unlocked and was refused 403
+    // before the build, while the locked spelling that works was refused by
+    // this floor: a session deadlocked at step 0. The floor admits the locked
+    // spelling, bare and rooted, and the refusal names it.
+    let dir = fixture("adjudicate-floor-engine-locked", PINS_ANOTHER_RELEASE);
+    let root = batten::git::canonical(&dir);
+    let locked = batten::engine::REPAIR_LOCKED;
+    let rooted = batten::engine::repair_at(&root, locked);
+    for repair in [locked.to_owned(), rooted.clone()] {
+        assert_eq!(
+            code_for(&dir, &command_envelope(&repair)),
+            Some(0),
+            "the locked repair is admitted: {repair}"
+        );
+    }
+    let refused = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &command_envelope("git push"),
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains(&rooted),
+        "the refusal names the locked repair: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    for command in [
+        format!("{locked} && git push"),
+        locked.replace("MISE_LOCKED=true", "MISE_LOCKED=false"),
+    ] {
+        assert_eq!(
+            code_for(&dir, &command_envelope(&command)),
+            Some(2),
+            "only the locked repair spelled whole is admitted: {command}"
+        );
+    }
+}
+
+#[test]
 fn a_command_carrying_the_repair_verb_is_still_refused() {
     // THE MIRROR. Admitting by containment would let any command ride the
     // repair's spelling past a build that judges nothing.
