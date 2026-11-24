@@ -161,6 +161,24 @@ fn a_loadable_config_still_allows_an_ordinary_call() {
     );
 }
 
+#[test]
+fn a_tool_name_off_the_pre_tool_event_loads_no_config() {
+    // `is_adjudicable` admits a tool name only on `PreTool` (CLOUD-2789): the
+    // tool name and the event are one clause, joined by `&&`. A `PostToolUse`
+    // naming `Grep` carries no command and no write, so it never reaches the
+    // config load, and an unparseable config cannot refuse it. Joined by `||`
+    // instead, the tool name alone admits it, the load fails, and an
+    // unclassified tool is refused at `2`.
+    let dir = fixture("adjudicate-post-tool-name", WILL_NOT_PARSE);
+    let post = "{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Grep\",\
+                \"tool_input\":{\"pattern\":\"ordinary\"}}";
+    assert_eq!(
+        code_for(&dir, post),
+        Some(0),
+        "a tool name off the pre-tool event must not make the call adjudicable"
+    );
+}
+
 /// A write-tool call targeting `file` inside `dir`, by absolute path the way
 /// Claude Code sends one — the boundary relativises it before judging.
 fn write_payload(dir: &Path, file: &str) -> String {
