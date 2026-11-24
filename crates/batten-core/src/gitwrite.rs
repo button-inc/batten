@@ -2609,6 +2609,37 @@ mod tests {
         );
     }
 
+    /// A tree's blob is read back as its own bytes, and a path the tree does
+    /// not hold as none (CLOUD-2789). The three-way candidate and the union
+    /// merge are built from these bytes.
+    ///
+    /// Fails by: every path read as an empty blob, which proposes from three
+    /// empty texts and unions two empty sides.
+    #[test]
+    fn a_blob_is_read_as_its_bytes_and_an_absent_path_as_none() {
+        let dir = replayable("gitwrite-blob-at");
+        diverged(&dir, "2\n", Some("3\n"));
+        let repo = gix::open(&dir).unwrap_or_else(|err| panic!("open: {err}"));
+        let tree = |rev: &str| {
+            repo.rev_parse_single(rev)
+                .unwrap_or_else(|err| panic!("{err}"))
+                .object()
+                .unwrap_or_else(|err| panic!("{err}"))
+                .peel_to_tree()
+                .unwrap_or_else(|err| panic!("{err}"))
+                .id
+        };
+        assert_eq!(
+            blob_at(&repo, tree("refs/heads/base"), "tool"),
+            Some(b"2\n".to_vec())
+        );
+        assert_eq!(
+            blob_at(&repo, tree("refs/heads/main"), "tool"),
+            Some(b"3\n".to_vec())
+        );
+        assert_eq!(blob_at(&repo, tree("refs/heads/main"), "absent"), None);
+    }
+
     /// A conflict at a path every tree holds gets a candidate, and a placed
     /// resolution keeps the path's executable mode (CLOUD-2477).
     #[test]
