@@ -470,6 +470,117 @@ pub fn is_lookthrough_wrapper(token: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// One family's options as its argv reads them: each inline option
+    /// carries the program, each valued one takes the next word, each
+    /// program-file option names it.
+    struct Reads {
+        program: &'static str,
+        inline: &'static [&'static str],
+        valued: &'static [&'static str],
+        file: &'static [&'static str],
+    }
+
+    /// Every option each family declares reads as that family's grammar
+    /// says (CLOUD-2626).
+    ///
+    /// Fails by: any field a family's arm names dropped for `PLAIN`'s empty
+    /// one (CLOUD-2789): an inline option no longer carries the program, a
+    /// valued one leaves its value to read as the script, a program-file one
+    /// leaves the program to the first operand.
+    #[test]
+    fn every_declared_option_reads_as_its_family_says() {
+        let families = [
+            Reads {
+                program: "bash",
+                inline: &["-c"],
+                valued: &["-o", "-O", "--rcfile", "--init-file"],
+                file: &[],
+            },
+            Reads {
+                program: "python",
+                inline: &["-c"],
+                valued: &["-W", "-X", "--check-hash-based-pycs"],
+                file: &[],
+            },
+            Reads {
+                program: "node",
+                inline: &["-e", "-p", "--eval", "--print"],
+                valued: &["-r", "-C", "--require", "--import", "--loader"],
+                file: &[],
+            },
+            Reads {
+                program: "perl",
+                inline: &["-e", "-E"],
+                valued: &["-I", "-M", "-m"],
+                file: &[],
+            },
+            Reads {
+                program: "ruby",
+                inline: &["-e"],
+                valued: &["-r", "-I", "-E", "-C", "--encoding"],
+                file: &[],
+            },
+            Reads {
+                program: "fish",
+                inline: &["-c", "-C", "--command", "--init-command"],
+                valued: &["-d", "-f", "-o", "--debug", "--features"],
+                file: &[],
+            },
+            Reads {
+                program: "awk",
+                inline: &[],
+                valued: &["-F", "-v", "-W"],
+                file: &["-f"],
+            },
+            Reads {
+                program: "gawk",
+                inline: &["-e", "--source"],
+                valued: &["-F", "-v", "--assign", "--include", "--load"],
+                file: &["-f", "-E", "--file", "--exec"],
+            },
+            Reads {
+                program: "sed",
+                inline: &["-e", "--expression"],
+                valued: &["-l", "--line-length"],
+                file: &["-f", "--file"],
+            },
+            Reads {
+                program: "osascript",
+                inline: &["-c", "-e", "-E", "--command", "--eval"],
+                valued: &[],
+                file: &[],
+            },
+        ];
+        for family in families {
+            let program = family.program;
+            for option in family.inline {
+                assert_eq!(
+                    carried(program, &[option, "text"]),
+                    Carried::Inline,
+                    "{program} {option}"
+                );
+            }
+            for option in family.valued {
+                assert_eq!(
+                    script_operand(&grammar(program), &[option, "value", "script"]),
+                    Some("script"),
+                    "{program} {option}"
+                );
+            }
+            for option in family.file {
+                assert_eq!(
+                    carried(program, &[option, "prog", "input"]),
+                    Carried::File,
+                    "{program} {option}"
+                );
+            }
+        }
+        // `python -m` runs a module: nothing in the argv is the program.
+        assert_eq!(carried("python", &["-m", "pkg"]), Carried::Elsewhere);
+        // The fallback never bundles: `-xc` is no `-c`, so the operand is.
+        assert_eq!(carried("osascript", &["-xc", "text"]), Carried::Operand);
+    }
+
     /// Fails by: fish read through the fallback, which knows neither
     /// `-C`/`--init-command` nor a bundle, so each of those carries no
     /// command.
