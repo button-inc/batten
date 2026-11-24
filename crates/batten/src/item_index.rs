@@ -2280,6 +2280,18 @@ mod tests {
         ));
     }
 
+    /// Fails by: `path_at` looking two bytes back rather than past the `::`
+    /// it stands on, so a trailing `::1` is taken into the path's length.
+    #[test]
+    fn a_comment_path_stops_before_a_segment_that_is_a_digit() {
+        let found = paths_in("// ab::cd::1");
+        assert_eq!(
+            found,
+            [(3, vec![String::from("ab"), String::from("cd")], 6)],
+            "{found:?}"
+        );
+    }
+
     /// Fails by: a changed assertion hidden behind a path. Only the path is
     /// canonical; every other token still has to match.
     #[test]

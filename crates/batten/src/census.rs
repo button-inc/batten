@@ -1589,6 +1589,21 @@ mod tests {
         names.iter().map(|name| (*name).to_owned()).collect()
     }
 
+    /// Fails by: every file read as opening with `#!`, so any untracked text
+    /// file is taken for a script.
+    #[test]
+    fn only_a_file_opening_with_hash_bang_is_one() {
+        let dir =
+            std::env::temp_dir().join(format!("batten-census-hash-bang-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("script"), "#!/bin/sh\necho\n").unwrap();
+        std::fs::write(dir.join("notes"), "# a heading\n").unwrap();
+        assert!(hash_bang(&dir.join("script")));
+        assert!(!hash_bang(&dir.join("notes")));
+        assert!(!hash_bang(&dir.join("absent")));
+    }
+
     /// Fails by: a macro body re-read past its closing delimiter, which no
     /// longer parses, so a spawn in a macro's arguments is no site.
     #[test]
