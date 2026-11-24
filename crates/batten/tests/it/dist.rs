@@ -669,7 +669,7 @@ fn a_dev_prerelease_is_published_under_the_dev_namespace() {
     assert_eq!(batten::engine::forge_tag(&format!("v{identity}")), shell);
 }
 
-/// `#MUTANT dev-prerelease-draft-stranded` reddens here. A run cancelled
+/// `#MUTANT dev-prerelease-draft-unchecked` reddens here. A run cancelled
 /// between `gh release create --draft` and the publish leaves a DRAFT under the
 /// tag (CLOUD-2903, review of #1291 LOW 6); the next run on the same head must
 /// complete it, never read it as done, or `releases/download/dev/…` 404s for a
@@ -698,9 +698,20 @@ fn a_cancelled_runs_draft_is_published_not_stranded() {
         "exit 0",
         "only a PUBLISHED release is done"
     );
+    // A draft is published only when it carries this run's asset names, and
+    // refused by name otherwise: never overwritten (`--clobber` is the release
+    // guard's alone).
+    let check = at("if [ \"$have\" != \"$want\" ]; then");
     assert!(
-        lines[draft + 1].starts_with("gh release upload \"$tag\" --clobber"),
-        "a draft is completed: {publish}"
+        draft < check && check < absent,
+        "the draft arm checks its assets: {publish}"
+    );
+    assert_eq!(lines[check + 2], "exit 1", "an incomplete draft is refused");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("gh release") && line.contains("--clobber")),
+        "{publish}"
     );
     assert!(
         draft < absent && absent < edit,
