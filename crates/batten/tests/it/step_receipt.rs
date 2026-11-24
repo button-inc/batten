@@ -1259,7 +1259,13 @@ fn a_rewrite_of_what_a_commit_step_judges_misses_though_the_tree_is_identical() 
         ),
         (
             "commit-check",
-            &["commit", "-q", "--amend", "-m", "feat: the subject, rewritten"],
+            &[
+                "commit",
+                "-q",
+                "--amend",
+                "-m",
+                "feat: the subject, rewritten",
+            ],
         ),
     ];
     for (step, rewrite) in rewrites {
@@ -1268,7 +1274,10 @@ fn a_rewrite_of_what_a_commit_step_judges_misses_though_the_tree_is_identical() 
         // A `cargo` that answers its version, as the row's tool probe asks.
         common::write(&repo.dir, "bin/cargo", "#!/bin/sh\necho 'cargo 1.0.0'\n");
         common::git_in(&repo.dir, &["commit", "-qam", "the row"]);
-        common::git_in(&repo.dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        common::git_in(
+            &repo.dir,
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
         common::write(&repo.dir, "input.txt", "two\n");
         common::git_in(
             &repo.dir,
