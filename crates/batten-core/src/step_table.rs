@@ -300,6 +300,14 @@ mod tests {
         }
     }
 
+    /// Fails by: a row declaring inputs and tools read as unkeyed, or a
+    /// schedule-only node read as keyed.
+    #[test]
+    fn a_row_with_inputs_and_tools_is_keyed() {
+        assert!(row(&["."], &[&["cargo", "--version"]]).is_keyed());
+        assert!(!node("n", &[]).is_keyed());
+    }
+
     /// The load error a `[[step]]` table parsed from `toml` gives, if any.
     fn loaded(toml: &str) -> Result<Vec<Step>, String> {
         #[derive(serde::Deserialize)]

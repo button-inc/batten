@@ -396,4 +396,39 @@ mod tests {
         assert!(any_branch_keyed([("a", &rule), ("b", &branch)].into_iter()));
         assert!(!any_branch_keyed([("a", &rule)].into_iter()));
     }
+
+    /// A fresh scratch directory, keyed by the process id so two concurrent
+    /// runs cannot share it (`git.rs`'s spelling).
+    fn scratch(name: &str) -> std::io::Result<std::path::PathBuf> {
+        let dir = std::env::temp_dir()
+            .join("batten-sink-tests")
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
+
+    fn request(rule: &str, kind: Production) -> Requested {
+        Requested {
+            rule: rule.to_owned(),
+            key: SinkKey::Rule,
+            kind,
+            digest: String::from("d"),
+            count: 1,
+        }
+    }
+
+    /// Fails by: a journal's write not counted, so a run that appended reads
+    /// as one that wrote less than it did.
+    #[test]
+    fn every_record_written_is_counted() -> Result<()> {
+        let git_dir = scratch("every-record-counted")?;
+        let requested = [
+            request("a", Production::Journal),
+            request("b", Production::Journal),
+            request("c", Production::Baseline),
+        ];
+        assert_eq!(perform(&git_dir, None, &requested)?, 3);
+        Ok(())
+    }
 }

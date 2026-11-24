@@ -8763,6 +8763,23 @@ mod tests {
         dir
     }
 
+    /// Fails by: the version key dropped for every tag, or tags compared as
+    /// text, which ranks `v1.9.0` above `v1.10.0`; a tag that is no version
+    /// (`release`, `vnext`) is never the answer.
+    #[test]
+    fn the_newest_version_tag_is_compared_numerically() {
+        let dir = scratch("newest-version-tag");
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        for tag in ["v1.9.0", "v1.10.0", "v0.99", "release", "vnext"] {
+            git(&dir, &["tag", tag]);
+        }
+        assert_eq!(
+            newest_version_tag(&dir).unwrap().as_deref(),
+            Some("v1.10.0")
+        );
+    }
+
     #[test]
     fn two_test_processes_do_not_share_one_fixture_directory() {
         // CLOUD-717's premise, shown able to fail: a case pinning only that one

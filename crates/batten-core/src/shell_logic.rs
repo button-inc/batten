@@ -1389,6 +1389,23 @@ mod tests {
         assert_eq!(argv("find . -name sh").len(), 4);
     }
 
+    /// Fails by: an attached `-S<text>` or `--split-string=<text>` word read
+    /// again as one of the utility's own arguments.
+    #[test]
+    fn an_attached_split_string_runs_what_follows_it() {
+        for attached in ["-Ssh -c", "--split-string=sh -c"] {
+            assert_eq!(
+                env_utility(&[attached, "x"]),
+                Some(vec!["sh", "-c", "x"]),
+                "{attached}"
+            );
+        }
+        assert_eq!(
+            env_utility(&["-i", "-S", "sh -c", "x"]),
+            Some(vec!["sh", "-c", "x"])
+        );
+    }
+
     #[test]
     fn the_carrier_table_bakes_in_no_consumer_path() {
         // Non-negotiable rule 1, held here for the table the census reads
