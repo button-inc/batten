@@ -974,6 +974,15 @@ mod tests {
         assert_eq!(second_of("1970-01-01T00:00-00Z"), None);
     }
 
+    /// Fails by: a zone with its colon but the wrong length, or the right
+    /// length but no colon, read as a zone — each half of the shape test holds
+    /// on its own.
+    #[test]
+    fn each_half_of_a_zone_s_shape_is_held_on_its_own() {
+        assert_eq!(second_of("1970-01-01T00:00:00+00:000"), None);
+        assert_eq!(second_of("1970-01-01T00:00:00+00-00"), None);
+    }
+
     /// One payload, a bare array, or an array wrapping one.
     #[test]
     fn a_claim_set_wrapped_in_an_array_is_read_through_the_wrapper() {
