@@ -1735,6 +1735,18 @@ pub(crate) fn committed_fixture_with_protected(name: &str) -> PathBuf {
             1,
         )
     };
+    // THE PIN NAMES THE BUILD UNDER TEST (CLOUD-2903). The committed row pins a
+    // published release, and a test build is a dev pre-release run outside its
+    // tree here, so it answers that pin with nothing and every case would meet
+    // the pin's follow instead of the rows it means to judge.
+    let config = match batten::engine::declared(&config).and_then(|pin| pin.release) {
+        Some(release) => config.replacen(
+            &format!("engine = {{ release = \"{release}\" }}"),
+            &format!("engine = {{ release = \"{}\" }}", batten::engine::release()),
+            1,
+        ),
+        None => config,
+    };
     let dir = Fixture::new(name)
         .config(&config)
         .git()

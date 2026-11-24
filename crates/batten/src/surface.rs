@@ -761,7 +761,10 @@ pub fn command_for(verb: Option<&str>) -> Command {
     // performs a default action (§2). clap renders the listing on its error path
     // (stderr, exit 1), so stdout stays the answer channel.
     let root = Command::new("batten")
-        .version(env!("CARGO_PKG_VERSION"))
+        // The build identity (CLOUD-2903), read from the build script directly
+        // rather than through `crate::config::VERSION`: naming `config` here
+        // closes a module cycle the ratchet refuses (61 to 69).
+        .version(env!("BATTEN_BUILD_VERSION"))
         .about(ROOT.about)
         // The §7 table, rendered from `ExitCode`'s own variants rather than
         // re-typed here, so `--help` and the binary can never disagree about
