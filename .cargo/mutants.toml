@@ -165,4 +165,9 @@ exclude_re = [
   # a 3-character full name that starts with `name` IS `name`, which the
   # `*full == name` arm already accepts, so `> 3` and `>= 3` agree (CLOUD-2789).
   'shell_logic\.rs:\d+:\d+: replace > with >= in switch_script$',
+  # `seen` is read only by this `insert`, and `!=` negates the key's mode bit
+  # for every row alike: a bijection on the keys, so two rows collide under it
+  # exactly when they collide under `==`. Pinned to the column: the other `==`
+  # in `validate` is not this argument's (CLOUD-2789).
+  'mint\.rs:\d+:56: replace == with != in validate$',
 ]
