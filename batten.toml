@@ -12066,6 +12066,8 @@ gates = [
   "land-stage-direct",
   "batten.toml",
   "task-verify",
+  "task-verify:gated",
+  "task-build:debug",
   "task-alive",
   "task-mutant",
   "task-mutant:rust",
