@@ -1444,11 +1444,10 @@ fn a_workspace_wrapper_between_is_run_with_the_compiler() {
     // A BARE NAME, as `RUSTC_WORKSPACE_WRAPPER=sccache` reaches it: no path
     // separator, so only the environment naming it marks it a wrapper.
     std::fs::remove_file(bin.join("wrapped")).unwrap();
-    let path = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&inherited)))
+            .expect("a PATH entry carries no separator");
     let bare = common::batten()
         .current_dir(&dir)
         .arg("cargo-auditable")
