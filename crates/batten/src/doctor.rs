@@ -42,7 +42,8 @@ use anyhow::Result;
 
 use crate::config_model::Rule;
 use crate::exit::ExitCode;
-use crate::wiring::{committed_events, entries_under, same_file};
+use crate::fsio::same_file;
+use crate::wiring::{committed_events, entries_under};
 use crate::{config, git, hook, resolve, wiring};
 
 /// One diagnostic's outcome.

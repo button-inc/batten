@@ -535,7 +535,7 @@ fn vouched_stamp(linked: &Path, entry: &Provision, cache_root: &Path) -> Option<
     let cached = entry_dir(cache_root, entry)
         .join(BIN_DIR)
         .join(entry.cached_name());
-    (lines.next() == Some(INTENT) && crate::wiring::same_bytes(linked, &cached))
+    (lines.next() == Some(INTENT) && crate::fsio::same_bytes(linked, &cached))
         .then(|| present.unwrap_or_default())
 }
 
