@@ -98,9 +98,24 @@ read(state, open) := {
 
 spellings := ["archive_session", "mcp__Claude_Code_Remote__archive_session", "mcp__claude-code-remote__archive_session"]
 
+refused_naming_the_child(tool, minted) if {
+	some v in violation with input as archive(tool, minted)
+	v.rule == "task watch pending"
+	v.subjects == [{"artifact": c}]
+}
+
 test_no_read_is_refused_naming_the_child if {
 	every tool in spellings {
-		violation == {{"rule": "task watch pending", "verdict": "task watch pending", "subjects": [{"artifact": c}]}} with input as archive(tool, {})
+		refused_naming_the_child(tool, {})
+	}
+}
+
+# The gate keys on the structured tool, never on text: a shell line that only
+# names it is some other gate's call.
+test_a_shell_line_naming_the_tool_is_not_this_gates if {
+	count(violation) == 0 with input as {
+		"call": {"command": "cd /tmp && echo archive_session", "tool": "Bash", "arguments": {"session_id": c}, "run-in-background": null},
+		"facts": {"minted": {}},
 	}
 }
 
