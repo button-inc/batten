@@ -1341,6 +1341,21 @@ pub fn case_target(program: &str, package_dir: &Path) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// Fails by: a case carrying a `failure`, an `error` or a `skipped` child
+    /// counted as passed, which reads one run's journal as more done than it
+    /// is (CLOUD-2789).
+    #[test]
+    fn a_failed_errored_or_skipped_case_is_not_passed() {
+        let xml = "<testsuites><testsuite>\
+            <testcase name=\"ok\"/>\
+            <testcase name=\"failed\"><failure/></testcase>\
+            <testcase name=\"errored\"><error/></testcase>\
+            <testcase name=\"skipped\"><skipped/></testcase>\
+            </testsuite></testsuites>";
+        assert_eq!(passed_cases(xml), Some(1));
+        assert_eq!(passed_cases("<unclosed"), None);
+    }
+
     /// Fails by: a named profile read as `default`, so a journaled run looks
     /// for its report under a profile it never ran; or an empty one kept.
     #[test]

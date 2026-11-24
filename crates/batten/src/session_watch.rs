@@ -798,7 +798,8 @@ mod tests {
     }
 
     /// Fails by: the delay shrinking between polls, which turns a patient
-    /// watch into a busy poll.
+    /// watch into a busy poll; or a poll that never reports the child gone,
+    /// which the bounded wait turns from a hang into a failure (CLOUD-2789).
     #[test]
     fn the_delay_doubles_between_polls() {
         let cache = Cache::new(crate::scratch::scratch("session-watch-backoff"));
@@ -807,7 +808,10 @@ mod tests {
             &mut Watch::new(Vec::new()),
             &mut Running { polls: 3 },
             &cache,
-            &mut |delay| waits.push(delay),
+            &mut |delay| {
+                waits.push(delay);
+                assert!(waits.len() <= 8, "the watch never ended: {waits:?}");
+            },
         );
         assert!(matches!(ended, Some((_, Ending::Nothing))));
         assert_eq!(waits, [FIRST_DELAY, FIRST_DELAY * 2, FIRST_DELAY * 4]);
@@ -906,7 +910,8 @@ mod tests {
         assert_eq!(cache.load("../escape"), None);
     }
 
-    /// Fails by: the capture's inventory emptied of its reports.
+    /// Fails by: the capture's inventory emptied of its reports, or the data
+    /// channel's `Line` writing anything but the report's line (CLOUD-2789).
     #[test]
     fn the_inventory_document_carries_each_report() {
         let mut inventory = Inventory::default();
@@ -916,6 +921,11 @@ mod tests {
             state: State::Done,
             inventory,
         };
+        assert_eq!(
+            crate::output::Line::line(&report),
+            Report::line(&report),
+            "the data channel writes the report's own line"
+        );
         let document = inventory_document(&[report]);
         assert_eq!(document[0]["session"], "session_a");
         assert_eq!(document[0]["state"], State::Done.as_str());

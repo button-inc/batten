@@ -33352,6 +33352,41 @@ mod mutation_markers;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    /// Fails by: a declared pin read as no pin, so `engine install` installs
+    /// the running binary over a release or source the config names, or a
+    /// malformed pin installed rather than refused (CLOUD-2789).
+    #[test]
+    fn a_declared_pin_is_what_engine_install_wants() {
+        use crate::config_model::Pin;
+        assert_eq!(super::pinned_by(None).unwrap(), None);
+        let release = Pin {
+            release: Some(String::from("v0.0.1")),
+            source: None,
+        };
+        assert_eq!(
+            super::pinned_by(Some(release.clone())).unwrap(),
+            Some(super::Want::Release(String::from("v0.0.1")))
+        );
+        let digest = "a".repeat(64);
+        let source = Pin {
+            release: None,
+            source: Some(digest.clone()),
+        };
+        assert_eq!(
+            super::pinned_by(Some(source)).unwrap(),
+            Some(super::Want::Source(digest))
+        );
+        let both = Pin {
+            release: Some(String::from("v0.0.1")),
+            source: Some("b".repeat(64)),
+        };
+        assert!(super::pinned_by(Some(both)).is_err());
+        assert_eq!(
+            super::install_want(None, None, Some(release)).unwrap(),
+            super::Want::Release(String::from("v0.0.1"))
+        );
+    }
+
     /// Fails by: the decided-mechanism line said for a claim that recorded
     /// none, as though saying were reason enough to report a count of zero.
     #[test]

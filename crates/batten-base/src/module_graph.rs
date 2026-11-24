@@ -236,16 +236,19 @@ impl Tarjan {
     }
 
     fn visit(&mut self, start: usize, succ: &[Vec<usize>]) {
-        // Each frame: the node and how many of its successors it has walked.
-        let mut frames: Vec<(usize, usize)> = vec![(start, 0)];
+        // Each frame: the node and the successors it has yet to walk. An
+        // iterator rather than a count, so each step consumes one successor
+        // by construction and the walk cannot revisit one forever (CLOUD-2789).
+        let mut frames: Vec<(usize, std::slice::Iter<'_, usize>)> =
+            vec![(start, succ[start].iter())];
         self.open(start);
-        while let Some(&mut (node, ref mut walked)) = frames.last_mut() {
-            if let Some(&next) = succ[node].get(*walked) {
-                *walked += 1;
+        while let Some((node, walk)) = frames.last_mut() {
+            let node = *node;
+            if let Some(&next) = walk.next() {
                 match self.index[next] {
                     None => {
                         self.open(next);
-                        frames.push((next, 0));
+                        frames.push((next, succ[next].iter()));
                     }
                     Some(seen) if self.on_stack[next] => {
                         self.low[node] = self.low[node].min(seen);
@@ -3357,5 +3360,26 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(items, ["Tr", "m"]);
+    }
+
+    /// Fails by: a root type alias left off the lib's items (its match arm
+    /// deleted), so a path naming it reads as no root item (CLOUD-2789).
+    #[test]
+    fn a_lib_type_alias_is_a_lib_item() {
+        let items: Vec<String> = lib_items("pub type Alias = u8;\n")
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(items, ["Alias"]);
+    }
+
+    /// Fails by: a lone `:` inside a macro read as half of a `::`, so the
+    /// token two past it is taken as the path's next segment (CLOUD-2789).
+    #[test]
+    fn a_lone_colon_inside_a_macro_continues_no_path() {
+        assert_eq!(
+            names("fn f() { m!(crate: a review); }\n", &["ready"]),
+            Vec::<String>::new()
+        );
     }
 }

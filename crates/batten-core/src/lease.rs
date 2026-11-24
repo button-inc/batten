@@ -6349,6 +6349,12 @@ mod tests {
             apply_delta(base, &delta(10, 3, &[0x90, 3])).expect("a copy"),
             b"012"
         );
+        // An offset byte is consumed before the length byte: a cursor that does
+        // not step past it reads the instruction back as the length (CLOUD-2789).
+        assert_eq!(
+            apply_delta(base, &delta(10, 3, &[0x91, 2, 3])).expect("an offset copy"),
+            b"234"
+        );
         assert!(apply_delta(base, &delta(9, 3, &[0x90, 3])).is_err(), "base");
         assert!(
             apply_delta(base, &delta(10, 3, &[0x00])).is_err(),
