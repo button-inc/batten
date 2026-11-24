@@ -8962,74 +8962,59 @@ fn asks_forge(request: &claim::Request, issues: &[claim::Issue]) -> bool {
 /// only when a row carries a live PR, so no such row costs no forge call; no
 /// answer leaves the competitor rules to decide as before.
 ///
-/// BY THE UPSTREAM FIRST, then the local name (CLOUD-2697, measured on #1276):
-/// a fleet session runs `git checkout -B <its own name> origin/<bundle>`, so
-/// the PR's head is the branch it tracks and the local name finds nothing.
+/// THE OWN PR IS THE ONE THIS CHECKOUT PUSHES TO: the PR whose head is the push
+/// target (`git::push_target_of_head` — git's own `push.default`, `pushRemote`
+/// and push refspec), else the one whose head is the local name. NEVER THE BARE
+/// UPSTREAM: `git checkout -B mine origin/<x>` sets `<x>` as the upstream for
+/// any start point, so a branch cut from a rival's would own the rival's PR and
+/// skip every competitor rule, and a stacked branch cut from a bundle and pushed
+/// under its own name would read its own PR as a rival. A fleet session that
+/// pushes to the bundle under another local name records it with
+/// `push.default=upstream` (or a push refspec), which is what makes it its own.
 fn with_own_pr(repo: &Path, request: &claim::Request, issues: &[claim::Issue]) -> claim::Request {
     let mut request = request.clone();
     if !asks_forge(&request, issues) {
         return request;
     }
     let slug = repo_or_placeholder(repo);
-    let upstream = git::upstream_of_head(repo)
-        .ok()
-        .flatten()
-        .as_deref()
-        .and_then(upstream_branch);
+    let pushed = git::push_target_of_head(repo).ok().flatten();
     let local = git::current_branch(repo).ok().flatten();
     request.own_pr =
-        upstream.into_iter().chain(local).find_map(
+        pushed.into_iter().chain(local).find_map(
             |branch| match fast_forward::look_up_pull_request(&slug, &branch) {
-                fast_forward::Lookup::Found(number) => Some(number),
+                fast_forward::Lookup::Found(number) => {
+                    Some(claim::PullRef::on_github(&slug, &number))
+                }
                 fast_forward::Lookup::None | fast_forward::Lookup::Unreadable(_) => None,
             },
         );
     request
 }
 
-/// The branch name an upstream ref names on its remote: `claude/x` out of
-/// `refs/remotes/origin/claude/x`, or out of `refs/heads/claude/x` for a branch
-/// tracking a local one. The remote's name is its first segment.
-fn upstream_branch(upstream: &str) -> Option<String> {
-    upstream
-        .strip_prefix("refs/remotes/")
-        .and_then(|rest| rest.split_once('/'))
-        .map(|(_, branch)| branch)
-        .or_else(|| upstream.strip_prefix("refs/heads/"))
-        .filter(|branch| !branch.is_empty())
-        .map(str::to_owned)
-}
-
 /// The issues with every attached PR the forge reports finished dropped from
 /// `live_prs` (CLOUD-2697): the tracker's attachment carries no state, so a
-/// predecessor merged long ago reads as a live competitor unless asked. This
-/// branch's own PR is not asked about; a PR the forge would not answer for
-/// stays live, so could-not-look still refuses as before.
-fn with_forge_states(
-    repo: &Path,
-    request: &claim::Request,
-    issues: &[claim::Issue],
-) -> Vec<claim::Issue> {
-    let others = |issue: &claim::Issue| {
-        issue
-            .live_prs
-            .iter()
-            .any(|number| request.own_pr.as_deref() != Some(number.as_str()))
-    };
-    if !issues.iter().any(others) {
-        return issues.to_vec();
-    }
-    let slug = repo_or_placeholder(repo);
-    let mut finished: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+/// predecessor merged long ago reads as a live competitor unless asked. Each PR
+/// is asked of the repository ITS URL names, never this one by number; this
+/// branch's own PR is not asked about; a PR on a host the forge client cannot
+/// ask, or one the forge would not answer for, stays live, so could-not-look
+/// still refuses as before.
+fn with_forge_states(request: &claim::Request, issues: &[claim::Issue]) -> Vec<claim::Issue> {
+    let mut finished: std::collections::BTreeMap<claim::PullRef, bool> =
+        std::collections::BTreeMap::new();
     issues
         .iter()
         .map(|issue| {
             let mut issue = issue.clone();
-            issue.live_prs.retain(|number| {
-                request.own_pr.as_deref() == Some(number.as_str())
-                    || !*finished.entry(number.clone()).or_insert_with(|| {
-                        fast_forward::pull_request_state(&slug, number).is_finished()
-                    })
+            issue.live_prs.retain(|pr| {
+                if request.own_pr.as_ref() == Some(pr) {
+                    return true;
+                }
+                let Some(slug) = pr.github_slug() else {
+                    return true;
+                };
+                !*finished.entry(pr.clone()).or_insert_with(|| {
+                    fast_forward::pull_request_state(slug, &pr.number).is_finished()
+                })
             });
             issue
         })
@@ -9100,7 +9085,7 @@ fn run_claim_check(
 
     let issues = claim_payloads(repo, issue)?;
     let request = &with_own_pr(repo, request, &issues);
-    let issues = with_forge_states(repo, request, &issues);
+    let issues = with_forge_states(request, &issues);
     let verdict = claim::judge(
         grammar,
         columns,
@@ -34928,13 +34913,16 @@ mod tests {
             id: String::from("CLOUD-1"),
             status: String::from("Todo"),
             assigned: false,
-            live_prs: live_pr.map(String::from).into_iter().collect(),
+            live_prs: live_pr
+                .map(|number| claim::PullRef::on_github("o/r", number))
+                .into_iter()
+                .collect(),
             description: None,
             created_at: None,
         };
         let unnamed = claim::Request::default();
         let named = claim::Request {
-            own_pr: Some(String::from("7")),
+            own_pr: Some(claim::PullRef::on_github("o/r", "7")),
             ..claim::Request::default()
         };
         assert!(asks_forge(&unnamed, &[issue(None), issue(Some("7"))]));
