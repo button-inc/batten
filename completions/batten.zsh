@@ -1436,6 +1436,37 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(previous)
+_arguments "${_arguments_options[@]}" : \
+'--tag=[The release tag whose nearest ancestor release is printed]:tag:_default' \
+'--pattern=[The glob a release tag matches; its literal prefix is stripped once, then the version is parsed as semver]:pattern:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__release__subcmd__help_commands" \
@@ -1501,6 +1532,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (backfill)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(previous)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -10428,6 +10463,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(previous)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -14114,6 +14153,7 @@ _batten__subcmd__help__subcmd__release_commands() {
 'pin:Print the release batten.toml pins, in the working tree or at a revision' \
 'settings:Exit 0 only when the rulesets and release settings the release path rests on hold' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
+'previous:Print the nearest ancestor release tag before a release tag, under a glob; exit 2 when the tag is not a release under it' \
     )
     _describe -t commands 'batten help release commands' commands "$@"
 }
@@ -14171,6 +14211,11 @@ _batten__subcmd__help__subcmd__release__subcmd__path_commands() {
 _batten__subcmd__help__subcmd__release__subcmd__pin_commands() {
     local commands; commands=()
     _describe -t commands 'batten help release pin commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__previous_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__previous_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release previous commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__release__subcmd__settings_commands] )) ||
 _batten__subcmd__help__subcmd__release__subcmd__settings_commands() {
@@ -15973,6 +16018,7 @@ _batten__subcmd__release_commands() {
 'pin:Print the release batten.toml pins, in the working tree or at a revision' \
 'settings:Exit 0 only when the rulesets and release settings the release path rests on hold' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
+'previous:Print the nearest ancestor release tag before a release tag, under a glob; exit 2 when the tag is not a release under it' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten release commands' commands "$@"
@@ -16024,6 +16070,7 @@ _batten__subcmd__release__subcmd__help_commands() {
 'pin:Print the release batten.toml pins, in the working tree or at a revision' \
 'settings:Exit 0 only when the rulesets and release settings the release path rests on hold' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
+'previous:Print the nearest ancestor release tag before a release tag, under a glob; exit 2 when the tag is not a release under it' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten release help commands' commands "$@"
@@ -16088,6 +16135,11 @@ _batten__subcmd__release__subcmd__help__subcmd__pin_commands() {
     local commands; commands=()
     _describe -t commands 'batten release help pin commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__previous_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__previous_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help previous commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__release__subcmd__help__subcmd__settings_commands] )) ||
 _batten__subcmd__release__subcmd__help__subcmd__settings_commands() {
     local commands; commands=()
@@ -16127,6 +16179,11 @@ _batten__subcmd__release__subcmd__path_commands() {
 _batten__subcmd__release__subcmd__pin_commands() {
     local commands; commands=()
     _describe -t commands 'batten release pin commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__previous_commands] )) ||
+_batten__subcmd__release__subcmd__previous_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release previous commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__release__subcmd__settings_commands] )) ||
 _batten__subcmd__release__subcmd__settings_commands() {

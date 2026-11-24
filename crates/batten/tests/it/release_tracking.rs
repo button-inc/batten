@@ -175,11 +175,11 @@ jobs:
             echo "::error:: no such tag" >&2
             exit 1
           fi
-      - name: Resolve the tag this one follows
+      - name: Resolve the release this one follows
         id: base
         env:
           TAG: ${{ inputs.tag }}
-        run: echo "ref=$(git describe --abbrev=0 --tags "$TAG^" 2>/dev/null || true)" >>"$GITHUB_OUTPUT"
+        run: mise run batten -- ci step --capture ref --arg-env TAG -- mise run batten -- release previous --pattern 'v[0-9]*' --tag
       - name: Release tracking requires its credential
         env:
           LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}

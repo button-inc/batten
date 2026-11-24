@@ -44,6 +44,12 @@ concurrency:
 
 permissions: {}
 
+# THE INSTALL LIST BINDS (`tool pin loose`, CLOUD-2556): the job installs `rust`
+# only, and a `mise run` must not re-install the whole toolchain behind it.
+env:
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
+
 jobs:
   linear-release-backfill:
     name: linear-release-backfill
@@ -80,6 +86,12 @@ jobs:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
           persist-credentials: false
+      # `batten release previous` below is the predecessor reader (CLOUD-2906),
+      # so the job carries the toolchain that builds it.
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          version: 2026.9.1
+          install_args: rust
       # A TYPO MUST NOT MINT A RELEASE RECORD. The release path cannot make this
       # mistake — its tag comes from `git tag --points-at HEAD`, so it either
       # exists or is empty — but here a human types it, and `sync` would happily
@@ -118,13 +130,19 @@ jobs:
       # a first release carrying only its own commit is correct rather than a
       # defect.
       #
+      # ONLY A RELEASE IS A PREDECESSOR, AND ONLY A RELEASE IS BACKFILLED
+      # (CLOUD-2906). The verb reads the nearest ancestor RELEASE under the glob,
+      # so a pre-release or a dev tag nearer the head is never the range's start;
+      # and it exits 2 when the typed tag is itself no release, so no Linear
+      # release is minted for a version that never shipped.
+      #
       # TAG through `env:`, never interpolated into the body; the OUTPUT is read
       # through `with:` below, where interpolation is not a shell substitution.
-      - name: Resolve the tag this one follows
+      - name: Resolve the release this one follows
         id: base
         env:
           TAG: ${{ inputs.tag }}
-        run: echo "ref=$(git describe --abbrev=0 --tags "$TAG^" 2>/dev/null || true)" >>"$GITHUB_OUTPUT"
+        run: mise run batten -- ci step --capture ref --arg-env TAG -- mise run batten -- release previous --pattern 'v[0-9]*' --tag
       # The same guard the release path carries, for the same reason: an empty
       # secret must FAIL this run rather than hand the action nothing and stay
       # green. Here it matters more, not less — a sweep over 111 tags would
