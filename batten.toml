@@ -11,7 +11,7 @@
 
 # The config schema version. This build supports version 1.
 version = 1
-engine = { release = "v0.0.220" }
+engine = { source = "72c3d9f463be291cf53577416593ce838a7def424ea9bd2f2c6afe69e8bb9d9e" }
 
 # Minimum Batten version permitted to read this file (semver). Enforced: a binary
 # older than this refuses to run rather than reporting green over rules it does
@@ -7449,20 +7449,20 @@ scope = "mediated_call"
 module = "policy/run-shape.rego"
 severity = "deny"
 
-# THE OPEN CHILDREN A TIMER MAY NAME (CLOUD-2889) are WITHHELD until the engine
-# that projects `minted` on the hook surface is released and pinned: the pinned
-# engine refuses a `minted` column on a `mediated_call` row ("rule declare
-# refused"), so the rule table would not load for any session on this branch.
-# Until then `children-open` is null, so the module admits no timer: a PR
-# heartbeat is refused as before, and so is a dispatcher's. The enabling row,
-# restored in the same change that moves the engine pin:
-#
-#   [[rule.minted]]
-#   id = "children-open"
-#   mint = "child-open"
-#   field = 1
-#   recency = 0
-#   max_age_days = 1
+# THE OPEN CHILDREN A TIMER MAY NAME (CLOUD-2889): the ids of `child-open`
+# receipts under a day old, projected as `input.facts.minted["children-open"]`.
+# Only an engine that projects `minted` on the hook surface reads this row —
+# v0.0.220 refuses a `minted` column on a `mediated_call` row ("rule declare
+# refused") — so this branch runs its own engine through a SOURCE PIN (the
+# `engine` key at the top of this file) until the release carrying it ships.
+# `engine-pin-check` keeps the source pin from landing, and the release step
+# swaps it for that release's pin.
+[[rule.minted]]
+id = "children-open"
+mint = "child-open"
+field = 1
+recency = 0
+max_age_days = 1
 
 [[rule]]
 id = "lane guard other"
