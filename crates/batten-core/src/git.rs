@@ -1784,13 +1784,15 @@ pub fn uncommitted(dir: &Path) -> Result<usize> {
 /// could-not-look rather than as a digest of nothing.
 #[must_use]
 pub fn blob_id(text: &str) -> Option<String> {
-    gix::objs::compute_hash(
-        gix::hash::Kind::Sha1,
-        gix::object::Kind::Blob,
-        text.as_bytes(),
-    )
-    .ok()
-    .map(|id| id.to_string())
+    blob_id_of(text.as_bytes())
+}
+
+/// [`blob_id`] over bytes: a protected file need not be UTF-8 (CLOUD-2923).
+#[must_use]
+pub fn blob_id_of(bytes: &[u8]) -> Option<String> {
+    gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Blob, bytes)
+        .ok()
+        .map(|id| id.to_string())
 }
 
 /// The commit `name` resolves to, or `None` when the ref does not exist.
@@ -5056,6 +5058,91 @@ pub fn blobs_changed_between(
     );
     changed.sort();
     Ok(changed)
+}
+
+/// The commit every remote-tracking ref points at, sorted and deduplicated
+/// (CLOUD-2923): the history this clone already knows to exist elsewhere.
+///
+/// Empty when the repository cannot be opened or holds no remote-tracking ref,
+/// which reads as "nothing was pushed" — the direction that excuses nothing.
+#[must_use]
+pub fn remote_tips(dir: &Path) -> Vec<String> {
+    let Ok(repo) = open(dir) else {
+        return Vec::new();
+    };
+    let mut tips = Vec::new();
+    if let Ok(references) = repo.references()
+        && let Ok(remotes) = references.prefixed("refs/remotes")
+    {
+        for reference in remotes.flatten() {
+            if let Some(id) = reference.target().try_id() {
+                tips.push(id.to_hex().to_string());
+            }
+        }
+    }
+    tips.sort();
+    tips.dedup();
+    tips
+}
+
+/// Whether the CURRENT `HEAD` moved only FORWARD onto history `tips` already
+/// reached (CLOUD-2923): it equals or descends from `before`, and it is one of
+/// `tips` or an ancestor of one.
+///
+/// `before` and `tips` are what the caller recorded EARLIER, never the refs as
+/// they stand: the question is whether `HEAD` was already history before some
+/// act, and a ref that act moved must not answer it. Forward-only, because a
+/// move back to an older pushed commit rolls a file back to content nobody
+/// wrote in this act, and that is still a change to it.
+///
+/// Opened fresh: the act may have moved `HEAD` after this process's memo was
+/// filled. `None` when it could not look; the caller reads that as "no".
+#[must_use]
+pub fn head_moved_onto(dir: &Path, before: &str, tips: &[String]) -> Option<bool> {
+    let repo = open_fresh(dir).ok()?;
+    let head = repo.head_id().ok()?.detach();
+    let before = gix::ObjectId::from_hex(before.as_bytes()).ok()?;
+    let mut hidden = Vec::with_capacity(tips.len());
+    for tip in tips {
+        hidden.push(gix::ObjectId::from_hex(tip.as_bytes()).ok()?);
+    }
+    let forward = head == before
+        || repo
+            .merge_base(before, head)
+            .is_ok_and(|base| base.is_some_and(|base| base.detach() == before));
+    if !forward || hidden.is_empty() {
+        return Some(false);
+    }
+    if hidden.contains(&head) {
+        return Some(true);
+    }
+    // HEAD HIDING EVERY TIP: a walk that yields nothing is a HEAD some tip
+    // already reaches, and the first commit it yields proves none does.
+    let mut walk = repo.rev_walk([head]).with_hidden(hidden).all().ok()?;
+    match walk.next() {
+        None => Some(true),
+        Some(Ok(_)) => Some(false),
+        Some(Err(_)) => None,
+    }
+}
+
+/// The blob id of each of `paths` at `HEAD`, read through a FRESH handle
+/// (CLOUD-2923): a post-call reader asks after a child `git` may have moved
+/// `HEAD`, which a remembered handle would not show. A path absent at `HEAD`
+/// is absent from the map; `None` when `HEAD` does not resolve to a tree.
+#[must_use]
+pub fn head_blob_ids(dir: &Path, paths: &[&str]) -> Option<BTreeMap<String, String>> {
+    let repo = open_fresh(dir).ok()?;
+    let tree = repo.head_commit().ok()?.tree().ok()?;
+    let mut ids = BTreeMap::new();
+    for path in paths {
+        if let Ok(Some(entry)) = tree.lookup_entry_by_path(path)
+            && entry.mode().is_blob()
+        {
+            ids.insert((*path).to_owned(), entry.object_id().to_string());
+        }
+    }
+    Some(ids)
 }
 
 /// The blob id of each of `paths` at `reference`, where present.

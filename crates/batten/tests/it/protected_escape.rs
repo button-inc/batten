@@ -398,3 +398,115 @@ fn a_real_write_while_a_background_call_is_live_is_refused() {
     assert_eq!(code, Some(2), "{said}");
     assert!(said.contains("path write refused at guarded.txt"), "{said}");
 }
+
+/// Commit the guarded file at `body` (or its removal, for `None`) on `main`,
+/// as another session's pushed work arrives: committed, then published under
+/// `refs/remotes/origin/main` (CLOUD-2923).
+fn publish_guarded(dir: &Path, body: Option<&str>) {
+    match body {
+        Some(body) => {
+            std::fs::write(dir.join(GUARDED), body).expect("the guarded write lands");
+            common::git_in(dir, &["add", GUARDED]);
+        }
+        None => {
+            common::git_in(dir, &["rm", "-q", GUARDED]);
+        }
+    }
+    common::git_in(dir, &["commit", "-q", "-m", "pushed by another session"]);
+    common::pin_origin_main(dir);
+}
+
+/// THE INCIDENT (CLOUD-2923). Another session pushed a protected change; this
+/// clone is behind it, and fast-forwards. The file now equals the committed blob
+/// at a `HEAD` a pre-call remote tip already reached, so nobody wrote it here.
+///
+/// Fails by: the post-call comparison reading any digest change as an unnamed
+/// write, which refused this and prescribed a `git restore` that restores nothing.
+#[test]
+fn a_fast_forward_to_a_remote_tip_is_no_protected_write() {
+    let dir = fixture("protected-escape-fast-forward");
+    publish_guarded(&dir, Some("pushed elsewhere\n"));
+    common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
+    let command = "git merge --ff-only -q origin/main";
+    let (code, said) = around_with(&dir, "call-ff", command, |dir| {
+        common::git_in(dir, &["merge", "--ff-only", "-q", "origin/main"]);
+    });
+    assert_eq!(code, Some(0), "a fast-forward to pushed history: {said}");
+    assert!(!said.contains("path write refused"), "{said}");
+}
+
+/// A fast-forward that REMOVES a protected path is the same act: absent from the
+/// working tree and from the committed tree alike.
+///
+/// Fails by: an absent file read as differing from `HEAD`.
+#[test]
+fn a_fast_forward_that_deletes_a_protected_path_is_no_protected_write() {
+    let dir = fixture("protected-escape-fast-forward-delete");
+    publish_guarded(&dir, None);
+    common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
+    let command = "git merge --ff-only -q origin/main";
+    let (code, said) = around_with(&dir, "call-ff-delete", command, |dir| {
+        common::git_in(dir, &["merge", "--ff-only", "-q", "origin/main"]);
+    });
+    assert_eq!(code, Some(0), "{said}");
+    assert!(!said.contains("path write refused"), "{said}");
+}
+
+/// THE CLOUD-2304 ESCAPE STAYS SHUT. A call that writes a protected path and
+/// commits it makes a commit no pre-call remote tip reaches, so it is refused —
+/// and since the file equals `HEAD`, the refusal prescribes no `git restore`.
+///
+/// Fails by: excusing any change that equals `HEAD` (the refusal is lost), or
+/// a reason that still prescribes the no-op restore.
+#[test]
+fn a_protected_write_committed_in_the_call_is_still_refused() {
+    let dir = fixture("protected-escape-committed-in-call");
+    let (code, said) = around_with(&dir, "call-commit", "python3 tool.py", |dir| {
+        std::fs::write(dir.join(GUARDED), "authored in the call\n").expect("the write lands");
+        common::git_in(dir, &["commit", "-q", "-am", "laundered"]);
+    });
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
+    assert!(
+        !said.contains("run git restore"),
+        "the file equals HEAD, so a restore is a no-op: {said}"
+    );
+    assert!(
+        said.contains("batten override request --rule 'protected-mutation'"),
+        "the override route stays: {said}"
+    );
+}
+
+/// THE TIPS ARE THE PRE-CALL ONES. A call that commits a protected write and
+/// then points a remote-tracking ref at it has not reached pushed history.
+///
+/// Fails by: reading the remote tips after the call rather than from the
+/// snapshot taken before it.
+#[test]
+fn a_commit_published_to_a_remote_ref_inside_the_call_is_still_refused() {
+    let dir = fixture("protected-escape-forged-tip");
+    let (code, said) = around_with(&dir, "call-forge", "python3 tool.py", |dir| {
+        std::fs::write(dir.join(GUARDED), "authored in the call\n").expect("the write lands");
+        common::git_in(dir, &["commit", "-q", "-am", "laundered"]);
+        common::pin_origin_main(dir);
+    });
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
+}
+
+/// FORWARD ONLY. A reset back to an older pushed commit rolls the protected file
+/// back to content nobody wrote in this call, and that is still a change to it.
+///
+/// Fails by: dropping the forward-only clause, so any ancestor of any remote tip
+/// excuses a one-call policy rollback (the L2 cold read's hole).
+#[test]
+fn a_reset_backwards_to_a_pushed_ancestor_is_still_refused() {
+    let dir = fixture("protected-escape-reset-back");
+    publish_guarded(&dir, Some("the current policy\n"));
+    let command = "git reset -q --hard HEAD~1";
+    let (code, said) = around_with(&dir, "call-reset-back", command, |dir| {
+        common::git_in(dir, &["reset", "-q", "--hard", "HEAD~1"]);
+    });
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
+}
