@@ -6185,6 +6185,23 @@ mod tests {
         assert_eq!(overlay.path_of("policy/a.rego"), None);
     }
 
+    /// Fails by: a pytest suite counted as declaring no case, so a filter that
+    /// selects every one of them is never refused as naming every case.
+    #[test]
+    fn a_pytest_suite_counts_its_cases() {
+        let root = crate::scratch::scratch("mutate-pytest-total");
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(
+            root.join("tests/test_gate.py"),
+            "def test_one():\n    pass\n\n    def test_nested():\n        pass\n\ndef helper():\n    pass\n",
+        )
+        .unwrap();
+        let suite = Suite::Pytest {
+            path: String::from("tests/test_gate.py"),
+        };
+        assert_eq!(total_cases(&root, &suite), 2);
+    }
+
     /// Fails by: a missed mutant read as anything but a violation, or a timeout
     /// or failed baseline read as a verdict.
     #[test]

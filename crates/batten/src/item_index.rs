@@ -1622,6 +1622,50 @@ mod tests {
         Index::new(&sources, &manifests)
     }
 
+    /// Fails by: a root child module's name read as one outside the crate
+    /// root, where it names nothing, or a name the root has no module of read
+    /// as one inside it.
+    #[test]
+    fn only_a_crate_root_reads_its_child_module_by_name() {
+        let index = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod model;\n"),
+            ("src/model.rs", "pub struct Rule;\n"),
+        ]);
+        let path = |segments: &[&str]| -> Vec<String> {
+            segments
+                .iter()
+                .map(|segment| (*segment).to_owned())
+                .collect()
+        };
+        assert_eq!(
+            index.absolute("app", true, &path(&["model", "Rule"])),
+            Some(path(&["app", "model", "Rule"]))
+        );
+        assert_eq!(
+            index.absolute("app", false, &path(&["model", "Rule"])),
+            None
+        );
+        assert_eq!(index.absolute("app", true, &path(&["other", "Rule"])), None);
+    }
+
+    /// Fails by: whitespace or punctuation read as a path's first segment, so
+    /// the path after it reads as glued to it and is lost; or a path after a
+    /// leading `::` read as one this crate names.
+    #[test]
+    fn a_token_path_starts_at_an_identifier_no_token_glues_to() {
+        let at = |body: &str| -> Vec<(usize, Vec<String>)> {
+            token_paths(body)
+                .into_iter()
+                .map(|(start, segments, _)| (start, segments))
+                .collect()
+        };
+        let a_b = vec![String::from("a"), String::from("b")];
+        assert_eq!(at(" a::b"), [(1, a_b.clone())]);
+        assert_eq!(at("(a::b)"), [(1, a_b)]);
+        assert!(at("::a::b").is_empty(), "{:?}", at("::a::b"));
+    }
+
     /// Two bodies, each read through its own tree, the base side mapped
     /// through the moves between them.
     fn same(

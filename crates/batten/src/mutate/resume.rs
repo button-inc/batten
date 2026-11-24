@@ -1019,8 +1019,13 @@ const REPORT: &str = "junit.xml";
 
 /// The nextest profile a journaled run uses: `NEXTEST_PROFILE`, or `default`.
 fn journal_profile() -> String {
-    std::env::var("NEXTEST_PROFILE")
-        .ok()
+    profile_or_default(std::env::var("NEXTEST_PROFILE").ok())
+}
+
+/// `named`, or `default` where it is unset or empty: [`journal_profile`]'s
+/// decision, apart from the environment it reads.
+fn profile_or_default(named: Option<String>) -> String {
+    named
         .filter(|profile| !profile.is_empty())
         .unwrap_or_else(|| String::from("default"))
 }
@@ -1328,6 +1333,16 @@ pub fn case_target(program: &str, package_dir: &Path) -> Result<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: a named profile read as `default`, so a journaled run looks
+    /// for its report under a profile it never ran; or an empty one kept.
+    #[test]
+    fn a_journal_profile_is_the_named_one_or_default() {
+        assert_eq!(profile_or_default(Some(String::from("ci"))), "ci");
+        assert_eq!(profile_or_default(Some(String::new())), "default");
+        assert_eq!(profile_or_default(None), "default");
+    }
+
     #[cfg(test)]
     /// Fails by: two cases sharing a key (one's pass skipping the other), or
     /// a key that holds across another target (a stale pass reused).

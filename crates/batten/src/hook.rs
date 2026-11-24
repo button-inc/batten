@@ -14855,6 +14855,41 @@ mod tests {
         envelope_at(Event::PreTool, command)
     }
 
+    /// Fails by: `mise`'s directory option read from its program word, so the
+    /// option is never reached; or a cargo manifest named as the directory
+    /// rather than the one holding it.
+    #[test]
+    fn a_programs_own_directory_option_moves_where_it_acts() {
+        let acting = |command: &str| acting_dirs(&envelope(command), Path::new("/repo"));
+        let sub = Some(vec![std::path::PathBuf::from("/repo/sub")]);
+        assert_eq!(acting("mise -C sub run build"), sub);
+        assert_eq!(acting("cargo build --manifest-path sub/Cargo.toml"), sub);
+        assert_eq!(acting("make -C sub"), sub);
+    }
+
+    /// Fails by: any second argument but an options object or an argv list
+    /// read as the call's own, so `spawn(program, argv)` names no argv.
+    #[test]
+    fn a_node_spawn_takes_an_options_object_and_nothing_else_after_its_program() {
+        let program = || Arg::Literal(String::from("git"));
+        assert_eq!(
+            decide(
+                Language::Node,
+                "spawn",
+                &[program(), Arg::Other(String::from("{ cwd: dir }"))]
+            ),
+            Some(Spawned::Argv(vec![String::from("git")]))
+        );
+        assert_eq!(
+            decide(
+                Language::Node,
+                "spawn",
+                &[program(), Arg::Other(String::from("argv"))]
+            ),
+            None
+        );
+    }
+
     fn envelope_at(event: Event, command: &str) -> Envelope {
         Envelope {
             event,

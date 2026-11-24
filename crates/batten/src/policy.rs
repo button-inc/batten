@@ -7338,6 +7338,58 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
         }
     }
 
+    /// Fails by: a string's opening delimiter looked for after the span's
+    /// start rather than before it, so the literal is cut at its first byte.
+    #[test]
+    fn a_spanned_string_keeps_both_its_delimiters() {
+        assert_eq!(spanned("x = \"abc\"", 5, 8), Some("\"abc\""));
+        assert_eq!(spanned("x = abc", 4, 7), Some("abc"));
+    }
+
+    /// Fails by: the `test_` rules' reads reported as the module's, and its
+    /// verdict rules' reads dropped.
+    #[test]
+    fn a_bundles_input_paths_are_its_verdict_rules_reads() {
+        const READS: &str = "package batten\n\nimport rego.v1\n\n\
+            violation contains \"a\" if input.tree.staged == 1\n\n\
+            test_reads_more if {\n\tinput.tree.tracked == 1\n\tinput.facts.session == 1\n}\n";
+        let bundle = bundle_of("row", &[("policy/a.rego", READS)]);
+        assert_eq!(input_paths(&bundle), [String::from("tree.staged")]);
+    }
+
+    /// Fails by: a case's `with` on one named pattern key refused as a `with`
+    /// on a path the plan cannot bind, so the case leaves the bytecode.
+    #[test]
+    fn a_with_on_one_pattern_key_stays_on_bytecode() {
+        const KEYED: &str = "package batten.p\n\nimport rego.v1\n\n\
+            violation contains \"hit\" if data.batten.patterns.foo == 1\n\n\
+            test_a_keyed_pattern_is_read if {\n\
+            \tcount(violation) == 1 with data.batten.patterns.foo as 1\n}\n";
+        let bundle = compile(
+            "row",
+            &sources_of(&[("policy/p.rego", KEYED)]),
+            &serde_json::json!({"batten": {"patterns": {"foo": 0}}}),
+        )
+        .expect("the fixture compiles");
+        assert_eq!(suite_splits(&bundle, "{}"), Vec::<String>::new());
+    }
+
+    /// Fails by: two set answers that differ reported whole rather than as
+    /// what each holds that the other does not. The two engines are handed
+    /// different `data` here, which is how a split is made to appear.
+    #[test]
+    fn a_set_split_names_each_sides_own_members() {
+        const SET: &str = "package batten.s\n\nimport rego.v1\n\n\
+            violation contains x if some x in data.extra\n";
+        let bundle = bundle_of("row", &[("policy/s.rego", SET)]);
+        let splits = rule_splits(&bundle, &serde_json::json!({"extra": ["a"]}), "{}");
+        assert_eq!(splits.len(), 1, "{splits:?}");
+        assert!(
+            splits[0].contains("only bytecode [\"a\"] only interpreter []"),
+            "{splits:?}"
+        );
+    }
+
     #[test]
     fn a_bundle_answers_for_its_row_its_modules_and_what_it_publishes() {
         let before = engines_constructed();

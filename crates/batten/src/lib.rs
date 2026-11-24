@@ -33419,6 +33419,14 @@ mod tests {
         assert_eq!(EngineUse::Fallback.as_str(), "fallback");
     }
 
+    /// Fails by: a build that failed reported as built, so the lap hands its
+    /// gates an engine that was never rebuilt.
+    #[test]
+    fn a_build_with_no_workspace_is_no_engine() {
+        let root = crate::scratch::scratch("lap-engine-no-workspace");
+        assert!(!super::build_engine(&root));
+    }
+
     /// Fails by: the comparison inverted, so the head no gate passed is readied
     /// and the one it passed is refused.
     #[test]

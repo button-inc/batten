@@ -325,6 +325,25 @@ fn mscore_of(
 mod tests {
     use super::*;
 
+    /// Fails by: a component's depth counted over the members it reaches
+    /// rather than the files outside it.
+    #[test]
+    fn a_components_depth_is_what_it_reaches_outside_itself() {
+        let set = |names: &[&str]| -> BTreeSet<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let component = set(&["a", "b"]);
+        let files = set(&["a", "b", "c", "d"]);
+        let reaches: Reaches = [
+            (String::from("a"), set(&["b", "c", "d"])),
+            (String::from("b"), set(&["a", "c", "d"])),
+            (String::from("c"), set(&["d"])),
+            (String::from("d"), set(&[])),
+        ]
+        .into();
+        assert_eq!(shape_of(&component, &files, &reaches), (2, 0, 2));
+    }
+
     /// `groups` clusters of `size` files, each cluster one cycle, no edges
     /// between clusters: the systems of the paper's Figure 2.
     fn clusters(groups: usize, size: usize) -> FileGraph {
