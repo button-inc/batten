@@ -5476,4 +5476,21 @@ mod tests {
             ),
         }
     }
+
+    /// Fails by: `mise_data_dir` answering `None` although a data home is
+    /// named, so a commit arm's relocated data home hides every install. Any
+    /// of `MISE_DATA_DIR`, `XDG_DATA_HOME`, `LOCALAPPDATA` or `HOME` yields a
+    /// directory, and the suite always runs with at least `HOME`.
+    #[test]
+    fn a_named_data_home_always_yields_mise_s_directory() {
+        let named = ["MISE_DATA_DIR", "XDG_DATA_HOME", "LOCALAPPDATA", "HOME"]
+            .into_iter()
+            .any(|name| std::env::var_os(name).is_some());
+        assert!(named, "the suite runs with HOME set");
+        let found = mise_data_dir();
+        assert!(
+            found.as_deref().is_some_and(|dir| !dir.is_empty()),
+            "a named data home yields a directory: {found:?}"
+        );
+    }
 }
