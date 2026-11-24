@@ -1864,4 +1864,14 @@ mod tests {
             "a file is not a journal"
         );
     }
+
+    /// Fails by: the committed nextest row's declared environment replaced by
+    /// nothing, so a journaled case is keyed on no variable at all.
+    #[test]
+    fn this_checkouts_journal_env_is_its_nextest_rows_declaration() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let declared = journal_env(&root);
+        assert_ne!(declared, DeclaredEnv::default());
+        assert!(!declared.env.is_empty(), "{declared:?}");
+    }
 }

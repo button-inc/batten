@@ -767,4 +767,39 @@ mod tests {
         let document = document(&payload).expect("the envelope unwraps");
         assert_eq!(document["ccr"]["data"], serde_json::json!([]));
     }
+
+    /// Fails by: the toolbox's session list answered without dispatching it.
+    #[test]
+    fn the_toolbox_lists_sessions_over_its_wiring() {
+        crate::fetch::stand_in(Box::new(|calls: &[crate::fetch::Call<'_>]| {
+            Ok(calls
+                .iter()
+                .map(|call| {
+                    let request: Value =
+                        serde_json::from_slice(call.body.unwrap_or_default()).unwrap_or_default();
+                    let (status, body) = match request.get("method").and_then(Value::as_str) {
+                        Some("initialize") => (200, r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
+                        Some("notifications/initialized") => (202, ""),
+                        _ => (
+                            200,
+                            r#"{"jsonrpc":"2.0","id":2,"result":{"ccr":{"data":[{"id":"s1"}],"has_more":false}}}"#,
+                        ),
+                    };
+                    crate::fetch::Response {
+                        status,
+                        body: body.as_bytes().to_vec(),
+                        headers: Vec::new(),
+                    }
+                })
+                .collect())
+        }));
+        let mut toolbox = Mcp::new(crate::mcp::Wiring {
+            source: "s".to_owned(),
+            endpoint: "https://mcp.invalid/mcp".to_owned(),
+            headers: Vec::new(),
+            credential: None,
+        });
+        let page = toolbox.sessions(None).expect("a page");
+        assert_eq!(page.items.len(), 1);
+    }
 }

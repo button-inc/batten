@@ -413,4 +413,22 @@ mod tests {
         }
         Ok(())
     }
+
+    /// Fails by: a task that ENDED, ok or failed, with no outcome on disk
+    /// reported as a crash (and its marker spent).
+    #[test]
+    fn a_finished_task_with_no_outcome_says_nothing() {
+        for phase in [task::OK, task::FAILED] {
+            let git_dir = crate::scratch::scratch(&format!("session-setup-ended-{phase}"));
+            std::fs::create_dir_all(dir(&git_dir)).unwrap_or_default();
+            task::register(&git_dir, TASK, "4194305", phase, 100);
+            assert!(surface(&git_dir).is_empty(), "{phase}");
+            assert!(!dir(&git_dir).join(SURFACED).exists(), "{phase}");
+        }
+        let git_dir = crate::scratch::scratch("session-setup-crashed");
+        std::fs::create_dir_all(dir(&git_dir)).unwrap_or_default();
+        task::register(&git_dir, TASK, "4194305", "start", 100);
+        assert_eq!(surface(&git_dir).len(), 1);
+        assert!(surface(&git_dir).is_empty(), "said once");
+    }
 }
