@@ -4608,6 +4608,21 @@ impl Policy {
             .any(|rule| rule.kind == RuleKind::Policy && modifier_admits(rule, envelope))
     }
 
+    /// Whether a row enabling `preset` is selected on this call (CLOUD-2887).
+    ///
+    /// Narrower than [`Policy::reads_pinned`] by one term, for a fact whose cost
+    /// only one preset's module repays: measured, the `state-push` walk took a
+    /// push's p95 from 24 ms to 109 ms in this checkout, over the 100 ms ceiling,
+    /// so a repository that enables no `state-private` row walks nothing.
+    #[must_use]
+    pub fn reads_preset(&self, envelope: &Envelope, preset: &str) -> bool {
+        self.shapes.iter().any(|rule| {
+            rule.kind == RuleKind::Policy
+                && rule.preset.as_deref() == Some(preset)
+                && modifier_admits(rule, envelope)
+        })
+    }
+
     /// Whether any row on this call reads the task receipt (CLOUD-856).
     ///
     /// Narrower than [`Policy::reads_pinned`] by one term, deliberately: that

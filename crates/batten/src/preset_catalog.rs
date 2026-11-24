@@ -169,6 +169,11 @@ pub struct VendoredRoute {
 /// enabled" lookup and the record cannot be renamed apart.
 pub const RED_HEAD: &str = "red-head";
 
+/// The preset refusing a push that carries session state (CLOUD-2887). Spelled
+/// once, so the manifest's name and the hook's "is a row selected" narrowing
+/// cannot be renamed apart.
+pub const STATE_PRIVATE: &str = "state-private";
+
 /// One module inside a preset, with the surface it decides.
 ///
 /// A struct rather than a `(RuleScope, &str, &str)` tuple because the two string
@@ -2600,7 +2605,7 @@ look at again. Read each named failed job's log first; reading is what admits th
     // The record is the `state-push` fact; its own bundle, so the row enabling
     // it names the one class it raises.
     Manifest {
-        name: "state-private",
+        name: STATE_PRIVATE,
         version: semver::Version::new(0, 1, 0),
         suggested: false,
         install: None,

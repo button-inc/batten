@@ -20202,14 +20202,18 @@ fn red_head_for(
 }
 
 /// What a `git push` would carry of the private session stores (CLOUD-2887),
-/// behind [`red_head_for`]'s three conjuncts: asked only before a push that a
-/// selected module could judge, so every other call walks nothing.
+/// asked only before a push a `state-private` row is selected for.
+///
+/// NARROWER THAN [`red_head_for`], by the row's own budget clause: behind
+/// `reads_pinned` alone the walk took a push's p95 to 109 ms, over the 100 ms
+/// ceiling, in a checkout enabling no such row. A copied module reading the
+/// fact without the preset's row gets `null`, which refuses nothing.
 fn state_push_for(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
 ) -> facts::Look<serde_json::Value> {
     if envelope.event == crate::config_model::Event::PreTool
-        && policy.reads_pinned(envelope)
+        && policy.reads_preset(envelope, preset_catalog::STATE_PRIVATE)
         && hook::pushes_git(envelope)
     {
         state_push::fact(envelope, hook_authority_root())
