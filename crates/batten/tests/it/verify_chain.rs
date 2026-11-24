@@ -573,56 +573,73 @@ fn the_commit_range_and_the_trusted_base_are_the_laps_own() {
 /// HK'S STEPS RUN THE ENGINE `BATTEN_BIN` NAMES TOO (CLOUD-2924). Tier 2
 /// reaches `hk.pkl`'s `check` strings through `ci:checks`, so a step spelling
 /// `cargo run -p batten` itself queues on cargo's lock beside every sibling
-/// build exactly as a `{{vars.batten}}` entry did. Each spells the engine as
-/// `${BATTEN_BIN:-cargo run --quiet -p batten --}`: the binary `verify:gated`
-/// built, with `vars.batten`'s own fallback where nothing set it.
+/// build exactly as a `{{vars.batten}}` entry did. The engine is read ONCE,
+/// in Pkl, as `local batten`: `BATTEN_BIN`, the binary `verify:gated` built,
+/// with `vars.batten`'s own fallback where nothing set it. Each step then opens
+/// with `\(batten)`, so its `check` stays argv: a shell expansion in hk's
+/// declared shell home is refused by `no-new-shell`.
 ///
 /// Fails by: any `check` that still spells `cargo run --quiet -p batten --`
-/// bare.
+/// bare, or reaches `BATTEN_BIN` through a shell expansion.
 #[test]
 fn every_hk_step_runs_the_named_engine() {
     let hk = std::fs::read_to_string(common::at_root("hk.pkl")).expect("the hook config");
     let engine = "cargo run --quiet -p batten --";
-    let named = format!("${{BATTEN_BIN:-{engine}}}");
-    let mut sites = 0;
+    let named = format!(r#"local batten = read?("env:BATTEN_BIN") ?? "{engine}""#);
+    let mut definitions = 0;
+    let mut steps = 0;
     for (index, line) in hk.lines().enumerate() {
         let code = line.trim_start();
-        if code.starts_with("//") || !code.contains(engine) {
+        if code.starts_with("//") {
             continue;
         }
-        sites += 1;
         assert!(
-            code.contains(&named),
-            "hk.pkl:{} spells the engine bare, so it waits on cargo's lock: {code}",
+            !code.contains("${BATTEN_BIN"),
+            "hk.pkl:{} reaches the engine through a shell expansion: {code}",
             index + 1
         );
+        if code == named {
+            definitions += 1;
+        } else {
+            assert!(
+                !code.contains(engine),
+                "hk.pkl:{} spells the engine bare, so it waits on cargo's lock: {code}",
+                index + 1
+            );
+        }
+        if code.starts_with(r#"check = "\(batten) "#) {
+            steps += 1;
+        }
     }
+    assert_eq!(definitions, 1, "hk.pkl reads the engine once, in Pkl");
     assert!(
-        sites > 0,
+        steps > 0,
         "hk.pkl runs the engine somewhere, so this case has a subject"
     );
 }
 
-/// THE GATE SET RUNS THE ENGINE IT BUILT FIRST (CLOUD-2924): `build:debug`
-/// follows `tree-clean` at the head of the body, `BATTEN_BIN` names the binary
-/// it writes, and the build is pinned to that directory. So every `step run` a
-/// tier reaches renders `{{vars.batten}}` to this tree's engine rather than a
-/// `cargo run` per step, whatever `BATTEN_BIN` the caller of `verify` set or
-/// left unset; and `tree-clean`, the one entry ahead of the build, does not
-/// read `BATTEN_BIN` at all.
+/// THE GATE SET RUNS THE ENGINE IT BUILT FIRST (CLOUD-2924): `tree-clean`,
+/// which opens `verify:gated`'s `depends` and its body, itself depends on
+/// `build:debug`, so the binary exists before any `{{vars.batten}}` runs;
+/// `BATTEN_BIN` names that binary; and the build is pinned to that directory.
+/// So every `step run` a tier reaches renders `{{vars.batten}}` to this tree's
+/// engine rather than a `cargo run` per step, whatever `BATTEN_BIN` the caller
+/// of `verify` set or left unset, and `tree-clean` still runs the engine `land`
+/// hands its gate.
 #[test]
 fn the_gate_set_runs_the_engine_it_built_first() {
-    let gated = steps("verify:gated");
+    assert_eq!(steps("verify:gated")[0], "mise run tree-clean");
     assert_eq!(
-        gated[..2],
-        ["mise run tree-clean", "mise run build:debug"],
-        "the engine is built before anything after tree-clean runs it"
+        depends_of("tree-clean"),
+        ["build:debug"],
+        "the engine is built before tree-clean, the first entry, runs it"
     );
     assert!(
-        steps("tree-clean")
-            .iter()
-            .all(|step| !step.contains("vars.batten")),
-        "tree-clean runs before the build, so it names no BATTEN_BIN engine"
+        common::task_block_template("tree-clean")
+            .expect("tree-clean is a declared task")
+            .lines()
+            .any(|line| line == r#"run = "{{vars.batten}} receipt clean""#),
+        "tree-clean runs the engine through its var, so `land`'s gate engine reaches it"
     );
     let target = env_of("build:debug", "CARGO_TARGET_DIR");
     assert_eq!(
