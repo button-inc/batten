@@ -18,9 +18,13 @@ pub fn now_unix() -> u64 {
 /// Unix epoch, UTC.
 ///
 /// The standard era-based civil-from-days algorithm, hand-written so a date
-/// costs no dependency, and kept ONCE: `waiver::Date::from_unix_seconds` and
-/// [`rfc3339_utc`] both read their date from here, so it cannot be right in
-/// one module and wrong in the other.
+/// costs no dependency, and kept ONCE IN THE LIBRARY: `waiver::Date::from_unix_seconds`
+/// and [`rfc3339_utc`] both read their date from here, so it cannot be right
+/// in one module and wrong in the other. ONE COPY lives outside it,
+/// `batten::build_identity::compact_utc`, because `batten`'s build script
+/// cannot include a `batten-base` file (a mutation sweep renders its probe into
+/// the file it mutates); a parity case holds that copy to [`rfc3339_utc`]'s
+/// answer (CLOUD-2903).
 #[must_use]
 pub fn civil(seconds: u64) -> (u64, u64, u64) {
     // Shift to the era starting 0000-03-01; every quantity below is
