@@ -37,7 +37,9 @@
 #MUTANT cover-may-skip-the-reach|s@\tlane_reaches(covering)@\ttrue@|a_covered_lane_verify_never_reaches_is_still_refused
 #MUTANT both-lanes-may-be-named|s@\tnames_the_covering_lane(list, covering)@\tfalse@|a_depends_list_naming_a_lane_and_its_cover_is_refused
 #MUTANT leg-may-go-unseen|s@^\tnot leg_reached(task, leg)$@\tfalse@|a_ci_leg_verify_never_runs_is_refused
-#MUTANT called-workflow-may-go-unseen|s@^\tcalled_workflow(job) == path$@\tfalse@|a_task_a_called_workflow_runs_verify_does_not_is_refused
+#MUTANT called-workflow-may-go-unseen|s@^\tcalls(caller, name) == path$@\tfalse@|a_task_a_called_workflow_runs_verify_does_not_is_refused
+#MUTANT include-legs-may-go-unseen|s@^\tsome entry in object.get(job, \["strategy", "matrix", "include"\], \[\])$@\tsome entry in []@|an_include_shaped_leg_verify_never_runs_is_refused
+#MUTANT a-delegated-task-may-reach-the-leg|s@^\tnot startswith(line, "mise run ")$@\ttrue@|a_leg_named_only_by_a_delegated_task_is_refused
 #MUTANT approximation-may-be-asserted-unchecked|s@\tapproximation_holds(task, entry)@\ttrue@|an_approximation_whose_bodies_no_longer_share_the_triple_is_refused
 #MUTANT approximation-may-skip-the-reach|s@\tlane_reaches(entry.by)@\ttrue@|an_approximator_verify_never_reaches_is_still_refused
 #MUTANT approximated-task-may-run-nowhere|s@\tnot approximated_task_runs_in_ci(task)@\tfalse@|a_declared_approximation_for_a_task_no_job_runs_is_refused
@@ -260,13 +262,9 @@ runs_on_pull_request(path) if on_pull_request(path)
 runs_on_pull_request(path) if {
 	some caller, _ in workflow
 	on_pull_request(caller)
-	some job in workflow[caller].jobs
-	called_workflow(job) == path
+	some name, _ in workflow[caller].jobs
+	calls(caller, name) == path
 }
-
-# `uses: ./.github/workflows/dist.yml` names the document at that path; a remote
-# `owner/repo/...@ref` names no document in this tree and matches none.
-called_workflow(job) := trim_prefix(job.uses, "./")
 
 judged_job(path, name) if {
 	runs_on_pull_request(path)
@@ -315,8 +313,7 @@ ci_task_leg contains [path, task, leg] if {
 	some path, _ in workflow
 	some name, job in workflow[path].jobs
 	judged_job(path, name)
-	some leg in object.get(job, ["strategy", "matrix", "target"], [])
-	is_string(leg)
+	some leg in matrix_targets(job)
 	some step in job.steps
 	contains(json.marshal(step), "matrix.target")
 	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], step.run, -1)
@@ -328,7 +325,31 @@ leg_reached(task, leg) if contains(verify_text, sprintf("%s %s", [task, leg]))
 
 leg_reached(task, leg) if {
 	contains(verify_text, task)
-	contains(task_run(task), leg)
+	some line in invocations(task)
+	contains(line, leg)
+}
+
+# A matrix's legs in either shape GitHub takes: a `target` list, or `include:`
+# entries each naming one (`dist.yml`'s shape), read alike.
+matrix_targets(job) := {leg |
+	some leg in object.get(job, ["strategy", "matrix", "target"], [])
+	is_string(leg)
+} | {leg |
+	some entry in object.get(job, ["strategy", "matrix", "include"], [])
+	leg := object.get(entry, "target", null)
+	is_string(leg)
+}
+
+# THE TASK'S OWN COMMANDS, NOT WHAT IT DELEGATES: a body line with its template
+# tags dropped, unless it is a `mise run` of another task. `darwin-link`'s
+# `target-ensure x86_64-apple-darwin` installs a triple and links nothing, so a
+# triple named only there is a leg the bare run never links (the independent
+# review's reproduction: an aarch64-only body passed).
+invocations(task) := {line |
+	some raw in split(task_run(task), "\n")
+	line := trim_space(concat("", regex.split(data.batten.patterns["mise-template-tag"], raw)))
+	line != ""
+	not startswith(line, "mise run ")
 }
 
 violation contains {
@@ -2197,11 +2218,14 @@ test_a_task_named_only_in_an_hk_comment_is_refused if {
 
 # A CI job linking two triples as matrix legs of `link`, which `verify:gated`
 # runs as `verify_runs`, and whose own body is `body`.
-legged(verify_runs, body) := out if {
+legged(verify_runs, body) := legged_over({"target": ["a-darwin", "x-darwin"]}, verify_runs, body)
+
+# `legged` over the matrix `matrix`, in whichever shape it is spelled.
+legged_over(matrix, verify_runs, body) := out if {
 	wf := object.union(sound_workflow, {"jobs": object.union(sound_workflow.jobs, {"link": {
 		"name": "link (${{ matrix.target }})",
 		"runs-on": "ubuntu-latest",
-		"strategy": {"matrix": {"target": ["a-darwin", "x-darwin"]}},
+		"strategy": {"matrix": matrix},
 		"steps": [lease_first, {"run": "mise run link --", "env": {"T": "${{ matrix.target }}"}}],
 	}})})
 	gated := object.union(sound_manifest.tasks["verify:gated"], {"run": concat("\n", ["mise run lint", verify_runs])})
@@ -2215,6 +2239,27 @@ legged(verify_runs, body) := out if {
 # THE SHAPE `darwin-link` HAD: run bare, linking only the triple it defaulted to.
 test_a_ci_leg_verify_never_runs_is_refused if {
 	found := violation with input as legged("mise run link", "zigbuild --target {{usage.target}}")
+	some f in found
+	f.verdict == "task run missing"
+	some s in f.subjects
+	s.artifact == "link x-darwin"
+}
+
+# `dist.yml`'s SHAPE: legs as `include:` entries are legs all the same.
+test_an_include_shaped_leg_verify_never_runs_is_refused if {
+	include := {"include": [{"target": "a-darwin", "runner": "r"}, {"target": "x-darwin", "runner": "r"}]}
+	found := violation with input as legged_over(include, "mise run link", "zigbuild --target {{usage.target}}")
+	some f in found
+	f.verdict == "task run missing"
+	some s in f.subjects
+	s.artifact == "link x-darwin"
+}
+
+# THE REVIEW'S FALSE GREEN: the triple named only where another task installs
+# it, while the link itself builds the other one. The leg is never linked.
+test_a_leg_named_only_by_a_delegated_task_is_refused if {
+	body := "mise run target-ensure a-darwin\nmise run target-ensure x-darwin\nzigbuild --target a-darwin"
+	found := violation with input as legged("mise run link", body)
 	some f in found
 	f.verdict == "task run missing"
 	some s in f.subjects
