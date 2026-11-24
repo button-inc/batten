@@ -805,6 +805,16 @@ mod tests {
         assert!(configured(&names, "x"), "the inner segment is configured");
     }
 
+    /// Fails by: a name of one or two segments sliced for its inner segments
+    /// anyway (`||` for `&&`), which panics on a dotless directory entry
+    /// such as `src` rather than reading it as configuring nothing (CLOUD-2789).
+    #[test]
+    fn a_name_without_inner_segments_configures_nothing() {
+        let names = [String::from("src"), String::from("mise.toml")];
+        assert!(!configured(&names, "src"));
+        assert!(!configured(&names, "toml"));
+    }
+
     /// Hand-written rows pass through untouched and in order.
     #[test]
     fn a_config_with_no_preset_row_derives_nothing() {
