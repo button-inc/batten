@@ -1247,8 +1247,9 @@ fn mise_dirs() -> &'static [(&'static str, PathBuf)] {
     reason = "stays with the harness spawn it configures: which mise a child reaches is a property of the child's environment"
 )]
 fn pin_mise(command: &mut Command) {
-    // The declared mutation, in a plain comment because `common/` is harness
-    // rather than a sweep route; its kill is shown by hand (CLOUD-2021):
+    // cargo-mutants never mutates `tests/`, so this loop's guard is a case:
+    // `primitives::a_redirected_state_root_leaves_mises_installs_where_they_are`
+    // fails when it is skipped (CLOUD-2021, measured on CLOUD-2917).
     for (name, dir) in mise_dirs() {
         command.env(name, dir);
     }
@@ -1262,7 +1263,8 @@ fn pin_mise(command: &mut Command) {
     // Measured on CLOUD-2173: one `SessionStart` in a fixture ran every
     // `session:*` task against the host, 200 processes and 78s. A case run over
     // the real repository has its manifest in its own cwd, below no ceiling.
-    // The declared mutation, in a plain comment for the reason above:
+    // Its guard, for the reason above:
+    // `harness_isolation::every_spawn_stops_mises_walk_at_the_fixture_root`.
     command.env("MISE_CEILING_PATHS", target_tmp());
 }
 
@@ -1615,11 +1617,27 @@ pub(crate) fn pkl_ca_selection(
 )]
 pub(crate) fn pkl_command() -> Command {
     let mut command = Command::new(require_tool("pkl"));
-    command.arg("eval").args(pkl_ca_selection(
+    command.args(pkl_eval_args(
         std::env::var_os("BATTEN_CA_BUNDLE"),
         std::env::var_os("SSL_CERT_FILE"),
     ));
     command
+}
+
+/// The argv [`pkl_command`] spawns `pkl` with, given the two CA candidates:
+/// `eval`, then [`pkl_ca_selection`]'s flag.
+///
+/// APART FROM THE ENVIRONMENT so `pkl_ca.rs` can show the spawn carries the
+/// selection on a runner whose environment sets neither variable, where an
+/// argv read off [`pkl_command`] is `eval` with or without it (CLOUD-2917).
+#[must_use]
+pub(crate) fn pkl_eval_args(
+    batten_ca: Option<std::ffi::OsString>,
+    ssl_cert: Option<std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    std::iter::once(std::ffi::OsString::from("eval"))
+        .chain(pkl_ca_selection(batten_ca, ssl_cert))
+        .collect()
 }
 
 /// A path the committed protected set guards TODAY: the policy authority while the
