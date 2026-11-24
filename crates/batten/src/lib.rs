@@ -33758,25 +33758,41 @@ mod tests {
         assert_eq!(stall.beats, 240);
     }
 
-    /// Fails by: a lap whose engine sources stood still rebuilding them (the
-    /// digest test inverted), or its engine withheld from the gate though
-    /// nothing fell back (CLOUD-2789). The fixture's manifest names no
-    /// `batten`, so a build asked for refuses at once and reads as a fallback.
+    /// Fails by: a lap whose engine sources moved never building them (the
+    /// digest test inverted, so the gate falls back to `cargo run` per step),
+    /// or the built or reused engine withheld from the gate though nothing
+    /// fell back (CLOUD-2789). The fixture is a library named `batten` with no
+    /// binary, so the build it asks for is quick and writes no `batten`
+    /// binary into whatever target directory the case inherits.
     #[test]
-    fn an_unmoved_engine_is_reused_and_handed_to_the_gate() {
-        let repo = crate::scratch::scratch("lib-lap-engine-reused");
+    fn a_moved_engine_is_built_once_and_then_reused() {
+        let repo = crate::scratch::scratch("lib-lap-engine-moved");
         crate::gitwrite::init_on_main(&repo).unwrap();
         std::fs::write(
             repo.join("Cargo.toml"),
-            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n\n[workspace]\n",
+            "[package]\nname = \"batten\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n\
+             [lib]\npath = \"lib.rs\"\n\n[workspace]\n",
         )
         .unwrap();
+        std::fs::write(repo.join("lib.rs"), "").unwrap();
         crate::gitwrite::commit_paths(&repo, &["Cargo.toml".to_owned()], "fixture").unwrap();
         let now = crate::engine::digest(&repo).expect("the manifest is an engine input");
         let exe = repo.join("engine");
-        *super::LAP_ENGINE.lock().unwrap() = Some((exe.clone(), now));
+        *super::LAP_ENGINE.lock().unwrap() = Some((exe.clone(), String::from("moved-from")));
         let (engine, used) = super::lap_engine(&repo).expect("a lap engine is set");
-        assert_eq!(used, super::EngineUse::Reused);
+        assert_eq!(used, super::EngineUse::Built, "moved sources are built");
+        assert_eq!(engine.as_deref(), exe.to_str());
+        assert_eq!(
+            super::LAP_ENGINE
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|(_, at)| at.clone()),
+            Some(now),
+            "the lap's engine now stands at the built digest"
+        );
+        let (engine, used) = super::lap_engine(&repo).expect("a lap engine is set");
+        assert_eq!(used, super::EngineUse::Reused, "unmoved sources are reused");
         assert_eq!(engine.as_deref(), exe.to_str());
     }
 
