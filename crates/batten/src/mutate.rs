@@ -2793,7 +2793,9 @@ fn orphaned(parent: rustix::process::Pid) -> ! {
 /// How many of `count` exits `exits` delivered before `grace` ran out, counted
 /// from now: the wait [`orphaned`] gives a group it sent TERM before the KILL. A
 /// SEPARATE FUNCTION so a case can see the grace, which `orphaned` itself,
-/// ending the process, never lets one observe (CLOUD-2789).
+/// ending the process, never lets one observe (CLOUD-2789). Compiled where
+/// `orphaned` is, and under `test`, whose case runs on every target.
+#[cfg(any(target_os = "linux", test))]
 fn exits_within(
     exits: &std::sync::mpsc::Receiver<()>,
     count: usize,
@@ -2808,6 +2810,7 @@ fn exits_within(
 /// the count, since the crate refuses both an assertion on the clock
 /// (`wall_clock`) and the sleep a delayed exit would need (`waiver add
 /// refused`).
+#[cfg(any(target_os = "linux", test))]
 fn exits_within_by(
     exits: &std::sync::mpsc::Receiver<()>,
     count: usize,
