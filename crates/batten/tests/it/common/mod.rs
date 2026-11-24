@@ -1509,6 +1509,27 @@ pub(crate) fn require_tool(name: &str) -> PathBuf {
     require_bin(name, name)
 }
 
+/// Whether a reach run started from this case traces its cases, as the schema
+/// asks (`mutate::trace::tracer`): on Linux, with `strace` on `PATH`, and never
+/// from a process already traced. A suite run under `step run`'s own tracer — a
+/// keyed miss of `test:cargo` on Linux (CLOUD-2784) — is such a process, so
+/// every reach it starts records its cases untraced, and each keys on the
+/// whole tree. A case whose subject is a traced selection asserts that
+/// selection here and the untraced fallback elsewhere, never one of them on
+/// every host (CLOUD-2789).
+#[must_use]
+pub(crate) fn traced() -> bool {
+    cfg!(target_os = "linux")
+        && !fs::read_to_string("/proc/self/status").is_ok_and(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("TracerPid:"))
+                .is_some_and(|pid| pid.trim() != "0")
+        })
+        && std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .any(|dir| dir.join("strace").is_file())
+}
+
 /// [`require_tool`] for a pinned tool whose program has another name: `tool` is
 /// the `[tools]` entry's last segment, `bin` the program it provides.
 ///

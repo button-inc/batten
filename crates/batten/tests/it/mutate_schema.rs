@@ -110,18 +110,9 @@ fn listing(name: &str) -> String {
     file.to_string_lossy().into_owned()
 }
 
-/// Whether reach runs cases under a tracer on this host, as the schema asks:
-/// never from a process already traced, as this case is inside a sweep's reach.
+/// Whether reach runs cases under a tracer on this host ([`common::traced`]).
 fn traced() -> bool {
-    cfg!(target_os = "linux")
-        && !std::fs::read_to_string("/proc/self/status").is_ok_and(|status| {
-            status
-                .lines()
-                .find_map(|line| line.strip_prefix("TracerPid:"))
-                .is_some_and(|pid| pid.trim() != "0")
-        })
-        && std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .any(|dir| dir.join("strace").is_file())
+    common::traced()
 }
 
 /// The verdict counts every sweep of the fixture reaches.
