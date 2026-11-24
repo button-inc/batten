@@ -1656,6 +1656,7 @@ pub fn build(
         args.extend([String::from("-p"), (*package).to_owned()]);
     }
     args.extend(cargo_dirs(target));
+    let discover = discovery_args(&args);
     let env: Vec<(String, String)> = Vec::new();
     let Known {
         unviable: mut skip,
@@ -1665,13 +1666,33 @@ pub fn build(
     skip.extend(handed.iter().copied());
     for round in 1..=12 {
         let schema = write_schema(root, work, mutants, &skip, &unprobed)?;
-        let ran = super::spawn(
+        // EVERY UNIT A ROUND CAN COMPILE, NOT THE FIRST THAT FAILS (CLOUD-2882).
+        // `cargo test` stops scheduling at the first failed unit and has no
+        // `--keep-going`, so a crate whose dependencies compiled but that was
+        // never started hid its refusals until a later round: on #1276's seven
+        // crates the cold build took 11 and 12 rounds against a cap of 12.
+        // `cargo build --tests` at the same profile compiles the same units and
+        // keeps going, so a round waits only on a dependency's own refusals.
+        // Clean, the build the reach run reads confirms it; its units are the
+        // ones just built, so it compiles only what `build` does not (examples).
+        let found = super::spawn(
             work,
             super::Program::Cargo,
-            &args,
+            &discover,
             &env,
             super::runner_bound(),
         )?;
+        let ran = if found.passed() {
+            super::spawn(
+                work,
+                super::Program::Cargo,
+                &args,
+                &env,
+                super::runner_bound(),
+            )?
+        } else {
+            found
+        };
         if ran.passed() {
             writeln!(
                 out,
@@ -1717,6 +1738,24 @@ pub fn build(
         handed.extend(refused.reconst);
     }
     anyhow::bail!("the schema build was not clean within 12 rounds")
+}
+
+/// The schema build's `cargo test --no-run …` respelled as the keep-going
+/// build of the same units: `cargo build --tests --keep-going …`, every
+/// argument after the leading pair (profile, packages, directories, message
+/// format) as given. Only the leading pair: `--profile test` keeps its `test`.
+fn discovery_args(args: &[String]) -> Vec<String> {
+    let rest = match args {
+        [verb, no_run, rest @ ..] if verb == "test" && no_run == "--no-run" => rest,
+        rest => rest,
+    };
+    let mut discover = vec![
+        String::from("build"),
+        String::from("--tests"),
+        String::from("--keep-going"),
+    ];
+    discover.extend(rest.iter().cloned());
+    discover
 }
 
 /// What earlier runs already found a build refuses: the mutants that do not
@@ -6899,6 +6938,48 @@ pub fn seal_tested(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The keep-going build is the schema build's own units: the same
+    /// profile, packages and directories, as `build --tests --keep-going`.
+    ///
+    /// Fails by: `--keep-going` dropped, which hid an unstarted crate's
+    /// refusals for a round each (CLOUD-2882); the profile's `test` stripped
+    /// with the verb; or a package or directory left behind.
+    #[test]
+    fn the_discovery_build_keeps_going_over_the_same_units() {
+        let args: Vec<String> = [
+            "test",
+            "--no-run",
+            "--profile",
+            "test",
+            "--message-format",
+            "json",
+            "-p",
+            "a",
+            "--target-dir",
+            "/t",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            discovery_args(&args),
+            [
+                "build",
+                "--tests",
+                "--keep-going",
+                "--profile",
+                "test",
+                "--message-format",
+                "json",
+                "-p",
+                "a",
+                "--target-dir",
+                "/t",
+            ]
+            .map(String::from)
+            .to_vec()
+        );
+    }
 
     /// Fails by: an `unviable` hand-back reported as an `error` verdict rather
     /// than counted apart, or a name no verdict carries read as one.

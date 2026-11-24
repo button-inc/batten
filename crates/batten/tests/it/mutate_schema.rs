@@ -587,6 +587,70 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
 ///
 /// THE STUB IS A `#!/bin/sh` SCRIPT, which only a unix host executes, so the
 /// case returns early elsewhere and still compiles on every target (CLOUD-1148).
+/// THE ROUND BOUND'S GUARANTEE (CLOUD-2882): crates that share no dependency
+/// are refused in ONE round, however many there are and whichever cargo
+/// starts first. Built one job at a time, `cargo test --no-run` stopped at the
+/// first failed crate, so each independent crate cost its own round: #1276's
+/// cold build took 11 and 12 rounds against a cap of 12.
+///
+/// Fails by: a second refusing round for the second crate, which is the
+/// keep-going build gone; or a clean round that is not the second.
+#[test]
+fn independent_crates_are_refused_in_one_round() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = common::scratch_repo("mutate-schema-one-round");
+    common::write(
+        &repo,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"a\", \"b\"]\nresolver = \"3\"\n",
+    );
+    common::write(
+        &repo,
+        ".config/nextest.toml",
+        "[profile.mutants]\nfail-fast = true\n\
+         slow-timeout = { period = \"2s\", terminate-after = 2 }\n",
+    );
+    let lib = "pub fn add(a: u8, b: u8) -> u8 {\n    a + b\n}\n\
+#[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {\n        assert_eq!(super::add(2, 3), 5);\n    }\n}\n";
+    let mut listed = Vec::new();
+    for package in ["a", "b"] {
+        common::write(
+            &repo,
+            &format!("{package}/Cargo.toml"),
+            &format!("[package]\nname = \"{package}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"),
+        );
+        common::write(&repo, &format!("{package}/src/lib.rs"), lib);
+        let mut ill = mutant(
+            &format!("ill-typed-{package}"),
+            "FnValue",
+            "\"x\"",
+            [2, 5, 2, 10],
+            ("add", "-> u8", [1, 1, 3, 2]),
+        );
+        ill["file"] = serde_json::json!(format!("{package}/src/lib.rs"));
+        ill["package"] = serde_json::json!(package);
+        listed.push(ill);
+    }
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-qm", "seed"]);
+    let file = common::scratch("mutate-schema-one-round-listing").join("listing.json");
+    std::fs::write(&file, serde_json::Value::Array(listed).to_string()).unwrap();
+    let output = common::batten()
+        .args(["__mutate-schema", &file.to_string_lossy(), "2"])
+        .current_dir(&repo)
+        .env_remove("CI")
+        // ONE JOB, SO WHICH CRATE CARGO STARTS FIRST CANNOT MATTER: with
+        // several, both refusals could land in one round by racing.
+        .env("CARGO_BUILD_JOBS", "1")
+        .streamed_output()
+        .expect("run batten");
+    let said = common::stdout(&output);
+    let err = common::stderr(&output);
+    for line in ["build 1 refused 2 mutant(s)", "build 2 clean, 2 unviable"] {
+        assert!(said.contains(line), "{line:?} in {said}\n{err}");
+    }
+}
+
 #[test]
 fn mutant_rust_runs_on_its_own_against_a_declared_base() {
     if !cfg!(unix) {
