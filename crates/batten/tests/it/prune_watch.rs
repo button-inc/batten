@@ -1494,6 +1494,53 @@ fn a_workspace_wrapper_between_is_run_with_the_compiler() {
     );
 }
 
+/// A path whose next argument is no compiler is no workspace wrapper: it is
+/// argv for a verb, and batten never runs it (CLOUD-2789).
+///
+/// Fails by: the wrapper test's `compiles(next) && !compiles(first)` joined by
+/// `||`, so any path-shaped first argument is executed as a wrapper.
+#[test]
+fn a_path_not_followed_by_a_compiler_is_not_run_as_a_wrapper() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = common::scratch_repo("rustc-not-wrapped");
+    let bin = dir.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let program = bin.join("not-a-wrapper");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\necho ran > \"$(dirname \"$0\")/ran\"\nexit 7\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let refused = common::batten()
+        .current_dir(&dir)
+        .arg(&program)
+        .args(["-vV"])
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_ne!(
+        refused.status.code(),
+        Some(7),
+        "{}",
+        common::stderr(&refused)
+    );
+    assert!(
+        !bin.join("ran").exists(),
+        "a path batten was not asked to wrap ran"
+    );
+}
+
 /// The probe `mise.toml` sets `RUSTC_WRAPPER` from: this binary answers with
 /// its own path; one without the wrapper answers nothing, leaving it unset.
 #[test]
