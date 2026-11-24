@@ -902,6 +902,23 @@ mod tests {
         assert_eq!(super::touched(&trace, Some(Path::new("/repo"))), None);
     }
 
+    // A `chdir` the kernel refused moves nothing (CLOUD-2789): the bare path
+    // after it still resolves in the start directory. Fails by: the result
+    // guard dropped, so a failed `chdir` reads as a move.
+    #[test]
+    fn a_refused_chdir_moves_nothing() {
+        let trace = whole(&[
+            "7     chdir(\"gone\") = -1 ENOENT (No such file or directory)",
+            "7     stat(\"c\", 0x1) = -1 ENOENT (No such file or directory)",
+        ]);
+        let touched = super::touched(&trace, Some(Path::new("/repo"))).expect("readable");
+        assert!(touched.contains(&PathBuf::from("/repo/c")), "{touched:?}");
+        assert!(
+            !touched.contains(&PathBuf::from("/repo/gone/c")),
+            "{touched:?}"
+        );
+    }
+
     // `fchdir` moves its pid to the path `-y` printed for the descriptor.
     #[test]
     fn an_fchdir_moves_to_its_descriptors_path() {

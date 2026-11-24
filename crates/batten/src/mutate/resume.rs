@@ -826,7 +826,7 @@ pub enum Seeded {
 /// and a seed that fails leaves the selection as it was, which re-runs.
 #[must_use]
 pub fn seed(root: &Path) -> Seeded {
-    if on_ci() {
+    if ci_named(std::env::var_os("CI").as_deref()) {
         return Seeded::NotOnCi;
     }
     if nested(|name| std::env::var_os(name)) {
@@ -849,13 +849,10 @@ pub fn seed(root: &Path) -> Seeded {
     request_seed(root)
 }
 
-/// Whether this process runs on CI: `CI` set to anything but empty.
-fn on_ci() -> bool {
-    ci_named(std::env::var_os("CI").as_deref())
-}
-
 /// Whether a `CI` value names a CI run: present and not empty. Apart from
-/// [`on_ci`] so a case judges it without setting the process's environment.
+/// the read so a case judges it without setting the process's environment.
+/// Its callers read `CI` inline rather than through a wrapper, whose own
+/// `-> bool` mutant no case outside CI could tell apart (CLOUD-2789).
 fn ci_named(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|ci| !ci.is_empty())
 }
@@ -916,7 +913,7 @@ pub fn lap_live(root: &Path) -> bool {
 pub fn lap_ended(root: &Path) -> Option<Seeded> {
     let state = crate::state::repo_state_dir(root).ok()?.join("test-run");
     std::fs::remove_file(state.join(SEED_PENDING)).ok()?;
-    if on_ci() {
+    if ci_named(std::env::var_os("CI").as_deref()) {
         return Some(Seeded::NotOnCi);
     }
     Some(request_seed(root))
