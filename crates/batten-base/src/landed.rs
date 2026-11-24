@@ -1431,6 +1431,16 @@ mod tests {
         }
     }
 
+    /// Fails by: an offset admitted when only ONE of its two shape checks
+    /// fails — six bytes with no `:` at the fourth, or a `:` at the fourth with
+    /// a byte too many — since each still reads two-digit hours and minutes.
+    #[test]
+    fn an_offset_is_refused_on_either_shape_fault_alone() {
+        for stamp in ["2026-08-29T10:40:00+02000", "2026-08-29T10:40:00+02:000"] {
+            assert_eq!(second_of(stamp), None, "{stamp:?} is not an instant");
+        }
+    }
+
     #[test]
     fn a_pull_request_url_needs_a_number_after_the_marker() {
         assert!(is_pull_request_url("https://github.com/o/r/pull/12"));

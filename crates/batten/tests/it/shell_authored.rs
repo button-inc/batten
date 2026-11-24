@@ -104,6 +104,29 @@ fn a_write_creating_a_shell_suffixed_file_is_refused() {
     assert!(!refused(&dir, &write("x.txt", "echo hi\n")));
 }
 
+/// Only a target that does not exist is a creation: a target the disk cannot
+/// answer for — a path beneath a regular file — is could-not-look.
+///
+/// Fails by: every metadata error read as an absent file, which hands a
+/// could-not-look path to the shell-suffix arm as a fresh shell file.
+#[test]
+fn a_target_the_disk_cannot_answer_for_is_could_not_look() {
+    if cfg!(windows) {
+        // A path beneath a file reads as NotFound there, not NotADirectory.
+        return;
+    }
+    let dir = repo("shell-authored-unanswerable", &[("plain", "body\n")]);
+    assert_eq!(
+        fact(&dir, &write("plain/x.sh", "echo hi\n")),
+        Look::CouldNotLook
+    );
+    // ANTI-VACUITY: the same name where its parent is a directory is a creation.
+    assert_eq!(
+        fact(&dir, &write("x.sh", "echo hi\n")),
+        Look::Is(SHELL_PATH)
+    );
+}
+
 #[test]
 fn a_write_landing_a_shell_shebang_is_refused_and_another_language_is_not() {
     let dir = repo("shell-authored-shebang", &[]);

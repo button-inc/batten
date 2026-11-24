@@ -2350,6 +2350,23 @@ mod tests {
         drop(held);
     }
 
+    /// Fails by: a cleared red left behind, so a gate starting under a reused
+    /// pid reads the last gate's failed step as its own.
+    #[test]
+    fn clearing_a_red_step_leaves_nothing_under_its_pid() {
+        let dir = crate::scratch::scratch("step-red-clear");
+        crate::record::keyed_write(&dir, RED, "41", "lint\n").unwrap();
+        crate::record::keyed_write(&dir, RED, "42", "test\n").unwrap();
+        assert_eq!(red_under(&dir, 41).as_deref(), Some("lint"));
+        clear_red(&dir, 41);
+        assert_eq!(red_under(&dir, 41), None);
+        assert_eq!(
+            red_under(&dir, 42).as_deref(),
+            Some("test"),
+            "only that pid"
+        );
+    }
+
     #[test]
     fn the_stored_key_is_the_last_field_of_the_first_line() {
         assert_eq!(

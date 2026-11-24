@@ -1299,6 +1299,10 @@ mod tests {
             // A bundle, a long form, a versioned name and a path.
             "bash -ec 'x'",
             "fish --command 'x'",
+            // fish's own `-C`/`--init-command`, which the fallback grammar
+            // (`-c`, `-e`, `-E` only) would read as an operand.
+            "fish -C 'x'",
+            "fish --init-command 'x'",
             "python3 -c 'x'",
             "/usr/bin/perl -E 'x'",
             "node --eval 'x'",

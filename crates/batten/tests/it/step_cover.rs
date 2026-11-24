@@ -191,3 +191,22 @@ fn a_malformed_mapping_is_a_usage_error() {
     );
     assert_eq!(out.status.code(), Some(1), "{}", common::stderr(&out));
 }
+
+/// Fails by: an entry with one side empty (`check=` or `=step`) read as a
+/// mapping, where either half alone names nothing to cover.
+#[test]
+fn a_mapping_with_an_empty_side_is_a_usage_error() {
+    let repo = Repo::new("half-empty");
+    for proof in ["check-a=", "=a"] {
+        let out = repo.batten(
+            &["step", "cover"],
+            &[("CI_REQUIRED_CHECKS", "check-a"), ("CI_LOCAL_PROOF", proof)],
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{proof}: {}",
+            common::stderr(&out)
+        );
+    }
+}

@@ -1139,6 +1139,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&at);
     }
 
+    /// Fails by: a comparison that ran against a baseline document reported as
+    /// never run, so the lock route's verdict is lost.
+    #[test]
+    fn a_comparison_that_ran_reports_its_code_on_the_lock_route() {
+        let at = crate::scratch::scratch("semver-lock");
+        let doc = at.join("baseline.json");
+        let compared = against_rustdoc(&at, NO_TOOLCHAIN, "batten", &doc, Some(&doc), "patch")
+            .expect("the analyser was spawned, so the run is reported");
+        assert_ne!(compared.code, Some(0));
+        assert_eq!(compared.route, Route::Lock);
+        let _ = std::fs::remove_dir_all(&at);
+    }
+
     #[test]
     fn a_current_doc_build_that_fails_is_could_not_look() {
         let at = crate::scratch::scratch("semver-current");

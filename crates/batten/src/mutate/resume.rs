@@ -1348,6 +1348,54 @@ mod tests {
         assert_eq!(profile_or_default(None), "default");
     }
 
+    /// Fails by: a set `NEXTEST_PROFILE` ignored for `default`. Only a run
+    /// under another profile (the `mutants` one) can tell the two apart.
+    #[test]
+    fn the_journal_profile_is_the_running_profile() {
+        let running = std::env::var("NEXTEST_PROFILE").unwrap_or_default();
+        let want = if running.is_empty() {
+            "default"
+        } else {
+            running.as_str()
+        };
+        assert_eq!(journal_profile(), want);
+    }
+
+    /// Fails by: a declared report name dropped, or an empty one taken as the
+    /// name rather than falling back to the built-in `junit.xml`.
+    #[test]
+    fn a_report_name_is_the_default_profiles_non_empty_path() {
+        let doc = |text: &str| text.parse::<toml_edit::DocumentMut>().unwrap_or_default();
+        assert_eq!(
+            report_name(&doc("[profile.default.junit]\npath = \"r.xml\"\n")).as_deref(),
+            Some("r.xml")
+        );
+        assert_eq!(
+            report_name(&doc("[profile.default.junit]\npath = \"\"\n")),
+            None
+        );
+    }
+
+    /// Fails by: the last run's report left in place, so a run that writes
+    /// none is read as the last run's verdicts.
+    #[test]
+    fn clearing_the_report_removes_the_last_runs_file() {
+        let root = crate::scratch::scratch("test-run-clear-report");
+        let config = root.join(".config");
+        std::fs::create_dir_all(&config).unwrap_or_default();
+        std::fs::write(
+            config.join("nextest.toml"),
+            "[store]\ndir = \"out\"\n\n[profile.default.junit]\npath = \"r.xml\"\n",
+        )
+        .unwrap_or_default();
+        let report = root.join("out").join(journal_profile()).join("r.xml");
+        std::fs::create_dir_all(report.parent().unwrap_or(&root)).unwrap_or_default();
+        std::fs::write(&report, "<testsuites/>").unwrap_or_default();
+        assert!(report.exists(), "the premise: a last run's report");
+        clear_report(&root);
+        assert!(!report.exists());
+    }
+
     #[cfg(test)]
     /// Fails by: two cases sharing a key (one's pass skipping the other), or
     /// a key that holds across another target (a stale pass reused).
