@@ -15228,9 +15228,24 @@ pub fn rustc_wrapped(
     args: impl Iterator<Item = std::ffi::OsString>,
 ) -> Option<std::process::ExitCode> {
     let args: Vec<std::ffi::OsString> = args.collect();
-    let compiler = args.get(1)?;
-    let stem = Path::new(compiler).file_stem()?.to_str()?;
-    if !matches!(stem, "rustc" | "clippy-driver") {
+    let compiles = |program: &std::ffi::OsString| {
+        Path::new(program)
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|stem| matches!(stem, "rustc" | "clippy-driver"))
+    };
+    let first = args.get(1)?;
+    // A WORKSPACE WRAPPER BETWEEN THIS ONE AND THE COMPILER (CLOUD-2789):
+    // cargo runs `RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER rustc …`, and
+    // `cargo auditable`, which every dist leg builds through, is one. Refused
+    // as a verb, it failed `mise run dist` locally while CI, whose engine is
+    // not the tree's, passed. A path followed by `rustc` is that wrapper: no
+    // verb carries a path separator.
+    let workspace_wrapper = Path::new(first).components().count() > 1
+        && args
+            .get(2)
+            .is_some_and(|next| compiles(next) && !compiles(first));
+    if !compiles(first) && !workspace_wrapper {
         return None;
     }
     if args.get(2).is_some_and(|arg| arg == RUSTC_WRAPPER_PROBE) {
