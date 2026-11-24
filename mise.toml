@@ -811,7 +811,9 @@ no_proxy = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=g
 # with `if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo
 # run --quiet -p batten --); fi`, and an argv `run = [...]` has no shell to say it
 # in — so it is a var every argv entry opens with, and `BATTEN_BIN` still names the
-# binary under test (the tiers set it; `test:bats` exports it). Without it a task
+# binary under test: `verify:gated` builds it once (`build:debug`) and sets it in
+# its `env`, so every tier's child `mise run` renders this to the built binary
+# rather than a `cargo run` per gate (CLOUD-2924). Without it a task
 # composed from a fixture — `board-sweep`'s gates, under a `CARGO_TARGET_DIR` that
 # puts the fixture beneath another checkout — builds whatever workspace cargo finds
 # by walking up, which is not the engine being tested (CLOUD-843).
@@ -2971,6 +2973,12 @@ description = "cargo-deny: licenses, advisories, sources"
 # split lock-currency already made.
 run = "{{vars.batten}} step run deny -- cargo deny check"
 
+[tasks."build:debug"]
+description = "Build the tree's engine once, the binary `verify:gated` names in `BATTEN_BIN` (CLOUD-2924)"
+# `cargo run` per gate re-fingerprinted the engine under cargo's lock on every
+# step, hit or miss; one build up front lets every later step start at once.
+run = "cargo build --quiet -p batten --bin batten"
+
 [tasks."build:release"]
 description = "Build the release binary the hook registrations execute"
 # NO `depends` ON `target-prune` (CLOUD-2198): the floor model it judged is
@@ -4973,7 +4981,14 @@ depends = ["tree-clean"]
 # THE DIST LEG AT THE LAP'S COST (CLOUD-2789), declared here rather than as a
 # `VAR=… mise run dist` prefix, which is shell form. Only `--profile dist`
 # reads these, so they reach the dist entry below and no other gate.
-env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "256", CARGO_PROFILE_DIST_OPT_LEVEL = "0", CARGO_PROFILE_DIST_INCREMENTAL = "true" }
+#
+# THE ENGINE IS BUILT ONCE, THEN NAMED (CLOUD-2924): `build:debug` heads the
+# body, and `BATTEN_BIN` points every child `mise run` at its binary, whose
+# `{{vars.batten}}` then renders to that path. Without it each of the tiers'
+# `step run` entries was `cargo run -p batten`, which takes cargo's lock and
+# fingerprints the engine before it even looks up its receipt, so a step that
+# hit still queued behind every sibling build.
+env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "256", CARGO_PROFILE_DIST_OPT_LEVEL = "0", CARGO_PROFILE_DIST_INCREMENTAL = "true", BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}/debug/batten" }
 # THE FAN (operator ruling, 2026-11-11). Every independent gate runs in ONE
 # `mise run --continue-on-error` invocation, listed cheapest first: mise starts
 # them in that order within its job limit, so the seconds-cheap gates report
@@ -5066,6 +5081,9 @@ env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "25
 # verify-4` and the `gate:*` rows together. Until then tier 2 keeps the graph's
 # fan width with `--jobs 2` and tier 3 its one-at-a-time with `--jobs 1`.
 run = [
+  # FIRST, so `BATTEN_BIN` (this task's `env`) names this tree's engine before
+  # any entry runs it (CLOUD-2924).
+  "mise run build:debug",
   "mise run tree-clean",
   "mise run record-verdicts",
   "mise run evaluator-io-record",
