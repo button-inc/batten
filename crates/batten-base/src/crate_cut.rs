@@ -814,6 +814,35 @@ mod tests {
         assert_eq!(found, ["Cargo.toml", "a.rs", "sub/b.RS"]);
     }
 
+    /// Fails by: the exit read off the refused count inverted, so a cut with
+    /// nothing refused (here a set already cut) exits as a violation, and one
+    /// with a refusal goes on to plan.
+    #[test]
+    fn a_cut_run_exits_on_whether_the_set_is_closed() {
+        let root = batten_facts::scratch::scratch("crate-cut-run-exit");
+        for dir in ["a/src", "b/src"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        std::fs::write(root.join("a/Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+        std::fs::write(root.join("a/src/lib.rs"), "").unwrap();
+        std::fs::write(root.join("b/src/lib.rs"), "pub mod m;\n").unwrap();
+        let run = |modules: &[&str]| {
+            let cut = Cut {
+                from: "a",
+                name: "b",
+                modules,
+            };
+            run_cut(&root, &cut, true, &mut Vec::new()).unwrap()
+        };
+        assert_eq!(run(&["m"]), crate::exit::ExitCode::Success, "already cut");
+        std::fs::remove_file(root.join("b/src/lib.rs")).unwrap();
+        assert_eq!(
+            run(&["m"]),
+            crate::exit::ExitCode::Violation,
+            "no such module"
+        );
+    }
+
     /// Fails by: an empty group (`old::{}`) read as a reach that names only
     /// moved modules, so a path that moves nothing is respelled.
     #[test]

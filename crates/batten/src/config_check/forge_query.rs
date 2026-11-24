@@ -341,4 +341,35 @@ mod tests {
             }
         }
     }
+
+    /// Fails by: a span refused only when BOTH its instants are malformed, so
+    /// an age (no `to`) reading a broken `from` path loads clean.
+    #[test]
+    fn a_span_reading_either_instant_at_a_malformed_path_is_refused() {
+        let spanned = |span: &str| {
+            let row = query(&format!(
+                "id = \"pulls\"\nendpoint = \"x\"\nper_page = 1\nmax_pages = 1\n\
+                 select = [\"number\"]\n[[span]]\nname = \"age\"\n{span}\n"
+            ));
+            validate_derived(
+                &row,
+                std::slice::from_ref(&row),
+                &std::collections::BTreeSet::new(),
+            )
+        };
+        let refused = Err(String::from(
+            "span `age` reads an instant at a path that is not dot-separated",
+        ));
+        assert_eq!(spanned("from = \"a.b\"\nto = \"c\""), Ok(()));
+        assert_eq!(
+            spanned("from = \"a..b\""),
+            refused,
+            "a broken `from`, no `to`"
+        );
+        assert_eq!(
+            spanned("from = \"a\"\nto = \"c.\""),
+            refused,
+            "a broken `to`"
+        );
+    }
 }

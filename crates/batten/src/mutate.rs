@@ -7626,6 +7626,24 @@ mod tests {
         );
     }
 
+    /// Fails by: a rego case's exact name match inverted, so the sibling
+    /// defining only a LONGER rule (`test_deny_too`) is counted, and the one
+    /// defining the exact rule is not.
+    #[test]
+    fn a_rego_case_lives_only_in_the_sibling_defining_its_exact_rule() {
+        let root = fixture("case-files-rego");
+        put(&root, "policy/a_test.rego", "test_other if { true }\n");
+        put(&root, "policy/b_test.rego", "test_deny if { true }\n");
+        put(&root, "policy/c_test.rego", "test_deny_too if { true }\n");
+        let suite = Suite::Conftest {
+            path: String::from("policy/a_test.rego"),
+        };
+        assert_eq!(
+            case_files(&root, &suite, "deny"),
+            [String::from("policy/b_test.rego")]
+        );
+    }
+
     /// Fails by: a shallow walk entering a directory, or a deep one entering a
     /// hidden or a `target` directory.
     #[test]
@@ -8837,5 +8855,21 @@ mod enrolled_tests {
             enrolled_since(&dir, "HEAD", &names, &changed),
             std::iter::once("toy".to_owned()).collect()
         );
+    }
+
+    /// Fails by: a newly written glob enrolling every name whatever its gate,
+    /// where only a name whose gate's sources the glob matches joins; here no
+    /// name resolves to a gate at all, so none does.
+    #[test]
+    fn a_new_glob_enrolls_no_name_whose_gate_it_does_not_reach() {
+        let dir = crate::scratch::scratch("mutate-enrolled-glob-unreached");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let config = crate::config_model::CONFIG_FILE;
+        std::fs::write(dir.join(config), "gates = [\"kept\"]\n").unwrap();
+        crate::gitwrite::commit_paths(&dir, &[config.to_owned()], "base").unwrap();
+        std::fs::write(dir.join(config), "gates = [\"kept\", \"src/*.zz\"]\n").unwrap();
+        let names = ["kept".to_owned()];
+        let changed = std::iter::once(config.to_owned()).collect();
+        assert!(enrolled_since(&dir, "HEAD", &names, &changed).is_empty());
     }
 }
