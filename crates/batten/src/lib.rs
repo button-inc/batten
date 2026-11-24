@@ -8961,16 +8961,79 @@ fn asks_forge(request: &claim::Request, issues: &[claim::Issue]) -> bool {
 /// row the bundle's own draft PR already moved is this branch's claim. Asked
 /// only when a row carries a live PR, so no such row costs no forge call; no
 /// answer leaves the competitor rules to decide as before.
+///
+/// BY THE UPSTREAM FIRST, then the local name (CLOUD-2697, measured on #1276):
+/// a fleet session runs `git checkout -B <its own name> origin/<bundle>`, so
+/// the PR's head is the branch it tracks and the local name finds nothing.
 fn with_own_pr(repo: &Path, request: &claim::Request, issues: &[claim::Issue]) -> claim::Request {
     let mut request = request.clone();
-    if asks_forge(&request, issues)
-        && let Ok(Some(branch)) = git::current_branch(repo)
-        && let fast_forward::Lookup::Found(number) =
-            fast_forward::look_up_pull_request(&repo_or_placeholder(repo), &branch)
-    {
-        request.own_pr = Some(number);
+    if !asks_forge(&request, issues) {
+        return request;
     }
+    let slug = repo_or_placeholder(repo);
+    let upstream = git::upstream_of_head(repo)
+        .ok()
+        .flatten()
+        .as_deref()
+        .and_then(upstream_branch);
+    let local = git::current_branch(repo).ok().flatten();
+    request.own_pr =
+        upstream.into_iter().chain(local).find_map(
+            |branch| match fast_forward::look_up_pull_request(&slug, &branch) {
+                fast_forward::Lookup::Found(number) => Some(number),
+                fast_forward::Lookup::None | fast_forward::Lookup::Unreadable(_) => None,
+            },
+        );
     request
+}
+
+/// The branch name an upstream ref names on its remote: `claude/x` out of
+/// `refs/remotes/origin/claude/x`, or out of `refs/heads/claude/x` for a branch
+/// tracking a local one. The remote's name is its first segment.
+fn upstream_branch(upstream: &str) -> Option<String> {
+    upstream
+        .strip_prefix("refs/remotes/")
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(_, branch)| branch)
+        .or_else(|| upstream.strip_prefix("refs/heads/"))
+        .filter(|branch| !branch.is_empty())
+        .map(str::to_owned)
+}
+
+/// The issues with every attached PR the forge reports finished dropped from
+/// `live_prs` (CLOUD-2697): the tracker's attachment carries no state, so a
+/// predecessor merged long ago reads as a live competitor unless asked. This
+/// branch's own PR is not asked about; a PR the forge would not answer for
+/// stays live, so could-not-look still refuses as before.
+fn with_forge_states(
+    repo: &Path,
+    request: &claim::Request,
+    issues: &[claim::Issue],
+) -> Vec<claim::Issue> {
+    let others = |issue: &claim::Issue| {
+        issue
+            .live_prs
+            .iter()
+            .any(|number| request.own_pr.as_deref() != Some(number.as_str()))
+    };
+    if !issues.iter().any(others) {
+        return issues.to_vec();
+    }
+    let slug = repo_or_placeholder(repo);
+    let mut finished: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+    issues
+        .iter()
+        .map(|issue| {
+            let mut issue = issue.clone();
+            issue.live_prs.retain(|number| {
+                request.own_pr.as_deref() == Some(number.as_str())
+                    || !*finished.entry(number.clone()).or_insert_with(|| {
+                        fast_forward::pull_request_state(&slug, number).is_finished()
+                    })
+            });
+            issue
+        })
+        .collect()
 }
 
 /// A DECIDED MECHANISM IS PLAN ENTRIES, not prose nothing checks (CLOUD-2810):
@@ -9037,6 +9100,7 @@ fn run_claim_check(
 
     let issues = claim_payloads(repo, issue)?;
     let request = &with_own_pr(repo, request, &issues);
+    let issues = with_forge_states(repo, request, &issues);
     let verdict = claim::judge(
         grammar,
         columns,

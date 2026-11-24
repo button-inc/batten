@@ -409,6 +409,158 @@ fn the_pull_request_rule_refuses_on_a_live_one_and_stands_down_on_a_finished_one
     }
 }
 
+// ---------------------------------------------------------------------------
+// The own-PR exemption, as a fleet runs it (CLOUD-2697).
+// ---------------------------------------------------------------------------
+
+/// The slug every forge case below resolves, through `GH_REPO`.
+const SLUG: &str = "o/r";
+
+/// A forge directory under `.git`, answering each `(needle, file, body)` route
+/// with `body` at `200`.
+fn forge(dir: &Path, routes: &[(&str, &str, &str)]) -> PathBuf {
+    let forge = dir.join(".git").join("forge");
+    std::fs::create_dir_all(&forge).expect("the forge directory");
+    let mut table = String::new();
+    for (needle, file, body) in routes {
+        table += &[needle, "\t", file, "\n"].concat();
+        std::fs::write(
+            forge.join(file),
+            format!("HTTP/2 200\ncontent-type: application/json\n\n{body}\n"),
+        )
+        .expect("a forge answer");
+    }
+    std::fs::write(forge.join("routes"), table).expect("the forge routes");
+    forge
+}
+
+/// `claim check` answered by `forge`.
+fn check_against(dir: &Path, forge: &Path, payload: &serde_json::Value) -> Output {
+    let mut command = common::batten();
+    command
+        .env("BATTEN_REST_FIXTURE", forge)
+        .env("GH_REPO", SLUG);
+    common::stdin_run(&mut command, dir, &["claim", "check"], &payload.to_string())
+}
+
+/// A row the forge's automation already moved for the bundle's draft PR: In
+/// Progress, assigned, with the PRs given attached and no state on any.
+fn moved_by_the_bundle(prs: &[&str]) -> serde_json::Value {
+    let mut payload = issue("CLOUD-1", "In Progress");
+    payload["assignee"] = serde_json::json!("the fleet");
+    payload["attachments"] = prs
+        .iter()
+        .map(|number| {
+            serde_json::json!({ "url": format!("https://github.com/{SLUG}/pull/{number}") })
+        })
+        .collect();
+    payload
+}
+
+/// A fleet session's checkout is `git checkout -B <its own name>
+/// origin/<bundle>`: the PR's head is the UPSTREAM, never the local name.
+/// Asking the forge by the local name finds nothing, and every row the bundle's
+/// own PR moved then reads as somebody else's (measured on #1276, ~25 sessions).
+///
+/// Both halves: the upstream answers, and with the upstream removed the same
+/// checkout is the old lookup by local name, which the forge answers empty.
+#[test]
+fn a_checkout_tracking_the_prs_head_under_another_name_owns_the_pr() {
+    let (dir, _) = ready_to_pull("claim-fleet-upstream");
+    git_in(
+        &dir,
+        &[
+            "remote",
+            "add",
+            "origin",
+            &format!("https://github.com/{SLUG}.git"),
+        ],
+    );
+    git_in(
+        &dir,
+        &["update-ref", "refs/remotes/origin/claude/bundle", "HEAD"],
+    );
+    git_in(
+        &dir,
+        &[
+            "checkout",
+            "-q",
+            "-B",
+            "fleet-local",
+            "origin/claude/bundle",
+        ],
+    );
+    let forge = forge(
+        &dir,
+        &[
+            (
+                "head=o:claude/bundle&",
+                "bundle.json",
+                r#"[{"number":1276}]"#,
+            ),
+            ("head=o:fleet-local&", "local.json", "[]"),
+        ],
+    );
+    let payload = moved_by_the_bundle(&["1276"]);
+
+    let output = check_against(&dir, &forge, &payload);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    // THE CONTROL: no upstream is the lookup by local name, and the bundle's
+    // row is a competitor's again.
+    git_in(&dir, &["branch", "-q", "--unset-upstream"]);
+    let output = check_against(&dir, &forge, &payload);
+    assert_eq!(code(&output), 2, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("not-todo (in In Progress)"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A row this branch's PR moved, carrying ANOTHER attached PR: the tracker's
+/// attachment holds no state, so the forge is asked. Merged or closed is a
+/// predecessor and the row is still this branch's; open is a live competitor
+/// and still refuses, so the exemption never swallows a real race.
+#[test]
+fn another_attached_pr_refuses_only_while_the_forge_says_it_is_open() {
+    let (dir, _) = ready_to_pull("claim-fleet-other-pr");
+    let payload = moved_by_the_bundle(&["1276", "900"]);
+    let cases = [
+        (
+            r#"{"number":900,"state":"closed","merged":true}"#,
+            0,
+            "merged",
+        ),
+        (
+            r#"{"number":900,"state":"closed","merged":false}"#,
+            0,
+            "closed unmerged",
+        ),
+        (r#"{"number":900,"state":"open","merged":false}"#, 2, "open"),
+    ];
+    for (state, expected, why) in cases {
+        let forge = forge(
+            &dir,
+            &[
+                ("head=o:feature/claim&", "own.json", r#"[{"number":1276}]"#),
+                ("pulls/900", "other.json", state),
+            ],
+        );
+        let output = check_against(&dir, &forge, &payload);
+        assert_eq!(code(&output), expected, "{why}: {}", stderr(&output));
+        // An open rival makes the row not this branch's own, so the competitor
+        // rules run, and the column is the first to refuse.
+        if expected == 2 {
+            assert!(
+                stderr(&output).contains("CLOUD-1 not-todo (in In Progress)"),
+                "{why}: {}",
+                stderr(&output)
+            );
+        }
+    }
+}
+
 #[test]
 fn a_set_is_judged_as_a_set_and_one_bad_apple_blocks() {
     let (dir, _) = ready_to_pull("claim-set");

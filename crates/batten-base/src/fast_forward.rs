@@ -119,6 +119,26 @@ pub fn merged(repo: &str, pr: &str) -> Merged {
     merged_of(crate::rest::get(&format!("repos/{repo}/pulls/{pr}"), None))
 }
 
+/// The state the forge reports for pull request `pr` (CLOUD-2697).
+///
+/// A tracker attachment carries no state, so a predecessor merged months ago
+/// reads as a live competitor unless somebody asks. Could-not-look is
+/// [`crate::forge::PullState::Unknown`], which no caller reads as finished.
+#[must_use]
+pub fn pull_request_state(repo: &str, pr: &str) -> crate::forge::PullState {
+    pull_state_of(crate::rest::get(&format!("repos/{repo}/pulls/{pr}"), None))
+}
+
+/// [`pull_request_state`]'s reading of the forge's answer.
+fn pull_state_of(answer: Option<crate::rest::Answer>) -> crate::forge::PullState {
+    answer
+        .filter(crate::rest::Answer::is_reading)
+        .and_then(|answer| serde_json::from_str::<serde_json::Value>(&answer.body).ok())
+        .map_or(crate::forge::PullState::Unknown, |document| {
+            crate::forge::PullState::of(&document)
+        })
+}
+
 /// [`merged`]'s reading of the forge's answer.
 fn merged_of(answer: Option<crate::rest::Answer>) -> Merged {
     let Some(answer) = answer else {
@@ -822,6 +842,37 @@ mod tests {
         assert_eq!(
             merged_of(Some(reading(200, r#"{"state": "closed"}"#))),
             Merged::Unreadable(200)
+        );
+    }
+
+    /// Could-not-look is never finished: an error document that happens to
+    /// carry `"state": "closed"` must not retire a live competitor.
+    #[test]
+    fn a_pull_state_the_forge_did_not_answer_is_unknown() {
+        use crate::forge::PullState;
+        assert_eq!(pull_state_of(None), PullState::Unknown);
+        assert_eq!(
+            pull_state_of(Some(reading(403, r#"{"state": "closed"}"#))),
+            PullState::Unknown
+        );
+        assert_eq!(
+            pull_state_of(Some(reading(200, "not json"))),
+            PullState::Unknown
+        );
+        assert_eq!(
+            pull_state_of(Some(reading(200, r#"{"state": "closed", "merged": true}"#))),
+            PullState::Merged
+        );
+        assert_eq!(
+            pull_state_of(Some(reading(
+                200,
+                r#"{"state": "closed", "merged": false}"#
+            ))),
+            PullState::Closed
+        );
+        assert_eq!(
+            pull_state_of(Some(reading(200, r#"{"state": "open"}"#))),
+            PullState::Open
         );
     }
 
