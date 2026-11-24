@@ -21,7 +21,7 @@
 # CA bundle addresses TLS RE-TERMINATION. The proxy also injects a repo-scoped
 # token, so `api.github.com` answers 403 for third-party tool repos — an
 # AUTHORIZATION failure no certificate helps with, and the one
-# `mise-tasks/egress-check.sh`'s header has recorded all along.
+# `mise-tasks/egress-check.sh`'s header recorded all along.
 #
 # Nothing refused that commit. `egress-check`'s `ok` admitted a partial fence, so
 # the container still read healthy, and no rule looked at the tree at all. This is

@@ -9,8 +9,8 @@
 # this engine fired at any point — git's own check was the only thing in the
 # stack that noticed, after the work was written, verified and committed.
 #
-# THE DISTINCTION IS BARE VERSUS EXPLICIT, and `mise-tasks/land-lock.sh` already
-# states it about its own CAS: "The expected value is passed EXPLICITLY
+# THE DISTINCTION IS BARE VERSUS EXPLICIT, and the retired lease script already
+# stated it about its own CAS: "The expected value is passed EXPLICITLY
 # (`<ref>:<sha>`) and must stay that way. Bare `--force-with-lease` compares
 # against this clone's remote-tracking ref — what the last fetch happened to see
 # — which for a ref other sessions are actively rewriting is precisely the stale
