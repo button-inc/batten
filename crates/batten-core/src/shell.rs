@@ -1074,3 +1074,20 @@ pub fn unquote(word: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::segments;
+    use crate::facts::Look;
+
+    /// Fails by: an empty word kept and the command's real words dropped, so
+    /// `echo '' x` reads as a command with no program.
+    #[test]
+    fn an_empty_word_is_dropped_and_the_rest_kept() {
+        let Look::Is(parsed) = segments("echo '' x") else {
+            panic!("the command parses");
+        };
+        assert_eq!(parsed[0].words, ["echo", "x"]);
+        assert_eq!(parsed[0].lines[0].words, ["echo", "x"]);
+    }
+}

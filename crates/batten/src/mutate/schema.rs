@@ -6383,6 +6383,16 @@ pub fn seal_tested(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: an `unviable` hand-back reported as an `error` verdict rather
+    /// than counted apart, or a name no verdict carries read as one.
+    #[test]
+    fn an_unviable_handback_is_counted_not_reported() {
+        assert_eq!(handback_tally("unviable"), None);
+        assert_eq!(handback_tally("missed"), Some(Verdict::Missed));
+        assert_eq!(handback_tally("no such verdict"), Some(Verdict::Error));
+    }
+
     #[cfg(test)]
     #[test]
     fn the_indexed_walk_reaches_what_the_closure_reaches_in_name_order() {

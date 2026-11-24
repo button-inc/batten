@@ -2618,6 +2618,43 @@ mod tests {
         let found = calls("fn f(r: &R) { let _ = vec![r.twice()]; }\n", &items);
         assert_eq!(found, BTreeMap::from([(None, false)]));
         assert!(calls("fn f() { let _ = vec![twice]; }\n", &items).is_empty());
+        // A call in a token tree is named after `.`/`::` AND before `(`.
+        assert!(calls("fn f() { let _ = vec![twice(1)]; }\n", &items).is_empty());
+        assert!(calls("fn f(r: &R) { let _ = vec![r.twice]; }\n", &items).is_empty());
+    }
+
+    /// Fails by: a crate root's own child module, read root-relative, left
+    /// unanchored, so its `use` line names a path nothing resolves.
+    #[test]
+    fn a_crate_roots_child_module_rebases_onto_crate() {
+        let nodes: BTreeSet<String> = [String::from("model")].into();
+        let path = |segments: &[&str]| -> Vec<String> {
+            segments
+                .iter()
+                .map(|segment| (*segment).to_owned())
+                .collect()
+        };
+        assert_eq!(
+            rebase(&path(&["model", "Rule"]), &[], &nodes),
+            path(&["crate", "model", "Rule"])
+        );
+        assert_eq!(
+            rebase(&path(&["other", "Rule"]), &[], &nodes),
+            path(&["other", "Rule"])
+        );
+    }
+
+    /// Fails by: a `static` read as naming nothing, so a path to it is never
+    /// carried with the item.
+    #[test]
+    fn a_static_item_is_named() {
+        let tree = batten_facts::source::rust_parse(
+            "static LIMIT: u8 = 1;\n",
+            ra_ap_syntax::Edition::Edition2024,
+        )
+        .tree();
+        let item = tree.items().next().expect("one item");
+        assert_eq!(item_name(&item).as_deref(), Some("LIMIT"));
     }
 
     /// The measured shape: `config_check.rs`, nothing but inline modules.

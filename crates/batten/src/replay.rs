@@ -1695,6 +1695,56 @@ fn said(outcome: Option<&(i32, String)>) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: a cut not recovered from the file it moved, so no base body
+    /// is respelled through it.
+    #[test]
+    fn a_library_file_moved_between_crates_is_a_cut_of_its_root_module() {
+        let manifests = |crates: &[&str]| -> BTreeMap<String, String> {
+            crates
+                .iter()
+                .map(|name| {
+                    (
+                        format!("crates/{name}/Cargo.toml"),
+                        format!("[package]\nname = \"{name}\"\n"),
+                    )
+                })
+                .collect()
+        };
+        let files = |rows: &[(&str, &str)]| -> BTreeMap<String, String> {
+            rows.iter()
+                .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+                .collect()
+        };
+        let before = crate::item_index::Index::new(
+            &files(&[
+                ("crates/big/src/lib.rs", "pub mod m;\n"),
+                ("crates/big/src/m.rs", "pub fn f() {}\n"),
+                ("crates/small/src/lib.rs", "\n"),
+            ]),
+            &manifests(&["big", "small"]),
+        );
+        let after = crate::item_index::Index::new(
+            &files(&[
+                ("crates/big/src/lib.rs", "\n"),
+                ("crates/small/src/lib.rs", "pub mod m;\n"),
+                ("crates/small/src/m.rs", "pub fn f() {}\n"),
+            ]),
+            &manifests(&["big", "small"]),
+        );
+        let moves = BTreeMap::from([(
+            String::from("crates/big/src/m.rs"),
+            String::from("crates/small/src/m.rs"),
+        )]);
+        assert_eq!(
+            cuts(&moves, &before, &after),
+            BTreeMap::from([(
+                (String::from("big"), String::from("small")),
+                BTreeSet::from([String::from("m")])
+            )])
+        );
+    }
+
     #[cfg(test)]
     /// A REFUSAL NAMES ITS CAUSE, AND A REPAIR IS SAID ONCE (CLOUD-2505).
     #[test]
