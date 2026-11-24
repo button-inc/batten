@@ -461,7 +461,7 @@ RUSTC_WRAPPER = "{% if os() != 'windows' %}{{ exec(command='{ ' ~ config_root ~ 
 # times out or is skipped — so waiting on it strands a landing on a non-verdict.
 # `ci-local-parity` accepts its absence only because it compares names up to the
 # first `(`, and `mutants (n)` stands for every `mutants (…)`.
-CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutants (3),cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final,dist / dist (x86_64-unknown-linux-gnu),dist / dist (aarch64-unknown-linux-gnu),dist / dist (x86_64-unknown-linux-musl),dist / dist (aarch64-unknown-linux-musl),dist / dist (x86_64-pc-windows-gnu),dist / dist (aarch64-apple-darwin),dist / dist (x86_64-apple-darwin)"
+CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutants (3),mutants (4),mutants (5),mutants (6),mutants (7),mutants (8),mutants (9),mutants (10),mutants (11),mutants (12),mutants (13),mutants (14),mutants (15),cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final,dist / dist (x86_64-unknown-linux-gnu),dist / dist (aarch64-unknown-linux-gnu),dist / dist (x86_64-unknown-linux-musl),dist / dist (aarch64-unknown-linux-musl),dist / dist (x86_64-pc-windows-gnu),dist / dist (aarch64-apple-darwin),dist / dist (x86_64-apple-darwin)"
 # Read by `batten step cover`, the last line of `verify` (CLOUD-2788): a check is
 # covered when the step it maps to passed at the lap's tree (`step run` and
 # `step graph run` record each pass). Beside the roster rather than in
@@ -470,7 +470,7 @@ CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutant
 # `mutant:changed` stands for `mutants (n)`. `mutants (reach)` has no entry:
 # it is off the roster, and `step cover` refuses a mapped check the roster does
 # not hold (CLOUD-2851).
-CI_LOCAL_PROOF = "ci=ci-suite,mutants (0)=ci-suite,mutants (1)=ci-suite,mutants (2)=ci-suite,mutants (3)=ci-suite,batten-check=gate:batten-check,commit-lint=gate:commit-lint,zizmor=gate:zizmor,semver=gate:semver,cross=gate:cross-check,darwin-link (aarch64-apple-darwin)=gate:darwin-link,darwin-link (x86_64-apple-darwin)=gate:darwin-link,perf=perf-gate"
+CI_LOCAL_PROOF = "ci=ci-suite,mutants (0)=ci-suite,mutants (1)=ci-suite,mutants (2)=ci-suite,mutants (3)=ci-suite,mutants (4)=ci-suite,mutants (5)=ci-suite,mutants (6)=ci-suite,mutants (7)=ci-suite,mutants (8)=ci-suite,mutants (9)=ci-suite,mutants (10)=ci-suite,mutants (11)=ci-suite,mutants (12)=ci-suite,mutants (13)=ci-suite,mutants (14)=ci-suite,mutants (15)=ci-suite,batten-check=gate:batten-check,commit-lint=gate:commit-lint,zizmor=gate:zizmor,semver=gate:semver,cross=gate:cross-check,darwin-link (aarch64-apple-darwin)=gate:darwin-link,darwin-link (x86_64-apple-darwin)=gate:darwin-link,perf=perf-gate"
 # Each exemption's reason; a `*` entry covers every check it prefixes. `musl`:
 # a link target CI builds, with no local toolchain declared. `windows`, `macos`:
 # the suite on another OS's runtime. `final`: the fan-in of the others, covered

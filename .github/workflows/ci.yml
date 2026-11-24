@@ -1197,12 +1197,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        # SIXTEEN, FROM THE JUDGING TIME (CLOUD-2882). The #1276 census ran
+        # this listing (13,734 mutants, 2,177 unviable, 266 classic) as 16
+        # shards: each judged ~701 switched mutants at ~2.4s and ~15 hand-backs
+        # at ~125s, 3,092-3,550s a shard. Eight would put a shard's x3 budget
+        # over the hosted 360-minute ceiling. Sixteen is also the most the
+        # account's 20 concurrent jobs hold: a shard starts only after `ci` and
+        # `mutants (reach)`, and by then every other job of the pull request's
+        # run has ended (the longest, dist's windows-gnu leg, at 1,616s).
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     runs-on: ubuntu-24.04-arm
-    # DERIVED, NOT OBSERVED: a warm build of the engine and the staged suite,
-    # about 600s, plus a quarter of the 1961s local run. 1200s, x3. Re-derive
-    # from `mise run timeout-drift` once this job has 25 runs.
-    timeout-minutes: 60 # budget: p95=1200s x3 measured=2026-10-17
+    # MEASURED: the census's slowest 16th judged in 3,550s, and a shard's
+    # fixed cost was 523s on run 42306940892 (38s of setup, 485s of
+    # `mutant:changed` over a near-empty listing). The reach job's build is
+    # taken as made (CLOUD-2882), so a shard builds nothing.
+    timeout-minutes: 204 # budget: p95=4073s x3 measured=2026-11-24
     # BEHIND `ci`, SO IT CARRIES NO LEASE STEP OF ITS OWN. `ci-local-parity`
     # property 7 puts the landing lease first in every job that starts at once,
     # and a fourth copy of its twelve shell lines is growth `no-new-shell`
