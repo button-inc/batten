@@ -1915,10 +1915,6 @@ id = "vendored-links-crate"
 regex = '^(tree-sitter|tree-sitter-language)$'
 
 [[pattern]]
-id = "release-tag"
-regex = '^v[0-9]+\.[0-9]+\.[0-9]+$'
-
-[[pattern]]
 id = "md-fenced-block"
 regex = '```[^`]*```'
 
@@ -10194,7 +10190,7 @@ severity = "deny"
 reason = "the break-glass sentinel admits the repair floor over a config that loads and denies; remove it from the index and disarm it, and fix the lockout in the config (CLOUD-1847)."
 [[pattern]]
 id = "hk-amends-version"
-regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
+regex = 'hk@([^#/"[:space:]]+)'
 # The SAME URL names the version twice, and the pattern above sees one of them
 # (CLOUD-2311). A `package://…/releases/download/v<X>/hk@<Y>` carries the release
 # TAG in the path and the PACKAGE version in the fragment, so `v1.57.0/hk@1.56.1`
@@ -10213,7 +10209,7 @@ regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
 # the arm that compares rather than in a set.
 [[pattern]]
 id = "hk-download-tag"
-regex = '/v([0-9]+\.[0-9]+\.[0-9]+)/hk@'
+regex = '/v([^/]+)/hk@'
 [[verdict]]
 id = "tool pin other"
 gloss = "mise.toml's hk pin, hk.pkl's `amends` URL and the pkl-package fetch do not all name one hk, or one of them names none"
