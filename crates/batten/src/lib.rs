@@ -3291,8 +3291,19 @@ fn run_session_setup(overrides: &Overrides) -> Result<ExitCode> {
         .as_ref()
         .map(|table| table.handlers.clone())
         .unwrap_or_default();
+    let presets: Vec<&str> = resolved
+        .rules
+        .iter()
+        .filter_map(|rule| rule.preset.as_deref())
+        .chain(
+            resolved
+                .startup
+                .iter()
+                .filter_map(|row| row.preset.as_deref()),
+        )
+        .collect();
     Ok(
-        if session_setup::run(here, &git_dir, &handlers, &resolved.startup) {
+        if session_setup::run(here, &git_dir, &handlers, &resolved.startup, &presets) {
             ExitCode::Success
         } else {
             ExitCode::Usage
@@ -12201,7 +12212,22 @@ fn run_land(
             };
             run_land_push(root, &url, &branch, out)
         }
-        cli::LandCommand::Lap { reference, hold } => {
+        // DISCOVERY NEEDS NO REMOTE AND NO TRUNK (CLOUD-2862): it never leases,
+        // pushes or replays, so it resolves neither, and refuses beside `--hold`
+        // before it runs anything.
+        cli::LandCommand::Lap { hold, discover, .. } if *discover => {
+            if *hold {
+                writeln!(
+                    err,
+                    "::error:: land lap: --discover runs no lap to hold; give one or the other"
+                )?;
+                return Ok(ExitCode::Usage);
+            }
+            run_land_discover(root, &branch, out, err)
+        }
+        cli::LandCommand::Lap {
+            reference, hold, ..
+        } => {
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
             };
@@ -15362,6 +15388,69 @@ fn lap_markers() -> [(String, String); 2] {
         (land::LAP_GATE.to_owned(), "1".to_owned()),
         (land::LAP_PID.to_owned(), std::process::id().to_string()),
     ]
+}
+
+/// `land lap --discover` (CLOUD-2862): run `$LAND_DISCOVER` once on HEAD as it
+/// stands and report what it answered.
+///
+/// EVERYTHING A LAP DOES TO PROVE OR PUBLISH IS ABSENT, by construction rather
+/// than by a flag checked at each step: no replay or rebase, no speculation bet,
+/// no singleton, no hook reclaim, no claim, no receipt fast path, no lease,
+/// push or ready, and no line on the lap record. What it shares with a lap is
+/// the gate's own running: the disk pre-check, the lap markers, the declared
+/// environment patterns, and the stall bound, whose cancel is exit 3.
+fn run_land_discover(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let declared = std::env::var("LAND_DISCOVER").unwrap_or_default();
+    let command: Vec<String> = declared.split_whitespace().map(str::to_owned).collect();
+    if command.is_empty() {
+        writeln!(
+            err,
+            "::error:: land discover: $LAND_DISCOVER names no command, and this engine does not know what discovering means in this repository"
+        )?;
+        return Ok(ExitCode::Usage);
+    }
+    if !disk_admits(root, "land discover", err)? {
+        return Ok(ExitCode::Violation);
+    }
+    let published = lap_markers().to_vec();
+    let stall = verify_stall(root, None);
+    let environment = verify_environment(root);
+    let verified = land::discover(
+        root,
+        branch,
+        &command,
+        &published,
+        &environment,
+        stall.as_ref(),
+    )?;
+    match verified {
+        land::Verified::Clean(head) => {
+            writeln!(
+                out,
+                "land: discovery on {head}: every tier passed; nothing recorded"
+            )?;
+            Ok(ExitCode::Success)
+        }
+        land::Verified::Stalled { beats, .. } => {
+            writeln!(
+                out,
+                "land: discovery stalled — no step advanced in {beats} beats; run this again"
+            )?;
+            Ok(ExitCode::Internal)
+        }
+        land::Verified::Refused { sha, .. } => {
+            writeln!(
+                out,
+                "land: discovery on {sha}: at least one tier refused; nothing recorded"
+            )?;
+            Ok(ExitCode::Violation)
+        }
+    }
 }
 
 /// [`run_land_verify`], and whether the gate was cancelled for stalling: the
@@ -20332,15 +20421,24 @@ fn install_pending_for(
         task::State::Failed => "failed",
         task::State::Crashed => "crashed",
     };
+    // WHILE THE TASK BUILDS THE CHECKOUT'S ENGINE (CLOUD-2871), its build
+    // program is held too, wherever it resolves: a second build in the same
+    // target directory races the one about to be installed under the hooks.
+    let building = state == "running" && entry.phase == session_setup::ENGINE;
     let pending: Vec<String> = if state == "ok" {
         Vec::new()
     } else {
         let roots = install_roots();
         hook::command_programs(&envelope.command)
             .into_iter()
-            .filter(|program| match resolve_on_path(program) {
-                None => true,
-                Some(found) => roots.iter().any(|root| found.starts_with(root)),
+            .filter(|program| {
+                (building
+                    && Path::new(program).file_name()
+                        == Some(std::ffi::OsStr::new(session_setup::BUILD_PROGRAM)))
+                    || match resolve_on_path(program) {
+                        None => true,
+                        Some(found) => roots.iter().any(|root| found.starts_with(root)),
+                    }
             })
             .collect()
     };
@@ -25258,9 +25356,27 @@ fn record_history_reads(envelope: &hook::Envelope) {
     if envelope.event != crate::config_model::Event::PostTool || envelope.result.is_null() {
         return;
     }
-    let Some(ids) = hook::history_read_ids(&envelope.command) else {
+    let Some((dir, ids)) = hook::history_read(&envelope.command) else {
         return;
     };
+    let root = hook_session_home();
+    // A `cd <dir> &&` read counts only where `<dir>` is this repository
+    // (CLOUD-2865): another checkout's history is another config's, and a read
+    // of it never admits an edit here. An operand that does not resolve to a
+    // repository at all mints nothing either.
+    if let Some(dir) = dir {
+        let start = envelope
+            .cwd
+            .as_deref()
+            .map_or_else(|| PathBuf::from(&dir), |here| here.join(&dir));
+        let same = git::repo_root(&start)
+            .ok()
+            .zip(git::repo_root(root).ok())
+            .is_some_and(|(there, here)| there == here);
+        if !same {
+            return;
+        }
+    }
     if facts::payload_in(&envelope.result)
         .unwrap_or_else(|| envelope.result.clone())
         .pointer("/is_error")
@@ -25269,7 +25385,6 @@ fn record_history_reads(envelope: &hook::Envelope) {
     {
         return;
     }
-    let root = hook_session_home();
     let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(root)) else {
         return;
     };

@@ -1639,6 +1639,18 @@ pub(crate) const LAND_HOLD: FlagDecl = FlagDecl::switch(
     "Stop after the first verify whose verdict is final, before the lease, push and ready",
 );
 
+/// `land lap --discover`: run every declared tier and prove nothing (CLOUD-2862).
+///
+/// A lap gated on its cheap tiers stops at the first red one, so the expensive
+/// tiers never run on a red head and no complete red list exists. This runs the
+/// consumer's `$LAND_DISCOVER` once instead of `$LAND_VERIFY`, and nothing it
+/// answers can stand in for a lap: no record, no `verify` receipt, no push.
+pub(crate) const LAND_DISCOVER: FlagDecl = FlagDecl::switch(
+    "discover",
+    "discover",
+    "Run $LAND_DISCOVER once on HEAD as it stands, keeping no record and never leasing, pushing or readying",
+);
+
 /// `--resolve <path>`: a path whose conflict the caller merged in the worktree.
 ///
 /// **Repeatable, and every conflicting path must be named** (CLOUD-1586).
@@ -7400,7 +7412,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Write,
         exits: EXITS_VERDICT,
-        flags: &[LAND_REFERENCE, LAND_HOLD],
+        flags: &[LAND_REFERENCE, LAND_HOLD, LAND_DISCOVER],
     },
     // `write`, for `land replay`'s first half: it fetches the reference into the
     // odb and moves its remote-tracking ref, which is the lap's own fetch reused

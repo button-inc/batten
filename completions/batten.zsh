@@ -8525,6 +8525,7 @@ verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '--hold[Stop after the first verify whose verdict is final, before the lease, push and ready]' \
+'--discover[Run \$LAND_DISCOVER once on HEAD as it stands, keeping no record and never leasing, pushing or readying]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \

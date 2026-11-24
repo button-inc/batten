@@ -926,6 +926,31 @@ checks = ["verify", "linear-check"]
 key = "head"
 reason = "Run `mise run land` (backgrounded): each lap runs `verify` and `linear-check`, reusing a `verify` receipt already on this head, and readies the head itself. Readying is what starts CI, so it waits for a green head."
 
+# The same precondition on EVERY ready spelling (CLOUD-2873). The row above keys
+# on `gh pr ready`, so the connector's `update_pull_request` with `draft: false`
+# readied a head with six red gates on it and bought the CI matrix (PR #1281).
+# This row names the EVENT and the engine owns its spellings: the connector
+# undraft and reopen, the mediated `batten mcp call`, `gh pr ready` without
+# `--undo`, `gh pr create` without `--draft`, `gh pr reopen` and the `gh api`
+# ready mutations. Creating or reopening a ready PR starts CI too, so it is gated
+# with them. An addition, never a conversion: the row above stands unchanged.
+#
+# `key = "head"` judges THIS checkout's HEAD, so readying some other branch's PR
+# is judged against this checkout. Accepted: the route that readies a PR for its
+# own branch is the one that buys CI by mistake. `land`'s ready is in-process and
+# no mediated call, so this row never sees it.
+#MUTANT-SUITE crates/batten/tests/it/ready_routes.rs
+#MUTANT ready-verify-row-unselected|s@^on = "pull-request-ready"[[:space:]]*# every ready spelling$@@|a_connector_ready_without_a_green_verify_is_refused
+[[rule]]
+id = "check open missing"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+on = "pull-request-ready"                          # every ready spelling
+checks = ["verify", "linear-check"]
+key = "head"
+reason = "Run `mise run land` (backgrounded): it runs `verify` and `linear-check` on this head, then readies it. Readying, creating a ready PR or reopening one starts CI, so each waits for a green head."
+
 # CLOUD-2707, half one: A PUSHED HEAD NO `verify` EVER SAW. Measured on PR #1276:
 # 42 row commits pushed over hours, each checked with clippy and its own tests
 # only, so the first full gate was `land`'s first lap and its sixteen findings,
@@ -8621,9 +8646,7 @@ all three again. Readying starts CI, so review first."""
 # same `ready_for_review` and buys the same matrix with none of the receipts
 # asked for. Mirroring every receipt row onto it would be a second copy of each
 # predicate free to drift from the first, so this refuses the ROUTE and names
-# the door. The connector's `draft = false` route is the same hole and needs an
-# `input-draft` projection the pinned engine predates; its row lands with the
-# release that carries the projection.
+# the door.
 [[rule]]
 id = "review reach loose"
 kind = "shape"
@@ -12685,10 +12708,17 @@ expires = "2027-02-28"
 # dates refinement against is written by `batten hook` itself at SessionStart,
 # before any row below runs — the engine reads it, so the engine writes it, and a
 # consumer no longer has to know to declare the step its gate depends on.
+#MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
+#MUTANT session-install-preinstall-on|s@^run = \["env", "MISE_TASK_RUN_AUTO_INSTALL=false", "mise", "run", "session:install"\]$@run = ["mise", "run", "session:install"]@|the_install_handler_skips_the_unlocked_pre_task_install
 [[hook.handler]]
 id = "session-install"
 on = "session-start"
-run = ["mise", "run", "session:install"]
+# `mise run` installs every missing tool BEFORE a task's body, and that install
+# does not see the task's `env`: under `lockfile = false` it resolves through
+# api.github.com, which the proxy refuses (CLOUD-2881). Measured cold: seven
+# tools 403'd and the locked body never ran. Off for this one call, the body's
+# own locked install is the only install.
+run = ["env", "MISE_TASK_RUN_AUTO_INSTALL=false", "mise", "run", "session:install"]
 # Ten minutes. The measured cold figure for ONE tool was 24s (`pipx:serena-agent`,
 # CLOUD-196); this installs the whole `[tools]` table on a container with no
 # cache, and it is the step every other one depends on.

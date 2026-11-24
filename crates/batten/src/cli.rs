@@ -968,6 +968,10 @@ pub enum LandCommand {
         /// Stop at the first final verify, never leasing, pushing or readying
         /// (CLOUD-2783).
         hold: bool,
+        /// Run `$LAND_DISCOVER` once on HEAD as it stands, keep no record and
+        /// write no `verify` receipt, and never lease, push or ready
+        /// (CLOUD-2862).
+        discover: bool,
     },
     /// Is this head built on the CURRENT tip of the reference, so its pull
     /// request can fast-forward-land (CLOUD-1991)?
@@ -3129,6 +3133,7 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
         ("lap", matches) => Some(LandCommand::Lap {
             reference: reference_of(matches),
             hold: matches.get_flag("hold"),
+            discover: matches.get_flag("discover"),
         }),
         ("linear", matches) => Some(LandCommand::Linear {
             reference: reference_of(matches),

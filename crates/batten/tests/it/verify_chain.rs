@@ -382,6 +382,135 @@ fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
     assert_eq!(depends_of("verify:gated"), ["tree-clean"]);
 }
 
+/// The `verify:gated` entries that are tier fans, in order.
+fn gated_tiers() -> Vec<String> {
+    steps("verify:gated")
+        .into_iter()
+        .filter(|step| step.starts_with("mise run --continue-on-error"))
+        .collect()
+}
+
+/// THE DISCOVERY TIERS ARE THE GATED TIERS, MEMBER FOR MEMBER (CLOUD-2862).
+///
+/// `land --discover` runs `verify:discover`, whose tiers are tasks of their own
+/// so one outer fan can run them past a red one. A discovery that dropped,
+/// reordered or re-jobbed a member would report a red list that is not the
+/// lap's, so each `verify:discover-N` is held EQUAL to `verify:gated`'s Nth fan,
+/// and the outer fan names the three tiers and `perf-gate` in order. And a
+/// discovery run proves nothing, so none of the four tasks writes a record or
+/// a receipt. Fails by: a member dropped from either side, or a record write
+/// copied across with the tiers.
+#[test]
+fn the_discovery_tiers_carry_the_gated_tiers_members() {
+    let gated = gated_tiers();
+    assert_eq!(
+        gated.len(),
+        3,
+        "verify:gated runs three tier fans: {gated:?}"
+    );
+    for (index, fan) in gated.iter().enumerate() {
+        let tier = format!("verify:discover-{}", index + 1);
+        assert_eq!(
+            steps(&tier),
+            std::slice::from_ref(fan),
+            "{tier} runs verify:gated's tier-{} fan, members, order and --jobs unchanged",
+            index + 1
+        );
+    }
+    let discover = steps("verify:discover");
+    let outer = discover.last().expect("verify:discover runs something");
+    assert_eq!(
+        members(outer),
+        [
+            "verify:discover-1",
+            "verify:discover-2",
+            "verify:discover-3",
+            "perf-gate"
+        ],
+        "the outer fan runs every tier, then perf-gate: {discover:?}"
+    );
+    assert_eq!(depends_of("verify:discover"), ["tree-clean"]);
+    for task in [
+        "verify:discover",
+        "verify:discover-1",
+        "verify:discover-2",
+        "verify:discover-3",
+    ] {
+        for step in steps(task) {
+            for written in ["receipt record", "step cover", "record validate"] {
+                assert!(
+                    !step.contains(written),
+                    "{task} proves nothing, so never runs `{written}`: {step}"
+                );
+            }
+            for member in members(&step) {
+                assert!(
+                    member != "record-verdicts" && !member.ends_with("-record"),
+                    "{task} writes no record, so never runs {member}: {step}"
+                );
+            }
+        }
+    }
+}
+
+/// THE OUTER FAN RUNS EVERY TIER, IN ORDER, PAST A RED ONE (CLOUD-2862).
+///
+/// What `--jobs 1 --continue-on-error` does is mise's, so it is run rather than
+/// trusted: the committed flags over a two-task fixture whose first task logs
+/// `a` and fails and whose second logs `b`. The log reads `a` then `b`, and the
+/// run still exits non-zero, so a red tier is reported rather than swallowed.
+/// Fails by: the outer fan losing `--continue-on-error` (only `a` runs) or
+/// `--jobs 1` (the order is no longer the tiers').
+#[test]
+fn the_discovery_fan_runs_every_tier_in_order_past_a_red_one() {
+    if !cfg!(unix) {
+        return;
+    }
+    let discover = steps("verify:discover");
+    let outer = discover.last().expect("verify:discover runs something");
+    let mut flags = Vec::new();
+    let mut words = outer.trim_start_matches("mise run ").split_whitespace();
+    while let Some(word) = words.next() {
+        if word == "--jobs" {
+            flags.push(word.to_owned());
+            flags.push(words.next().expect("--jobs takes a count").to_owned());
+        } else if word.starts_with('-') {
+            flags.push(word.to_owned());
+        } else {
+            break;
+        }
+    }
+    let dir = scratch("verify-discover-fan");
+    common::init_repo(&dir);
+    let log = dir.join("log");
+    common::write(
+        &dir,
+        "mise.toml",
+        &format!(
+            "[tasks.a]\nrun = \"echo a >> {log}; exit 1\"\n\n[tasks.b]\nrun = \"echo b >> {log}\"\n",
+            log = log.display()
+        ),
+    );
+    let output = common::task_bash(&dir, &format!("mise run {} a ::: b", flags.join(" ")))
+        .env("MISE_TRUSTED_CONFIG_PATHS", &dir)
+        .env_remove("MISE_CONFIG_FILE")
+        .env_remove("MISE_ENV")
+        .output()
+        .expect("run the fixture fan");
+    let said = format!("{}{}", common::stdout(&output), common::stderr(&output));
+    let ran = std::fs::read_to_string(&log).unwrap_or_default();
+    assert_eq!(
+        ran.lines().collect::<Vec<_>>(),
+        ["a", "b"],
+        "`mise run {}` ran both tasks, in order: {said}",
+        flags.join(" ")
+    );
+    assert!(
+        !output.status.success(),
+        "a red task leaves the fan red: {said}"
+    );
+}
+
 /// THE RETIRED BODY'S ORDER, which the old suite pinned by behaviour and by text:
 /// the toolchain first, then the claim receipt (a question cheaper than any below it),
 /// then linearity (a branch that is behind laps regardless, so the gate set is

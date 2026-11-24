@@ -159,3 +159,31 @@ fn a_failed_or_dead_task_is_refused_naming_it() {
         "a task gone without a last word is a crash: {said}"
     );
 }
+
+/// Fails by: a build left to run while the setup task builds the checkout's
+/// engine (CLOUD-2871), so two builds race over the target directory whose
+/// output is about to be installed under the hooks. The `cargo` named here is
+/// a file outside every install root, so only the engine phase can hold it:
+/// in any other phase the same call runs.
+#[test]
+fn a_build_is_held_while_the_setup_task_builds_the_engine() {
+    let dir = bench("install-gate-engine");
+    let cargo = dir.join("bin").join("cargo");
+    std::fs::create_dir_all(dir.join("bin")).expect("a bin directory");
+    // A BINARY, NOT A SCRIPT: the boundary reads a script's interpreter line
+    // as the program it runs, so a `#!/bin/sh` stub would be judged as itself.
+    std::os::unix::fs::symlink("/bin/true", &cargo).expect("a cargo stub");
+    let command = format!("{} build --release", cargo.display());
+    setup(&dir, &std::process::id().to_string(), "handlers");
+    let said = call(&dir, &command);
+    assert!(
+        !held(&said),
+        "outside the engine phase a resolved build runs: {said}"
+    );
+    setup(&dir, &std::process::id().to_string(), "engine");
+    let said = call(&dir, &command);
+    assert!(
+        held(&said) && said.contains("session-setup running"),
+        "the engine phase holds the build, naming the task: {said}"
+    );
+}
