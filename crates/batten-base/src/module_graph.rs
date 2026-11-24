@@ -3199,6 +3199,31 @@ mod tests {
         assert_eq!(resolver.node_of(&path, &[String::from("a")], 2), None);
     }
 
+    /// Fails by: a bare `child::Name` path resolving from inside a module,
+    /// where `child` is no top-level module's name but a child of that module,
+    /// or a bare head naming no module resolving at all (the match guard
+    /// `module.is_empty() && self.modules.contains(child)` in `node_of` read as
+    /// `true`).
+    #[test]
+    fn a_bare_child_path_resolves_only_from_the_crate_root() {
+        let modules = BTreeSet::from([String::from("a")]);
+        let homes = BTreeMap::from([(
+            String::from("S"),
+            BTreeSet::from([String::from("a"), String::from("x")]),
+        )]);
+        let lib_aliases = BTreeMap::new();
+        let resolver = Resolver {
+            modules: &modules,
+            homes: &homes,
+            lib_aliases: &lib_aliases,
+        };
+        let path = [String::from("a"), String::from("S")];
+        assert_eq!(resolver.node_of(&path, &[], 2), Some(String::from("a")));
+        assert_eq!(resolver.node_of(&path, &[String::from("b")], 2), None);
+        let unknown = [String::from("x"), String::from("S")];
+        assert_eq!(resolver.node_of(&unknown, &[], 2), None);
+    }
+
     /// Fails by: a binary's `main.rs` located as a module named `main`.
     #[test]
     fn a_binary_root_has_no_module() {

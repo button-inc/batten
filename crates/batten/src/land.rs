@@ -7018,4 +7018,23 @@ mod hold_tests {
         );
         assert!(hold.line("abc").starts_with("held abc entry-ms=7 "));
     }
+
+    /// Fails by: `Hold::after` answering `None`, so a held lap never ends on
+    /// its final verify and runs on as if unheld.
+    #[test]
+    fn a_held_lap_ends_on_its_final_verify_and_an_unheld_one_does_not() {
+        use crate::exit::ExitCode;
+        assert_eq!(
+            Hold::new(true).after(Step::Verify, ExitCode::Success),
+            Some(ExitCode::Success)
+        );
+        assert_eq!(
+            Hold::new(true).after(Step::Verify, ExitCode::Violation),
+            Some(ExitCode::Violation)
+        );
+        assert_eq!(
+            Hold::new(false).after(Step::Verify, ExitCode::Success),
+            None
+        );
+    }
 }
