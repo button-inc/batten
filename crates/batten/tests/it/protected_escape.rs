@@ -16,6 +16,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::path::{Path, PathBuf};
 
@@ -413,7 +414,34 @@ fn publish_guarded(dir: &Path, body: Option<&str>) {
         }
     }
     common::git_in(dir, &["commit", "-q", "-m", "pushed by another session"]);
-    common::pin_origin_main(dir);
+    publish_origin_main(dir, Published::BeforeTheCall);
+}
+
+/// When a remote-tracking ref moved, as its reflog stamps it.
+#[derive(Clone, Copy)]
+enum Published {
+    /// An hour before the call: history that was already on a remote.
+    BeforeTheCall,
+    /// Now, inside the call.
+    InTheCall,
+}
+
+/// Point `refs/remotes/origin/main` at `HEAD` the way `git fetch` does, through
+/// `update-ref`, so the move is in the ref's reflog — which is where the
+/// post-call check reads the pre-call tips from (CLOUD-2923). A fixture whose
+/// tip was written to the ref file directly has no reflog, and counts as no
+/// tip at all.
+fn publish_origin_main(dir: &Path, when: Published) {
+    let mut update = common::git_command(dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    if let Published::BeforeTheCall = when {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        update.env("GIT_COMMITTER_DATE", format!("@{} +0000", now - 3600));
+    }
+    let output = update.streamed_output().expect("run git update-ref");
+    assert!(output.status.success(), "{output:?}");
 }
 
 /// THE INCIDENT (CLOUD-2923). Another session pushed a protected change; this
@@ -480,12 +508,29 @@ fn a_protected_write_committed_in_the_call_is_still_refused() {
 /// THE TIPS ARE THE PRE-CALL ONES. A call that commits a protected write and
 /// then points a remote-tracking ref at it has not reached pushed history.
 ///
-/// Fails by: reading the remote tips after the call rather than from the
-/// snapshot taken before it.
+/// Fails by: reading the remote tips as they stand after the call, rather than
+/// as their reflogs say they stood when it began.
 #[test]
 fn a_commit_published_to_a_remote_ref_inside_the_call_is_still_refused() {
     let dir = fixture("protected-escape-forged-tip");
     let (code, said) = around_with(&dir, "call-forge", "python3 tool.py", |dir| {
+        std::fs::write(dir.join(GUARDED), "authored in the call\n").expect("the write lands");
+        common::git_in(dir, &["commit", "-q", "-am", "laundered"]);
+        publish_origin_main(dir, Published::InTheCall);
+    });
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
+}
+
+/// A REMOTE TIP WITH NO REFLOG IS NO TIP. A call that commits a protected write
+/// and writes the ref file itself leaves no record of when the ref moved, so
+/// nothing says the commit was on a remote before the call.
+///
+/// Fails by: reading a ref with no reflog at its current value.
+#[test]
+fn a_commit_written_into_a_remote_ref_file_inside_the_call_is_still_refused() {
+    let dir = fixture("protected-escape-forged-loose-tip");
+    let (code, said) = around_with(&dir, "call-forge-loose", "python3 tool.py", |dir| {
         std::fs::write(dir.join(GUARDED), "authored in the call\n").expect("the write lands");
         common::git_in(dir, &["commit", "-q", "-am", "laundered"]);
         common::pin_origin_main(dir);
