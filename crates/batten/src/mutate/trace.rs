@@ -602,10 +602,20 @@ pub(crate) fn await_trace(path: &Path) -> Option<String> {
     }
 }
 
-/// No tracer off Linux, so nothing to wait for.
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn await_trace(path: &Path) -> Option<String> {
-    crate::fsio::read_to_string(path).ok()
+pub(crate) use off_linux::await_trace;
+
+/// The off-Linux arm, in a module of its own so its compiled-out mutants are
+/// named apart from the Linux arm's (`.cargo/mutants.toml`, CLOUD-2902), as
+/// `batten_core::lease`'s `off_proc` is.
+#[cfg(not(target_os = "linux"))]
+mod off_linux {
+    use std::path::Path;
+
+    /// No tracer off Linux, so nothing to wait for.
+    pub(crate) fn await_trace(path: &Path) -> Option<String> {
+        crate::fsio::read_to_string(path).ok()
+    }
 }
 
 /// A strace string argument up to its closing quote, with the text after it,
@@ -626,7 +636,12 @@ fn quoted_arg(text: &str) -> Option<(String, &str)> {
     };
     let mut out: Vec<u8> = Vec::new();
     let mut at = 0;
-    while let Some(&byte) = bytes.get(at) {
+    // BOUNDED BY THE TEXT'S LENGTH (CLOUD-2789), as `item_index::paths_in` is:
+    // every pass moves `at` forward by at least one byte, so `bytes.len()`
+    // passes reach the end. A change that stops it advancing, or steps it back
+    // onto an escape's backslash, ends the walk unread rather than spinning.
+    for _ in 0..bytes.len() {
+        let &byte = bytes.get(at)?;
         at += 1;
         match byte {
             b'"' => {

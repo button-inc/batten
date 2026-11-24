@@ -2782,18 +2782,33 @@ fn orphaned(parent: rustix::process::Pid) -> ! {
         });
     }
     drop(send);
-    let deadline = std::time::Instant::now() + ORPHAN_GRACE;
-    for _ in &live {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        if exits.recv_timeout(left).is_err() {
-            break;
-        }
-    }
+    let _ = exits_within(&exits, live.len(), ORPHAN_GRACE);
     for leader in &live {
         kill_group(*leader);
         sweep_group(*leader);
     }
     std::process::exit(crate::ExitCode::Internal.code())
+}
+
+/// How many of `count` exits `exits` delivered before `grace` ran out, counted
+/// from now: the wait [`orphaned`] gives a group it sent TERM before the KILL. A
+/// SEPARATE FUNCTION so a case can see the grace, which `orphaned` itself,
+/// ending the process, never lets one observe (CLOUD-2789).
+fn exits_within(
+    exits: &std::sync::mpsc::Receiver<()>,
+    count: usize,
+    grace: std::time::Duration,
+) -> usize {
+    let deadline = std::time::Instant::now() + grace;
+    let mut arrived = 0;
+    for _ in 0..count {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if exits.recv_timeout(left).is_err() {
+            break;
+        }
+        arrived += 1;
+    }
+    arrived
 }
 
 // ---------------------------------------------------------------------------
@@ -3146,7 +3161,7 @@ impl Reach {
 }
 
 /// How many cases the run selected, whether it passed, and how far it got.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Selection {
     selected: usize,
     ok: bool,
@@ -3314,12 +3329,18 @@ fn run_suite(
                 "mutate sweep: {want} timed out at `{stopped}`"
             );
         }
-        return Selection {
-            reach: Reach::TimedOut,
-            ..selection
-        };
+        return ended_at_bound(selection);
     }
     selection
+}
+
+/// A suite's selection once its bound ended it: whatever it printed before,
+/// it reached [`Reach::TimedOut`], which outranks every other reach.
+fn ended_at_bound(selection: Selection) -> Selection {
+    Selection {
+        reach: Reach::TimedOut,
+        ..selection
+    }
 }
 
 /// The words cargo and nextest open a status line with.
@@ -6391,6 +6412,41 @@ mod tests {
         assert_eq!(cgroup_remaining_mb(&v2), None);
     }
 
+    /// An orphaned sweep's group that exits on TERM inside the grace is waited
+    /// for, and one that never exits is waited for no longer than the grace.
+    ///
+    /// Fails by: the deadline set before now (`+` read as `-`), so a group
+    /// that would have exited cleanly inside the grace gets KILL at once; or
+    /// an exit miscounted.
+    #[test]
+    fn an_orphaned_sweep_waits_the_grace_for_its_groups() {
+        let (send, exits) = std::sync::mpsc::channel();
+        let late = send.clone();
+        let sender = std::thread::spawn(move || {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the delay IS the subject: an exit `50ms` after the wait began, inside its \
+                          `30s` grace, which a deadline set before now never waits for"
+            )]
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let _ = late.send(());
+        });
+        assert_eq!(
+            exits_within(&exits, 1, std::time::Duration::from_secs(30)),
+            1,
+            "an exit 50ms into a 30s grace is waited for"
+        );
+        sender.join().unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(
+            exits_within(&exits, 2, std::time::Duration::from_millis(50)),
+            0,
+            "no exit arrives"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        drop(send);
+    }
+
     /// Fails by: the first status line reported instead of the last, or a
     /// non-status line (a case's own output) taken for one, or the whole line
     /// reported rather than a pointer to it (CLOUD-2206).
@@ -7829,6 +7885,10 @@ mod tests {
         assert_eq!(basic_to_rust(r"[]a]", '@').as_deref(), Some(r"[\]a]"));
         assert_eq!(basic_to_rust(r"[a&&b]", '@').as_deref(), Some(r"[a\&\&b]"));
         assert_eq!(basic_to_rust(r"[a-z]", '@').as_deref(), Some(r"[a-z]"));
+        // A `[` member opens no class unless a `:` follows it: read as one, the
+        // `b]` after it is swallowed as the class and the bracket never closes
+        // (CLOUD-2789).
+        assert_eq!(basic_to_rust(r"[a[b]c", '@').as_deref(), Some(r"[a\[b]c"));
         assert_eq!(
             basic_to_rust(r"[[:digit:]]x^", '@').as_deref(),
             Some(r"[[:digit:]]x\^")
@@ -8489,6 +8549,43 @@ mod tests {
         assert_eq!(ran.stdout.trim_end().len(), 200_000);
         assert!(!ran.stdout.contains('e'));
         assert_eq!(ran.output.matches('e').count(), 200_000);
+    }
+
+    /// Fails by: a suite its bound ended keeping the reach its output gave
+    /// (the `reach` override dropped), so a hang reads as a run that reported.
+    #[test]
+    fn a_suite_its_bound_ended_reached_timed_out() {
+        let reported = Selection {
+            selected: 3,
+            ok: true,
+            reach: Reach::Reported,
+        };
+        assert_eq!(
+            ended_at_bound(reported),
+            Selection {
+                selected: 3,
+                ok: true,
+                reach: Reach::TimedOut,
+            }
+        );
+    }
+
+    /// Fails by: a run its bound ended answered with how the killed child
+    /// exited rather than `TimedOut` (the `outcome` override dropped), so a
+    /// hung suite reads as a failing one.
+    #[test]
+    fn a_run_its_bound_ends_is_timed_out() {
+        let dir = crate::scratch::scratch("mutate-bound-ends");
+        let hang = [String::from("-c"), String::from("sleep 30")];
+        let ran = spawn(
+            &dir,
+            Program::Suite("sh"),
+            &hang,
+            &[],
+            std::time::Duration::from_millis(200),
+        )
+        .expect("sh runs");
+        assert_eq!(ran.outcome, Outcome::TimedOut);
     }
 
     #[test]
