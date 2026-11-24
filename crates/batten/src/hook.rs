@@ -24261,6 +24261,88 @@ deny contains "refused by themodule" if {
         );
     }
 
+    /// Fails by: the `watch` option walk's step multiplied rather than added
+    /// (`at += …` as `at *= …`), so from 0 it never moves and the walk spins.
+    /// The walk runs on its own thread and the case fails at its deadline
+    /// rather than hanging with it.
+    #[test]
+    fn a_watch_option_walk_steps_past_each_option() {
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let scripts = inner_scripts("watch", &["-d", "-n", "2", "git", "push"], Stage::call());
+            sent.send(scripts).ok();
+        });
+        let scripts = received
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|_| panic!("the option walk never reached `git push`"));
+        assert_eq!(scripts, ["git push"]);
+    }
+
+    /// Fails by: git's option walk running to `<= end`, which with no
+    /// subcommand is the argv's length, so it reads one word past the end.
+    #[test]
+    fn a_git_option_walk_with_no_subcommand_stops_at_the_argv_end() {
+        let here = Path::new("/r");
+        assert_eq!(
+            git_acting_dir(&["git", "-C", "sub"], here),
+            Some(PathBuf::from("/r/sub"))
+        );
+        assert_eq!(
+            git_acting_dir(&["git", "--work-tree=w"], here),
+            Some(PathBuf::from("/r/w"))
+        );
+    }
+
+    /// Fails by: `restore`'s `-s <tree>` skip multiplied rather than added
+    /// (`index *= 2`), so after another option it lands on the tree and reads
+    /// it as a pathspec.
+    #[test]
+    fn a_restore_source_after_another_option_is_no_pathspec() {
+        assert_eq!(
+            git_pathspecs(
+                &["git", "restore", "-q", "-s", "HEAD", "f"],
+                Path::new("/r")
+            ),
+            Pathspecs::Placed(vec![PathspecCall {
+                dir: PathBuf::from("/r"),
+                pathspecs: vec![String::from("f")],
+            }])
+        );
+    }
+
+    /// Fails by: a parenthesised call's arguments ended at a newline, as only
+    /// a paren-less call's are, so its second argument is lost.
+    #[test]
+    fn a_parenthesised_calls_arguments_run_past_a_newline() {
+        let text = "system(\"git\",\n\"push\")";
+        let args = call_args(Language::Perl, text, "system(".len());
+        assert!(
+            matches!(
+                args.as_slice(),
+                [Arg::Literal(program), Arg::Literal(verb)] if program == "git" && verb == "push"
+            ),
+            "{args:?}"
+        );
+    }
+
+    /// Fails by: the `.git` skip requiring the directory to be both the root's
+    /// `.git` and a nested one (`||` as `&&`), so neither is ever skipped and
+    /// git's own files are recorded as protected state.
+    #[test]
+    fn the_protected_walk_skips_every_git_directory() {
+        let root = crate::scratch::scratch("hook-protected-git-skip");
+        for file in ["a", ".git/x", "sub/b", "sub/.git/y"] {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, file).unwrap();
+        }
+        let state = protected_state_of(&root, &[String::from("**")], None).unwrap();
+        assert_eq!(
+            state.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["a", "sub/b"]
+        );
+    }
+
     /// Fails by: a script file exactly at the bound left unread.
     #[test]
     fn a_script_file_at_the_bound_is_read() {

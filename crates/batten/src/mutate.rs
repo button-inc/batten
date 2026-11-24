@@ -8707,4 +8707,29 @@ mod enrolled_tests {
             std::iter::once("added".to_owned()).collect()
         );
     }
+
+    /// Fails by: a newly written glob never consulted (`!globs.is_empty()`
+    /// read as `globs.is_empty()`), so a gate the glob newly selects by its
+    /// source is not enrolled although its name was never written.
+    #[test]
+    fn a_gate_a_new_glob_selects_is_enrolled_by_its_source() {
+        let dir = crate::scratch::scratch("mutate-enrolled-glob");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("mise-tasks")).unwrap();
+        std::fs::write(dir.join("mise-tasks/toy.sh"), "#!/bin/sh\n").unwrap();
+        let config = crate::config_model::CONFIG_FILE;
+        std::fs::write(dir.join(config), "gates = []\n").unwrap();
+        crate::gitwrite::commit_paths(&dir, &[config.to_owned()], "base").unwrap();
+        std::fs::write(dir.join(config), "gates = [\"mise-tasks/*.sh\"]\n").unwrap();
+        assert!(
+            resolve(&dir, "toy").is_some(),
+            "premise: the task resolves to a gate over its source"
+        );
+        let names = ["toy".to_owned()];
+        let changed = std::iter::once(config.to_owned()).collect();
+        assert_eq!(
+            enrolled_since(&dir, "HEAD", &names, &changed),
+            std::iter::once("toy".to_owned()).collect()
+        );
+    }
 }

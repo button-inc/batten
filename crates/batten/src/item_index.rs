@@ -2444,6 +2444,57 @@ mod tests {
         assert!(paths_in("// ::a::b").is_empty());
     }
 
+    /// Fails by: a segment after `::` admitted only when it does NOT open with
+    /// `_` (`c == '_'` as `!=`), so `a::_b` reads as no path at all.
+    #[test]
+    fn a_segment_may_open_with_an_underscore() {
+        assert_eq!(
+            path_at("a::_b"),
+            Some((vec!["a".to_owned(), "_b".to_owned()], 5))
+        );
+    }
+
+    /// Fails by: the `self` arm of `anchored` deleted, so a `self::` target is
+    /// kept as written instead of anchored at the module that wrote it.
+    #[test]
+    fn a_self_glob_target_is_anchored_at_its_module() {
+        let owned = |segments: &[&str]| -> Vec<String> {
+            segments
+                .iter()
+                .map(|segment| (*segment).to_owned())
+                .collect()
+        };
+        assert_eq!(
+            Index::anchored("app", &owned(&["m"]), &owned(&["self", "inner"])),
+            Some(owned(&["app", "m", "inner"]))
+        );
+    }
+
+    /// Fails by: the `self` arm of `first_shim` deleted, so a `pub use
+    /// self::…` re-export is no shim and a path through it is never respelled.
+    #[test]
+    fn a_self_shim_is_the_first_shim_of_a_path_through_it() {
+        let index = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod m;\n"),
+            ("src/m.rs", "pub mod inner;\npub use self::inner::Thing;\n"),
+            ("src/m/inner.rs", "pub struct Thing;\n"),
+        ]);
+        let owned = |segments: &[&str]| -> Vec<String> {
+            segments
+                .iter()
+                .map(|segment| (*segment).to_owned())
+                .collect()
+        };
+        assert_eq!(
+            index.first_shim(&owned(&["app", "m", "Thing"])),
+            Some((
+                ("app".to_owned(), owned(&["m"]), "Thing".to_owned()),
+                owned(&["app", "m", "inner", "Thing"])
+            ))
+        );
+    }
+
     /// Fails by: `respell` asked at a body offset rather than the file offset
     /// the body starts at, for a `use` leaf or for a path.
     #[test]

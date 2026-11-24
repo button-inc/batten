@@ -419,6 +419,31 @@ mod tests {
         Ok(())
     }
 
+    /// Fails by: `start` answering a pid (`Some(String::new())`) while the
+    /// session's task is already running, so a resume starts a second install
+    /// over the first. Registers this process as the running task, so the
+    /// real code returns at once and the case never spawns anything.
+    #[test]
+    fn a_start_while_the_task_runs_starts_nothing() {
+        let git_dir = crate::scratch::scratch("session-setup-running");
+        let own = std::process::id().to_string();
+        task::register(&git_dir, TASK, &own, "start", 100);
+        if cfg!(unix) {
+            assert!(
+                task::partition(&git_dir)
+                    .0
+                    .iter()
+                    .any(|entry| entry.task == TASK),
+                "premise: this process is the running task"
+            );
+            assert_eq!(start(&git_dir, &git_dir, "{}", 200), None);
+            assert!(
+                !payload_path(&git_dir).exists(),
+                "a refused start spools no payload"
+            );
+        }
+    }
+
     /// Fails by: a crash read as said only once it HAS an outcome, so a task
     /// that died before writing one is never surfaced.
     #[test]

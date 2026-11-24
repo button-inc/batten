@@ -214,6 +214,22 @@ pub const DRAIN_GRACE: Duration = Duration::from_secs(10);
 mod tests {
     use super::*;
 
+    /// Fails by: a change through the share neither run nor answered
+    /// (`Shared::with_mut` read as `None`).
+    #[test]
+    fn a_change_through_the_share_runs_and_answers() {
+        let shared = Shared::new(vec![1_u8]);
+        let other = shared.clone();
+        assert_eq!(
+            shared.with_mut(|sink| {
+                sink.push(2);
+                sink.len()
+            }),
+            Some(2)
+        );
+        assert_eq!(other.bytes(), [1, 2]);
+    }
+
     /// Fails by: a write through the share reporting no byte taken, so a
     /// caller's `write_all` loops or gives up on bytes the sink holds.
     #[test]

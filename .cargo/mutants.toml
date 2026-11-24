@@ -108,4 +108,10 @@ exclude_re = [
   # identifier or a colon, so no path starts, continues or is glued there.
   # Pinned to the column: the other `+` mutants in `token_paths` are killed.
   'item_index\.rs:\d+:81: replace \+ with \* in token_paths$',
+  # A body that parses after `fn f() ` opens with `{` at offset 7, so no root
+  # splice starts before or at it: `< 7` and `== 7` are both never true (CLOUD-2789).
+  'crate_cut\.rs:\d+:\d+: replace < with == in respell_body$',
+  # At `at == end` the slice is empty, `path_at` finds nothing, and the walk
+  # steps once past `end` and stops: the extra pass pushes no path (CLOUD-2789).
+  'item_index\.rs:\d+:\d+: replace < with <= in paths_in$',
 ]

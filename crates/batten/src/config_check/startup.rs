@@ -298,4 +298,13 @@ mod tests {
         assert!(names("ci_agent").is_ok());
         assert!(names("ci.agent").is_err());
     }
+
+    /// Fails by: the `-` arm of the name alphabet inverted, so a hyphen is
+    /// refused and any other punctuation admitted.
+    #[test]
+    fn a_hyphenated_name_is_one_environment_and_a_dotted_one_is_not() {
+        let names = |name: &str| super::environment_names("r", &[name.to_owned()], ":");
+        assert!(names("dev-ci").is_ok());
+        assert!(names("dev.ci").is_err());
+    }
 }

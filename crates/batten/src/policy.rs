@@ -8245,6 +8245,25 @@ violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects
         );
     }
 
+    /// Fails by: `Fallback::as_str` answering `""` for every fallback, so the
+    /// `-vv` line and the evaluator report name no reason at all.
+    #[test]
+    fn every_fallback_names_its_own_token() {
+        let tokens = [
+            (Fallback::NotOffered, "not-offered"),
+            (Fallback::GuardUnavailable, "guard-unavailable"),
+            (Fallback::GuardedSourceRefused, "guarded-source-refused"),
+            (Fallback::NoAnsweredRule, "no-answered-rule"),
+            (Fallback::CompileRefused, "compile-refused"),
+            (Fallback::KeyedPartialSet, "keyed-partial-set"),
+            (Fallback::RuleElse, "rule-else"),
+            (Fallback::TestWith, "test-with"),
+        ];
+        for (fallback, token) in tokens {
+            assert_eq!(fallback.as_str(), token, "{fallback:?}");
+        }
+    }
+
     /// Fails by: a rule both evaluators agree on reported as a split (the
     /// comparison inverted), so the parity gate reads every bundle as split.
     #[test]
