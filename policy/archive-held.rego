@@ -43,11 +43,11 @@ archiving if input.call.tool == "archive_session"
 
 archiving if endswith(input.call.tool, "__archive_session")
 
-# The child the call archives, or "" when the call names none. Two complete
-# definitions rather than an `else`, which the two evaluators decided apart.
-child := input.call.arguments.session_id if is_string(input.call.arguments.session_id)
+# Whether the call names a child, and which. No `else` and no empty-string
+# sentinel: both were decided apart by the two evaluators (`policy_execution.rs`).
+named_child if is_string(input.call.arguments.session_id)
 
-child := "" if not is_string(input.call.arguments.session_id)
+child := input.call.arguments.session_id if named_child
 
 # The newest complete read of this child says `done`.
 settled if {
@@ -55,8 +55,10 @@ settled if {
 	state == "done"
 }
 
-# The tasks that read left open: comma-separated, `-` when none.
-open_tasks contains task if {
+# The tasks that read left open: comma-separated, `-` when none. A comprehension,
+# not a partial set rule: the interpreter left `count()` over an empty partial
+# set undefined where bytecode answered 0 (`policy_execution.rs`).
+open_tasks := {task |
 	some task in split(input.facts.minted["children-tasks"][child], ",")
 	not task in {"", "-"}
 }
@@ -66,12 +68,12 @@ held := [{"artifact": task} | some task in sort(open_tasks)] if count(open_tasks
 
 held := [{"artifact": child}] if {
 	count(open_tasks) == 0
-	child != ""
+	named_child
 }
 
 held := [{"artifact": input.call.tool}] if {
 	count(open_tasks) == 0
-	child == ""
+	not named_child
 }
 
 violation contains {
@@ -98,6 +100,14 @@ archive(tool, minted) := {
 	"facts": {"minted": minted},
 }
 
+# A listed store with no read of this child: another child's only. Spelled with
+# a member rather than as `{}`, which the interpreter did not read as the empty
+# object bytecode does (`policy_execution.rs`).
+unread := {
+	"children-state": {"session_01Other": "done"},
+	"children-tasks": {"session_01Other": "-"},
+}
+
 read(state, open) := {
 	"children-state": {c: state},
 	"children-tasks": {c: open},
@@ -106,18 +116,18 @@ read(state, open) := {
 # Each host spelling is written out: the suite precomputes every `with` value,
 # so one that depends on a loop variable is not a case it can run.
 test_no_read_is_refused_naming_the_child if {
-	some v in violation with input as archive("archive_session", {})
-	v.subjects == [{"artifact": c}]
+	some v in violation with input as archive("archive_session", unread)
+	v.subjects == [{"artifact": "session_01ChildAbc"}]
 }
 
 test_no_read_is_refused_under_the_readable_connector_name if {
-	some v in violation with input as archive("mcp__Claude_Code_Remote__archive_session", {})
-	v.subjects == [{"artifact": c}]
+	some v in violation with input as archive("mcp__Claude_Code_Remote__archive_session", unread)
+	v.subjects == [{"artifact": "session_01ChildAbc"}]
 }
 
 test_no_read_is_refused_under_the_servers_own_name if {
-	some v in violation with input as archive("mcp__claude-code-remote__archive_session", {})
-	v.subjects == [{"artifact": c}]
+	some v in violation with input as archive("mcp__claude-code-remote__archive_session", unread)
+	v.subjects == [{"artifact": "session_01ChildAbc"}]
 }
 
 # The gate keys on the structured tool, never on text: a shell line that only
@@ -125,7 +135,7 @@ test_no_read_is_refused_under_the_servers_own_name if {
 test_a_shell_line_naming_the_tool_is_not_this_gates if {
 	count(violation) == 0 with input as {
 		"call": {"command": "cd /tmp && echo archive_session", "tool": "Bash", "arguments": {"session_id": c}, "run-in-background": null},
-		"facts": {"minted": {}},
+		"facts": {"minted": unread},
 	}
 }
 
@@ -140,7 +150,7 @@ test_a_waiting_read_names_each_open_task if {
 
 test_a_dead_read_with_nothing_open_names_the_child if {
 	some v in violation with input as archive("archive_session", read("dead", "-"))
-	v.subjects == [{"artifact": c}]
+	v.subjects == [{"artifact": "session_01ChildAbc"}]
 }
 
 test_a_done_read_admits if {
@@ -173,6 +183,6 @@ test_a_call_naming_no_child_is_refused if {
 test_another_tool_is_not_held if {
 	count(violation) == 0 with input as {
 		"call": {"command": "", "tool": "get_session", "arguments": {"session_id": c}, "run-in-background": null},
-		"facts": {"minted": {}},
+		"facts": {"minted": unread},
 	}
 }
