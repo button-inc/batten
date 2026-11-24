@@ -323,6 +323,22 @@ fn a_stale_digest_cache_never_hides_a_write() {
     assert!(said.contains("path write refused at guarded.txt"), "{said}");
 }
 
+/// A pre-call snapshot keeps the digest cache it lends the next call.
+///
+/// Fails by: the cache path lost, or written only when unchanged.
+#[test]
+fn a_pre_call_snapshot_writes_its_digest_cache() {
+    let dir = fixture("protected-escape-digest-cache");
+    let cache = dir.join(".git/batten-facts/protected-watch/digests");
+    assert!(!cache.exists(), "premise: no cache before the first call");
+    let (code, said) = around_with(&dir, "call-cache", "ls", |_| {});
+    assert_eq!(code, Some(0), "{said}");
+    let digests: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cache).expect("the cache is written"))
+            .unwrap();
+    assert!(digests.get(GUARDED).is_some(), "{digests}");
+}
+
 /// NO HOLE FOR A LIVE BACKGROUND TASK. A foreground call that really changes a
 /// protected file's bytes is refused whether or not a backgrounded call of the
 /// same session is still running: nothing the hook can observe says which

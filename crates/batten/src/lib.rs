@@ -33329,6 +33329,125 @@ mod mutation_markers;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    /// Fails by: a subject naming no finding read as naming one under another rule.
+    #[test]
+    fn a_subject_naming_no_finding_falls_back_to_the_head() {
+        use crate::findings::{Check, Finding, Remediation};
+        use crate::identity::{FindingKind, StoredIdentity};
+        let fingerprint = crate::identity::code_fingerprint(
+            "other rule",
+            "a.txt",
+            "x",
+            crate::identity::SpanNormalization::Collapsed,
+        )
+        .unwrap();
+        let finding = Finding {
+            carried: Vec::new(),
+            owner: None,
+            rule: "other rule".to_owned(),
+            severity: crate::severity::RuleSeverity::Deny,
+            path: "a.txt".to_owned(),
+            line: Some(1),
+            identity: StoredIdentity::new(FindingKind::Code, fingerprint),
+            check: Check::Reevaluate,
+            remediation: Some(Remediation::NoFix("fix it".to_owned())),
+            reason: None,
+        };
+        let head = || {
+            Ok((
+                super::admission::Anchor::Finding("head".to_owned()),
+                "head".to_owned(),
+            ))
+        };
+        let found = std::slice::from_ref(&finding);
+        let (_, bound) = super::anchor_among(found, "mine", "class", "b.txt", head).unwrap();
+        assert_eq!(bound, "head");
+        let refused = super::anchor_among(found, "mine", "class", "a.txt", head).unwrap_err();
+        assert!(
+            format!("{refused:#}").contains("carries rule `other rule`"),
+            "{refused:#}"
+        );
+    }
+
+    /// Fails by: a successful build read as failed.
+    #[test]
+    fn a_build_that_succeeds_is_built() {
+        let root = crate::scratch::scratch("lib-build-engine");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "").unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"other\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        assert!(!super::build_engine(&root), "no package `batten` here");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"batten\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        assert!(super::build_engine(&root));
+    }
+
+    /// Fails by: only empty advice lines written at a permission answer.
+    #[test]
+    fn a_permission_answers_advice_reaches_stderr() {
+        let harness = crate::config_model::Harness::ClaudeCode;
+        let envelope = super::hook::decode(
+            harness,
+            r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"x"}}"#,
+        )
+        .unwrap();
+        let policy = super::hook::Policy::declaring_nothing(harness);
+        let tier = crate::severity::AdvisoryTier::Advisory;
+        let advice = [
+            super::advisory::Advice::new(tier, "batten note a"),
+            super::advisory::Advice::new(tier, ""),
+        ];
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        super::answer_permission_event(&policy, &envelope, &advice, &mut out, &mut err).unwrap();
+        assert_eq!(String::from_utf8(err).unwrap(), "batten note a\n");
+    }
+
+    /// Fails by: any adjacent word pair read as `capture show`.
+    #[test]
+    fn only_a_windowed_capture_show_shows_a_capture() {
+        assert!(super::shows_a_capture("batten capture show h --lines 3"));
+        assert!(!super::shows_a_capture("batten capture list --lines 3"));
+    }
+
+    /// Fails by: the interpreted total not summing the census.
+    #[test]
+    fn the_evaluator_total_sums_interpreted_evaluations() {
+        let probe = "package batten.probe\n\nimport rego.v1\n\nrules contains \"probe run never\"\n\n\
+                     violation contains {\"rule\": \"probe run never\", \"verdict\": \"probe run never\"} if {\n\
+                     \tinput.tree[\"git-head\"] == \"a head no repository has\"\n}\n";
+        let sources = vec![(String::from("probe.rego"), String::from(probe))];
+        let bundle =
+            super::policy::compile("census probe", &sources, &serde_json::json!({})).unwrap();
+        let _ = super::policy::deny(&bundle, "{}");
+        let interpreted: usize = super::policy::execution_census()
+            .into_iter()
+            .filter(|(_, how, _)| matches!(how, super::policy::Execution::Interpreted(_)))
+            .map(|(_, _, count)| count)
+            .sum();
+        assert!(
+            interpreted >= 1,
+            "premise: the probe ran on the interpreter"
+        );
+        let mode = super::Mode {
+            verbosity: super::Verbosity::Debug,
+            ..super::Mode::default()
+        };
+        let mut err = Vec::new();
+        super::report_policy_executions(mode, &mut err).unwrap();
+        let said = String::from_utf8(err).unwrap();
+        assert!(
+            said.contains(&format!(" {interpreted} interpreted evaluation(s)")),
+            "{said}"
+        );
+    }
+
     /// A config change no arm-shaped line moved is answered without a parse:
     /// two texts no build can parse, differing only in a comment and a plain
     /// key, come back as "nothing introduced" rather than could-not-look.
