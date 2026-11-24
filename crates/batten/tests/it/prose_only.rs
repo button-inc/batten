@@ -466,6 +466,75 @@ fn a_shell_program_carrying_no_extension_is_read_as_shell() {
     refused(&root);
 }
 
+/// [`findings`] over a change-set, as `check --staged` narrows a run.
+fn findings_scoped(root: &Path, changed: &[&str]) -> Vec<String> {
+    let verdicts = common::verdicts_in(root);
+    let scope = rules::Scope::Changed(changed.iter().map(|path| (*path).to_owned()).collect());
+    rules::run_static_over(
+        &[row()],
+        &[],
+        batten::policy::Vocabulary {
+            patterns: &[],
+            verdicts: &verdicts,
+            words: None,
+            recorders: &[],
+            registers: &[],
+            traversals: &[],
+            records: &[],
+        },
+        root,
+        rules::RunOptions {
+            checks: batten::policy::ModuleChecks::Run,
+            scope: &scope,
+            surface: batten::facts::Surface::Check,
+            now: None,
+            half: None,
+            keyed_bases: &[],
+        },
+    )
+    .expect("the read surface runs a policy row over a change-set")
+    .findings
+    .into_iter()
+    .map(|finding| finding.rule)
+    .collect()
+}
+
+/// A NARROWED RUN'S DELTA NAMES ONLY THE CHANGE-SET (CLOUD-2789). A code edit
+/// beside a comment-only one admits the branch, but a run scoped to the
+/// comment-only file reads a delta holding that file alone, and prices it.
+///
+/// Fails by: the scope's change-set never handed to the delta
+/// (`Scope::changed` answering `None`), so the unstaged code edit admits it.
+#[test]
+fn a_scoped_run_prices_only_the_change_set_it_names() {
+    let root = repo(
+        "scoped",
+        &[
+            ("crates/batten-core/src/git.rs", CODE),
+            ("crates/batten-core/src/other.rs", CODE),
+        ],
+        &Head {
+            written: &[
+                (
+                    "crates/batten-core/src/git.rs",
+                    "// a doc line\nfn main() {\n    let x = 99;\n    let y = 2;\n}\n",
+                ),
+                (
+                    "crates/batten-core/src/other.rs",
+                    "// a doc line, rewritten\nfn main() {\n    let x = 1;\n    let y = 2;\n}\n",
+                ),
+            ],
+            removed: &[],
+        },
+    );
+    admitted(&root);
+    assert_eq!(
+        findings_scoped(&root, &["crates/batten-core/src/other.rs"]),
+        vec!["diff ship early".to_owned()],
+        "scoped to the comment-only file, the code edit beside it is not this change's"
+    );
+}
+
 // changed: "the refusal names paths and a count, never a line of the diff" crates/batten/tests/it/prose_only.rs the shell printed every changed path beside the count; the port emits the count alone, because a diff is content nobody has published
 #[test]
 fn the_finding_carries_a_count_and_never_a_path() {

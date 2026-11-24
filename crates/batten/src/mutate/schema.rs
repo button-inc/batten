@@ -10808,6 +10808,18 @@ mod tests {
         assert!(!names.contains("a"), "{names:?}");
     }
 
+    /// Fails by: the build's census never written, so a run reports no count
+    /// of what it built and how long that took (CLOUD-2789).
+    #[test]
+    fn the_build_announces_its_counts_and_its_time() {
+        let mut out = Vec::new();
+        announce_built(&mut out, (13_869, 2_180, 281), 695).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "mutate schema: 13869 mutant(s), 2180 unviable, 281 classic, built in 695s\n"
+        );
+    }
+
     #[test]
     fn a_handed_back_mutant_is_judged_by_the_cases_that_can_observe_it() {
         assert_eq!(function_ident("Foo::bar").as_deref(), Some("bar"));
