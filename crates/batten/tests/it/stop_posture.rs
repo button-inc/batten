@@ -941,6 +941,48 @@ fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
     );
 }
 
+/// A stop row that REFUSES (exit 2) is demoted to the nudge, never dropped.
+/// Fails by: the deny arm read as saying nothing, so a refusing stop row's
+/// reason and its row id never reach the reader.
+#[test]
+fn a_refusing_stop_row_still_speaks() {
+    // The row runs `/bin/sh`, which a Windows runner does not have (CLOUD-113);
+    // the script is handed to it, so no execute bit and no unix-only API.
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = repo("stop-handler-deny");
+    let script = dir.join("deny-stub.sh");
+    fs::write(&script, "printf '%s\\n' 'refused for turn 14'\nexit 2\n").expect("write stub");
+    let config = dir.join("batten.toml");
+    let mut text = fs::read_to_string(&config).expect("read config");
+    let _ = write!(
+        text,
+        "\n[[hook.handler]]\nid = \"deny-sink\"\non = \"stop\"\nrun = [\"/bin/sh\", {:?}]\n",
+        script.display().to_string()
+    );
+    fs::write(&config, text).expect("declare the stop row");
+    let transcript = dir.join("session.jsonl");
+    fs::write(&transcript, "{}\n").expect("write transcript");
+    let payload = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "s-1",
+        "stop_hook_active": false,
+        "last_assistant_message": "Landed and pushed.",
+        "transcript_path": transcript.display().to_string(),
+    });
+    let output = hook(&dir, &payload.to_string());
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains("refused for turn 14"),
+        "the reason travels: {stdout}"
+    );
+    assert!(
+        stdout.contains("hook.handler.deny-sink"),
+        "and so does the row that said it: {stdout}"
+    );
+}
+
 /// EVERY APPLICABLE RUNG SPEAKS, IN RANK ORDER (CLOUD-2078).
 ///
 /// The ladder used to stop at its first rung, so a module finding hid every
