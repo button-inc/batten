@@ -126,39 +126,67 @@ fn the_pkl_spawn_carries_the_selection_after_eval() {
 /// [`pkl_command_reads_the_environment_in_order`] alone.
 const CA_VARIABLES: [&str; 2] = ["BATTEN_CA_BUNDLE", "SSL_CERT_FILE"];
 
+/// The file the parent expects the child's `pkl_command()` to select.
+const CHILD_EXPECTS: &str = "BATTEN_PKL_CA_CHILD_EXPECTS";
+
 /// `pkl_command()` ITSELF carries the selection, on any runner (CLOUD-2917).
 ///
 /// CI sets neither CA variable, so an argv read off `pkl_command()` in this
 /// process is `eval` whatever the helper does with them. This test binary is
-/// spawned again, exact filter, with BOTH variables naming real, distinct files,
-/// and the child holds `pkl_command()`'s argv to `BATTEN_CA_BUNDLE`'s file: a
-/// helper that spawns bare `pkl eval`, passes neither variable, or swaps the
-/// two fails it here. The environment is the child's own, so no parallel case
-/// reads a mutated one.
+/// spawned again, exact filter, with an environment of its own, twice:
+///
+/// * BOTH variables naming real, distinct files, which holds the ORDER:
+///   `BATTEN_CA_BUNDLE`'s file outranks `SSL_CERT_FILE`'s, so a helper that
+///   swaps the two fails;
+/// * `SSL_CERT_FILE` ALONE, `BATTEN_CA_BUNDLE` removed, which holds that the
+///   helper READS it: `pkl_argv(var_os("BATTEN_CA_BUNDLE"), None)` passes the
+///   first run and fails this one.
+///
+/// A helper that spawns bare `pkl eval`, or passes neither variable, fails both.
+/// The environment is the child's own, so no parallel case reads a mutated one.
 #[test]
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only (CLOUD-2917): the subject is `pkl_command()` over an environment this process does not have, so this test binary runs again as a child that has it"
-)]
 fn pkl_command_reads_the_environment_in_order() {
     let dir = common::scratch("pkl-ca-child");
     common::write(&dir, "batten.pem", "batten\n");
     common::write(&dir, "ssl.pem", "ssl\n");
-    let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
-        .args([
-            "pkl_ca::pkl_command_child",
-            "--exact",
-            "--ignored",
-            "--test-threads=1",
-        ])
-        .env(CA_VARIABLES[0], dir.join("batten.pem"))
-        .env(CA_VARIABLES[1], dir.join("ssl.pem"))
+    let batten = dir.join("batten.pem");
+    let ssl = dir.join("ssl.pem");
+    child_selects(
+        &[(CA_VARIABLES[0], &batten), (CA_VARIABLES[1], &ssl)],
+        &batten,
+    );
+    child_selects(&[(CA_VARIABLES[1], &ssl)], &ssl);
+}
+
+/// Run [`pkl_command_child`] with exactly `set` of [`CA_VARIABLES`] (the rest
+/// removed) and assert it held `pkl_command()` to `expected`'s file.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only (CLOUD-2917): the subject is `pkl_command()` over an environment this process does not have, so this test binary runs again as a child that has it"
+)]
+fn child_selects(set: &[(&str, &Path)], expected: &Path) {
+    let mut child = std::process::Command::new(std::env::current_exe().expect("this test binary"));
+    child.args([
+        "pkl_ca::pkl_command_child",
+        "--exact",
+        "--ignored",
+        "--test-threads=1",
+    ]);
+    for name in CA_VARIABLES {
+        child.env_remove(name);
+    }
+    for (name, path) in set {
+        child.env(name, path);
+    }
+    let output = child
+        .env(CHILD_EXPECTS, expected)
         .streamed_output()
         .expect("spawn this test binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
-        "pkl_command() carries BATTEN_CA_BUNDLE's file: {stdout}{}",
+        "pkl_command() selects {} under {set:?}: {stdout}{}",
+        expected.display(),
         String::from_utf8_lossy(&output.stderr)
     );
     // A filter that matched nothing exits 0 too.
@@ -166,18 +194,18 @@ fn pkl_command_reads_the_environment_in_order() {
 }
 
 /// The child half: `pkl_command()`'s argv over the environment the case above
-/// hands it.
+/// hands it, held to the file that case names in [`CHILD_EXPECTS`].
 ///
-/// Ignored, because it is not a case: run without that parent it has no two
-/// files to hold the order over, and fails rather than passing over nothing.
+/// Ignored, because it is not a case: run without that parent it has no
+/// expectation to hold, and fails rather than passing over nothing.
 #[test]
-#[ignore = "the child pkl_command_reads_the_environment_in_order spawns; it reads the files that case names"]
+#[ignore = "the child pkl_command_reads_the_environment_in_order spawns; it reads the file that case names"]
 fn pkl_command_child() {
-    let [batten, ssl] = CA_VARIABLES
-        .map(|name| std::env::var_os(name).expect("spawned by the parent, which sets it"));
+    let expected =
+        std::env::var_os(CHILD_EXPECTS).expect("spawned by the parent, which names the file");
     assert!(
-        Path::new(&batten).is_file() && Path::new(&ssl).is_file() && batten != ssl,
-        "both variables name distinct files, so the order is observable"
+        Path::new(&expected).is_file(),
+        "the expected selection is a real file, so a selection is observable"
     );
     assert_eq!(
         common::pkl_command()
@@ -187,9 +215,9 @@ fn pkl_command_child() {
         vec![
             OsString::from("eval"),
             OsString::from("--ca-certificates"),
-            batten,
+            expected,
         ],
-        "pkl_command() is `eval` with BATTEN_CA_BUNDLE's file, which outranks SSL_CERT_FILE"
+        "pkl_command() is `eval` with the file its environment selects"
     );
 }
 
