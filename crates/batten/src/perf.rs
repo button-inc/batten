@@ -77,8 +77,8 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::config_model::{Event, Harness};
 use crate::error::UsageError;
+use crate::fsio::same_bytes;
 use crate::hook::WiringFile;
-use crate::wiring::same_bytes;
 
 /// The base a comparison is taken against, and the run counts.
 ///

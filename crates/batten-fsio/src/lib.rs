@@ -46,6 +46,36 @@ pub fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
     std::fs::read(path)
 }
 
+/// Whether two paths name the same file on disk.
+///
+/// Compared by CANONICAL path rather than by string: a checkout reached through
+/// a symlink, or spelled with a `.`, is still the same file, and a string
+/// comparison would miss it and report the committed wiring as a merged second
+/// authority. A path that does not canonicalize does not exist, and a file that
+/// does not exist collides with nothing.
+///
+/// The collision is real rather than theoretical: several hosts spell their
+/// user-level surface and their project-level one identically, differing only in
+/// which directory they are resolved against, so a checkout that sits AT the
+/// home directory resolves both to one file.
+#[must_use]
+pub fn same_file(one: &Path, two: &Path) -> bool {
+    match (one.canonicalize(), two.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Whether two files hold the same BYTES, where [`same_file`] asks whether they
+/// are the same file; an unreadable side is never "same".
+#[must_use]
+pub fn same_bytes(left: &Path, right: &Path) -> bool {
+    match (read(left), read(right)) {
+        (Ok(left_bytes), Ok(right_bytes)) => left_bytes == right_bytes,
+        _ => false,
+    }
+}
+
 /// The bytes of every one of `files`, each given with its size from a stat the
 /// caller already took, with every read in flight before any completes.
 ///
