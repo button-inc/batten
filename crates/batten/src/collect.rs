@@ -2454,7 +2454,10 @@ mod tests {
         let repo = scratch("pressed");
         let config = band(Some((10, 20)));
         let pressed = |free: u64| {
-            super::collect_if_pressed(&repo, &config, &[], &mut || Ok(free), None, false)
+            // BOUNDED, SO NO MUTANT COPY IN THE SHARED TEMP DIRECTORY IS READ
+            // ([`a_collection_frees_toward_max_in_mebibytes`], CLOUD-2789).
+            let bound = std::time::Instant::now() + Duration::from_secs(3600);
+            super::collect_if_pressed(&repo, &config, &[], &mut || Ok(free), Some(bound), false)
         };
         assert!(pressed(10).is_none(), "at the minimum");
         assert!(pressed(9).is_some(), "below it");
@@ -2462,6 +2465,13 @@ mod tests {
 
     /// Fails by: the bytes to free misread from the band's MiB. 1 MiB is asked
     /// for, and two 600 KiB units are needed to free it.
+    ///
+    /// BOUNDED, SO THE PASS READS NO MUTANT COPIES (CLOUD-2789). An unbounded
+    /// pass also takes every `cargo-mutants-*.tmp` copy in the temp directory
+    /// whole, and the suite's temp directory is shared: a stale copy a nested
+    /// sweep left there was freed first, met the 1 MiB alone, and the case read
+    /// one unit where two were needed, deleting a directory it never made. A
+    /// bound it never reaches leaves the arithmetic under test unchanged.
     #[test]
     fn a_collection_frees_toward_max_in_mebibytes() {
         let repo = scratch("toward-max");
@@ -2488,7 +2498,7 @@ mod tests {
             &[],
             0,
             &mut || Ok(5),
-            None,
+            Some(std::time::Instant::now() + Duration::from_secs(3600)),
             false,
         )
         .expect("a declared band collects");
