@@ -23948,6 +23948,98 @@ deny contains "refused by themodule" if {
         );
     }
 
+    /// Fails by: an attached `-S<value>` dropped, so the script it carries is
+    /// never read as the command `env` runs.
+    #[test]
+    fn an_attached_split_string_is_envs_command() {
+        assert_eq!(split_strings(&["env", "-Sgit push"]), ["git push"]);
+    }
+
+    /// Fails by: a paren-less call not ending at its statement's `;`, which
+    /// reads the next statement into its last argument and makes it opaque.
+    #[test]
+    fn a_parenless_calls_arguments_end_at_its_statement() {
+        let text = "system \"git\", \"push\"; print 1\n";
+        let args = call_args(Language::Perl, text, "system".len());
+        assert!(
+            matches!(
+                args.as_slice(),
+                [Arg::Literal(program), Arg::Literal(verb)] if program == "git" && verb == "push"
+            ),
+            "{args:?}"
+        );
+    }
+
+    /// Fails by: Ruby's `#{…}` interpolation read as a literal.
+    #[test]
+    fn a_ruby_interpolated_string_is_no_literal() {
+        assert_eq!(string_literal(Language::Ruby, "\"git #{verb}\""), None);
+        assert_eq!(
+            string_literal(Language::Ruby, "\"git push\"").as_deref(),
+            Some("git push")
+        );
+    }
+
+    /// Fails by: `mise tasks <verb>` other than `run` read as starting a task.
+    #[test]
+    fn only_mise_tasks_run_passes_arguments() {
+        assert!(mise_task_arguments(&["tasks", "ls", "foo", "bar"]).is_empty());
+        assert_eq!(
+            mise_task_arguments(&["tasks", "run", "foo", "bar"]),
+            std::collections::BTreeMap::from([("foo".to_owned(), vec!["bar".to_owned()])])
+        );
+    }
+
+    /// Fails by: a write carrying only one notebook key read as a file write.
+    #[test]
+    fn either_notebook_key_alone_could_not_look() {
+        let root = crate::scratch::scratch("hook-shell-introduced-notebook");
+        let mut envelope = write_envelope("Write", "new.sh");
+        envelope.input = serde_json::json!({"content": "echo hi\n"});
+        // ANTI-VACUITY: the same write without a notebook key is the path arm's.
+        assert_eq!(
+            shell_introduced(&root, &envelope),
+            crate::facts::Look::Is(SHELL_PATH)
+        );
+        for key in ["notebook_path", "new_source"] {
+            envelope.input = serde_json::json!({ key: "new.sh" });
+            assert_eq!(
+                shell_introduced(&root, &envelope),
+                crate::facts::Look::CouldNotLook,
+                "{key}"
+            );
+        }
+    }
+
+    /// Fails by: a make/cargo directory option misread.
+    #[test]
+    fn a_directory_option_moves_where_the_program_acts() {
+        let here = std::path::Path::new("/r");
+        let at = |tokens: &[&str]| option_acting_dir(tokens, here);
+        assert_eq!(at(&["make", "-C", "sub"]), Some(here.join("sub")));
+        assert_eq!(at(&["make", "-Cdir=1"]), Some(here.join("dir=1")));
+        assert_eq!(at(&["make", "all", "-C", "sub"]), Some(here.join("sub")));
+        assert_eq!(
+            at(&["cargo", "--manifest-path", "sub/Cargo.toml", "build"]),
+            Some(here.join("sub"))
+        );
+        assert_eq!(at(&["ls", "-C", "sub"]), None);
+    }
+
+    /// Fails by: `.git` and a bare git dir swapped.
+    #[test]
+    fn a_git_dir_named_dot_git_acts_in_its_parent() {
+        let here = std::path::Path::new("/r");
+        assert_eq!(
+            git_acting_dir(&["git", "--git-dir", "/r/x/.git", "status"], here),
+            Some(std::path::PathBuf::from("/r/x"))
+        );
+        assert_eq!(
+            git_acting_dir(&["git", "--git-dir", "/r/bare", "status"], here),
+            Some(std::path::PathBuf::from("/r/bare"))
+        );
+    }
+
     /// Fails by: a word the crude read emptied, or a lone `$`, taken for the
     /// program of an unread text.
     #[test]

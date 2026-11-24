@@ -1784,6 +1784,72 @@ mod tests {
         assert!(rows[1]["cause"].is_null());
     }
 
+    /// Fails by: a move within one crate counted as a cut, or the cut lost.
+    #[test]
+    fn a_cut_is_a_module_moved_between_crates() {
+        let owned = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+                .collect()
+        };
+        let manifests = owned(&[
+            ("a/Cargo.toml", "[package]\nname = \"a\"\n"),
+            ("b/Cargo.toml", "[package]\nname = \"b\"\n"),
+        ]);
+        let before = owned(&[
+            ("a/src/lib.rs", "pub mod m;\npub mod k;\n"),
+            ("a/src/m.rs", "pub fn f() {}\n"),
+            ("a/src/k.rs", "pub fn g() {}\n"),
+        ]);
+        let after = owned(&[
+            ("a/src/lib.rs", "pub mod q;\n"),
+            ("a/src/q/k.rs", "pub fn g() {}\n"),
+            ("b/src/lib.rs", "pub mod m;\n"),
+            ("b/src/m.rs", "pub fn f() {}\n"),
+        ]);
+        let moves = owned(&[("a/src/m.rs", "b/src/m.rs"), ("a/src/k.rs", "a/src/q/k.rs")]);
+        let base = crate::item_index::Index::new(&before, &manifests);
+        let head = crate::item_index::Index::new(&after, &manifests);
+        assert_eq!(
+            cuts(&moves, &base, &head),
+            BTreeMap::from([(
+                ("a".to_owned(), "b".to_owned()),
+                BTreeSet::from(["m".to_owned()])
+            )])
+        );
+    }
+
+    /// Fails by: the target crate read as `crate` anywhere but inside it.
+    #[test]
+    fn a_cut_body_names_the_crate_its_module_moved_to() {
+        let cuts = BTreeMap::from([(
+            ("a".to_owned(), "b".to_owned()),
+            BTreeSet::from(["m".to_owned()]),
+        )]);
+        assert_eq!(
+            respell_cut("{ crate::m::f(); }", "a", "c", &cuts),
+            "{ b::m::f(); }"
+        );
+        assert_eq!(
+            respell_cut("{ a::m::f(); }", "c", "b", &cuts),
+            "{ crate::m::f(); }"
+        );
+    }
+
+    /// Fails by: restore rewriting only files already equal to HEAD.
+    #[test]
+    fn restore_rewrites_what_differs_from_head() {
+        let tree = crate::scratch::scratch("replay-restore");
+        std::fs::write(tree.join("a.rs"), "spliced\n").unwrap();
+        let after = BTreeMap::from([("a.rs".to_owned(), "head a\n".to_owned())]);
+        restore(&tree, &after).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tree.join("a.rs")).unwrap(),
+            "head a\n"
+        );
+    }
+
     /// Fails by: the journal's base half keyed on anything but the Rust read
     /// at the merge base (CLOUD-2787) — a commit id would move with a trunk
     /// commit touching none of it, and a key blind to a body would hold
