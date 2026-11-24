@@ -1096,14 +1096,16 @@ mod tests {
     }
 
     /// A head whose every page is full is read to the page budget and no
-    /// further; an unchanged answer is never walked.
+    /// further; an unchanged answer is never walked. The forge stops answering
+    /// one page past the budget, so a walk that ignores it ends with a count
+    /// this case refuses rather than spinning (CLOUD-2789).
     #[test]
     fn the_walk_is_bounded_and_a_non_reading_is_returned_as_it_came() {
         let full = usize::try_from(PER_PAGE).expect("a page fits");
         let asked = std::cell::Cell::new(0_u32);
         let get = |_: &str, _: Option<&str>| {
             asked.set(asked.get() + 1);
-            Some(answer(200, Some("\"v1\""), &runs(full)))
+            (asked.get() <= MAX_PAGES).then(|| answer(200, Some("\"v1\""), &runs(full)))
         };
         read_with(&config_for("o/r"), None, &get).expect("an answer");
         assert_eq!(asked.get(), MAX_PAGES);

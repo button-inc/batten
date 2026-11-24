@@ -890,13 +890,15 @@ mod tests {
         assert_eq!(asked.get(), 1, "a short page is the end of the window");
     }
 
-    /// A window of full pages is read to its page budget and no further.
+    /// A window of full pages is read to its page budget and no further. The
+    /// reader stops answering one page past the budget, so a walk whose page
+    /// never advances ends unreadable rather than spinning (CLOUD-2789).
     #[test]
     fn the_answer_reads_at_most_the_page_budget() {
         let asked = std::cell::Cell::new(0u32);
         let full = |_: &str| {
             asked.set(asked.get() + 1);
-            Some(page(PER_PAGE as usize, None))
+            (asked.get() <= MAX_PAGES).then(|| page(PER_PAGE as usize, None))
         };
         assert_eq!(answer_with(&ask(), SINCE, "1001", full), Answer::Pending);
         assert_eq!(asked.get(), MAX_PAGES);

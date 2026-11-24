@@ -399,6 +399,16 @@ mod tests {
         assert_eq!((chain.nesting, chain.decisions), (1, 2));
     }
 
+    /// Fails by: a `match` read at its enclosing level rather than one deeper,
+    /// so a top-level `match` counts no nesting (CLOUD-2789).
+    #[test]
+    fn a_match_deepens_nesting() {
+        let flat = one("fn f(x: u8) { match x { 0 => g(), _ => h() } }");
+        assert_eq!(flat.nesting, 1);
+        let held = one("fn f(x: u8) { match x { 0 => { if h() { g(); } } _ => {} } }");
+        assert_eq!(held.nesting, 2);
+    }
+
     /// Fails by: a closure's body read at its enclosing level.
     #[test]
     fn a_closure_deepens_nesting() {

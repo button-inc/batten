@@ -171,6 +171,35 @@ fn an_edit_to_a_rule_row_without_its_history_read_is_refused() {
     assert!(!refused(&line), "the same edit after the read: {line}");
 }
 
+/// Fails by: a `PostToolUse` that carries no result minting the read, as if
+/// the call had answered (CLOUD-2789).
+#[test]
+fn a_history_read_with_no_result_does_not_admit() {
+    let repo = fixture("history-no-result");
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "s1",
+        "tool_name": "Bash",
+        "tool_input": { "command": format!("batten policy explain '{ROW}' --history") },
+    });
+    let _ = run_with_stdin(
+        &repo,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload.to_string(),
+    );
+    let line = edit_row(&repo, "s1");
+    assert!(
+        refused(&line),
+        "a read that never answered admits nothing: {line}"
+    );
+    read_history(&repo, "s1");
+    let line = edit_row(&repo, "s1");
+    assert!(
+        !refused(&line),
+        "the same read with its result admits: {line}"
+    );
+}
+
 #[test]
 fn another_contexts_receipt_does_not_admit() {
     let repo = fixture("history-other-context");
