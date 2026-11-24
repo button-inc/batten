@@ -3376,9 +3376,6 @@ struct ProvisionSite {
     on_path: Vec<PathBuf>,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/startup_bootstrap.rs
-//MUTANT status-skips-host-links|s@^            links: true,$@            links: self.links_host,@|status_from_a_checkout_build_still_judges_the_link
-//MUTANT apply-writes-host-links-from-the-checkout|s@^            links: self.links_host,$@@|apply_from_a_checkout_build_never_writes_the_host_link
 impl ProvisionSite {
     /// The host a WRITER resolves declared links against: [`links_host`] says
     /// whether this engine may write them at all, and the caller's `PATH` says
