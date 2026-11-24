@@ -454,6 +454,15 @@ fn with_no_live_build_a_recent_unit_is_collected() {
 /// the installed engine hands every call to, so it survives with nothing
 /// running it. It shares its inode with the unit's artifact, as cargo's uplift
 /// does.
+/// A pass bound no case reaches. An unbounded pass also takes every
+/// `cargo-mutants-*.tmp` copy in the temp directory whole, and the suite's
+/// temp directory is shared: a stale copy a nested sweep left there was
+/// collected by a case that never made it, and freed first, it decided what
+/// else the pass took (CLOUD-2789). Bounded, a pass reads no copies.
+fn unreached() -> std::time::Instant {
+    std::time::Instant::now() + Duration::from_secs(3600)
+}
+
 #[test]
 fn the_checkout_build_is_never_collected() {
     let repo = common::scratch("collect-checkout-build");
@@ -464,8 +473,15 @@ fn the_checkout_build_is_never_collected() {
     let mut config = rules("target");
     config.min_free_mb = Some(10);
     config.max_free_mb = Some(1 << 30);
-    let done =
-        batten::collect::collect_toward_max(&repo, &config, &[], 0, &mut || Ok(0), None, false);
+    let done = batten::collect::collect_toward_max(
+        &repo,
+        &config,
+        &[],
+        0,
+        &mut || Ok(0),
+        Some(unreached()),
+        false,
+    );
     assert!(done.is_some());
     assert!(
         present(&profile, "batten", "cdcdcdcdcdcdcdcd"),
@@ -740,9 +756,15 @@ fn a_sibling_worktrees_units_are_ranked_with_the_checkouts() {
     rules.min_free_mb = Some(1);
     rules.max_free_mb = Some(2);
     let mut pressed = || Ok(0);
-    let collected =
-        batten::collect::collect_if_pressed(&repo, &rules, &[], &mut pressed, None, false)
-            .expect("below the minimum, it collects");
+    let collected = batten::collect::collect_if_pressed(
+        &repo,
+        &rules,
+        &[],
+        &mut pressed,
+        Some(unreached()),
+        false,
+    )
+    .expect("below the minimum, it collects");
     assert!(collected.units >= 1);
     assert!(
         !present(&sibling.join("target/debug"), "far", "bbbbbbbbbbbbbbbb"),
