@@ -104,26 +104,160 @@ const READ: &str = "read";
 /// The tracer's raw output in a case's record, removed once read.
 const TRACE: &str = "trace";
 
-/// The tree paths a trace shows touched, relative to `tree`, or `None` when
-/// the trace cannot be read whole ([`trace::touched`]) or it read the tree's
-/// `.git`, which depends on every tracked file. Paths outside the tree and
-/// under its `target/` are a run's own, not its inputs.
-fn read_trace(trace: &str, tree: &[std::path::PathBuf]) -> Option<BTreeSet<String>> {
+/// The file in a case's record naming why it was not traced ([`Untraced`]);
+/// absent when it was.
+const UNTRACED: &str = "untraced";
+
+/// Why a case was not traced, so it keys on every non-Rust file instead of
+/// what it read. COUNTED AND REPORTED, NEVER SILENT (CLOUD-2904): the sweep
+/// prints each reason's count ([`untraced_line`]), so a reader regression that
+/// reads every trace as unfinished shows as a count rather than as keys that
+/// quietly never hold. None of them fails the record: the fallback is sound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Untraced {
+    /// It read the tree's `.git`, which depends on every tracked file.
+    GitRead,
+    /// A process in it asked for its own tracer under the recorder's, and it
+    /// ran again untraced (U3), or the recorder was itself under a tracer.
+    Nested,
+    /// No schema tree to take its paths against ([`TREE_ENV`] unset).
+    NoTree,
+    /// No tracer on the host.
+    TracerAbsent,
+    /// No trace whose root exit line arrived by [`trace::TRACE_GRACE`].
+    Unfinished,
+    /// A whole trace [`trace::touched`] cannot read: a relative path with no
+    /// directory, or an escape it does not decode.
+    Unreadable,
+}
+
+impl Untraced {
+    /// Every reason, in the order [`untraced_line`] reports them.
+    const ALL: [Self; 6] = [
+        Self::GitRead,
+        Self::Nested,
+        Self::NoTree,
+        Self::TracerAbsent,
+        Self::Unfinished,
+        Self::Unreadable,
+    ];
+
+    /// Its name, as a record holds it and the report prints it.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::GitRead => "git-read",
+            Self::Nested => "nested",
+            Self::NoTree => "no-tree",
+            Self::TracerAbsent => "tracer-absent",
+            Self::Unfinished => "unfinished",
+            Self::Unreadable => "unreadable",
+        }
+    }
+
+    /// The reason a record names, or `None` for any other text.
+    fn parsed(text: &str) -> Option<Self> {
+        match text.trim() {
+            "git-read" => Some(Self::GitRead),
+            "nested" => Some(Self::Nested),
+            "no-tree" => Some(Self::NoTree),
+            "tracer-absent" => Some(Self::TracerAbsent),
+            "unfinished" => Some(Self::Unfinished),
+            "unreadable" => Some(Self::Unreadable),
+            _ => None,
+        }
+    }
+}
+
+/// Why a case about to run goes untraced, or `None` when it is traced: no
+/// schema tree (`tree` false), a recorder already under a tracer (`nested`),
+/// or no tracer on the host (`tracer` false).
+const fn untraced_reason(tree: bool, nested: bool, tracer: bool) -> Option<Untraced> {
+    if !tree {
+        Some(Untraced::NoTree)
+    } else if nested {
+        Some(Untraced::Nested)
+    } else if !tracer {
+        Some(Untraced::TracerAbsent)
+    } else {
+        None
+    }
+}
+
+/// The sweep's one classed line of untraced cases: the total, then every
+/// reason's count, zeros included. Counts only, never a case name.
+fn untraced_line(counts: &std::collections::BTreeMap<Untraced, usize>) -> String {
+    let mut total = 0;
+    let mut parts = Vec::with_capacity(Untraced::ALL.len());
+    for reason in Untraced::ALL {
+        let count = counts.get(&reason).copied().unwrap_or(0);
+        total += count;
+        parts.push(format!("{} {count}", reason.name()));
+    }
+    format!(
+        "mutate schema: untraced {total} case(s): {}",
+        parts.join(", ")
+    )
+}
+
+/// The tree paths a trace shows touched, relative to `tree`, or why it cannot
+/// be keyed on: [`Untraced::Unfinished`] with no text or no root exit line,
+/// [`Untraced::Unreadable`] when [`trace::touched`] cannot read it whole, and
+/// [`Untraced::GitRead`] when it read the tree's `.git`, which depends on
+/// every tracked file. Paths outside the tree and under its `target/` are a
+/// run's own, not its inputs.
+fn read_trace(
+    trace: Option<&str>,
+    tree: &[std::path::PathBuf],
+) -> Result<BTreeSet<String>, Untraced> {
+    let trace = trace
+        .filter(|text| trace::trace_whole(text))
+        .ok_or(Untraced::Unfinished)?;
     let mut read = BTreeSet::new();
-    for path in trace::touched(trace, None)? {
+    for path in trace::touched(trace, None).ok_or(Untraced::Unreadable)? {
         let Some(relative) = tree.iter().find_map(|root| path.strip_prefix(root).ok()) else {
             continue;
         };
         let relative = relative.to_string_lossy().into_owned();
         if relative == ".git" || relative.starts_with(".git/") {
-            return None;
+            return Err(Untraced::GitRead);
         }
         if relative == "target" || relative.starts_with("target/") {
             continue;
         }
         read.insert(relative);
     }
-    Some(read)
+    Ok(read)
+}
+
+/// A traced case's record from its trace `text`: the [`READ`] listing of the
+/// paths it touched under `tree`, or the [`UNTRACED`] reason it cannot be
+/// keyed on them.
+///
+/// # Errors
+///
+/// The record cannot be written.
+fn record_trace(
+    dir: &std::path::Path,
+    text: Option<&str>,
+    tree: &std::path::Path,
+) -> anyhow::Result<()> {
+    let roots: Vec<std::path::PathBuf> = std::fs::canonicalize(tree)
+        .ok()
+        .into_iter()
+        .chain(std::iter::once(tree.to_path_buf()))
+        .collect();
+    match read_trace(text, &roots) {
+        Ok(read) => {
+            let listing = read.iter().fold(String::new(), |mut listing, path| {
+                listing.push_str(path);
+                listing.push('\n');
+                listing
+            });
+            crate::durable::replace(dir.join(READ), listing)?;
+        }
+        Err(reason) => crate::durable::replace(dir.join(UNTRACED), reason.name())?,
+    }
+    Ok(())
 }
 
 /// One mutant as `cargo mutants --list --json` names it.
@@ -2761,9 +2895,13 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     // TRACED WHERE THE HOST CAN, so the case's key reads only the files it
     // touched (Ekstazi's dynamic file dependencies); untraced, it keys on every
     // non-Rust file. The tree the paths are taken against comes from the
-    // recorder, which knows it; a case run outside one is not traced.
+    // recorder, which knows it; a case run outside one is not traced. Every
+    // case not traced says why in its record ([`Untraced`]).
     let tree = std::env::var_os(TREE_ENV).map(std::path::PathBuf::from);
-    let mut traced = trace::tracer().filter(|_| tree.is_some());
+    let strace = trace::tracer();
+    let mut why_untraced =
+        untraced_reason(tree.is_some(), trace::traced_already(), strace.is_some());
+    let mut traced = strace.filter(|_| why_untraced.is_none());
     let trace = dir.join(TRACE);
     let run = |traced: Option<&str>| match traced {
         Some(strace) => super::spawn_as(
@@ -2788,6 +2926,7 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     // this one it took the branch no judging run takes.
     if traced.is_some() && untraced_again(&dir)? {
         traced = None;
+        why_untraced = Some(Untraced::Nested);
         ran = run(None)?;
     }
     let code = match ran.outcome {
@@ -2795,22 +2934,15 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
         super::Outcome::Failed(Some(code)) => u8::try_from(code).unwrap_or(101),
         super::Outcome::Failed(None) | super::Outcome::TimedOut => 101,
     };
-    if let (Some(_), Some(tree)) = (traced, tree) {
-        let roots: Vec<std::path::PathBuf> = std::fs::canonicalize(&tree)
-            .ok()
-            .into_iter()
-            .chain(std::iter::once(tree))
-            .collect();
-        let read = trace::await_trace(&trace).and_then(|text| read_trace(&text, &roots));
-        if let Some(read) = read {
-            let listing = read.iter().fold(String::new(), |mut listing, path| {
-                listing.push_str(path);
-                listing.push('\n');
-                listing
-            });
-            crate::durable::replace(dir.join(READ), listing)?;
+    match (traced, tree, why_untraced) {
+        (Some(_), Some(tree), _) => {
+            record_trace(&dir, trace::await_trace(&trace).as_deref(), &tree)?;
+            let _ = std::fs::remove_file(&trace);
         }
-        let _ = std::fs::remove_file(&trace);
+        (_, _, reason) => crate::durable::replace(
+            dir.join(UNTRACED),
+            reason.unwrap_or(Untraced::NoTree).name(),
+        )?,
     }
     crate::durable::replace(dir.join(DONE), code.to_string())?;
     Ok(code)
@@ -3164,6 +3296,8 @@ pub struct Reach {
     pub skipped: BTreeSet<Case>,
     /// The schema tree the record is over ([`tree_digest`]).
     pub tree: String,
+    /// How many recorded cases were not traced, by reason ([`UNTRACED`]).
+    untraced: std::collections::BTreeMap<Untraced, usize>,
 }
 
 /// Each case's seconds: the report's for a case that ran, and the sealed ones
@@ -3217,6 +3351,12 @@ fn collect_dirs(
         if dir.join(SKIPPED).is_file() {
             reach.skipped.insert(case.clone());
         }
+        if let Some(reason) = crate::fsio::read_to_string(dir.join(UNTRACED))
+            .ok()
+            .and_then(|text| Untraced::parsed(&text))
+        {
+            *reach.untraced.entry(reason).or_default() += 1;
+        }
         if let Ok(listing) = crate::fsio::read_to_string(dir.join(READ)) {
             reach
                 .read
@@ -3247,7 +3387,13 @@ fn collect_dirs(
         for file in std::fs::read_dir(&dir)? {
             let path = file?.path();
             if path.file_name().is_some_and(|f| {
-                f == "case" || f == DONE || f == TRACE || f == READ || f == OVER || f == SKIPPED
+                f == "case"
+                    || f == DONE
+                    || f == TRACE
+                    || f == READ
+                    || f == UNTRACED
+                    || f == OVER
+                    || f == SKIPPED
             }) {
                 continue;
             }
@@ -5929,6 +6075,7 @@ fn reached(
         schema.probes.len(),
         started.elapsed().as_secs()
     )?;
+    writeln!(out, "{}", untraced_line(&reach.untraced))?;
     Ok((reach, digests, seconds, red))
 }
 
@@ -9955,65 +10102,179 @@ mod tests {
                      101 openat(AT_FDCWD</w>, \"target/debug/x\", O_RDONLY) = 4</w/target/debug/x>\n\
                      102 <... openat resumed>) = 5</w/a/../b.txt>\n";
         assert_eq!(
-            read_trace(&whole(lines), &tree),
-            Some(
-                ["crates/batten/tests/x.toml", "absent.toml", "b.txt"]
-                    .map(String::from)
-                    .into()
-            )
+            read_trace(Some(&whole(lines)), &tree),
+            Ok(["crates/batten/tests/x.toml", "absent.toml", "b.txt"]
+                .map(String::from)
+                .into())
         );
         let git = "100 openat(AT_FDCWD</w>, \".git/index\", O_RDONLY) = 3</w/.git/index>\n";
         assert_eq!(
-            read_trace(&whole(git), &tree),
-            None,
+            read_trace(Some(&whole(git)), &tree),
+            Err(Untraced::GitRead),
             "a .git read depends on every file"
         );
         let bare = "100 stat(\"relative\", 0x7ff) = 0\n";
         assert_eq!(
-            read_trace(&whole(bare), &tree),
-            None,
+            read_trace(Some(&whole(bare)), &tree),
+            Err(Untraced::Unreadable),
             "no directory to resolve against"
         );
         // `\x01` decodes since CLOUD-2835; `\q` is an escape strace never writes.
         let escaped = "100 openat(AT_FDCWD</w>, \"a\\q\", O_RDONLY) = 3</w/a>\n";
         assert_eq!(
-            read_trace(&whole(escaped), &tree),
-            None,
+            read_trace(Some(&whole(escaped)), &tree),
+            Err(Untraced::Unreadable),
             "an escape this reader does not decode"
         );
         // A DETACHED TRACER'S PARTIAL TRACE IS NO TRACE: without the case's own
         // exit the tracer may still be writing, or never attached at all.
         let unfinished = whole(lines).replace("100 +++ exited with 0 +++\n", "");
         assert_eq!(
-            read_trace(&unfinished, &tree),
-            None,
+            read_trace(Some(&unfinished), &tree),
+            Err(Untraced::Unfinished),
             "the case's exit is missing"
         );
         let child_only = format!(
             "100 execve(\"/usr/bin/t\", [], 0x7ff) = 0\n{lines}101 +++ exited with 0 +++\n"
         );
         assert_eq!(
-            read_trace(&child_only, &tree),
-            None,
+            read_trace(Some(&child_only), &tree),
+            Err(Untraced::Unfinished),
             "only a child's exit is no whole trace"
         );
-        assert_eq!(read_trace("", &tree), None, "an empty trace says nothing");
+        assert_eq!(
+            read_trace(Some(""), &tree),
+            Err(Untraced::Unfinished),
+            "an empty trace says nothing"
+        );
         // strace pads a short pid to five columns.
         let padded = whole(lines)
             .lines()
             .map(|line| line.replacen(' ', "   ", 1) + "\n")
             .collect::<String>();
         assert_eq!(
-            read_trace(&padded, &tree),
-            read_trace(&whole(lines), &tree),
+            read_trace(Some(&padded), &tree),
+            read_trace(Some(&whole(lines)), &tree),
             "a padded pid column reads as the plain one"
         );
         let killed =
             whole(lines).replace("100 +++ exited with 0 +++", "100 +++ killed by SIGKILL +++");
         assert!(
-            read_trace(&killed, &tree).is_some(),
+            read_trace(Some(&killed), &tree).is_ok(),
             "a case killed by a signal finished"
         );
+    }
+
+    /// T6 (CLOUD-2904): an unread trace is recorded with its reason, never
+    /// failed and never silent. `read_trace` answers `unfinished` over no text
+    /// and over a trace with no root exit line, `unreadable` over a whole
+    /// trace it cannot resolve, and `git-read` over a `.git` read;
+    /// `record_trace` writes that reason and no `read`, and over a whole trace
+    /// it writes `read` and no reason.
+    ///
+    /// Fails by: an unread trace recorded with no reason (an untraced case
+    /// silently keys on every non-Rust file), a reason named for another, or a
+    /// readable trace recorded as untraced.
+    #[test]
+    fn an_unread_trace_is_recorded_with_its_reason() {
+        let tree = std::path::Path::new("/w");
+        let whole = |body: &str| {
+            format!(
+                "100 execve(\"/usr/bin/t\", [\"t\"], 0x7ff) = 0\n{body}100 +++ exited with 0 +++\n"
+            )
+        };
+        let read = "100 openat(AT_FDCWD</w>, \"a.toml\", O_RDONLY) = 3</w/a.toml>\n";
+        let git = "100 openat(AT_FDCWD</w>, \".git/HEAD\", O_RDONLY) = 3</w/.git/HEAD>\n";
+        let bare = "100 stat(\"relative\", 0x7ff) = 0\n";
+        let unfinished = whole(read).replace("100 +++ exited with 0 +++\n", "");
+        let roots = [tree.to_path_buf()];
+        assert_eq!(
+            read_trace(None, &roots),
+            Err(Untraced::Unfinished),
+            "no text"
+        );
+        for (text, reason) in [
+            (unfinished.as_str(), "unfinished"),
+            (whole(bare).as_str(), "unreadable"),
+            (whole(git).as_str(), "git-read"),
+        ] {
+            let dir = crate::scratch::scratch("schema-record-trace");
+            record_trace(&dir, Some(text), tree).unwrap();
+            assert_eq!(
+                crate::fsio::read_to_string(dir.join(UNTRACED)).unwrap(),
+                reason
+            );
+            assert!(!dir.join(READ).exists(), "{reason}: no read listing");
+        }
+        let dir = crate::scratch::scratch("schema-record-trace-none");
+        record_trace(&dir, None, tree).unwrap();
+        assert_eq!(
+            crate::fsio::read_to_string(dir.join(UNTRACED)).unwrap(),
+            "unfinished"
+        );
+        let dir = crate::scratch::scratch("schema-record-trace-whole");
+        record_trace(&dir, Some(&whole(read)), tree).unwrap();
+        assert_eq!(
+            crate::fsio::read_to_string(dir.join(READ)).unwrap(),
+            "a.toml\n"
+        );
+        assert!(!dir.join(UNTRACED).exists(), "a traced case has no reason");
+    }
+
+    /// T5 (CLOUD-2904): the sweep reports its untraced cases by reason, in one
+    /// classed line of counts with every reason's zero, and each way a case
+    /// comes to be untraced maps to its reason.
+    ///
+    /// Fails by: an untraced case read as traced or counted under another
+    /// reason, a reason left out of the line, or a traced case counted.
+    #[test]
+    fn the_sweep_reports_untraced_cases_by_reason() {
+        let base = crate::scratch::scratch("schema-untraced-reasons");
+        let record = |key: &str, untraced: Option<&str>| {
+            let dir = base.join(key);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("case"), format!("{key}\tbin")).unwrap();
+            std::fs::write(dir.join(DONE), "0").unwrap();
+            match untraced {
+                Some(reason) => std::fs::write(dir.join(UNTRACED), reason).unwrap(),
+                None => std::fs::write(dir.join(READ), "a.toml\n").unwrap(),
+            }
+            dir
+        };
+        let mut dirs: Vec<std::path::PathBuf> = Untraced::ALL
+            .iter()
+            .map(|reason| record(reason.name(), Some(reason.name())))
+            .collect();
+        dirs.push(record("traced", None));
+        let identity = Identity {
+            probes: &[],
+            sites: &[],
+            mutant_fns: &std::collections::BTreeMap::new(),
+            file_fns: &std::collections::BTreeMap::new(),
+            classic: &BTreeSet::new(),
+        };
+        let reach = collect_dirs(dirs, &identity).unwrap();
+        assert_eq!(
+            untraced_line(&reach.untraced),
+            "mutate schema: untraced 6 case(s): git-read 1, nested 1, no-tree 1, \
+             tracer-absent 1, unfinished 1, unreadable 1"
+        );
+        assert_eq!(
+            untraced_line(&std::collections::BTreeMap::new()),
+            "mutate schema: untraced 0 case(s): git-read 0, nested 0, no-tree 0, \
+             tracer-absent 0, unfinished 0, unreadable 0"
+        );
+        assert_eq!(untraced_reason(false, false, true), Some(Untraced::NoTree));
+        assert_eq!(untraced_reason(true, true, false), Some(Untraced::Nested));
+        assert_eq!(
+            untraced_reason(true, false, false),
+            Some(Untraced::TracerAbsent)
+        );
+        assert_eq!(untraced_reason(true, false, true), None, "traced");
+        for reason in Untraced::ALL {
+            assert_eq!(Untraced::parsed(reason.name()), Some(reason));
+        }
+        assert_eq!(Untraced::parsed("other"), None);
     }
 
     /// A handed-back mutant is judged by each case that ran its enclosing
