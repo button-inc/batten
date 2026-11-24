@@ -7521,6 +7521,26 @@ mod tests {
         fs::write(path, format!("{target}\n")).expect("a ref");
     }
 
+    /// Fails by: an answer that is not the newest `v*` tag by version order —
+    /// `v0.0.10` above `v0.0.9` and a later-created `v0.0.2`, a name that does
+    /// not parse as a version never chosen — or `None` while one exists.
+    #[test]
+    fn the_newest_version_tag_is_chosen_by_version_order() {
+        let dir = crate::scratch::scratch("git-newest-version-tag");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        fs::write(dir.join("a.txt"), "a\n").expect("write");
+        crate::gitwrite::commit_paths(&dir, &["a.txt".to_owned()], "a\n").expect("commit");
+        assert_eq!(newest_version_tag(&dir).expect("readable"), None);
+        let head = head_commit(&dir).expect("head");
+        for name in ["v0.0.9", "v0.0.10", "v0.0.2", "vnext", "w9.9.9"] {
+            fixture_ref(&dir, &format!("refs/tags/{name}"), &head);
+        }
+        assert_eq!(
+            newest_version_tag(&dir).expect("readable").as_deref(),
+            Some("v0.0.10")
+        );
+    }
+
     /// A three-commit history on `main`: `a.txt` and `b.txt`, then `a.txt`
     /// rewritten and `c.txt` added, then `b.txt` deleted. Tagged `v1` at the
     /// first and `v2` at the third; `origin/main` at the second, which is also
