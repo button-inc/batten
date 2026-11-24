@@ -139,14 +139,16 @@ pub fn wrap(
     prune_others(&bins, &journal)?;
     std::fs::create_dir_all(&journal)?;
     let config = state.join("nextest.toml");
-    let wrapper = pinned_wrapper(state, &std::env::current_exe()?)?;
+    let wrapper = pinned_wrapper(state, &std::env::current_exe()?, &super::running_image()?)?;
     crate::durable::replace(&config, config_text(config_root, &wrapper, &journal)?)?;
     Ok(with_config(command, &config.to_string_lossy()))
 }
 
 /// The wrapper every case execs, PINNED under `state` rather than named where
 /// it was built (CLOUD-2789): a hard link to `exe` where the filesystem allows
-/// one, a copy where it does not, replacing the last run's.
+/// one, else a copy of `image`, the running image ([`super::running_image`]),
+/// replacing the last run's. NOT A COPY OF `exe` (CLOUD-2886): once a build
+/// has replaced it, `exe` names a deleted file, and only the image still reads.
 ///
 /// THE BUILD DIRECTORY MOVES UNDER A RUN. Cargo replaces `target/debug/batten`
 /// by a new file on any build, and a run naming it then execs a path the kernel
@@ -154,7 +156,7 @@ pub fn wrap(
 /// with exit 70, and the replay read 597 base bodies as expectation changes,
 /// measured on #1276. A link keeps the inode the run started with; a copy keeps
 /// its bytes.
-fn pinned_wrapper(state: &Path, exe: &Path) -> Result<std::path::PathBuf> {
+fn pinned_wrapper(state: &Path, exe: &Path, image: &Path) -> Result<std::path::PathBuf> {
     let pinned = state.join("wrapper");
     match std::fs::remove_file(&pinned) {
         Ok(()) => {}
@@ -162,7 +164,7 @@ fn pinned_wrapper(state: &Path, exe: &Path) -> Result<std::path::PathBuf> {
         Err(err) => return Err(err).context("retire the last run's wrapper"),
     }
     if std::fs::hard_link(exe, &pinned).is_err() {
-        std::fs::copy(exe, &pinned).context("pin the run-wrapper")?;
+        std::fs::copy(image, &pinned).context("pin the run-wrapper")?;
     }
     Ok(pinned)
 }
@@ -1448,7 +1450,7 @@ mod tests {
         std::fs::write(&exe, "the build the run started with")?;
         let state = dir.join("state");
         std::fs::create_dir_all(&state)?;
-        let pinned = pinned_wrapper(&state, &exe)?;
+        let pinned = pinned_wrapper(&state, &exe, &exe)?;
         assert!(pinned.starts_with(&state));
         // Cargo writes a new file and renames it over the old one.
         let fresh = dir.join("batten.new");
@@ -1460,10 +1462,49 @@ mod tests {
         );
         // A second run pins afresh, over the first run's.
         assert_eq!(
-            std::fs::read_to_string(pinned_wrapper(&state, &exe)?)?,
+            std::fs::read_to_string(pinned_wrapper(&state, &exe, &exe)?)?,
             "a rebuild"
         );
         std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// A run pinned after a build already replaced its binary pins the image
+    /// it is running, not the path that now names a deleted file (CLOUD-2886).
+    ///
+    /// Fails by: the copy made from `exe`, which no longer exists, so the
+    /// wrapper cannot be pinned and every case of the run is lost.
+    #[test]
+    fn a_wrapper_pinned_after_a_rebuild_is_the_running_image() -> Result<()> {
+        let dir = crate::scratch::scratch("pin-wrapper-deleted");
+        let image = dir.join("image");
+        std::fs::write(&image, "the build this run is running")?;
+        let state = dir.join("state");
+        std::fs::create_dir_all(&state)?;
+        let gone = dir.join("batten (deleted)");
+        let pinned = pinned_wrapper(&state, &gone, &image)?;
+        assert_eq!(
+            std::fs::read_to_string(pinned)?,
+            "the build this run is running"
+        );
+        Ok(())
+    }
+
+    /// The running image is the kernel's own name for it on Linux, which reads
+    /// the bytes this process runs (CLOUD-2886).
+    ///
+    /// Fails by: `current_exe()` answered there, the name a concurrent build
+    /// turns into `… (deleted)`.
+    #[test]
+    fn the_running_image_is_the_kernels_name_for_it() -> Result<()> {
+        let image = super::super::running_image()?;
+        if cfg!(target_os = "linux") {
+            assert_eq!(image, Path::new("/proc/self/exe"));
+        }
+        assert_eq!(
+            std::fs::read(&image)?,
+            std::fs::read(std::env::current_exe()?)?
+        );
         Ok(())
     }
 
@@ -1477,7 +1518,7 @@ mod tests {
         std::fs::write(&exe, "the build").unwrap();
         let state = dir.join("state");
         std::fs::create_dir_all(state.join("wrapper")).unwrap();
-        let err = pinned_wrapper(&state, &exe).unwrap_err();
+        let err = pinned_wrapper(&state, &exe, &exe).unwrap_err();
         assert!(
             format!("{err:#}").contains("retire the last run's wrapper"),
             "{err:#}"

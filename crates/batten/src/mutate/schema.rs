@@ -3369,7 +3369,9 @@ pub fn record_reach(
     // running copy is never written.
     let recorder = state.join("recorder");
     let staged = state.join(format!("recorder.{}", std::process::id()));
-    std::fs::copy(std::env::current_exe()?, &staged)?;
+    // THE RUNNING IMAGE, NOT ITS PATH (CLOUD-2886): a build during the schema
+    // build relinks the checkout's binary, and its path then names nothing.
+    std::fs::copy(super::running_image()?, &staged)?;
     std::fs::rename(&staged, &recorder)?;
     crate::durable::replace(
         &config,
