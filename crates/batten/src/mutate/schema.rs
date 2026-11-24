@@ -1421,7 +1421,7 @@ pub fn build(
 /// What earlier runs already found a build refuses: the mutants that do not
 /// compile, those handed back for a const caller, and the files built without
 /// probes. Each skips the build round that would only rediscover it.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Known {
     /// Mutants an earlier build found do not compile.
     pub unviable: BTreeSet<u32>,
@@ -1819,6 +1819,13 @@ fn reuse_ids(document: &str) -> Option<BTreeSet<String>> {
 /// never trusted.
 const PACKED_TREE: &str = "tree";
 
+/// The file under the reuse directory naming the sets ([`Known`]) the packed
+/// tree was rendered with: its unviable, handed-back and unprobed. BUILD FACTS
+/// OF THE SAME RUN, NOT VERDICTS (CLOUD-2789): a shard under CI reads no
+/// journal (CLOUD-2850), and without them it renders a tree the pack was never
+/// built from and rebuilds cold.
+const PACKED_KNOWN: &str = "known.json";
+
 /// The directory under the reuse directory holding the packed binaries, each
 /// at its path relative to the target it was built in.
 const PACKED: &str = "packed";
@@ -1853,14 +1860,15 @@ fn packed_paths(document: &str) -> Option<(std::path::PathBuf, Vec<std::path::Pa
 }
 
 /// Pack, under `state`'s reuse directory, every file [`packed_paths`] names
-/// from `document`, and record `tree` as the rendering they were built from.
-/// Hard links where the filesystem allows, so a pack costs no disk.
+/// from `document`, and record `tree` as the rendering they were built from,
+/// with `known` the sets it was rendered with. Hard links where the filesystem
+/// allows, so a pack costs no disk.
 ///
 /// THE BUILD SHARDS NEED, AND NOTHING ELSE (CLOUD-2789): the whole mirror
 /// target, 6 GB on #1276, was more than half the repository's 10 GB cache
 /// store, and saved once per run it evicted the Rust caches every other job
 /// restores. A reused run reads the test binaries and what they launch.
-fn pack(state: &std::path::Path, document: &str, tree: &str) -> Option<()> {
+fn pack(state: &std::path::Path, document: &str, tree: &str, known: &Known) -> Option<()> {
     let (target, files) = packed_paths(document)?;
     let dir = state.join("reuse");
     let into = dir.join(PACKED);
@@ -1872,6 +1880,8 @@ fn pack(state: &std::path::Path, document: &str, tree: &str) -> Option<()> {
             std::fs::copy(&from, &to).ok()?;
         }
     }
+    let sets = serde_json::to_string(known).ok()?;
+    crate::durable::replace(dir.join(PACKED_KNOWN), sets).ok()?;
     crate::durable::replace(dir.join(PACKED_TREE), tree).ok()
 }
 
@@ -1907,9 +1917,15 @@ fn restore(state: &std::path::Path, tree: &str) -> Option<Reuse> {
 }
 
 /// The build a packed reuse record under `state` already made, when the
-/// rendering of `mutants` with what `known` skips is the one it was packed
-/// over: taken as built with no cargo run. `None` without a record or over any
-/// other rendering, and the build runs as always.
+/// rendering of `mutants` with what `known` skips, or else with the sets the
+/// pack records it was rendered with, is the one it was packed over: taken as
+/// built with no cargo run. `None` without a record or over any other
+/// rendering, and the build runs as always.
+///
+/// THE PACK'S OWN SETS, NOT ONLY THE JOURNAL'S (CLOUD-2882): under CI the
+/// journal answers nothing (CLOUD-2850), so `known` is empty and its rendering
+/// switches every mutant the reach job's build refused. The packed sets are
+/// that same run's build facts, never a verdict, and the digest still decides.
 ///
 /// # Errors
 ///
@@ -1921,20 +1937,26 @@ fn prebuilt(
     mutants: &[Listed],
     known: &Known,
 ) -> anyhow::Result<Option<Built>> {
-    let Ok(packed) = crate::fsio::read_to_string(state.join("reuse").join(PACKED_TREE)) else {
+    let dir = state.join("reuse");
+    let Ok(packed) = crate::fsio::read_to_string(dir.join(PACKED_TREE)) else {
         return Ok(None);
     };
-    let skip: BTreeSet<u32> = known.unviable.union(&known.handed).copied().collect();
-    let schema = write_schema(root, work, mutants, &skip, &known.unprobed)?;
-    if tree_digest(work)? != packed {
-        return Ok(None);
+    let recorded: Option<Known> = crate::fsio::read_to_string(dir.join(PACKED_KNOWN))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok());
+    for sets in std::iter::once(known).chain(recorded.as_ref()) {
+        let skip: BTreeSet<u32> = sets.unviable.union(&sets.handed).copied().collect();
+        let schema = write_schema(root, work, mutants, &skip, &sets.unprobed)?;
+        if tree_digest(work)? == packed {
+            return Ok(Some(Built {
+                unviable: sets.unviable.difference(&sets.handed).copied().collect(),
+                handed: sets.handed.clone(),
+                schema,
+                unprobed: sets.unprobed.clone(),
+            }));
+        }
     }
-    Ok(Some(Built {
-        unviable: known.unviable.difference(&known.handed).copied().collect(),
-        handed: known.handed.clone(),
-        schema,
-        unprobed: known.unprobed.clone(),
-    }))
+    Ok(None)
 }
 
 /// Record the clean schema build's binaries under `state` for every judging
@@ -1943,7 +1965,7 @@ fn prebuilt(
 fn record_reuse(
     (work, target, state): (&std::path::Path, &std::path::Path, &std::path::Path),
     mutants: &[Listed],
-    tree: &str,
+    (tree, known): (&str, &Known),
 ) -> Option<Reuse> {
     let dir = state.join("reuse");
     // A record from an earlier sweep names binaries this build may not have.
@@ -1990,7 +2012,7 @@ fn record_reuse(
     )?;
     // PACKED FOR THE NEXT RUN OVER THIS RENDERING, a shard above all: best
     // effort, since a pack that fails costs that run a build and nothing else.
-    let _ = pack(state, &listed, tree);
+    let _ = pack(state, &listed, tree, known);
     Some(Reuse {
         binaries,
         metadata,
@@ -5163,6 +5185,13 @@ pub fn sweep(
         (&site_keys, &mut cache, &cache_path),
         out,
     )?;
+    // THE SETS THIS RENDERING WAS MADE WITH, packed beside its binaries so a
+    // shard that reads no journal renders the same tree (CLOUD-2789).
+    let rendered_with = Known {
+        unviable: unviable.clone(),
+        handed: handed.clone(),
+        unprobed: unprobed.clone(),
+    };
     let classic = schema.classic(handed);
     let built = (mutants.len(), unviable.len(), classic.len());
     announce_built(out, built, started.elapsed().as_secs())?;
@@ -5181,7 +5210,7 @@ pub fn sweep(
     // after this point changes a source the binaries were built from, so every
     // judging run reuses them rather than asking cargo again. Before the reach
     // phase returns, so its pack is what the shards restore.
-    let reuse = announce_reuse(&work, &target, mutants, &state, out)?;
+    let reuse = announce_reuse(&work, &target, (mutants, &rendered_with), &state, out)?;
     if scope.phase == Phase::Reach {
         return reach_sealed(out, &reach);
     }
@@ -5352,7 +5381,7 @@ fn snapshot_as_listed(
 fn announce_reuse(
     work: &std::path::Path,
     target: &std::path::Path,
-    mutants: &[Listed],
+    (mutants, known): (&[Listed], &Known),
     state: &std::path::Path,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Option<Reuse>> {
@@ -5362,7 +5391,7 @@ fn announce_reuse(
     let tree = tree_digest(work)?;
     let (reuse, how) = match restore(state, &tree) {
         Some(reuse) => (Some(reuse), "reuse the packed build's binaries"),
-        None => match record_reuse((work, target, state), mutants, &tree) {
+        None => match record_reuse((work, target, state), mutants, (&tree, known)) {
             Some(reuse) => (Some(reuse), "reuse the clean build's binaries"),
             None => (None, "rebuild-check the clean build's binaries"),
         },
@@ -9723,7 +9752,7 @@ pub fn repo() -> u8 {{ scratch() }}
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("binaries.json"), &document).unwrap();
         std::fs::write(dir.join("cargo-metadata.json"), "{}").unwrap();
-        pack(&state, &document, "tree-1").unwrap();
+        pack(&state, &document, "tree-1", &Known::default()).unwrap();
         std::fs::remove_dir_all(&target).unwrap();
         assert!(restore(&state, "tree-2").is_none(), "another rendering");
         assert!(!target.join("debug/batten").exists(), "nothing put back");
@@ -9772,6 +9801,64 @@ pub fn repo() -> u8 {{ scratch() }}
             .unwrap()
             .expect("its own rendering");
         assert!(built.unviable.is_empty() && built.handed.is_empty());
+    }
+
+    /// A pack the reach job made over a listing with unviable and handed-back
+    /// mutants is taken by a shard that restored it with no verdict journal,
+    /// as under CI (CLOUD-2850): the sets it was rendered with are packed
+    /// beside it, so the shard renders the very tree the binaries came from.
+    ///
+    /// Fails by: the shard rendering with every mutant switched (no journal
+    /// tells it which were refused), missing the pack, and rebuilding cold
+    /// (CLOUD-2789: 2,177 unviable on #1276, 12 rounds that never finished);
+    /// or the packed sets dropped from what the build reports.
+    #[test]
+    fn a_pack_over_refused_mutants_is_taken_with_no_journal() {
+        let root = crate::scratch::scratch("schema-packed-known-root");
+        let work = crate::scratch::scratch("schema-packed-known-work");
+        let state = crate::scratch::scratch("schema-packed-known-state");
+        for dir in [&root, &work] {
+            std::fs::create_dir_all(dir.join("crates/x/src")).unwrap();
+            std::fs::write(dir.join("crates/x/src/lib.rs"), "pub mod m;\n").unwrap();
+            std::fs::write(
+                dir.join("crates/x/src/m.rs"),
+                "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n",
+            )
+            .unwrap();
+        }
+        let mutants: Vec<Listed> = ["!=", ">", "<"]
+            .map(|replacement| {
+                let mut mutant = listed("BinaryOperator", replacement, (2, 7), (2, 9));
+                mutant.file = String::from("crates/x/src/m.rs");
+                mutant
+            })
+            .to_vec();
+        let rendered_with = Known {
+            unviable: BTreeSet::from([0]),
+            handed: BTreeSet::from([1]),
+            unprobed: BTreeSet::new(),
+        };
+        let skip = BTreeSet::from([0, 1]);
+        write_schema(&root, &work, &mutants, &skip, &rendered_with.unprobed).unwrap();
+        let rendered = tree_digest(&work).unwrap();
+        let target = state.join("target");
+        std::fs::create_dir_all(target.join("debug/deps")).unwrap();
+        std::fs::write(target.join("debug/deps/x-1"), "test binary").unwrap();
+        let document = format!(
+            r#"{{"rust-build-meta":{{"target-directory":"{}"}},"rust-binaries":{{"x":{{"binary-path":"{}"}}}}}}"#,
+            target.display(),
+            target.join("debug/deps/x-1").display()
+        );
+        pack(&state, &document, &rendered, &rendered_with).unwrap();
+        assert!(!state.join("verdicts").exists(), "no journal");
+        // WHAT A CI SHARD KNOWS: nothing, since it reads no journal.
+        let known = Known::default();
+        let built = prebuilt(&root, &work, &state, &mutants, &known)
+            .unwrap()
+            .expect("the pack's own rendering");
+        assert_eq!(built.unviable, rendered_with.unviable);
+        assert_eq!(built.handed, rendered_with.handed);
+        assert_eq!(tree_digest(&work).unwrap(), rendered);
     }
 
     /// A shard judges only its own ids, from the whole listing's build: its
