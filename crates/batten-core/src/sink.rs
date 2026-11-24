@@ -376,3 +376,39 @@ fn write_record(at: &Path, text: &str, append: bool) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(rule: &str, kind: Production) -> Requested {
+        Requested {
+            rule: rule.to_owned(),
+            key: SinkKey::Rule,
+            kind,
+            digest: String::from("d"),
+            count: 1,
+        }
+    }
+
+    /// Fails by: a replaced record left out of the count, so two baselines
+    /// and a journal read as one write (`+=` read as `*=` in `perform`).
+    #[test]
+    fn every_destination_written_is_counted_once() {
+        let git_dir = crate::scratch::scratch("sink-perform-counts");
+        let written = perform(
+            &git_dir,
+            None,
+            &[
+                request("a", Production::Baseline),
+                request("b", Production::Marker),
+                request("c", Production::Journal),
+                request("c", Production::Journal),
+            ],
+        )
+        .expect("the store is writable");
+        assert_eq!(written, 3, "two replaced records and one journal");
+        assert!(path(&git_dir, Production::Baseline, "a", "rule").exists());
+        let _ = std::fs::remove_dir_all(&git_dir);
+    }
+}

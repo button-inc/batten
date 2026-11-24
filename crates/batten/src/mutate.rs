@@ -7472,6 +7472,33 @@ mod tests {
         assert_eq!(sweep.row_defects(), 2);
     }
 
+    /// Fails by: the gate-level count read as a constant, or as every
+    /// finding (`gate_level -> usize with 1`).
+    #[test]
+    fn gate_level_counts_only_the_findings_about_a_gate_rather_than_a_row() {
+        let finding = |verdict: Verdict| Finding {
+            gate: String::from("g"),
+            slug: None,
+            verdict,
+            owner: None,
+        };
+        let sweep = Sweep {
+            findings: vec![
+                finding(Verdict::NoMutantDeclared),
+                finding(Verdict::RunnerOwned {
+                    runner: "cargo-mutants",
+                }),
+                finding(Verdict::Survived {
+                    want: String::new(),
+                }),
+            ],
+            declared: 1,
+            recorded: 0,
+            gates: 2,
+        };
+        assert_eq!(sweep.gate_level(), 2);
+    }
+
     /// Fails by: a root-level suite's directory read as empty, or any line
     /// that merely starts `test ` (the summary) or holds ` ... ` counted as a
     /// case.

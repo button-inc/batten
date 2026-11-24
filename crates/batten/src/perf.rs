@@ -5416,4 +5416,23 @@ mod tests {
     // accepts what it writes needs the compiled binary, so those cases live in
     // `crates/batten/tests/it/acquisition_sweep.rs`; the builder is public for
     // exactly that.
+
+    /// Fails by: the installs' directory replaced by a name mise never
+    /// reads, so a commit arm installs the whole toolchain inside its first
+    /// timed run (`mise_data_dir` read as `Some("xyzzy")`). The process's own
+    /// environment is the input: `MISE_DATA_DIR` where set, else a `mise`
+    /// directory under a data home.
+    #[test]
+    fn mise_s_data_directory_is_the_one_its_environment_names() {
+        let found = mise_data_dir();
+        match std::env::var_os("MISE_DATA_DIR") {
+            Some(dir) => assert_eq!(found, Some(dir.to_string_lossy().into_owned())),
+            None => assert!(
+                found
+                    .as_deref()
+                    .is_none_or(|dir| std::path::Path::new(dir).ends_with("mise")),
+                "a data home's `mise`: {found:?}"
+            ),
+        }
+    }
 }

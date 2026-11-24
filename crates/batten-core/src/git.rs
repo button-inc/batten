@@ -7566,6 +7566,32 @@ mod tests {
         (dir, [first, second, third])
     }
 
+    /// Fails by: the newest tag read by any order but version order, so
+    /// `v0.0.9` outranks `v0.0.10`, or a name that is no version chosen
+    /// (`newest_version_tag` read as `Ok(Some(String::new()))`).
+    #[test]
+    fn the_newest_version_tag_is_chosen_by_version_order() {
+        let (dir, [first, _, third]) = history("newest-version-tag");
+        for (name, target) in [
+            ("refs/tags/v0.0.9", &third),
+            ("refs/tags/v0.0.10", &first),
+            ("refs/tags/vnext", &third),
+        ] {
+            fixture_ref(&dir, name, target);
+        }
+        assert_eq!(
+            newest_version_tag(&dir).expect("the tags read"),
+            Some(String::from("v2"))
+        );
+        fs::remove_file(dir.join(".git/refs/tags/v1")).expect("drop v1");
+        fs::remove_file(dir.join(".git/refs/tags/v2")).expect("drop v2");
+        assert_eq!(
+            newest_version_tag(&dir).expect("the tags read"),
+            Some(String::from("v0.0.10"))
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// Fails by: the call's root-commit memo answering from a stale tip set — a
     /// root added under a new ref mid-scope not reported — or two calls over
     /// unchanged tips disagreeing (CLOUD-2813).
