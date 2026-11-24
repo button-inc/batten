@@ -1137,6 +1137,36 @@ mod tests {
         Ok(())
     }
 
+    /// Fails by: every failure to retire the last run's wrapper read as "there
+    /// was none", so a wrapper path that cannot be removed is reported as a
+    /// failure to pin rather than to retire.
+    #[test]
+    fn a_wrapper_that_will_not_retire_is_named_as_such() {
+        let dir = crate::scratch::scratch("pin-wrapper-unretired");
+        let exe = dir.join("batten");
+        std::fs::write(&exe, "the build").unwrap();
+        let state = dir.join("state");
+        std::fs::create_dir_all(state.join("wrapper")).unwrap();
+        let err = pinned_wrapper(&state, &exe).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("retire the last run's wrapper"),
+            "{err:#}"
+        );
+    }
+
+    /// Fails by: the report name a profile already declares read as absent,
+    /// so its `JUnit` report is looked for under the default name.
+    #[test]
+    fn the_declared_junit_report_name_is_read() {
+        let doc: toml_edit::DocumentMut = "[profile.default.junit]\npath = \"own.xml\"\n"
+            .parse()
+            .unwrap();
+        assert_eq!(report_name(&doc).as_deref(), Some("own.xml"));
+        let empty: toml_edit::DocumentMut =
+            "[profile.default.junit]\npath = \"\"\n".parse().unwrap();
+        assert_eq!(report_name(&empty), None);
+    }
+
     #[test]
     fn the_config_goes_ahead_of_the_test_binaries_arguments() {
         let argv = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();

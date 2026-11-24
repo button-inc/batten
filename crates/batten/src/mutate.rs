@@ -7432,6 +7432,29 @@ mod tests {
         assert_eq!(sweep.unlooked(), 2);
     }
 
+    /// Fails by: the row-defect count read as a constant, or as every finding.
+    #[test]
+    fn row_defects_counts_only_the_rows_that_prove_nothing() {
+        let finding = |verdict: Verdict| Finding {
+            gate: String::from("g"),
+            slug: None,
+            verdict,
+            owner: None,
+        };
+        let sweep = Sweep {
+            findings: vec![
+                finding(Verdict::InertMutation),
+                finding(Verdict::Caught),
+                finding(Verdict::SelfMutatingRow),
+                finding(Verdict::NoMutantDeclared),
+            ],
+            declared: 3,
+            recorded: 0,
+            gates: 1,
+        };
+        assert_eq!(sweep.row_defects(), 2);
+    }
+
     /// Fails by: a root-level suite's directory read as empty, or any line
     /// that merely starts `test ` (the summary) or holds ` ... ` counted as a
     /// case.
@@ -7903,6 +7926,126 @@ mod tests {
             .and_then(|meta| meta.modified())
             .expect("the kept file's timestamp");
         assert_eq!(kept, set, "an unchanged file is not rewritten");
+    }
+
+    /// Fails by: the mutation's shape answered as a constant: an untouched
+    /// subject read as changed, or a changed one's code lines miscounted.
+    #[test]
+    fn a_diff_shape_reads_the_staged_subject_against_the_checkout() {
+        let root = fixture("diff-shape");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        put(&root, "a.txt", "one\ntwo\nthree\n");
+        crate::gitwrite::commit_paths(&root, &[String::from("a.txt")], "a").expect("commit");
+        let staged = Staged::new(&root, fixture("diff-shape-work")).expect("stage");
+        assert_eq!(diff_shape(&root, &staged, None, "a.txt"), (false, 0));
+        put(staged.dir(), "a.txt", "one\nTWO\nTHREE\n");
+        assert_eq!(diff_shape(&root, &staged, None, "a.txt"), (true, 4));
+    }
+
+    /// Fails by: an ordinary subdirectory skipped as though it were the build
+    /// directory (the `target` test inverted), or a hidden or `target`
+    /// directory entered.
+    #[test]
+    fn collecting_files_enters_every_directory_but_hidden_and_target() {
+        let root = fixture("collect-files");
+        for path in [
+            "d/w.rs",
+            "d/sub/x.rs",
+            "d/target/y.rs",
+            "d/.hidden/z.rs",
+            "d/n.txt",
+        ] {
+            put(&root, path, "");
+        }
+        let mut files = Vec::new();
+        collect_files(&root, "d", "rs", true, &mut files);
+        files.sort();
+        assert_eq!(files, ["d/sub/x.rs", "d/w.rs"]);
+    }
+
+    /// Fails by: a pytest suite's case census answered as a constant, or a
+    /// line that merely mentions a test function counted.
+    #[test]
+    fn a_pytest_suite_counts_its_test_functions() {
+        let root = fixture("total-cases");
+        put(
+            &root,
+            "test_x.py",
+            "def test_a():\n    pass\n\n    def test_nested():\n        pass\n\ndef helper():\n    test_a()\n\ndef test_b():\n    pass\n",
+        );
+        let pytest = Suite::Pytest {
+            path: String::from("test_x.py"),
+        };
+        assert_eq!(total_cases(&root, &pytest), 3);
+        let cargo = Suite::Cargo {
+            path: String::from("test_x.py"),
+        };
+        assert_eq!(total_cases(&root, &cargo), 0);
+    }
+
+    /// Fails by: a test target that embeds nothing read as embedding every
+    /// source, which mutates every row in place and rebuilds it.
+    #[test]
+    fn a_test_target_embeds_only_what_its_dep_info_lists() {
+        let built = Prebuilt {
+            binaries: PathBuf::new(),
+            metadata: PathBuf::new(),
+            embedded: Vec::new(),
+            test_embedded: vec![String::from("mise-tasks")],
+            dirty: std::cell::Cell::new(false),
+        };
+        assert!(built.tests_embed("mise-tasks/toy.sh"));
+        assert!(!built.tests_embed("src/lib.rs"));
+        assert!(!built.tests_embed("mise-tasks-other/toy.sh"));
+    }
+
+    /// Fails by: the suite's binary id answered as nothing; a library target
+    /// skipped (its kind test joined with `&&`); or a target whose root file
+    /// does not hold the suite, or whose file is no root file, taken as its
+    /// owner (the depth test joined with `||`).
+    #[test]
+    fn a_suites_binary_is_the_deepest_target_root_that_holds_it() {
+        let staged = fixture("suite-binary");
+        let canonical = crate::git::canonical(&staged);
+        let src = |path: &str| canonical.join(path).to_string_lossy().into_owned();
+        let doc = serde_json::json!({
+            "packages": [{
+                "name": "pkg",
+                "targets": [
+                    {"name": "pkg", "kind": ["lib"], "src_path": src("src/lib.rs")},
+                    {"name": "it", "kind": ["test"], "src_path": src("tests/it/main.rs")},
+                    {"name": "other", "kind": ["test"], "src_path": src("tests/other.rs")},
+                    {"name": "tool", "kind": ["bin"], "src_path": src("tools/main.rs")},
+                ],
+            }],
+        });
+        let metadata = staged.join("metadata.json");
+        fs::write(&metadata, doc.to_string()).expect("write the metadata");
+        let binary = |suite: &str| suite_binary(&metadata, &staged, suite);
+        assert_eq!(binary("src/x.rs").as_deref(), Some("pkg"));
+        assert_eq!(binary("tests/it/mutate.rs").as_deref(), Some("pkg::it"));
+        assert_eq!(binary("tests/other.rs").as_deref(), Some("pkg::other"));
+        assert_eq!(binary("tools/x.rs").as_deref(), Some("pkg::bin/tool"));
+        assert_eq!(binary("tests/flat.rs"), None);
+    }
+
+    /// Fails by: a declaring file's word counts gaining where they should
+    /// fall (`+=` for `-=`), or a word mentioned exactly as often as at base
+    /// read as enrolled (`>=` for `>`).
+    #[test]
+    fn a_gate_is_enrolled_only_when_its_name_is_mentioned_more_than_at_base() {
+        let root = fixture("enrolled-since");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        let config = crate::config_model::CONFIG_FILE;
+        put(&root, config, "alpha beta beta\n");
+        crate::gitwrite::commit_paths(&root, &[String::from(config)], "base").expect("commit");
+        put(&root, config, "alpha beta gamma\n");
+        let names = ["alpha", "beta", "gamma", "delta"].map(String::from);
+        let changed = std::collections::BTreeSet::from([String::from(config)]);
+        assert_eq!(
+            enrolled_since(&root, "HEAD", &names, &changed),
+            std::collections::BTreeSet::from([String::from("gamma")])
+        );
     }
 
     /// Fails by: a shard outside `0 <= k < n` accepted, where `n = 0` divides

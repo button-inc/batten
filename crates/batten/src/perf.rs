@@ -5391,6 +5391,19 @@ mod tests {
         );
     }
 
+    /// Fails by: the sibling-directory filter joined with `||`, so a bare
+    /// `../` (an empty name) or a nested `../a/b` is read as a workspace crate.
+    #[test]
+    fn a_path_dependency_names_one_sibling_directory_or_nothing() -> Result<()> {
+        let manifest: toml::Table = "[dependencies]\n\
+             base = { path = \"../batten-base\" }\n\
+             bare = { path = \"../\" }\n\
+             nested = { path = \"../a/b\" }\n"
+            .parse()?;
+        assert_eq!(path_dependencies(&manifest), ["batten-base"]);
+        Ok(())
+    }
+
     // What `sweep_fixture` WRITES is asserted above, in
     // `a_sweep_fixture_declares_one_document_per_point`. Whether the ENGINE
     // accepts what it writes needs the compiled binary, so those cases live in

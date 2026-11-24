@@ -2617,6 +2617,92 @@ mod tests {
         );
     }
 
+    /// Fails by: the cuts read off a move answering a fixed or empty map,
+    /// rather than each crate pair a file moved between and the crate-root
+    /// module that moved; or a move inside one crate counted as a cut.
+    #[test]
+    fn a_cut_is_the_crate_pair_a_module_moved_between() {
+        let index = |files: &[(&str, &str)], manifests: &[(&str, &str)]| {
+            let owned = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+                pairs
+                    .iter()
+                    .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+                    .collect()
+            };
+            crate::item_index::Index::new(&owned(files), &owned(manifests))
+        };
+        let manifests = [
+            ("crates/a/Cargo.toml", "[package]\nname = \"a\"\n"),
+            ("crates/b/Cargo.toml", "[package]\nname = \"b\"\n"),
+        ];
+        let before = index(
+            &[
+                ("crates/a/src/lib.rs", "pub mod m;\npub mod n;\n"),
+                ("crates/a/src/m.rs", "pub fn f() {}\n"),
+                ("crates/a/src/n.rs", "pub fn g() {}\n"),
+                ("crates/b/src/lib.rs", ""),
+            ],
+            &manifests,
+        );
+        let after = index(
+            &[
+                ("crates/a/src/lib.rs", "pub mod o;\n"),
+                ("crates/a/src/o.rs", "pub fn g() {}\n"),
+                ("crates/b/src/lib.rs", "pub mod m;\n"),
+                ("crates/b/src/m.rs", "pub fn f() {}\n"),
+            ],
+            &manifests,
+        );
+        let moves = BTreeMap::from([
+            (
+                "crates/a/src/m.rs".to_owned(),
+                "crates/b/src/m.rs".to_owned(),
+            ),
+            (
+                "crates/a/src/n.rs".to_owned(),
+                "crates/a/src/o.rs".to_owned(),
+            ),
+        ]);
+        assert_eq!(
+            cuts(&moves, &before, &after),
+            BTreeMap::from([(
+                ("a".to_owned(), "b".to_owned()),
+                BTreeSet::from(["m".to_owned()])
+            )])
+        );
+    }
+
+    /// Fails by: the union run's log pointer printed on a structural run,
+    /// whose report owes no pointer at a log.
+    #[test]
+    fn a_structural_admission_names_no_union_log() {
+        let scratch = crate::scratch::scratch("replay-admit-structural");
+        crate::testing::contain_state(&scratch.join("data"));
+        let root = scratch.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("a.txt")], "init").unwrap();
+        let logs = crate::state::repo_state_dir(&root).unwrap().join("replay");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join(BUILD_LOG), "b").unwrap();
+        std::fs::write(logs.join(RUN_LOG), "r").unwrap();
+        let said = |structural: bool| {
+            let mut out = Vec::new();
+            admit(&root, "HEAD", &[], (false, structural), &mut out).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        let plain = said(false);
+        assert!(plain.contains("union build failed"), "{plain}");
+        assert!(plain.contains("union test run failed"), "{plain}");
+        let structural = said(true);
+        assert!(!structural.contains("union build failed"), "{structural}");
+        assert!(
+            !structural.contains("union test run failed"),
+            "{structural}"
+        );
+    }
+
     /// Fails by: a refusal no body holds journaled against a test (it would
     /// outlive the body that caused it) or sent to the control run, or a
     /// passing union build that failed to link left unjournaled.
