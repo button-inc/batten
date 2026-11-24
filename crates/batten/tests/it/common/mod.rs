@@ -1517,9 +1517,19 @@ pub(crate) fn require_tool(name: &str) -> PathBuf {
 /// whole tree. A case whose subject is a traced selection asserts that
 /// selection here and the untraced fallback elsewhere, never one of them on
 /// every host (CLOUD-2789).
+///
+/// ONE LANE MUST TAKE THE TRACED BRANCH, and [`TRACED_REQUIRED`] names it:
+/// `test:traced`, which `verify` and the `ci` job run outside any `step run`.
+/// There an untraceable host is a misprovisioned lane, so this panics rather
+/// than answer `false` and let the fallback pass for the selection it stands in
+/// for.
+///
+/// # Panics
+///
+/// When [`TRACED_REQUIRED`] is set and this process cannot trace its reach runs.
 #[must_use]
 pub(crate) fn traced() -> bool {
-    cfg!(target_os = "linux")
+    let traced = cfg!(target_os = "linux")
         && !fs::read_to_string("/proc/self/status").is_ok_and(|status| {
             status
                 .lines()
@@ -1527,8 +1537,18 @@ pub(crate) fn traced() -> bool {
                 .is_some_and(|pid| pid.trim() != "0")
         })
         && std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .any(|dir| dir.join("strace").is_file())
+            .any(|dir| dir.join("strace").is_file());
+    assert!(
+        traced || std::env::var_os(TRACED_REQUIRED).is_none(),
+        "`{TRACED_REQUIRED}` is set, so this lane must trace: Linux, `strace` on PATH, \
+         and no tracer already attached (run it outside `step run`)"
+    );
+    traced
 }
+
+/// Set by `test:traced` (mise.toml): the lane whose cases must take their
+/// traced branch ([`traced`]), so the selection they assert is judged somewhere.
+pub(crate) const TRACED_REQUIRED: &str = "BATTEN_TEST_TRACED_REQUIRED";
 
 /// [`require_tool`] for a pinned tool whose program has another name: `tool` is
 /// the `[tools]` entry's last segment, `bin` the program it provides.
