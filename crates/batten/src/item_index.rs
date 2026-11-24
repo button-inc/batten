@@ -1666,6 +1666,52 @@ mod tests {
         assert!(at("::a::b").is_empty(), "{:?}", at("::a::b"));
     }
 
+    /// Fails by: a path read through a glob re-export counted as using any
+    /// number of segments but those before the glob plus those its target
+    /// read past the glob's own, so a splice past it cuts the path at the
+    /// wrong segment. The glob is two segments and the path three past it,
+    /// where a quotient and a difference part.
+    #[test]
+    fn a_path_through_a_glob_counts_every_segment_it_reads() {
+        let index = index(&[
+            ("Cargo.toml", "[workspace]\n"),
+            ("one/Cargo.toml", "[package]\nname = \"one\"\n"),
+            ("two/Cargo.toml", "[package]\nname = \"two\"\n"),
+            ("one/src/lib.rs", "pub mod error;\n"),
+            ("one/src/error.rs", "pub use two::error::*;\n"),
+            ("two/src/lib.rs", "pub mod error;\n"),
+            ("two/src/error.rs", "pub mod sub;\n"),
+            ("two/src/error/sub.rs", "pub mod deeper;\n"),
+            ("two/src/error/sub/deeper.rs", "pub struct Thing;\n"),
+        ]);
+        let path = ["one", "error", "sub", "deeper", "Thing"].map(str::to_owned);
+        let (key, used) = index
+            .resolve_through(&path, 8, true)
+            .expect("the glob binds `sub`");
+        assert_eq!(
+            (key.0.as_str(), key.1.as_str(), used),
+            ("two/src/error/sub/deeper.rs", "Thing", 5)
+        );
+    }
+
+    /// Fails by: a glob followed without spending the depth it is given, so
+    /// two crates whose globs re-export each other are read forever rather
+    /// than answered unresolved.
+    #[test]
+    fn a_cycle_of_glob_re_exports_is_unresolved_not_endless() {
+        let index = index(&[
+            ("Cargo.toml", "[workspace]\n"),
+            ("one/Cargo.toml", "[package]\nname = \"one\"\n"),
+            ("two/Cargo.toml", "[package]\nname = \"two\"\n"),
+            ("one/src/lib.rs", "pub mod a;\n"),
+            ("one/src/a.rs", "pub use two::b::*;\n"),
+            ("two/src/lib.rs", "pub mod b;\n"),
+            ("two/src/b.rs", "pub use one::a::*;\n"),
+        ]);
+        let path = ["one", "a", "Missing"].map(str::to_owned);
+        assert_eq!(index.resolve_through(&path, 8, true), None);
+    }
+
     /// Two bodies, each read through its own tree, the base side mapped
     /// through the moves between them.
     fn same(

@@ -523,4 +523,57 @@ mod tests {
         apart[2] = spending_row("second", Some("closed"));
         assert!(validate_across(&apart).is_ok());
     }
+
+    /// Fails by: two rows selecting the SAME value at one path read as rows
+    /// that can never select one call, so the second spend row is admitted and
+    /// never mints.
+    #[test]
+    fn two_spend_rows_selecting_the_same_call_are_refused() {
+        let declared = rows(
+            r#"
+[[mint]]
+name = "dispatch"
+tool = "Agent"
+key = "branch"
+mode = "replace"
+body = "x"
+
+[[mint]]
+name = "one"
+tool = "Skill"
+key = "branch"
+selects_at = "skill"
+selects = "review"
+after = "dispatch"
+mode = "replace"
+body = "x"
+
+[[mint]]
+name = "two"
+tool = "Skill"
+key = "branch"
+selects_at = "skill"
+selects = "review"
+after = "dispatch"
+mode = "replace"
+body = "x"
+"#,
+        );
+        let refused = validate_across(&declared).expect_err("the second row could never mint");
+        assert!(
+            refused.to_string().contains("same tool and key"),
+            "{refused}"
+        );
+        // THE PREMISE: the same rows selecting different values may both stand.
+        let apart: Vec<Declared> = declared
+            .into_iter()
+            .map(|mut row| {
+                if row.name == "two" {
+                    row.selects = Some(String::from("other"));
+                }
+                row
+            })
+            .collect();
+        validate_across(&apart).expect("different values never select one call");
+    }
 }

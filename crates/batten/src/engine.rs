@@ -1708,6 +1708,17 @@ mod tests {
         }
     }
 
+    /// Fails by: a dashed bare key not read as a key, so it buries the pin
+    /// unseen; or a line continuing a multi-line value, which is no bare key,
+    /// read as one that buries it.
+    #[test]
+    fn a_dashed_key_buries_the_pin_and_a_continuation_does_not() {
+        let dashed = "version = 1\nmust-land = \"main\"\nengine = { release = \"v0.0.9\" }\n";
+        assert_eq!(pin_out_of_order(dashed), Some(3));
+        let continued = "version = 1\n\"quoted.key\" = 1\nengine = { release = \"v0.0.9\" }\n";
+        assert_eq!(pin_out_of_order(continued), None);
+    }
+
     #[test]
     fn the_pin_read_stops_at_the_pin_and_never_reads_the_rest() {
         // Everything past the pin is not TOML at all: a read that went on would

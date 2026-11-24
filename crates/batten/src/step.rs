@@ -2257,6 +2257,23 @@ mod tests {
         assert_eq!(red_under(&git_dir, 42), None);
     }
 
+    /// Fails by: the code read at a fixed offset from the line's start rather
+    /// than two past the key, so a pass line of any other shape loses the
+    /// failure written after it.
+    #[test]
+    fn a_failure_is_read_back_wherever_its_key_sits() {
+        let failure = Failure {
+            code: 3,
+            log: None,
+            cases: None,
+        };
+        for pass in ["45ms key", "stamp 45ms key", "a stamp 45ms key"] {
+            let body = failure_body(pass, &failure, true);
+            let (read, flaky) = failure_of(&body, "key").expect(pass);
+            assert_eq!((read.code, flaky), (3, true), "{pass}");
+        }
+    }
+
     #[cfg(test)]
     /// Fails by: a miss or a suspect recording under any key but its own, or
     /// a hit recording at all.

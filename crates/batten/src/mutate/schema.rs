@@ -10410,6 +10410,47 @@ pub fn repo() -> u8 {{ scratch() }}
         );
     }
 
+    /// Fails by: a `macro` 2.0 definition answering to every word in its
+    /// body rather than to its own name.
+    #[test]
+    fn a_macro_definition_answers_to_its_own_name_alone() {
+        let names: Vec<Vec<String>> = items_of("macro m($x:expr) { $x + other }\n")
+            .iter()
+            .map(item_names)
+            .collect();
+        assert_eq!(names, [vec![String::from("m")]]);
+    }
+
+    /// Fails by: an include rooted at `CARGO_MANIFEST_DIR` read as one no
+    /// syntax can name, which keys every case on the whole tree.
+    #[test]
+    fn an_include_under_the_manifest_dir_names_its_file() {
+        let items = items_of("include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/data/x.rs\"));\n");
+        let Some(ast::Item::MacroCall(call)) = items.first() else {
+            panic!("an item-position macro call: {items:?}");
+        };
+        assert_eq!(
+            include_path(call, "crates/x/src/lib.rs"),
+            Some(Included::File(String::from("crates/x/data/x.rs")))
+        );
+    }
+
+    /// Fails by: a hand-back's journaled verdict not reported as itself.
+    #[test]
+    fn a_handback_verdict_is_tallied_by_its_name() {
+        for (name, verdict) in [
+            ("caught", Some(Verdict::Caught)),
+            ("missed", Some(Verdict::Missed)),
+            ("timeout", Some(Verdict::Timeout)),
+            ("uncovered", Some(Verdict::Uncovered)),
+            ("unjudged", Some(Verdict::Unjudged)),
+            ("anything else", Some(Verdict::Error)),
+            ("unviable", None),
+        ] {
+            assert_eq!(handback_tally(name), verdict, "{name}");
+        }
+    }
+
     /// Fails by: an item-position macro skipped as if it were a call in an
     /// expression, which leaves what it binds owned by nothing.
     #[test]
