@@ -491,7 +491,15 @@ fn a_dead_child_outranks_a_done_one_and_the_wait_backs_off() {
         events("unstarted-events.json"),
     );
     let mut waits = Vec::new();
-    let mut wait = |delay| waits.push(delay);
+    // The case owns its bound (CLOUD-2789): a watch the unstarted child never
+    // ends fails here rather than hanging the suite.
+    let mut wait = |delay| {
+        waits.push(delay);
+        assert!(
+            waits.len() <= 8,
+            "the unstarted child never ended it: {waits:?}"
+        );
+    };
     let mut watch = Watch::new(Vec::new());
     let (_, ending) = run(&mut watch, &mut source, &cache("backoff"), &mut wait).unwrap();
     assert_eq!(ending, Ending::Dead);
