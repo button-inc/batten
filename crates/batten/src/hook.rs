@@ -13791,7 +13791,11 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
     while i < tokens.len() && is_env_assignment(program_token(tokens[i])) {
         i += 1;
     }
-    loop {
+    // BOUNDED BY THE TOKEN COUNT (CLOUD-2789): every pass moves `i` forward by
+    // at least one token, so `tokens.len() + 1` passes reach `get(i)?`'s end. A
+    // change that stops it advancing then answers wrong where a case can see
+    // it, rather than spinning until the suite's timeout.
+    for _ in 0..=tokens.len() {
         match program_token(tokens.get(i)?) {
             // SHELL GRAMMAR BEFORE THE PROGRAM (CLOUD-1382), and the guard is
             // half the arm: stepping past requires a further token, so a
@@ -13815,15 +13819,21 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
                 i += 1;
                 // The wrapper's own flags, env assignments, and bare numeric
                 // arguments (timeout's duration) precede the wrapped program.
-                while i < tokens.len()
-                    && (program_token(tokens[i]).starts_with('-')
-                        || is_env_assignment(program_token(tokens[i]))
-                        || program_token(tokens[i]).starts_with(|c: char| c.is_ascii_digit()))
-                {
+                // Bounded as the outer walk is: each pass consumes a token.
+                for _ in i..tokens.len() {
+                    let Some(token) = tokens.get(i).map(|token| program_token(token)) else {
+                        break;
+                    };
+                    if !(token.starts_with('-')
+                        || is_env_assignment(token)
+                        || token.starts_with(|c: char| c.is_ascii_digit()))
+                    {
+                        break;
+                    }
                     // A FLAG WHOSE VALUE IS THE NEXT WORD takes that word with it
                     // (CLOUD-2687): `sudo -u x git` resolved to `x`, so every
                     // module finding git through `programs` allowed it.
-                    if wrapper_option_takes_value(wrapper, program_token(tokens[i])) {
+                    if wrapper_option_takes_value(wrapper, token) {
                         i += 1;
                     }
                     i += 1;
@@ -13849,6 +13859,7 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
             _ => return Some(i),
         }
     }
+    None
 }
 
 /// Claude Code's verdict payload: the `hookSpecificOutput.permissionDecision`

@@ -372,4 +372,26 @@ mod tests {
             "a broken `to`"
         );
     }
+
+    /// Fails by: a `params` key that is empty, or carries a byte no query
+    /// string can hold, admitted; or a printable key refused.
+    #[test]
+    fn a_params_key_is_admitted_only_nonempty_and_printable() {
+        let families: Vec<crate::config_model::RecordDeclared> =
+            vec![toml::from_str("record = \"q\"\nwriter = \"w\"\n").unwrap()];
+        let row = |key: &str| {
+            query(&format!(
+                "id = \"q\"\nendpoint = \"x\"\nper_page = 1\nmax_pages = 1\n\
+                 select = [\"sha\"]\nparams = {{ {key:?} = \"v\" }}\n"
+            ))
+        };
+        assert!(validate(&[row("status")], &families).is_ok());
+        for key in ["", "a b"] {
+            let refused = validate(&[row(key)], &families).unwrap_err().to_string();
+            assert!(
+                refused.contains("a `params` key is empty or not printable"),
+                "{key:?}: {refused}"
+            );
+        }
+    }
 }
