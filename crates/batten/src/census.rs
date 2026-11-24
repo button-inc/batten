@@ -2069,6 +2069,36 @@ mod tests {
         assert_no_consumer_path(include_str!("census.rs"));
     }
 
+    /// Fails by: a spawn row that names its file but no function passes,
+    /// because the refusal needs BOTH halves missing rather than either.
+    #[test]
+    fn a_spawn_row_without_a_function_is_refused() {
+        let spawn = |function: Option<&str>| ShellCensus {
+            spawns: vec![crate::config_model::Spawn {
+                path: "src/a.rs".to_owned(),
+                function: function.map(str::to_owned),
+                contract: Some("an external format https://example.invalid".to_owned()),
+            }],
+            ..ShellCensus::default()
+        };
+        assert!(
+            spawn(Some("run")).validate().is_ok(),
+            "premise: a whole row"
+        );
+        assert!(spawn(None).validate().is_err());
+        assert!(spawn(Some(" ")).validate().is_err());
+    }
+
+    /// Fails by: a `.rs` file outside `src`, or a non-Rust file inside it,
+    /// read as engine source because either half alone sufficed.
+    #[test]
+    fn engine_source_is_a_rust_file_under_src() {
+        assert!(engine_source("src/a.rs"));
+        assert!(engine_source("crates/x/src/a.rs"));
+        assert!(!engine_source("crates/x/tests/a.rs"));
+        assert!(!engine_source("crates/x/src/a.md"));
+    }
+
     /// Each spawn site `spawn_sites` reads in `text`, as `(line, function)`.
     fn sites(text: &str) -> Vec<(usize, Option<String>)> {
         spawn_sites("f.rs", text)
@@ -2126,6 +2156,74 @@ mod tests {
         assert_eq!(sites(text), [at(2, "c")]);
         let bare = "fn c() {\n    Command::new(\"env\");\n}\n";
         assert!(sites(bare).is_empty(), "the program alone is not a shell");
+    }
+
+    /// Fails by: an array argv binding read as no spawn — every sequence
+    /// taken for a field value, its argv read empty, or its words dropped —
+    /// or a field's value read as one.
+    #[test]
+    fn an_array_argv_is_a_spawn_and_a_field_value_is_not() {
+        assert_eq!(
+            sites("fn run() {\n    let argv = [\"sh\", \"-c\", \"x\"];\n}\n"),
+            [(2, Some("run".to_owned()))]
+        );
+        assert!(
+            sites("fn run() {\n    let s = S { read: &[\"sh\", \"-c\", \"x\"] };\n}\n").is_empty()
+        );
+    }
+
+    /// Fails by: a `vec!` argv lost (its body sliced with the delimiter, so
+    /// the re-read refuses; or `vec!` treated as any other macro), placed on
+    /// the wrong line (its body offset subtracted), or a non-`vec!` macro's
+    /// own list read as an argv.
+    #[test]
+    fn a_vec_macro_argv_is_a_spawn_on_its_line() {
+        assert_eq!(
+            sites("fn run() {\n    let argv = vec![\n        \"sh\", \"-c\", \"x\"];\n}\n"),
+            [(3, Some("run".to_owned()))]
+        );
+        assert!(sites("fn run() {\n    other!(\"sh\", \"-c\", \"x\");\n}\n").is_empty());
+    }
+
+    /// Fails by: a `Command::new` chain's argv replaced, so a program that
+    /// runs a script only through its `.arg`/`.args` links is missed; or an
+    /// `.args` array read as computed, so `--version` reads as a script.
+    #[test]
+    fn a_command_chain_spells_its_argv_through_its_links() {
+        assert!(
+            sites("fn run() {\n    Command::new(\"python3\");\n}\n").is_empty(),
+            "premise: the program alone runs no script"
+        );
+        assert_eq!(
+            sites("fn run() {\n    Command::new(\"python3\").arg(\"-c\").arg(\"x\");\n}\n"),
+            [(2, Some("run".to_owned()))]
+        );
+        assert_eq!(
+            sites("fn run() {\n    Command::new(\"python3\").args([\"-c\", \"x\"]);\n}\n"),
+            [(2, Some("run".to_owned()))]
+        );
+        assert!(
+            sites("fn run() {\n    Command::new(\"python3\").args([\"--version\"]);\n}\n")
+                .is_empty()
+        );
+    }
+
+    /// Fails by: a key two rows name for one manifest listed twice, or a
+    /// second distinct key dropped, by an inverted duplicate test.
+    #[test]
+    fn homes_union_a_manifests_keys_once_each() {
+        let documents = serde_json::json!({
+            "batten.toml": {"census": {"shell": {"manifest": [
+                {"path": "m", "keys": ["a", "b"]},
+                {"path": "m", "keys": ["b", "c"]},
+            ]}}}
+        });
+        let serde_json::Value::Object(documents) = documents else {
+            unreachable!("a json! object literal");
+        };
+        let homes = Homes::find(&documents);
+        let fields = homes.manifests.get("m").map(|(fields, _)| fields.clone());
+        assert_eq!(fields, Some(keys(&["a", "b", "c"])));
     }
 
     fn assert_no_consumer_path(source: &str) {

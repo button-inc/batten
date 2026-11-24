@@ -1926,6 +1926,28 @@ fn a_gate_enrolled_in_the_committed_table_since_the_base_is_swept() {
     );
 }
 
+/// The glob arm of the same: a glob newly written in the manifest enrolls the
+/// gate whose source it matches, though no gate's NAME grew. Fails by: a new
+/// glob never read, so `other` was not swept and the change looked inert.
+#[test]
+fn a_gate_enrolled_by_a_new_glob_since_the_base_is_swept() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = enrolling(
+        "since-enrolled-glob",
+        "mise.toml",
+        "[env]\nMUTANT_GATES = \"toy,other\"\n",
+        "[env]\nMUTANT_GATES = \"toy,other\"\n# mise-tasks/oth*.sh\n",
+    );
+    let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("other/pipefail-dropped SURVIVED"),
+        "{out}{err}"
+    );
+}
+
 /// `toy`'s cases moved out of its declared suite into a module of the same
 /// target, as a `tests/<dir>/main.rs` layout has them: libtest selects a case
 /// wherever it compiled, so the case file is not the declared one. Committed.
