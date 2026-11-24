@@ -3805,16 +3805,11 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
         rule: "review watch refused",
         site: CensusSite::Checkout,
     },
-    ShapeCase {
-        call: CensusCall::Verb("mcp__Claude_Code_Remote__send_later"),
-        rule: "timer mint refused",
-        site: CensusSite::Checkout,
-    },
-    ShapeCase {
-        call: CensusCall::Verb("mcp__Claude_Code_Remote__create_trigger"),
-        rule: "event mint refused",
-        site: CensusSite::Checkout,
-    },
+    // `send_later` and `create_trigger` left this census with their shape rows
+    // (CLOUD-2889): both are `policy/run-shape.rego` arms now, whose verdict turns
+    // on the open-child receipts this container holds, so the ambient checkout is
+    // the wrong site for them. `child_wait.rs` runs both, refused and admitted,
+    // against a fixture whose receipt store it writes.
     // CLOUD-1264. The raw tracker read, under the readable server spelling — the
     // UUID and bare-name spellings, and every negative control, are
     // `raw_tracker_read.rs`'s.

@@ -1384,7 +1384,14 @@ pub const TOOL_VERDICT: Class = Class::new(Cost::Read, Surface::Check);
 ///
 /// The bound is the declaration: a mint no row names resolves nothing, so this
 /// cannot become an ambient sweep of the receipt store.
-pub const MINTED: Class = Class::new(Cost::Read, Surface::Check);
+///
+/// **`Surface::Hook` since CLOUD-2889**, and the argument above is why that was
+/// always admissible: one directory listing and a first line per declared mint,
+/// the same cost `Receipts` already pays on every mediated call. The consumer is
+/// a mediated one — a dispatcher's open-child receipt is what tells a timer that
+/// waits on children from one that babysits a PR — and a `Check`-only class left
+/// that module no input to read at all. The tree key is unchanged.
+pub const MINTED: Class = Class::new(Cost::Read, Surface::Hook);
 
 /// [`Fact::Captured`] — a declared reduction over a captured response
 /// (CLOUD-1188).

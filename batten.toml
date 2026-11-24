@@ -3970,6 +3970,32 @@ requires = ["url"]
 mode = "clear"
 body = "{now} {url}"
 
+# ONE RECEIPT PER OPEN CHILD SESSION (CLOUD-2760, CLOUD-2889), keyed by the
+# child's own session id, so `children-open` below projects the ids a timer must
+# name to be admitted. `create_session` answers `{"ccr": {"id": "session_…"}}`,
+# so the row keys from that id and refuses any id outside a session id's shape;
+# `archive_session` answers inside an envelope, so its clear row keys from the
+# call's own input.
+#MUTANT-SUITE crates/batten/tests/it/child_wait.rs
+#MUTANT child-open-clear-row-dropped|s@^key_from_input = "session_id"$@key_from_input = "no_such_field"@|archiving_a_child_clears_its_receipt
+[[mint]]
+name = "child-open"
+tool = "create_session"
+key = "named"
+key_from = "ccr.id"
+key_shape = "^session_[0-9A-Za-z]+$"
+requires = ["ccr.id"]
+mode = "replace"
+body = "{now} open"
+
+[[mint]]
+name = "child-open"
+tool = "archive_session"
+key = "named"
+key_from_input = "session_id"
+mode = "clear"
+body = "{now} open"
+
 [[rule]]
 id = "review open twice"
 kind = "shape"
@@ -3979,24 +4005,12 @@ tool = "create_pull_request"
 while_marker = "pr-open"
 reason = "This branch already has an unlanded pull request; the rule is one PR for all of it. Put the new commits on that PR's branch, or land it with `mise run land`. Landing or closing it unmerged sweeps this marker."
 
-[[rule]]
-id = "timer mint refused"
-kind = "shape"
-scope = "mediated_call"
-severity = "deny"
-tool = "send_later"
-reason = "No timers to babysit a PR. Background the long command and act on its exit: a backgrounded task re-invokes this session when it ends, so the turn in between is the designed state."
-
-[[rule]]
-id = "event mint refused"
-kind = "shape"
-scope = "mediated_call"
-severity = "deny"
-tool = "create_trigger"
-reason = """
-No Routines or timers to babysit a PR (AGENTS.md). `mise run land` drives the whole \
-landing loop with no timeout and no cap, and a Routine firing beside it is a second \
-clock nothing reads. Background the task and act on its exit."""
+# `timer mint refused` (`send_later`) and `event mint refused` (`create_trigger`)
+# were shape rows here that refused the tool outright. They retired into
+# `policy/run-shape.rego` under CLOUD-2889, keeping their ids and their
+# `call name refused` class: a timer is admitted only when its own arguments name
+# an open child session (`children-open` on `commit read missing`), so a PR
+# heartbeat names none and is refused as before.
 
 # CLOUD-312 row 6: `fanout-guard` retired into two rows over the `Agent` call, and
 # ONE remains. The spawn is gated at all for CLOUD-287's reason: it commits a whole
@@ -7434,6 +7448,7 @@ kind = "policy"
 scope = "mediated_call"
 module = "policy/run-shape.rego"
 severity = "deny"
+
 
 [[rule]]
 id = "lane guard other"

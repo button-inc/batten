@@ -106,6 +106,7 @@ mod census_shell;
 mod cfg_gated_test;
 mod checks_green;
 mod checksums;
+mod child_wait;
 mod ci_cache_declared;
 mod ci_hygiene;
 mod ci_parity;

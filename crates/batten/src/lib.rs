@@ -20353,9 +20353,14 @@ struct CallFacts {
     prospective: hook::ProspectiveFacts,
     budgeted: hook::BudgetFacts,
     ratcheted: hook::RatchetFacts,
+    minted: facts::Look<hook::MintedFields>,
 }
 
-fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
+fn call_facts(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    instant: std::time::SystemTime,
+) -> CallFacts {
     let (discards, singleton) = destructive_call_facts(envelope);
     let land_live = land_live_for(policy, envelope);
     let lap_held = land_live
@@ -20377,7 +20382,38 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         prospective: prospective_for(policy, envelope),
         budgeted: budgeted_for(policy, envelope),
         ratcheted: ratcheted_for(policy, envelope),
+        minted: minted_for(policy, envelope, instant),
     }
+}
+
+/// Each declared `[[rule.minted]]` field, read off the receipt store at the
+/// mediated boundary (CLOUD-2889).
+///
+/// Behind [`pinned_for`]'s narrowing plus a declaration: a call no module
+/// selects, or a repository declaring no `[[rule.minted]]` row, lists nothing.
+/// The clock is the boundary's own instant, never a caller's, for
+/// `rules::minted_facts`' reason: a supplied "now" could make a stale receipt
+/// answer, the one direction this fact must not fail in. A clock before the
+/// epoch reads as `0`, so every receipt looks ancient and nothing is admitted.
+fn minted_for(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    instant: std::time::SystemTime,
+) -> facts::Look<hook::MintedFields> {
+    if !policy.reads_pinned(envelope) {
+        return facts::Look::CouldNotLook;
+    }
+    let declared = policy.declared_minted();
+    if declared.is_empty() {
+        return facts::Look::CouldNotLook;
+    }
+    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+        return facts::Look::CouldNotLook;
+    };
+    let now = instant
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    facts::Look::Is(minted::fields(&git_dir, &declared, now))
 }
 
 /// The status of every pathspec a checkout or restore names (CLOUD-2684),
@@ -20967,7 +21003,7 @@ fn dispatch_envelope(
     // git and opens nothing. `None` is could-not-look and allows.
     let manifest = manifest_for(&policy, &envelope);
     let ((tasks, task_bodies), extracted) = session_facts(&policy, &envelope);
-    let call = call_facts(&policy, &envelope);
+    let call = call_facts(&policy, &envelope, instant);
     let facts = hook::Facts {
         singleton: &call.singleton,
         land_live: &call.land_live,
@@ -20990,6 +21026,7 @@ fn dispatch_envelope(
         tasks: &tasks,
         task_bodies: &task_bodies,
         extracted: &extracted,
+        minted: &call.minted,
         dispatch: &call.dispatch,
         red_head: &call.red_head,
         pathspec_status: &call.pathspec_status,
