@@ -343,3 +343,94 @@ fn a_release_pin_that_loads_and_carries_every_verb_passes() {
     let output = run(&dir, &["engine", "gate", "--lane", "lane.yml"]);
     assert!(output.status.success(), "{}", text(&output));
 }
+
+/// A RELEASE PIN NAMING A DEV PRE-RELEASE LANDS THROUGH THIS GATE (CLOUD-2903),
+/// and the same tree under a source pin still does not. The dev pre-release is
+/// fetched as `engine gate` fetches any pin, from the forge's `dev/` namespace
+/// with its build metadata dropped; before this row the gate asked for it under
+/// `releases/download/v<pin>` and nothing answered.
+#[test]
+fn a_release_pin_naming_a_dev_prerelease_passes_and_a_source_pin_still_does_not() {
+    // Linux only, said here so the case compiles everywhere (CLOUD-1148): the
+    // TLS fixture's key material comes from `openssl`.
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let pin = "v0.0.222-dev.pr1290.20261124120000+abcdef012345";
+    let dir = repo(
+        "engine-gate-dev-prerelease",
+        &format!("version = 1\nengine = {{ release = \"{pin}\" }}\n"),
+    );
+    common::write(&dir, "lane.yml", LANE);
+    let (_host, served) = crate::engine_install::release_host(&dir, pin, pin);
+    // THE FORGE'S LAYOUT, SPELLED HERE rather than through `forge_tag`: the
+    // fixture places the release with the function under test, so without this
+    // a gate asking under the bare pin would agree with a fixture serving there.
+    assert!(
+        dir.join("www")
+            .join(crate::engine_install::REPO)
+            .join("releases/download/dev/v0.0.222-dev.pr1290.20261124120000/SHA256SUMS")
+            .is_file(),
+        "the dev pre-release is published under dev/, its metadata dropped"
+    );
+    let gate = |dir: &Path| {
+        common::batten()
+            .state_dir(&data_dir(dir))
+            .args(["engine", "gate", "--lane", "lane.yml"])
+            .envs(served.iter().map(|(name, value)| (name, value)))
+            .current_dir(dir)
+            .streamed_output()
+            .expect("run batten")
+    };
+    let output = gate(&dir);
+    assert!(output.status.success(), "{}", text(&output));
+    let fetched = data_dir(&dir)
+        .join("batten")
+        .join(batten::state::derive_repo_name(&dir.canonicalize().unwrap()).unwrap())
+        .join("engine")
+        .join(pin);
+    assert!(
+        fetched.is_dir(),
+        "the dev pre-release was fetched and cached under its pin"
+    );
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\nengine = {{ source = \"{}\" }}\n",
+            "0".repeat(64)
+        ),
+    );
+    let source = gate(&dir);
+    assert!(!source.status.success(), "{}", text(&source));
+    assert!(
+        text(&source).contains("engine pin source never lands"),
+        "{}",
+        text(&source)
+    );
+}
+
+/// `engine pin version` pins the release this source will be cut as, never
+/// the build identity (CLOUD-2903): `release-plz.yml` runs it through `cargo
+/// run` on the release PR's head, which is a dev build, and a dev identity is
+/// a tag no release publishes. It passes on the unchanged tree and fails on the
+/// naive change that leaves the verb on `engine::release()`.
+#[test]
+fn engine_pin_version_pins_the_package_release_not_the_build() {
+    let dir = repo(
+        "engine-pin-version-package",
+        "version = 1\nengine = { release = \"v0.0.1\" }\n",
+    );
+    let output = run(&dir, &["engine", "pin", "version"]);
+    assert!(output.status.success(), "{}", text(&output));
+    let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
+    let want = format!(
+        "engine = {{ release = \"v{}\" }}",
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(config.contains(&want), "{config}");
+    assert!(
+        !config.contains("-dev."),
+        "the build identity is never pinned: {config}"
+    );
+}

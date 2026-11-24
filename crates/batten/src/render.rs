@@ -59,7 +59,7 @@ pub fn man(root: &Command, path: Option<&str>) -> Result<String> {
         .display_name(title)
         .bin_name(qualified(root.get_name(), path))
         // Reset, not merely "never set". The ROOT node carries a version —
-        // `surface::command()` sets it from `CARGO_PKG_VERSION` so `--version`
+        // `surface::command()` sets it from `config::VERSION` so `--version`
         // works — and a clone of it inherits one, so the root page grew a
         // VERSION section while every subcommand page had none. An asymmetry
         // that only bites one page out of 38 is exactly the kind a smoke test
@@ -289,6 +289,12 @@ mod tests {
             assert!(
                 !page.contains(env!("CARGO_PKG_VERSION")),
                 "{path}'s page carries the crate version, so a bump alone drifts it"
+            );
+            // The build identity moves with every commit (CLOUD-2903), so a page
+            // carrying it would drift on every one.
+            assert!(
+                !page.contains(crate::config::VERSION),
+                "{path}'s page carries the build identity, so every commit drifts it"
             );
             assert!(
                 !page.contains(".SH VERSION"),

@@ -212,6 +212,10 @@ sysctl.workspace = true
 # CLOUD-2224: `build.rs` writes the o200k vocabulary as a static table, so no
 # batten binary builds it at runtime; tiktoken-rs is the one source of it.
 tiktoken-rs.workspace = true
+# CLOUD-2903: `src/build_identity.rs` folds the source digest the build stamps,
+# and parses the package version as semver (CLOUD-2906).
+sha2.workspace = true
+semver.workspace = true
 regex-automata = { version = "0.4", default-features = false, features = [
   "std",
   "dfa-build",

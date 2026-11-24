@@ -55,5 +55,8 @@ Exit 0 only when the rulesets and release settings the release path rests on hol
 batten\-release\-backfill(1)
 Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed
 .TP
+batten\-release\-previous(1)
+Print the nearest ancestor release tag before a release tag, under a glob; exit 2 when the tag is not a release under it
+.TP
 batten\-release\-help(1)
 Print this message or the help of the given subcommand(s)

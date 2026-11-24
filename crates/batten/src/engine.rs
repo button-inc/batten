@@ -11,7 +11,11 @@
 //!
 //! # The two identities
 //!
-//! - **A release** is `v{VERSION}`, which the binary already carries.
+//! - **A release** is `v{PACKAGE_VERSION}`, which a build carries as its
+//!   identity only when the release marker is set (CLOUD-2903); every other
+//!   build reports a dev pre-release of the next patch, so it never claims a
+//!   release it is not. A DEV PRE-RELEASE is published under the `dev/` tag
+//!   namespace ([`forge_tag`]), so no `v*` reader takes one for a release.
 //! - **A source** is the SHA-256 of every tracked engine input — each path under
 //!   `crates/`, plus the root `Cargo.toml` and `Cargo.lock` — as path, NUL, bytes,
 //!   NUL, in sorted order. Tracked, so `target/` and scratch never enter; the
@@ -83,10 +87,149 @@ impl PinExt for Pin {
 /// The suffix of the stamp written beside an installed binary.
 pub const STAMP_SUFFIX: &str = "source";
 
-/// This binary's release identity.
+/// This binary's identity as a tag: `v` plus the build identity (CLOUD-2903),
+/// which is the release only for the marked release build.
 #[must_use]
 pub fn release() -> String {
     format!("v{}", crate::config::VERSION)
+}
+
+/// The release this source is, or will be cut as: `v{PACKAGE_VERSION}`.
+#[must_use]
+pub fn declared_release() -> String {
+    format!("v{}", crate::config::PACKAGE_VERSION)
+}
+
+/// The tag namespace a dev pre-release is published under (CLOUD-2903).
+///
+/// **OUTSIDE `v*`, ON PURPOSE.** Every reader of this repository's releases
+/// selects `v*` — `git::newest_version_tag`, the `release-tags` history glob
+/// `tag mint wrong` judges, the release guard's tag ruleset, release-plz's
+/// `git_only` baseline — so a dev tag under `v*` would be read as a release by
+/// each of them. Under `dev/` none of them sees it.
+pub const DEV_TAG_PREFIX: &str = "dev/";
+
+/// The forge tag a release pin is published under: the pin itself for a
+/// release, `dev/` plus the pin LESS its build metadata for a dev pre-release.
+///
+/// The metadata (the source digest) is identity, never precedence (semver
+/// §10), and `+` is not safe in a tag a URL path carries, so the forge tag
+/// drops it. The pin keeps it, and the pinned binary proves it: its own
+/// [`release`] must equal the pin for it to load the config at all.
+#[must_use]
+pub fn forge_tag(tag: &str) -> String {
+    match release_version(tag) {
+        Ok(version) if !version.pre.is_empty() => format!(
+            "{DEV_TAG_PREFIX}v{}.{}.{}-{}",
+            version.major, version.minor, version.patch, version.pre
+        ),
+        _ => tag.to_owned(),
+    }
+}
+
+/// THE OPEN OWNER QUESTION (CLOUD-2903), as one switch: under a release pin,
+/// is a STAMPED checkout build installed outside its tree admitted as the
+/// pinned release?
+///
+/// **No**, the conservative answer and the behaviour before this row: such a
+/// build is judged by its identity, which is not the release, so the hook
+/// follows the cached release. Flip it to `true` and a running binary carrying
+/// a stamp is its tree's own build in [`check`] and [`stale`] alike, which is
+/// what CLOUD-2871's engine phase needs on a release-pinned branch, at the cost
+/// of the measured failure this row exists for staying reachable for every
+/// stamped build.
+pub const STAMPED_BUILD_ANSWERS_ITS_RELEASE: bool = false;
+
+/// Whether this binary answers a release pin as its tree's own build: built
+/// inside the tree, run with `BATTEN_ENGINE=local`, or — only if the owner
+/// says yes ([`STAMPED_BUILD_ANSWERS_ITS_RELEASE`]) — carrying a stamp.
+/// `stamped` is asked only then, so the hook path never reads a stamp for it.
+#[must_use]
+pub fn own_build_for_release(in_tree: bool, local: bool, stamped: impl FnOnce() -> bool) -> bool {
+    in_tree || local || (STAMPED_BUILD_ANSWERS_ITS_RELEASE && stamped())
+}
+
+/// Whether a release pin `tag` is met by a binary whose identity is `running`
+/// and whose source declares the release `declared` (CLOUD-2903): it IS the
+/// release, or it is the tree's own build and either the pin names the release
+/// that tree will be cut as, or the pin is a DEV pre-release that build
+/// descends from ([`dev_pin_answered`]). Compared as parsed versions, build
+/// metadata included, so any OTHER binary meets a dev pin only by being that
+/// build, digest and all.
+#[must_use]
+pub fn release_satisfied(tag: &str, running: &str, declared: &str, own_build: bool) -> bool {
+    let (Ok(pin), Ok(running)) = (release_version(tag), release_version(running)) else {
+        return false;
+    };
+    if pin == running {
+        return true;
+    }
+    own_build
+        && (release_version(declared).is_ok_and(|declared| declared == pin)
+            || dev_pin_answered(&pin, &running))
+}
+
+/// Whether the tree's OWN build `running` answers the DEV pin `pin` (CLOUD-2903,
+/// the review of #1291's HIGH 1): both are dev pre-releases of one next patch,
+/// and `running` was committed at or after the pinned build.
+///
+/// WHY: a branch pins the dev pre-release CI published for one of its own
+/// heads, and every later commit on it builds a later identity (a later commit
+/// second, another digest), so without this arm every config load on the
+/// branch that carries the pin refuses — `config::parse` runs [`check`], and an
+/// in-tree build is never handed to the pinned engine. A RELEASE pin is never
+/// answered this way: it stays the release or the package version's own build,
+/// and the stamped-build question stays No ([`STAMPED_BUILD_ANSWERS_ITS_RELEASE`]).
+///
+/// The pin carries no commit, so descent is read from the identity's commit
+/// second (`<line>.<YYYYMMDDhhmmss>`): an equal-width digit string, ordered as
+/// text. An identity with no commit second (`dev.unknown`) answers nothing.
+#[must_use]
+pub fn dev_pin_answered(pin: &semver::Version, running: &semver::Version) -> bool {
+    let same_patch =
+        (pin.major, pin.minor, pin.patch) == (running.major, running.minor, running.patch);
+    let dev = crate::version::is_dev_prerelease(pin) && crate::version::is_dev_prerelease(running);
+    match (committed_second(pin), committed_second(running)) {
+        (Some(pinned), Some(built)) => same_patch && dev && built >= pinned,
+        _ => false,
+    }
+}
+
+/// The commit second a dev identity carries: its last pre-release identifier,
+/// when that is the 14-digit `YYYYMMDDhhmmss` [`crate::build_identity`] renders.
+fn committed_second(version: &semver::Version) -> Option<&str> {
+    let second = version.pre.as_str().rsplit('.').next()?;
+    (second.len() == 14 && second.bytes().all(|byte| byte.is_ascii_digit())).then_some(second)
+}
+
+/// Why `engine stamp` must refuse to attest the tree whose source digest is
+/// `digest` for a binary whose build identity is `identity` (CLOUD-2903, the
+/// measured 14:45 provenance defect), or `None` when it may.
+///
+/// A stamp attests "this binary was built from this tree". The identity
+/// carries the source digest the build itself read (its semver build
+/// metadata, a prefix of the full digest), so the stamp is refused unless
+/// that prefix names this tree: a binary built before an edit, or from
+/// another tree entirely, can no longer be stamped as this one. A build whose
+/// identity carries no digest (the release build, `dev.unknown`) attests
+/// nothing about any tree, so it is refused too.
+#[must_use]
+pub fn stamp_refusal(identity: &str, digest: &str) -> Option<String> {
+    let built = crate::version::parse(identity)
+        .map(|version| version.build.to_string())
+        .unwrap_or_default();
+    if built.is_empty() {
+        return Some(format!(
+            "this binary ({identity}) carries no source digest, so it attests no tree; build it from \
+             this checkout and stamp that build"
+        ));
+    }
+    (!digest.starts_with(&built)).then(|| {
+        format!(
+            "this binary was built from source {built}, and this tree is {}; rebuild, then stamp",
+            digest.get(..built.len()).unwrap_or(digest)
+        )
+    })
 }
 
 /// The stamp file beside `binary`.
@@ -203,24 +346,27 @@ pub fn is_installed(running: &Path, path: Option<&std::ffi::OsStr>, root: Option
 }
 
 /// Whether release `latest` is newer than release `current`, both `v`-prefixed
-/// tags (CLOUD-2287): `engine update` only ever moves a pin forward.
+/// tags (CLOUD-2287): `engine update` only ever moves a pin forward. Semver
+/// precedence, so build metadata never makes a release newer (CLOUD-2906).
 ///
 /// # Errors
 ///
 /// A [`UsageError`] naming a tag that is not a version.
 pub fn is_newer(latest: &str, current: &str) -> Result<bool> {
-    Ok(release_version(latest)? > release_version(current)?)
+    Ok(crate::version::precedence(&release_version(latest)?, &release_version(current)?).is_gt())
 }
 
-/// The version a release tag names, with or without its `v` (CLOUD-2279): the
-/// one reading of the tag grammar every engine verb shares.
+/// The version a release tag names (CLOUD-2279): exactly one `v`, then semver
+/// (CLOUD-2906), through [`crate::version::Tag::parse`] — the one reading of the
+/// tag grammar every engine verb shares.
 ///
 /// # Errors
 ///
 /// A [`UsageError`] naming a tag that is not a version.
 pub fn release_version(tag: &str) -> Result<semver::Version> {
-    semver::Version::parse(tag.trim_start_matches('v'))
-        .map_err(|_| UsageError::raise(format!("engine: {tag} is not a release tag (v0.0.201)")))
+    crate::version::Tag::parse(tag)
+        .map(|tag| tag.version)
+        .ok_or_else(|| UsageError::raise(format!("engine: {tag} is not a release tag (v0.0.201)")))
 }
 
 /// Write `digest` as the stamp beside `binary`.
@@ -348,7 +494,8 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)
         let Some(version) = item.as_str() else {
             continue;
         };
-        let parsed = release_version(version).ok();
+        // A provision row's `version` is written with or without its `v`.
+        let parsed = crate::version::parse_lenient(version);
         if parsed.as_ref() == Some(&pin) {
             continue;
         }
@@ -472,7 +619,8 @@ pub const LOCAL_ENV: &str = "BATTEN_ENGINE";
 /// Whether `BATTEN_ENGINE=local` asks for this binary as it is (CLOUD-2232),
 /// Go's `GOTOOLCHAIN=local`: a test run of a branch tests the engine it built,
 /// and an in-process load names its source by label rather than by a path the
-/// in-tree arm could judge. Source pins only — a release pin is a published
+/// in-tree arm could judge. Source pins, and the release the package version
+/// names (CLOUD-2903) — never another release: a release pin is a published
 /// engine's name, and running another under it is the skew this check refuses.
 pub(crate) fn runs_local() -> bool {
     std::env::var_os(LOCAL_ENV).is_some_and(|value| value == "local")
@@ -590,12 +738,23 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
     match pin.kind() {
         PinKind::Release(tag) => {
             let running = release();
-            if tag != running {
+            // THE TREE'S OWN BUILD ANSWERS THE RELEASE ITS PACKAGE VERSION NAMES
+            // (CLOUD-2903), by that name, while its identity says it is not that
+            // release: `main` pins a release and every task and CI step is a
+            // `cargo run` inside the tree, so without this arm every
+            // config-loading verb on `main` would refuse. An installed build
+            // outside the tree is judged by its identity alone.
+            let satisfied = release_satisfied(
+                &tag,
+                &running,
+                &declared_release(),
+                own_build_for_release(built_in(source), runs_local(), || running_stamp().is_some()),
+            );
+            if !satisfied {
                 // A RELEASE PIN IS REPAIRED BY THE RELEASE, NEVER BY A BUILD.
                 // CLOUD-2220 named `cargo build` here for a stale in-tree binary,
-                // and that build reports the tag's version without being the
-                // release: the pin is then satisfied by a binary it does not
-                // name. The install puts the pinned release over the running
+                // and that build answers only the release its OWN package
+                // version names, never another. The install puts the pinned release over the running
                 // binary, in-tree included — measured 2026-10-14, the repair
                 // (then spelled `engine update`, CLOUD-2287) replaced
                 // `target/release` at 0.0.215 with the published 0.0.216. In-tree, the pinned spelling, so
@@ -674,7 +833,14 @@ pub fn stale(text: &str, stamp: impl FnOnce() -> Option<String>) -> Option<Pin> 
 fn stale_as(text: &str, stamp: impl FnOnce() -> Option<String>, local: bool) -> Option<Pin> {
     let pin = declared(text)?;
     let satisfied = match (pin.release.as_deref(), pin.source.as_deref()) {
-        (Some(tag), None) => tag == release(),
+        // An in-tree binary never reaches the follow, so only `local` (and the
+        // owner's open question) makes this the tree's own build here.
+        (Some(tag), None) => release_satisfied(
+            tag,
+            &release(),
+            &declared_release(),
+            own_build_for_release(false, local, || stamp().is_some()),
+        ),
         // `BATTEN_ENGINE=local` satisfies a source pin here exactly as it does
         // in [`check`]: one answer to "is this the engine", or a test run of
         // the branch would try to BUILD the pin it was told to run without.
@@ -718,10 +884,25 @@ fn target_triple(arch: &str, os: &str, musl: bool, gnu: bool) -> String {
 /// The release archive's asset name for `tag` on `target`.
 #[must_use]
 pub fn release_asset(tag: &str, target: &str) -> String {
-    let version = tag.trim_start_matches('v');
+    // A dev pre-release's archive carries its forge tag's version, metadata
+    // dropped (CLOUD-2903); a release's carries the tag's version. A tag that
+    // is not one names no published asset; its text is kept so the fetch that
+    // follows names what it could not find.
+    let version = crate::version::Tag::parse(tag).map_or_else(
+        || tag.to_owned(),
+        |tag| {
+            if tag.is_release() {
+                tag.version.to_string()
+            } else {
+                let mut forged = tag.version;
+                forged.build = semver::BuildMetadata::EMPTY;
+                forged.to_string()
+            }
+        },
+    );
     format!(
         "{}{}",
-        crate::dist::archive_stem("batten", version, target),
+        crate::dist::archive_stem("batten", &version, target),
         crate::dist::archive_ext(target)
     )
 }
@@ -730,8 +911,9 @@ pub fn release_asset(tag: &str, target: &str) -> String {
 #[must_use]
 pub fn release_url(repository: &str, tag: &str, file: &str) -> String {
     format!(
-        "{}/releases/download/{tag}/{file}",
-        repository.trim_end_matches('/')
+        "{}/releases/download/{}/{file}",
+        repository.trim_end_matches('/'),
+        forge_tag(tag)
     )
 }
 
@@ -926,6 +1108,13 @@ fn heading_of(line: &str) -> Option<(semver::Version, Option<String>)> {
     Some((version, date))
 }
 
+/// The version a changelog line's `## [X]` heading names, parsed (CLOUD-2906):
+/// how a reader finds a release's section by its version rather than its text.
+#[must_use]
+pub fn heading_version(line: &str) -> Option<semver::Version> {
+    heading_of(line).map(|(version, _)| version)
+}
+
 /// Every release section in a changelog body, in the order it lists them, each
 /// with its breaking count and line span (CLOUD-2660).
 ///
@@ -1012,12 +1201,19 @@ pub fn releases_between(headings: &[Heading], pin: &str, latest: &str) -> Result
     let (pin, latest) = (release_version(pin)?, release_version(latest)?);
     let mut newer: Vec<Heading> = headings
         .iter()
-        .filter(|heading| heading.version > pin && heading.version <= latest)
+        .filter(|heading| {
+            crate::version::precedence(&heading.version, &pin).is_gt()
+                && crate::version::precedence(&heading.version, &latest).is_le()
+        })
         .cloned()
         .collect();
-    newer.sort_by(|left, right| left.version.cmp(&right.version));
+    newer.sort_by(|left, right| crate::version::precedence(&left.version, &right.version));
     newer.dedup_by(|left, right| left.version == right.version);
-    if latest > pin && newer.last().is_none_or(|heading| heading.version < latest) {
+    if crate::version::precedence(&latest, &pin).is_gt()
+        && newer
+            .last()
+            .is_none_or(|heading| crate::version::precedence(&heading.version, &latest).is_lt())
+    {
         newer.push(Heading {
             version: latest,
             date: None,
@@ -1207,10 +1403,12 @@ fn item_line(text: &str, item: &toml_edit::Item) -> usize {
 pub fn moved_url(url: &str, new: &str) -> Option<String> {
     let (head, asset) = url.rsplit_once('/')?;
     let (base, segment) = head.rsplit_once('/')?;
-    let old = segment.strip_prefix('v').unwrap_or(segment);
-    semver::Version::parse(old).ok()?;
-    let prefix = if segment.starts_with('v') { "v" } else { "" };
-    let asset = asset.replacen(old, new, 1);
+    // The segment is a release tag or a bare version; its `v` is kept as written.
+    let (prefix, old) = match crate::version::Tag::parse(segment) {
+        Some(tag) => ("v", tag.version),
+        None => ("", crate::version::parse(segment)?),
+    };
+    let asset = asset.replacen(&old.to_string(), new, 1);
     Some(format!("{base}/{prefix}{new}/{asset}"))
 }
 
@@ -1324,7 +1522,7 @@ pub fn pinned_sums(state_dir: &Path, repository: &str, tag: &str) -> Result<Stri
 /// which remedy `engine gate` names for it.
 #[must_use]
 pub fn ahead_of(declared: &semver::Version, pin: &semver::Version) -> bool {
-    declared > pin
+    crate::version::precedence(declared, pin).is_gt()
 }
 
 /// `line` less a YAML comment: from the first `#` that opens the line or
@@ -1352,18 +1550,18 @@ fn yaml_code(line: &str) -> &str {
 const LITERAL_KEYS: [&str; 2] = ["BATTEN_VERSION", "BATTEN_SHA256"];
 
 /// Whether `literal`, the value of `key`, is a copy that disagrees with release
-/// `want` (bare): a version (`v?X.Y.Z`) other than it, or a 64-hex digest not
-/// among `published`. Anything else — an expression, a word — is no copy.
+/// `want`: a version (one optional `v`, then semver) that is not it, build
+/// metadata included, or a 64-hex digest not among `published`. Anything else —
+/// an expression, a word — is no copy.
 fn literal_differs(
     key: &str,
     literal: &str,
-    want: &str,
+    want: Option<&semver::Version>,
     published: &std::collections::BTreeSet<String>,
 ) -> bool {
     let literal = literal.trim();
     if key == "BATTEN_VERSION" {
-        let bare = literal.trim_start_matches('v');
-        semver::Version::parse(bare).is_ok() && bare != want
+        crate::version::parse_lenient(literal).is_some_and(|copy| Some(&copy) != want)
     } else {
         literal.len() == 64
             && literal.chars().all(|c| c.is_ascii_hexdigit())
@@ -1445,8 +1643,9 @@ pub fn workflow_literals(
         /// A sequence.
         Item,
     }
-    let want = tag.trim_start_matches('v');
-    let differs = |key: &str, literal: &str| literal_differs(key, literal, want, published);
+    let want = crate::version::Tag::parse(tag).map(|tag| tag.version);
+    let differs =
+        |key: &str, literal: &str| literal_differs(key, literal, want.as_ref(), published);
     let mut found = Vec::new();
     let Some(events) = yaml_events(text) else {
         for (index, line) in text.lines().enumerate() {
@@ -2070,12 +2269,132 @@ mod tests {
         assert!(stale("engine = { source = \"ab\" }\n", None).is_some());
     }
 
-    /// `BATTEN_ENGINE=local` (CLOUD-2232) answers a source pin and never a
-    /// release pin.
+    /// `BATTEN_ENGINE=local` (CLOUD-2232) answers a source pin and the release
+    /// its own package version names, never another release (CLOUD-2903).
     #[test]
-    fn the_local_engine_answers_a_source_pin_only() {
+    fn the_local_engine_answers_a_source_pin_and_its_own_release_only() {
+        let own = format!("engine = {{ release = \"{}\" }}\n", declared_release());
         assert!(stale_as("engine = { source = \"ab\" }\n", || None, true).is_none());
+        assert!(stale_as(&own, || None, true).is_none());
         assert!(stale_as("engine = { release = \"v0.0.1\" }\n", || None, true).is_some());
+        // Without `local` the build is judged by its identity, which is not
+        // the release: a dev build is stale under its package's release pin.
+        assert!(stale_as(&own, || Some(String::from("ab")), false).is_some());
+    }
+
+    /// CLOUD-2903: a release pin is met by the release itself, or by its tree's
+    /// own build when the pin names the release that tree declares.
+    #[test]
+    fn a_release_pin_is_answered_by_the_release_or_by_its_own_build_only() {
+        let dev = "v0.0.221-dev.pr1282.20261124054448+3f9c2a1b7d04";
+        assert!(!release_satisfied("v0.0.220", dev, "v0.0.220", false));
+        assert!(release_satisfied("v0.0.220", dev, "v0.0.220", true));
+        assert!(release_satisfied("v0.0.220", "v0.0.220", "v0.0.220", false));
+        assert!(!release_satisfied("v0.0.1", dev, "v0.0.220", true));
+        // A pin naming the dev pre-release is met by that build, digest and all.
+        assert!(release_satisfied(dev, dev, "v0.0.220", false));
+        assert!(!release_satisfied(
+            dev,
+            "v0.0.221-dev.pr1282.20261124054448+000000000000",
+            "v0.0.220",
+            false
+        ));
+        assert!(!release_satisfied(
+            "not a tag",
+            "not a tag",
+            "v0.0.220",
+            true
+        ));
+    }
+
+    /// THE DEV PIN IS SATISFIABLE ON THE BRANCH THAT CARRIES IT (CLOUD-2903,
+    /// review HIGH 1): the tree's own build of a later commit answers it; any
+    /// other binary must BE the pinned build; and a release pin is never
+    /// answered by a dev build.
+    #[test]
+    fn a_dev_pin_is_answered_by_its_own_trees_later_build_and_a_release_pin_is_not() {
+        let pin = "v0.0.222-dev.pr1291.20261124120000+abcdef012345";
+        let later = "v0.0.222-dev.pr1291.20261124130000+0123456789ab";
+        let other_line = "v0.0.222-dev.claude-x.20261124130000+0123456789ab";
+        let earlier = "v0.0.222-dev.pr1291.20261124110000+0123456789ab";
+        let next_patch = "v0.0.223-dev.pr1291.20261124130000+0123456789ab";
+        let declared = "v0.0.221";
+        assert!(release_satisfied(pin, later, declared, true));
+        assert!(release_satisfied(pin, other_line, declared, true));
+        assert!(release_satisfied(pin, pin, declared, false));
+        assert!(!release_satisfied(pin, later, declared, false));
+        assert!(!release_satisfied(pin, earlier, declared, true));
+        assert!(!release_satisfied(pin, next_patch, declared, true));
+        assert!(!release_satisfied(
+            pin,
+            "v0.0.222-dev.unknown",
+            declared,
+            true
+        ));
+        // A release pin: never a dev build, own or not, unless it is the
+        // package version's own release.
+        assert!(!release_satisfied("v0.0.222", later, declared, true));
+        assert!(!release_satisfied("v0.0.220", later, declared, true));
+        assert!(release_satisfied(declared, later, declared, true));
+        // A non-dev pre-release pin is not answered by descent.
+        assert!(!release_satisfied(
+            "v0.0.222-rc.20261124120000",
+            "v0.0.222-rc.20261124130000",
+            declared,
+            true
+        ));
+    }
+
+    /// `engine stamp` refuses a binary whose embedded digest is not the tree's
+    /// (CLOUD-2903, the 14:45 provenance requirement), and one that embeds none.
+    #[test]
+    fn a_stamp_is_refused_unless_the_build_embedded_this_trees_digest() {
+        let tree = "abcdef0123456789aaaabbbbccccddddeeeeffff00001111222233334444abcd";
+        let built = "v0.0.222-dev.pr1291.20261124120000+abcdef012345";
+        assert_eq!(stamp_refusal(&built[1..], tree), None);
+        let other = "0.0.222-dev.pr1291.20261124120000+000000000000";
+        assert!(stamp_refusal(other, tree).is_some_and(|why| why.contains("000000000000")));
+        assert!(stamp_refusal("0.0.221", tree).is_some());
+        assert!(stamp_refusal("0.0.222-dev.unknown", tree).is_some());
+        assert!(stamp_refusal("not a version", tree).is_some());
+    }
+
+    /// THE OPEN QUESTION'S CURRENT ANSWER IS NO (CLOUD-2903): a stamped build
+    /// outside its tree, without `local`, is not its release's own build, and
+    /// its stamp is never even read for the question.
+    #[test]
+    fn a_stamped_build_outside_its_tree_is_not_its_release() {
+        let read = std::cell::Cell::new(false);
+        let stamped = || {
+            read.set(true);
+            true
+        };
+        assert!(!own_build_for_release(false, false, stamped));
+        assert!(!read.get(), "the stamp is read only if the owner says yes");
+        assert!(own_build_for_release(true, false, || true));
+        assert!(own_build_for_release(false, true, || true));
+    }
+
+    /// CLOUD-2903: a dev pre-release is published under `dev/`, metadata
+    /// dropped, and a release keeps its tag; the asset and its URL follow.
+    #[test]
+    fn a_dev_prerelease_is_fetched_from_the_dev_namespace() {
+        let dev = "v0.0.222-dev.pr1290.20261124120000+abcdef012345";
+        assert_eq!(forge_tag(dev), "dev/v0.0.222-dev.pr1290.20261124120000");
+        assert_eq!(forge_tag("v0.0.221"), "v0.0.221");
+        assert_eq!(forge_tag("not a tag"), "not a tag");
+        assert_eq!(
+            release_asset(dev, "x86_64-unknown-linux-gnu"),
+            "batten-v0.0.222-dev.pr1290.20261124120000-x86_64-unknown-linux-gnu.tar.gz"
+        );
+        assert_eq!(
+            release_url("https://h/o/r/", dev, "SHA256SUMS"),
+            "https://h/o/r/releases/download/dev/v0.0.222-dev.pr1290.20261124120000/SHA256SUMS"
+        );
+        assert_eq!(
+            release_url("https://h/o/r", "v0.0.221", "SHA256SUMS"),
+            "https://h/o/r/releases/download/v0.0.221/SHA256SUMS"
+        );
     }
 
     #[test]
@@ -2084,6 +2403,22 @@ mod tests {
         assert!(is_input("Cargo.toml"));
         assert!(is_input("Cargo.lock"));
         assert!(!is_input("README.md"));
+    }
+
+    #[test]
+    fn build_metadata_never_makes_a_release_newer() -> Result<()> {
+        assert!(!is_newer("v1.0.0+b", "v1.0.0+a")?);
+        assert!(!is_newer("v1.0.0+a", "v1.0.0")?);
+        assert!(!is_newer(
+            "v1.0.0-dev.pr1.20261124T050057Z+3f9c2a1b7d04",
+            "v1.0.0"
+        )?);
+        assert!(is_newer("v1.0.0", "v1.0.0-rc.1")?);
+        let build = semver::Version::parse("1.0.0+b")?;
+        assert!(!ahead_of(&build, &semver::Version::new(1, 0, 0)));
+        assert!(release_version("vv1.0.0").is_err());
+        assert!(release_version("1.0.0").is_err());
+        Ok(())
     }
 
     #[test]
@@ -2170,6 +2505,13 @@ mod tests {
             ["1.1.0"]
         );
         assert!(releases_between(&[], "v1.0.0", "v1.0.0")?.is_empty());
+        // A pre-release of the latest orders below it, so it is between, and the
+        // release itself is still counted once (CLOUD-2906).
+        let headings = [heading("v1.1.0-rc.1"), heading("v1.0.0")];
+        assert_eq!(
+            versions(releases_between(&headings, "v1.0.0", "v1.1.0")?),
+            ["1.1.0-rc.1", "1.1.0"]
+        );
         Ok(())
     }
 
