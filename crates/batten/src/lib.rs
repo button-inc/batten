@@ -33770,6 +33770,82 @@ mod tests {
         );
     }
 
+    /// A live lap is read only where a policy reads it: a pre-call write into
+    /// a checkout a lap holds, under a policy reading no pinned path, reads no
+    /// lap.
+    ///
+    /// Fails by: the event-or-reads guard joined with `&&`, so every pre-call
+    /// opens the repository and probes the lap's pid for no gate (CLOUD-2789).
+    #[test]
+    fn a_policy_reading_no_pin_reads_no_live_lap() {
+        let scratch = crate::scratch::scratch("lib-land-live-unread");
+        crate::testing::contain_state(&scratch.join("state"));
+        let repo = scratch.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        let git_dir = crate::git::git_dir(&repo).unwrap();
+        let pid = std::process::id().to_string();
+        assert_eq!(
+            batten_base::task::singleton_acquire(
+                &git_dir,
+                super::LAND_TASK,
+                &pid,
+                std::time::Duration::ZERO
+            ),
+            batten_base::task::Claim::Taken
+        );
+        assert_eq!(
+            batten_base::task::singleton_holder(&git_dir, super::LAND_TASK),
+            Some(pid),
+            "premise: a lap holds the checkout the call writes in"
+        );
+        let harness = crate::config_model::Harness::ClaudeCode;
+        let call = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "cwd": repo,
+            "tool_name": "Write",
+            "tool_input": {"file_path": repo.join("f"), "content": "x"},
+        });
+        let envelope = super::hook::decode(harness, &call.to_string()).unwrap();
+        let policy = super::hook::Policy::declaring_nothing(harness);
+        assert!(
+            !policy.reads_pinned(&envelope),
+            "premise: nothing reads a pin"
+        );
+        assert_eq!(super::land_live_for(&policy, &envelope), None);
+        batten_base::task::singleton_release(&git_dir, super::LAND_TASK);
+    }
+
+    /// The paths whose working-tree bytes are `HEAD`'s: a committed file left
+    /// alone is, and so is a path absent from both; a committed file deleted
+    /// from the tree is not.
+    ///
+    /// Fails by: the absent-from-both test joined with `||`, so a tracked file
+    /// the call deleted reads as at `HEAD` and is excused (CLOUD-2789).
+    #[test]
+    fn a_deleted_tracked_file_is_not_at_head() {
+        let root = crate::scratch::scratch("lib-paths-at-head");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("kept"), "k").unwrap();
+        std::fs::write(root.join("gone"), "g").unwrap();
+        crate::gitwrite::commit_paths(
+            &root,
+            &[String::from("kept"), String::from("gone")],
+            "fixture",
+        )
+        .unwrap();
+        std::fs::remove_file(root.join("gone")).unwrap();
+        let paths = [
+            String::from("kept"),
+            String::from("gone"),
+            String::from("never"),
+        ];
+        assert_eq!(
+            super::paths_at_head(&root, &paths),
+            std::collections::BTreeSet::from([String::from("kept"), String::from("never")])
+        );
+    }
+
     /// Fails by: any adjacent word pair read as `capture show`.
     #[test]
     fn only_a_windowed_capture_show_shows_a_capture() {

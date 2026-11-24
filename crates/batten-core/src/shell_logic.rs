@@ -1976,6 +1976,10 @@ mod tests {
         // Fails by: a name of three letters or more read as valued whatever
         // it prefixes, so the unknown `-xyz` swallows the `-c` after it.
         assert!(switch_script("pwsh", &["-xyz", "-c", "x"]));
+        // Fails by: a name under three letters read as a prefix of a longer
+        // valued one (the length tests joined with `||`), so `-wi` swallows
+        // the `-c` after it as `-windowstyle`'s value (CLOUD-2789).
+        assert!(switch_script("pwsh", &["-wi", "-c", "x"]));
     }
 
     /// Fails by: any `cmd.exe` argument read as `/C`, `/K` or `/R`.

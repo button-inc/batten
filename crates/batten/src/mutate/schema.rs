@@ -8736,6 +8736,77 @@ mod tests {
         assert_eq!(verdicts, [(0, Verdict::Unjudged)]);
     }
 
+    /// A hand-back with green cases to run but no filter that could leave its
+    /// red case out is unjudged without a run: unfiltered, the run takes every
+    /// case, the red one included, and its failure would read as a kill.
+    ///
+    /// Fails by: the poisoned test's `||` read as `&&`, so a hand-back with a
+    /// green case and no filter is run beside its red case (CLOUD-2789). The
+    /// runner here does not exist, so that run errs rather than being skipped.
+    #[test]
+    fn a_poisoned_handback_no_filter_can_isolate_is_unjudged_without_a_run() {
+        let base = crate::scratch::scratch("schema-handback-unfiltered-red");
+        let live = base.join("live");
+        std::fs::create_dir_all(live.join("src")).unwrap();
+        std::fs::write(live.join("src/lib.rs"), KEYED_SOURCE).unwrap();
+        crate::gitwrite::init_on_main(&live).unwrap();
+        crate::gitwrite::commit_paths(&live, &[String::from("src/lib.rs")], "lib").unwrap();
+        let listed_over = crate::mutate::cover::source_digest(&live).unwrap();
+        let mutants = [keyed("!=")];
+        let reddened: Case = (String::from("tests::red"), String::from("p"));
+        let green: Case = (String::from("tests::green"), String::from("p"));
+        let (reach_by_id, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let red: Red = [(reddened.clone(), String::from("failed"))].into();
+        let store = base.join("verdicts");
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &live,
+            mutants: &mutants,
+            reach: &reach_by_id,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &store,
+            red: &red,
+            reuse: None,
+        };
+        // NO PROBED FILE, SO NO OBSERVING SET AND NO FILTER: the run would be
+        // the whole suite, the red case with it.
+        let schema = Schema::default();
+        let reach = Reach {
+            executed: [
+                (reddened, BTreeSet::from([0])),
+                (green, BTreeSet::from([0])),
+            ]
+            .into(),
+            ..Reach::default()
+        };
+        let nowhere = base.join("nowhere");
+        let handback = Handback {
+            runner: &nowhere,
+            diff: Some(&nowhere),
+            disk: None,
+        };
+        let state = base.join("state");
+        let mut out = Vec::new();
+        let (verdicts, _) = judge_handbacks(
+            &judging,
+            (&handback, &live, &listed_over, &state),
+            &BTreeSet::from([0]),
+            (&schema, &reach),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(verdicts, [(0, Verdict::Unjudged)]);
+    }
+
     /// Fails by: a hand-back that no case observes and no red case poisons
     /// read as unjudged without a run (the unjudged test's `&&` read as `||`),
     /// when its run is what says it is uncovered. The runner here does not
