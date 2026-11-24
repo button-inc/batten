@@ -13600,6 +13600,95 @@ pub(crate) fn pushes_git(envelope: &Envelope) -> bool {
     })
 }
 
+/// The PR body this call writes and the head branch it is for, if it writes one
+/// (CLOUD-2867). The head is `None` where the call names none, which is the
+/// checkout's own branch.
+///
+/// Three surfaces write a body: `gh pr create`/`gh pr edit` with `--body`, the
+/// forge MCP `update_pull_request`, and `batten mcp call <server>
+/// update_pull_request`. The last is read off [`Envelope::mediated`], the one
+/// answer [`mediated_mcp_call`] gives every selector, so it is the direct
+/// tool by another route. `gh` is read off [`program_reach`] like every other
+/// program anchor, so `mise exec -- gh …` and a body in the second half of a
+/// list are seen. A `gh pr edit` naming its PR by number or URL has a head
+/// only the forge knows, so it is not recorded: the hook makes no network call.
+/// An MCP update carries a PR number and no head, so it is the checkout's
+/// branch: a body written from here for another branch's PR is the limit.
+pub(crate) fn pr_body_written(envelope: &Envelope) -> Option<(Option<String>, String)> {
+    let direct = (envelope.raw_tool.starts_with("mcp__"))
+        .then_some((envelope.raw_tool.as_str(), &envelope.input));
+    let mediated = envelope
+        .mediated
+        .as_ref()
+        .map(|(tool, params)| (tool.as_str(), params));
+    if let Some((_, input)) =
+        direct.or(mediated).filter(|(tool, _)| tool.ends_with("__update_pull_request"))
+    {
+        let body = input.get("body").and_then(Value::as_str)?;
+        return Some((None, body.to_owned()));
+    }
+    program_reach(&envelope.command).iter().find_map(|entry| {
+        let arguments: Vec<&str> = entry
+            .get("arguments")
+            .and_then(Value::as_array)
+            .map(|list| list.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        (entry.get("name").and_then(Value::as_str)? == "gh")
+            .then(|| gh_pr_body(&arguments))
+            .flatten()
+    })
+}
+
+/// `gh pr create`/`gh pr edit`'s `--body` and head, per [`pr_body_written`].
+fn gh_pr_body(arguments: &[&str]) -> Option<(Option<String>, String)> {
+    // The flags of either verb that take no value; every other flag takes one.
+    const SWITCHES: [&str; 11] = [
+        "--draft",
+        "-d",
+        "--fill",
+        "-f",
+        "--fill-first",
+        "--fill-verbose",
+        "--web",
+        "-w",
+        "--dry-run",
+        "--no-maintainer-edit",
+        "--remove-milestone",
+    ];
+    let ["pr", verb @ ("create" | "edit"), rest @ ..] = arguments else {
+        return None;
+    };
+    let (mut body, mut head, mut selector) = (None, None, None);
+    let mut words = rest.iter();
+    while let Some(word) = words.next() {
+        let (flag, inline) = match word.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value)),
+            _ => (*word, None),
+        };
+        let mut value = || inline.or_else(|| words.next().copied()).map(str::to_owned);
+        match flag {
+            "--body" | "-b" => body = value(),
+            "--head" | "-H" => head = value(),
+            _ if !flag.starts_with('-') => selector = selector.or(Some((*word).to_owned())),
+            _ if !SWITCHES.contains(&flag) => {
+                let _ = value();
+            }
+            _ => {}
+        }
+    }
+    let body = body?;
+    if *verb == "create" {
+        return Some((head, body));
+    }
+    match selector {
+        None => Some((None, body)),
+        Some(pr) if pr.starts_with("http") || pr.trim_start_matches('#').parse::<u64>().is_ok() => {
+            None
+        }
+        branch => Some((branch, body)),
+    }
+}
+
 /// The target of a `git reset --hard` in this call, if it makes one (CLOUD-462).
 ///
 /// **Read off `programs`, which is the argv the boundary already resolved** — so
@@ -16656,6 +16745,23 @@ mod tests {
                 .any(|entry| entry["opaque"] == true && entry["trusted"] == false),
             "an inline program's computed spawn is opaque and never trusted: {opaque:?}"
         );
+    }
+
+    /// Fails by: a shell surface that writes a PR body read as writing none, or
+    /// a body read off a call that writes none (CLOUD-2867).
+    #[test]
+    fn pr_body_written_reads_each_shell_surface() {
+        let read = |command: &str| pr_body_written(&envelope(command));
+        assert_eq!(
+            read(r#"batten mcp call github update_pull_request '{"pullNumber":1,"body":"b"}'"#),
+            Some((None, "b".to_owned()))
+        );
+        assert_eq!(
+            read("gh pr create --draft --head topic --body b"),
+            Some((Some("topic".to_owned()), "b".to_owned()))
+        );
+        assert_eq!(read("gh pr edit 12 --body b"), None);
+        assert_eq!(read("gh pr view --json body"), None);
     }
 
     /// Fails by: a redirection handed to the program as an argument, or a

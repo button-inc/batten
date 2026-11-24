@@ -1842,6 +1842,244 @@ fn a_row_the_branch_closes_leaves_the_filed_checklist() {
     );
 }
 
+/// A filed-rows fixture carrying the committed closing grammar and a trunk, with
+/// one unclosed commit on `main` past `origin/main`.
+fn closing_grammar_fixture(name: &str) -> PathBuf {
+    let dir = scratch(name);
+    common::init_repo(&dir);
+    let base = format!("{CONFIG}{FILED_ROWS}");
+    let committed: toml::Table = fs::read_to_string(common::at_root("batten.toml"))
+        .expect("read the committed authority")
+        .parse()
+        .expect("the committed authority parses");
+    let grammar: Vec<toml::Value> = committed["pattern"]
+        .as_array()
+        .expect("the authority declares patterns")
+        .iter()
+        .filter(|row| {
+            row["id"].as_str().is_some_and(|id| {
+                (id.starts_with("ready-") || id == "clause-label")
+                    && !base.contains(&format!("\"{id}\""))
+            })
+        })
+        .cloned()
+        .collect();
+    let mut patterns = toml::Table::new();
+    patterns.insert("pattern".to_owned(), toml::Value::Array(grammar));
+    fs::write(
+        dir.join("batten.toml"),
+        format!(
+            "must_land_on = \"origin/main\"\n{base}\n{}",
+            toml::to_string(&patterns).expect("the patterns serialize")
+        ),
+    )
+    .expect("write config");
+    fs::create_dir_all(dir.join("policy")).expect("policy dir");
+    install_modules(&dir);
+    fs::copy(
+        common::at_root("policy/filed-here.rego"),
+        dir.join("policy/filed-here.rego"),
+    )
+    .expect("install the filed-here module");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "--quiet", "-m", "base"]);
+    common::pin_origin_main(&dir);
+    common::write(&dir, "src/b.rs", "fn main() {}\n");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "--quiet", "-m", "fix: the thing"]);
+    dir
+}
+
+/// A Claude `PostToolUse` payload for a Bash call running `command`.
+fn bash_post(command: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "s-1",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_response": {"stdout": "", "stderr": "", "interrupted": false},
+    })
+    .to_string()
+}
+
+/// A row closed only in the PR body is answered too (CLOUD-2867): the PR body
+/// is where this repository puts closing keys, and the hook reads the body this
+/// session wrote rather than asking the forge.
+///
+/// Fails by: the captured-body drop removed (CLOUD-9 listed), a row merely
+/// mentioned in the body dropped (CLOUD-7), or a body written for another head
+/// branch answering this one (CLOUD-8).
+/// MUTANT: rust-filed-rows-pr-body-closes.
+#[test]
+fn a_row_the_pr_body_closes_leaves_the_filed_checklist() {
+    let dir = closing_grammar_fixture("filed-row-closed-by-body");
+    let receipts = dir.join(".git/batten-receipts");
+    fs::create_dir_all(&receipts).expect("receipts dir");
+    fs::write(
+        receipts.join("board-writes.main"),
+        "issue CLOUD-7 2099-01-01T00:00:00Z ready 0 - 0\n\
+         issue CLOUD-8 2099-01-01T00:00:00Z ready 0 - 0\n\
+         issue CLOUD-9 2099-01-01T00:00:00Z ready 0 - 0\n",
+    )
+    .expect("write the board record");
+    let before = stdout_of(&hook(&dir, &stop_payload("Done.", false)));
+    assert!(
+        before.contains("CLOUD-9 filed"),
+        "the premise: with no body written, the row is listed: {before}"
+    );
+    let _ = hook(
+        &dir,
+        &bash_post("gh pr create --title T --body 'Closes CLOUD-9\nSee CLOUD-7'"),
+    );
+    let _ = hook(
+        &dir,
+        &bash_post("gh pr create --head other --body 'Closes CLOUD-8'"),
+    );
+    let stdout = stdout_of(&hook(&dir, &stop_payload("Done.", false)));
+    assert!(
+        !stdout.contains("CLOUD-9 filed"),
+        "the row the PR body closes is off the checklist: {stdout}"
+    );
+    assert!(
+        stdout.contains("CLOUD-7 filed"),
+        "a row only mentioned in the body stays listed: {stdout}"
+    );
+    assert!(
+        stdout.contains("CLOUD-8 filed"),
+        "a body captured for another branch closes nothing here: {stdout}"
+    );
+}
+
+/// Every surface that writes a PR body leaves its capture under the PR's head
+/// branch, and the newest body for a branch replaces the last (CLOUD-2867).
+///
+/// Fails by: any one surface's match removed, a switch read as taking a value
+/// (so `--draft` eats `--head`), a value flag's value read as the PR selector,
+/// or a numbered `gh pr edit`, whose head only the forge knows, recorded.
+/// MUTANT: rust-pr-body-capture-surface.
+#[test]
+fn every_pr_body_surface_is_captured_by_head_branch() {
+    let dir = closing_grammar_fixture("pr-body-surfaces");
+    let receipts = dir.join(".git/batten-receipts");
+    let body = |branch: &str| fs::read_to_string(receipts.join(format!("pr-body.{branch}"))).ok();
+    let written = |payload: String, branch: &str, expected: &str| {
+        let _ = hook(&dir, &payload);
+        assert_eq!(
+            body(branch).as_deref(),
+            Some(expected),
+            "after {payload}, the newest body for {branch}"
+        );
+    };
+    written(bash_post("gh pr create --body one"), "main", "one");
+    written(bash_post("gh pr edit --body=two"), "main", "two");
+    written(bash_post("gh pr edit --title T --body three"), "main", "three");
+    written(
+        bash_post("mise exec -- gh pr edit feature/x -b four"),
+        "feature-x",
+        "four",
+    );
+    written(
+        bash_post("gh pr create --draft --head topic --body five"),
+        "topic",
+        "five",
+    );
+    written(
+        serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "s-1",
+            "tool_name": "mcp__github__update_pull_request",
+            "tool_input": {"owner": "o", "repo": "r", "pullNumber": 1, "body": "six"},
+            "tool_response": [{"type": "text", "text": "{}"}],
+        })
+        .to_string(),
+        "main",
+        "six",
+    );
+    written(
+        bash_post(r#"batten mcp call github update_pull_request '{"pullNumber":1,"body":"seven"}'"#),
+        "main",
+        "seven",
+    );
+    let _ = hook(&dir, &bash_post("gh pr edit 12 --body eight"));
+    let _ = hook(&dir, &bash_post("gh pr view --json body"));
+    assert_eq!(
+        body("main").as_deref(),
+        Some("seven"),
+        "a numbered edit and a read record nothing"
+    );
+}
+
+/// A LAND UNDER WAY SILENCES THE POINTER (CLOUD-2867): the land is the answer
+/// the pointer asks for, so it is not asked while one runs, held or just
+/// dispatched. Once the land ends with the claim still unlanded, the next Stop
+/// speaks, because nothing was marked spoken while it was silent.
+///
+/// MUTANT: rust-unlanded-pointer-land-under-way (the check removed, or either
+/// half of it dropped), rust-unlanded-pointer-marker-while-silent (killed by
+/// the Stop after the land).
+#[test]
+fn a_land_under_way_silences_the_unlanded_pointer() {
+    // HELD: a land holding the lock.
+    let (repo, home) = unlanded_fixture("stop-unlanded-pointer-held");
+    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let git_dir = repo.join(".git");
+    let pid = std::process::id().to_string();
+    let claim = batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO);
+    assert_eq!(
+        claim,
+        batten::task::Claim::Taken,
+        "the fixture holds the lock"
+    );
+    let held = stop();
+    batten::task::singleton_release(&git_dir, "land");
+    assert_eq!(held.status.code(), Some(0), "a held land passes the Stop");
+    assert_eq!(
+        unlanded_line(&stdout_of(&held)),
+        None,
+        "and the pointer is silent while the land holds the lock"
+    );
+    assert!(
+        unlanded_line(&stdout_of(&stop())).is_some(),
+        "once the land is gone, the still-unlanded claim is reported"
+    );
+
+    // DISPATCHED: a backgrounded land started, not yet holding the lock.
+    let (repo, home) = unlanded_fixture("stop-unlanded-pointer-dispatched");
+    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let start = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "s-1",
+        "tool_name": "Bash",
+        "tool_input": {"command": "mise run land", "run_in_background": true},
+        "tool_response": {"backgroundTaskId": "b-1"},
+    })
+    .to_string();
+    let _ = hook_in(&repo, &home, &start);
+    let receipts = repo.join(".git/batten-receipts");
+    let dispatched: Vec<PathBuf> = fs::read_dir(&receipts)
+        .expect("the receipts dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("land-dispatched."))
+        })
+        .collect();
+    assert_eq!(dispatched.len(), 1, "the premise: the start left its receipt");
+    assert_eq!(
+        unlanded_line(&stdout_of(&stop())),
+        None,
+        "the pointer is silent while a dispatched land has not yet locked"
+    );
+    // The land took the lock and released it, which drops the receipt.
+    fs::remove_file(&dispatched[0]).expect("the land ends");
+    assert!(
+        unlanded_line(&stdout_of(&stop())).is_some(),
+        "once the land is gone, the still-unlanded claim is reported"
+    );
+}
+
 /// The checklist re-evaluates OPEN rows: one the tracker last said was a
 /// duplicate is closed, and listing it asks for a groom it does not need.
 #[test]

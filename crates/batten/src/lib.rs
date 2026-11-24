@@ -25637,6 +25637,16 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
     let Some(UnlandedClaim { branch, key, count }) = unlanded_claim() else {
         return unlanded_unknown_pointer();
     };
+    // A LAND UNDER WAY IS THE REMEDY ALREADY RUNNING (CLOUD-2867). The Stop
+    // refusal already reads it that way; this pointer did not, so it asked for
+    // a land on every Stop while one ran. Silent BEFORE either marker is
+    // written: a pointer never spoken was never told, so once the land ends
+    // with the claim still unlanded, the next Stop speaks and the refusal can
+    // arm. The lock is per git dir, so a lap in another clone is not seen here.
+    let landing = land_under_way();
+    if landing.held || landing.dispatched_at.is_some() {
+        return None;
+    }
 
     // ONCE PER CLAIM, AND THE KEY IS NOT ONE THE REMEDY CAN MINT (CLOUD-890).
     //
@@ -25715,6 +25725,7 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
 fn rearm_unlanded(envelope: &hook::Envelope) {
     if envelope.event == crate::config_model::Event::PostTool {
         note_land_dispatch(envelope);
+        note_pr_body(envelope);
         return;
     }
     if envelope.event != crate::config_model::Event::UserPromptSubmit {
@@ -25977,6 +25988,34 @@ fn note_land_dispatch(envelope: &hook::Envelope) {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = crate::durable::append(&path, LAND_TASK);
+    }
+}
+
+/// The record family holding the newest PR body written for a head branch
+/// (CLOUD-2867).
+const PR_BODY: &str = "pr-body";
+
+/// Record the PR body this call wrote, keyed by its head branch, so the Stop
+/// checklist reads its closing keys without asking the forge (CLOUD-2867).
+///
+/// The PR body is where this repository puts closing keys, and no local copy
+/// of it existed: the landing loop reads it from the forge, a network call no
+/// Stop hook may make. AFTER the call, like [`note_land_dispatch`], so a write
+/// the engine denied records nothing. The newest body replaces the last, as
+/// the forge's does. Fail-silent like every write on this path.
+fn note_pr_body(envelope: &hook::Envelope) {
+    let Some((head, body)) = hook::pr_body_written(envelope) else {
+        return;
+    };
+    let Some(head) = head.or_else(|| git::current_branch(Path::new(".")).ok().flatten()) else {
+        return;
+    };
+    if let Ok(git_dir) = git::git_dir(Path::new(".")) {
+        let path = recorder::record_path(&git_dir, PR_BODY, &head, None);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = crate::durable::replace(&path, body);
     }
 }
 
@@ -26407,17 +26446,25 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     // checklist asked every Stop for an answer the branch had already given,
     // and only rows still open to the question belong on it. A log that cannot
     // be read closes nothing, the could-not-look direction.
-    let closed_here: std::collections::BTreeSet<String> =
-        ready::Grammar::from_compiled(&crate::pattern::compiled(&config.patterns))
-            .ok()
-            .zip(
-                worktree::declared_trunk(root)
-                    .ok()
-                    .flatten()
-                    .and_then(|trunk| git::log_messages(root, &trunk.tracking).ok().flatten()),
-            )
-            .map(|(grammar, log)| race::closes(&log, &grammar).into_iter().collect())
-            .unwrap_or_default();
+    let grammar = ready::Grammar::from_compiled(&crate::pattern::compiled(&config.patterns)).ok();
+    let mut closed_here: std::collections::BTreeSet<String> = grammar
+        .as_ref()
+        .zip(
+            worktree::declared_trunk(root)
+                .ok()
+                .flatten()
+                .and_then(|trunk| git::log_messages(root, &trunk.tracking).ok().flatten()),
+        )
+        .map(|(grammar, log)| race::closes(&log, grammar).into_iter().collect())
+        .unwrap_or_default();
+    // AND A ROW THE BRANCH'S PR BODY CLOSES (CLOUD-2867), which is where this
+    // repository puts its closing keys: the newest body written for this branch,
+    // as `note_pr_body` recorded it, so the Stop path never asks the forge. No
+    // record closes nothing, the could-not-look direction.
+    let body = crate::fsio::read_to_string(recorder::record_path(&git_dir, PR_BODY, &branch, None));
+    if let (Some(grammar), Ok(body)) = (grammar.as_ref(), body) {
+        closed_here.extend(race::closes(&body, grammar));
+    }
     let filed = filed
         .into_iter()
         .filter(|id| !row_closed(root, id) && !closed_here.contains(id))
