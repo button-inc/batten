@@ -1063,14 +1063,13 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
     // scope unless a write spends it, which forgets the walks with the opens.
     let walk_key: WalkKey = (start.to_path_buf(), ceilings.clone());
     let walked = with_opens(|opens| opens.3.get(&walk_key).cloned()).flatten();
-    let (found, trust) = match walked {
-        Some(walked) => walked,
-        None => {
-            let walked =
-                gix::discover::upwards_opts(start, discovery(&ceilings)).map_err(|_| refused())?;
-            let _ = with_opens(|opens| opens.3.insert(walk_key, walked.clone()));
-            walked
-        }
+    let (found, trust) = if let Some(walked) = walked {
+        walked
+    } else {
+        let walked =
+            gix::discover::upwards_opts(start, discovery(&ceilings)).map_err(|_| refused())?;
+        let _ = with_opens(|opens| opens.3.insert(walk_key, walked.clone()));
+        walked
     };
     let (git_dir, worktree) = found.into_repository_and_work_tree_directories();
     let key = OpenKey {
