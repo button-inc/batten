@@ -268,6 +268,35 @@ fn the_recorded_drop_is_what_makes_check_pass_for_that_pr_and_session_only() {
     );
 }
 
+/// Fails by: `check` deciding with the whole ruleset rather than the one rule
+/// it names, so a rule that never reads this record refuses a recorded drop
+/// (CLOUD-2789).
+#[test]
+fn check_decides_with_its_named_rule_alone() {
+    let dir = repo("named-rule");
+    let mut config = std::fs::read_to_string(dir.join("batten.toml")).expect("the config");
+    config.push_str(
+        "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nseverity = \"deny\"\n\
+         glob = \"**/*.rs\"\npattern = \"TODO\"\nno_fix_reason = \"delete the marker\"\n",
+    );
+    write(&dir, "batten.toml", &config);
+    write(&dir, "src/a.rs", "fn main() {}\n// TODO fix me\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "a rule that refuses the tree"]);
+    let bystander = common::run(&dir, &["check", "--rule", "no-todo"]);
+    assert_eq!(
+        bystander.status.code(),
+        Some(2),
+        "the premise: the other rule refuses: {}",
+        said(&bystander)
+    );
+    let session = in_session("cse_fixture");
+    let recorded = task(&dir, "record", "489", &answer_for("489"), &session);
+    assert!(recorded.status.success(), "{}", said(&recorded));
+    let check = task(&dir, "check", "489", "", &session);
+    assert_eq!(check.status.code(), Some(0), "{}", said(&check));
+}
+
 #[test]
 fn record_refuses_an_answer_for_another_pr_and_an_empty_one_is_could_not_look() {
     let dir = repo("answers");

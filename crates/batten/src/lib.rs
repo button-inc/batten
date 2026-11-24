@@ -35178,6 +35178,96 @@ mod tests {
         assert!(!super::mcp_answers(&resolved, &dir, "linear"));
     }
 
+    /// Fails by: the writer's host judging links whatever this engine is, so a
+    /// build of the checkout rewrites the host's links (CLOUD-2124), or the
+    /// reader inheriting the writer's gate and reading an unwritten link as
+    /// fresh (CLOUD-2617).
+    #[test]
+    fn only_the_writer_carries_the_link_gate() {
+        let dir = crate::scratch::scratch("lib-provision-hosts");
+        std::fs::write(dir.join("batten.toml"), "version = 1\n").unwrap();
+        let config = crate::resolve::resolve(&dir, &crate::resolve::Overrides::default())
+            .expect("the authority resolves");
+        for links_host in [false, true] {
+            let site = super::ProvisionSite {
+                config: config.clone(),
+                repo: dir.clone(),
+                cache: dir.join("cache"),
+                links_host,
+                on_path: vec![dir.join("bin")],
+            };
+            assert_eq!(site.write_host().links, links_host, "the writer's gate");
+            assert!(site.judge_host().links, "the reader judges every link");
+            assert_eq!(site.write_host().on_path, site.judge_host().on_path);
+        }
+    }
+
+    /// Fails by: the transcript-only record (the mediated end of turn, which
+    /// skips the tree scan) folding an empty `not_evaluated`, which reads as
+    /// "every rule ran and saw nothing" and resolves a finding the scan found
+    /// (CLOUD-81's fail-open). nextest runs each case in its own process, so
+    /// the move into the fixture repository is this case's.
+    #[test]
+    fn a_record_that_skips_the_scan_holds_what_the_scan_found() {
+        let scratch = crate::scratch::scratch("lib-record-holds");
+        crate::testing::contain_state(&scratch.join("state"));
+        let repo = scratch.join("repo");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(
+            repo.join("batten.toml"),
+            "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nseverity = \"deny\"\n\
+             glob = \"**/*.rs\"\npattern = \"TODO\"\nno_fix_reason = \"delete the marker\"\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("src/a.rs"), "fn main() {}\n// TODO fix me\n").unwrap();
+        crate::gitwrite::commit_paths(
+            &repo,
+            &["batten.toml".to_owned(), "src/a.rs".to_owned()],
+            "fixture",
+        )
+        .unwrap();
+        std::env::set_current_dir(&repo).expect("enter the fixture");
+        let record = |scan_tree| {
+            super::run_state_record(
+                &super::Overrides::default(),
+                super::Mode::default(),
+                &mut std::io::sink(),
+                super::policy::ModuleChecks::Run,
+                super::facts::Surface::Check,
+                scan_tree,
+            )
+            .expect("the record runs")
+        };
+        let occurrences = || {
+            let store = super::store::commit(super::store::resolve(&repo).unwrap())
+                .unwrap()
+                .dir;
+            let records = super::findings::load_all(&store).unwrap();
+            let todo = records
+                .iter()
+                .find(|record| record.rule == "no-todo")
+                .expect("the scan recorded the marker");
+            todo.instances
+                .iter()
+                .map(|instance| instance.occurrences)
+                .collect::<Vec<_>>()
+        };
+        record(true);
+        assert_eq!(
+            occurrences(),
+            [super::findings::Observation::Observed(1)],
+            "the premise: the scan observed the marker"
+        );
+        record(false);
+        let held = occurrences();
+        assert_eq!(held.len(), 1, "{held:?}");
+        assert_ne!(
+            held[0].count(),
+            Some(0),
+            "a record that did not look resolved the finding: {held:?}"
+        );
+    }
+
     /// Fails by: a text leaf at or under the kept size replaced by the pointer,
     /// so a bounded result loses the short fields that carried no bulk. nextest
     /// runs each case in its own process, so the move into the fixture
