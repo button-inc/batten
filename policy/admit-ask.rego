@@ -24,6 +24,8 @@
 #MUTANT admit-label-unchecked|s@^\tnot labelled_admit(question)$@\tfalse@|an_admit_ask_without_the_exact_pair_is_refused
 #MUTANT admit-pair-unchecked|s@^\tnot paired(question)$@\tfalse@|an_admit_ask_naming_no_ledger_pair_is_refused
 #MUTANT single-answer-unchecked|s@^\tone_useful_answer(question)$@\tfalse@|a_question_with_one_useful_answer_is_refused
+#MUTANT ledger-pair-bare-unread|s@^paired(question) if regex.match(data.batten.patterns\["ledger-pair-bare"\], question.question)$@paired(question) if false@|a_bare_key_pair_is_asked
+#MUTANT ledger-pair-bare-unterminated|s@\\x27"\.\]@\\x27".\\s]@|a_prose_hyphen_is_not_a_pair
 
 # METADATA
 # description: |
@@ -58,6 +60,13 @@ labelled_admit(question) if {
 # question naming `batten.toml` and a rule id in prose passed the path check and
 # bound nothing, because no `rule-predicate-changed rule[<id>].<key>` stood in it.
 paired(question) if regex.match(data.batten.patterns["ledger-pair"], question.question)
+
+# A KEY THE ENGINE EMITS BARE OR DOTTED is a pair too (CLOUD-2920):
+# `strictness-lowered strictness`, `forge-credentials-removed
+# forge.credential_names`. Its own row because the key must close the pair
+# (`ledger-pair-bare`'s terminator), or any hyphenated word before any word
+# would read as one.
+paired(question) if regex.match(data.batten.patterns["ledger-pair-bare"], question.question)
 
 paths(question) := {token |
 	some token in regex.find_n(data.batten.patterns["finding-path"], question.question, -1)
@@ -181,11 +190,45 @@ ask(question, labels) := {"call": {
 	}]},
 }}
 
+bare_pair_regex := `\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ [A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*(?:[?,;:)\x60\x27".]|$)`
+
 judged(question, labels) := v if {
 	v := violation with input as ask(question, labels)
 		with data.batten.patterns["admit-asked"] as asked_regex
 		with data.batten.patterns["finding-path"] as path_regex
 		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["ledger-pair-bare"] as bare_pair_regex
+}
+
+# --- CLOUD-2920: a bare or dotted key is a pair ------------------------------
+
+test_a_bare_key_pair_is_asked if {
+	count(judged("Admit strictness-lowered strictness?", ["Admit", "Refuse"])) == 0
+}
+
+test_a_snake_key_pair_is_asked if {
+	count(judged("Admit promotion-disabled fail_on_warning?", ["Admit", "Refuse"])) == 0
+}
+
+test_a_dotted_key_pair_is_asked if {
+	count(judged("Admit forge-credentials-removed forge.credential_names?", ["Admit", "Refuse"])) == 0
+}
+
+test_a_backticked_bare_key_pair_is_asked if {
+	count(judged("Admit `strictness-lowered strictness`?", ["Admit", "Refuse"])) == 0
+}
+
+# The terminator is what keeps the arm meaningful: a hyphenated word in prose
+# followed by more prose is no pair.
+test_a_prose_hyphen_is_not_a_pair if {
+	count(judged("Admit the follow-up change to batten.toml?", ["Admit", "Refuse"])) > 0
+}
+
+# The committed row, unbound: `policy test` supplies `batten.toml`'s patterns,
+# so drift between it and `bare_pair_regex` reddens this case.
+test_the_committed_bare_pair_pattern_reads_a_bare_key if {
+	regex.match(data.batten.patterns["ledger-pair-bare"], "Admit strictness-lowered strictness?")
+	not regex.match(data.batten.patterns["ledger-pair-bare"], "Admit the follow-up change to batten.toml?")
 }
 
 # The #1276 fourth round: a path and a rule id in prose, no pair side by side.

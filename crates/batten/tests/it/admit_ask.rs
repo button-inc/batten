@@ -29,6 +29,9 @@ fn fixture(name: &str) -> std::path::PathBuf {
              [[pattern]]\n\
              id = \"ledger-pair\"\n\
              regex = '\\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_][A-Za-z0-9_.]*\\[[^\\]]+\\](?:\\.[A-Za-z0-9_]+)*)'\n\n\
+             [[pattern]]\n\
+             id = \"ledger-pair-bare\"\n\
+             regex = '\\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ [A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)*(?:[?,;:)\\x60\\x27\".]|$)'\n\n\
              [[verdict]]\n\
              id = \"call ask loose\"\n\
              gloss = \"a question asks to admit a finding in words the ledger cannot bind\"\n\
@@ -166,5 +169,30 @@ fn a_question_with_one_useful_answer_is_refused() {
     assert!(
         !choice.contains(VERDICT),
         "two real choices are asked: {choice}"
+    );
+}
+
+/// Fails by: an admission whose finding the engine keys bare or dotted
+/// (`strictness-lowered strictness`, `forge-credentials-removed
+/// forge.credential_names`) refused as naming no pair, so it can never be
+/// asked; or a hyphenated word in prose read as a pair (CLOUD-2920).
+#[test]
+fn a_bare_or_dotted_key_pair_is_asked() {
+    let dir = fixture("admit-ask-bare");
+    for question in [
+        "Admit strictness-lowered strictness?",
+        "Admit forge-credentials-removed forge.credential_names?",
+    ] {
+        let said = ask(&dir, question, &["Admit", "Refuse"]);
+        assert!(!said.contains(VERDICT), "{question} is asked: {said}");
+    }
+    let prose = ask(
+        &dir,
+        "Admit the follow-up change to batten.toml?",
+        &["Admit", "Refuse"],
+    );
+    assert!(
+        prose.contains("\"deny\"") && prose.contains(VERDICT),
+        "a hyphenated word in prose is no pair: {prose}"
     );
 }
