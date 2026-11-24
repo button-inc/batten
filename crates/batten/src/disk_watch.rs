@@ -76,6 +76,11 @@ pub struct DiskWatch<'a> {
     pub free_mb: Box<dyn FnMut() -> anyhow::Result<u64> + Send + 'a>,
     /// Files no collection removes ([`crate::collect::kept`]).
     pub kept: Vec<crate::collect::Kept>,
+    /// The directory a pass reads cargo-mutants' staged copies from: the
+    /// process's temp directory, where cargo-mutants stages them. A case names
+    /// one of its own, so it never frees a copy another suite's sweep left
+    /// there (CLOUD-2789).
+    pub copies: PathBuf,
     /// Where each collection's lines go the moment it ends (CLOUD-2782):
     /// `land` points it at the lap record. `None` keeps them for the join alone.
     pub record: Option<RecordSink<'a>>,
@@ -89,6 +94,7 @@ impl std::fmt::Debug for DiskWatch<'_> {
             .field("repo", &self.repo)
             .field("config", &self.config)
             .field("free_mb", &"<reader>")
+            .field("copies", &self.copies)
             .field("record", &self.record.as_ref().map(|_| "<sink>"))
             .finish_non_exhaustive()
     }
@@ -104,6 +110,7 @@ struct Sampler<'scope, 'env> {
     repo: PathBuf,
     config: &'scope crate::config_model::Prune,
     kept: Vec<crate::collect::Kept>,
+    copies: PathBuf,
     min: u64,
     reader: Reader<'scope>,
     lines: Arc<Mutex<Vec<String>>>,
@@ -176,6 +183,7 @@ impl Sampler<'_, '_> {
             let _ = done.join();
         }
         let (repo, kept, config) = (self.repo.clone(), self.kept.clone(), self.config);
+        let copies = self.copies.clone();
         let (reader, lines, collecting, sink, settled) = (
             Arc::clone(&self.reader),
             Arc::clone(&self.lines),
@@ -196,8 +204,14 @@ impl Sampler<'_, '_> {
             // passes during one `land` lap each logged `disk-held ./target` and
             // freed nothing while 6.9GB of stale scratch sat in that tree, and
             // the lap died at `No space left on device`.
-            if let Some(done) = crate::collect::collect_toward_max(
-                &repo, config, &kept, free, &mut read, None, true,
+            if let Some(done) = crate::collect::collect_toward_max_in(
+                &repo,
+                config,
+                &kept,
+                free,
+                &mut read,
+                (None, true),
+                &copies,
             ) {
                 let new = done.lines();
                 if let Ok(mut lines) = lines.lock() {
@@ -265,6 +279,7 @@ fn watch_on<'scope>(
             config,
             free_mb,
             kept,
+            copies,
             record,
         } = watch;
         let Some((min, _)) = config.free_band() else {
@@ -281,6 +296,7 @@ fn watch_on<'scope>(
             repo,
             config,
             kept,
+            copies,
             min,
             reader: Arc::new(Mutex::new(free_mb)),
             lines: Arc::new(Mutex::new(Vec::new())),
@@ -564,6 +580,13 @@ impl Drop for Stop<'_> {
 mod tests {
     use super::*;
 
+    /// A copies directory no case creates: the pass reads no cargo-mutants
+    /// copy, so a case never frees one another suite's sweep staged
+    /// (CLOUD-2789).
+    fn no_copies() -> PathBuf {
+        PathBuf::new()
+    }
+
     /// Fails by: the floor's stop test inverted, so a watcher with no runtime
     /// never samples until it is stopped, and then never ends.
     #[test]
@@ -614,6 +637,7 @@ mod tests {
                 Ok(0)
             }),
             kept: Vec::new(),
+            copies: no_copies(),
             record: None,
         };
         reset_low_water();
@@ -645,6 +669,7 @@ mod tests {
             config: &config,
             free_mb: Box::new(|| Ok(0)),
             kept: Vec::new(),
+            copies: no_copies(),
             record: None,
         };
         let printed = format!("{watch:?}");
@@ -745,6 +770,7 @@ mod tests {
                 Ok(if taken == 0 { 9 } else { 50 })
             }),
             kept: Vec::new(),
+            copies: no_copies(),
             record: None,
         };
         let ((), lines) = around(Some(watch), || {
@@ -813,6 +839,7 @@ mod tests {
                 Ok(reading)
             }),
             kept: Vec::new(),
+            copies: no_copies(),
             record: sink,
         }
     }
@@ -890,6 +917,7 @@ mod tests {
                 Ok(50)
             }),
             kept: Vec::new(),
+            copies: no_copies(),
             record: None,
         };
         let (observed, lines) = around(Some(watch), || {
@@ -962,6 +990,7 @@ mod tests {
                 Ok(50)
             }),
             kept: Vec::new(),
+            copies: no_copies(),
             record: None,
         };
         let ((), _) = around(Some(watch), || {

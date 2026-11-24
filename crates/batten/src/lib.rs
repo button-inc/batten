@@ -15161,6 +15161,7 @@ fn disk_watcher<'a>(
         config,
         free_mb: Box::new(free_mb),
         kept: collect::engine_kept(),
+        copies: std::env::temp_dir(),
         record: None,
     })
 }
