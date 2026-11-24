@@ -311,14 +311,29 @@ pub fn land_state(facts: &LandFacts) -> LandState {
             }
         }
         Read::Draft { target } => {
-            let version = facts.tag.trim_start_matches('v');
+            // PARSED IDENTITY (CLOUD-2906): the pin and version at the target are
+            // the tag's own, build metadata included; text that only looks equal
+            // is not.
+            let tag = crate::version::Tag::parse(&facts.tag);
+            let version = tag
+                .as_ref()
+                .map_or_else(String::new, |tag| tag.version.to_string());
+            let pinned = facts
+                .pin_at_target
+                .as_deref()
+                .and_then(crate::version::Tag::parse);
+            let at_target = facts
+                .version_at_target
+                .as_deref()
+                .and_then(crate::version::parse);
             let baked = is_baked(facts, target);
             if !full_sha(target) || (*target != facts.sha && !baked) {
                 LandState::DraftBad(format!("its target {target} is not {}", facts.sha))
             } else if facts.tag_ref.as_ref().is_some_and(|at| at != target) {
                 LandState::DraftBad(format!("refs/tags/{} is at another commit", facts.tag))
-            } else if facts.pin_at_target.as_deref() != Some(facts.tag.as_str())
-                || facts.version_at_target.as_deref() != Some(version)
+            } else if tag.is_none()
+                || pinned != tag
+                || at_target.as_ref() != tag.as_ref().map(|tag| &tag.version)
             {
                 LandState::DraftBad(format!(
                     "the pin and version at {target} are not {} and {version}",
@@ -372,19 +387,15 @@ pub fn unusable(found: &Found, reachable: bool, tag_exists: bool) -> Option<Unus
 }
 
 /// The next patch version: `0.0.214` → `0.0.215`, or `None` for a version
-/// that is not three dot-separated numbers.
+/// that is not semver, or carries a pre-release or build metadata — a patch base
+/// is a release (CLOUD-2906).
 #[must_use]
 pub fn next_version(version: &str) -> Option<String> {
-    let mut parts: Vec<u64> = version
-        .split('.')
-        .map(str::parse)
-        .collect::<Result<_, _>>()
-        .ok()?;
-    if parts.len() != 3 {
+    let version = crate::version::parse(version)?;
+    if !crate::version::is_release(&version) || !version.build.is_empty() {
         return None;
     }
-    parts[2] += 1;
-    Some(format!("{}.{}.{}", parts[0], parts[1], parts[2]))
+    Some(semver::Version::new(version.major, version.minor, version.patch + 1).to_string())
 }
 
 /// The four files a bump moves, as text in and text out.
@@ -466,11 +477,12 @@ fn bump_lock(lock: &str, packages: &[String], old_line: &str, new_line: &str) ->
 /// moved to X+1, or `None` where no such heading exists.
 fn bump_heading(changelog: &str, from: &str, to: &str) -> Option<String> {
     let opener = format!("## [{from}]");
+    let want = crate::version::parse(from)?;
     let mut found = false;
     let lines: Vec<String> = changelog
         .lines()
         .map(|line| {
-            if !found && line.starts_with(&opener) {
+            if !found && crate::engine::heading_version(line).as_ref() == Some(&want) {
                 found = true;
                 line.replacen(&opener, &format!("## [{to}]"), 1).replacen(
                     &format!("...v{from})"),
@@ -1147,7 +1159,9 @@ pub fn run_bump_unusable(
         config,
         changelog: log,
     };
-    let (to, bumped) = match bump(&files, tag.trim_start_matches('v'), &packages) {
+    let from =
+        crate::version::Tag::parse(tag).map_or_else(String::new, |tag| tag.version.to_string());
+    let (to, bumped) = match bump(&files, &from, &packages) {
         Ok(bumped) => bumped,
         Err(why) => {
             writeln!(err, "release bump-unusable: {tag}: {why}")?;
@@ -1181,10 +1195,12 @@ pub fn run_bump_unusable(
 /// heading up to the next `## [` heading — or `None` where there is none.
 #[must_use]
 pub fn section(changelog: &str, version: &str) -> Option<String> {
-    let opener = format!("## [{version}]");
+    // FOUND BY THE PARSED VERSION (CLOUD-2906), so `## [1.0.0]` is never the
+    // section of `1.0.0-rc.1` because it shares a prefix with it.
+    let want = crate::version::parse(version)?;
     let mut lines = changelog
         .lines()
-        .skip_while(|line| !line.starts_with(&opener));
+        .skip_while(|line| crate::engine::heading_version(line).as_ref() != Some(&want));
     lines.next()?;
     let mut body = Vec::new();
     for line in lines {
@@ -1305,7 +1321,9 @@ fn run_cut_in(
             Discarded::Undeleted(path, None) => return Err(format!("{path} did not answer")),
         }
         let text = crate::git::show(here, sha, changelog).map_err(|why| why.to_string())?;
-        let Some(notes) = section(&text, tag.trim_start_matches('v')) else {
+        let version =
+            crate::version::Tag::parse(tag).map_or_else(String::new, |tag| tag.version.to_string());
+        let Some(notes) = section(&text, &version) else {
             return Ok(Err(format!(
                 "{changelog} at {sha} has no section for {tag}"
             )));
@@ -1558,12 +1576,32 @@ pub fn run_pin(
             return Ok(crate::ExitCode::Internal);
         }
     };
-    if let Some(pin) = crate::release_path::pin_of(&text) {
-        writeln!(out, "{pin}")?;
-        Ok(crate::ExitCode::Success)
-    } else {
-        writeln!(err, "release pin: batten.toml pins no release")?;
-        Ok(crate::ExitCode::Violation)
+    match cuttable_pin(&text) {
+        Ok(pin) => {
+            writeln!(out, "{pin}")?;
+            Ok(crate::ExitCode::Success)
+        }
+        Err(why) => {
+            writeln!(err, "release pin: {why}")?;
+            Ok(crate::ExitCode::Violation)
+        }
+    }
+}
+
+/// The release `config` pins, when it is one a release step may cut: a tag,
+/// parsed, and a release (CLOUD-2906). A pre-release, or a pin that is not a
+/// tag at all, is never handed to a release step.
+///
+/// # Errors
+///
+/// Why there is no such pin, as the pointer [`run_pin`] prints.
+pub fn cuttable_pin(config: &str) -> Result<String, String> {
+    let pin = crate::release_path::pin_of(config)
+        .ok_or_else(|| String::from("batten.toml pins no release"))?;
+    match crate::version::Tag::parse(&pin) {
+        Some(tag) if tag.is_release() => Ok(pin),
+        Some(_) => Err(format!("{pin} is a pre-release, which is never cut")),
+        None => Err(format!("{pin} is not a release tag")),
     }
 }
 
@@ -1937,11 +1975,7 @@ mod tests {
         use std::fmt::Write as _;
         let mut sums = String::new();
         for target in crate::install::TARGETS {
-            let stem = crate::dist::archive_stem(
-                env!("CARGO_PKG_NAME"),
-                tag.trim_start_matches('v'),
-                target,
-            );
+            let stem = crate::dist::tag_archive_stem(env!("CARGO_PKG_NAME"), tag, target);
             let _ = writeln!(
                 sums,
                 "{}  {stem}{}",
@@ -2126,6 +2160,33 @@ mod tests {
             ..facts(SHA)
         };
         assert!(matches!(land_state(&wrong_version), LandState::DraftBad(_)));
+    }
+
+    #[test]
+    fn a_pre_release_pin_is_never_cut() {
+        let config = |pin: &str| format!("version = 1\nengine = {{ release = \"{pin}\" }}\n");
+        assert_eq!(cuttable_pin(&config("v0.0.221")), Ok("v0.0.221".to_owned()));
+        assert!(cuttable_pin(&config("v0.0.221-dev.pr1.20261124T050057Z+3f9c2a1b7d04")).is_err());
+        assert!(cuttable_pin(&config("v0.0.221-rc.1")).is_err());
+        assert!(cuttable_pin(&config("vv0.0.221")).is_err());
+        assert!(cuttable_pin("version = 1\n").is_err());
+    }
+
+    #[test]
+    fn a_pre_release_or_non_semver_is_not_a_patch_base() {
+        assert_eq!(next_version("0.0.214").as_deref(), Some("0.0.215"));
+        assert_eq!(next_version("0.0.221-dev.1"), None);
+        assert_eq!(next_version("0.00.221"), None);
+        assert_eq!(next_version("0.0.221+b"), None);
+        assert_eq!(next_version("0.0.221.1"), None);
+    }
+
+    #[test]
+    fn a_section_is_found_by_its_parsed_version_and_never_by_a_prefix() {
+        let log = "## [1.0.0-rc.1] - 2026-01-01\nrc\n## [1.0.0] - 2026-01-02\nfinal\n";
+        assert_eq!(section(log, "1.0.0").as_deref(), Some("final"));
+        assert_eq!(section(log, "1.0.0-rc.1").as_deref(), Some("rc"));
+        assert_eq!(section(log, "v1.0.0"), None);
     }
 
     #[test]

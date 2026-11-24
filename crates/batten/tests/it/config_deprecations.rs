@@ -79,13 +79,21 @@ use common::{batten, git_in, scratch};
 /// `None` is could-not-look and never a pass. A fresh clone with no tags fetched
 /// has no baseline, and reporting "nothing was removed" having compared nothing is
 /// the vacuous pass CLOUD-251 names.
+///
+/// The oracle parses every `v*` tag through the one semver reading and takes the
+/// greatest RELEASE by precedence (CLOUD-2906): git's own version sort ranks
+/// `v1.0.0-rc1` above `v1.0.0` unless `versionsort.suffix` is configured.
 fn latest_release_tag(root: &Path) -> Option<String> {
-    let listed = git_in(root, &["tag", "--list", "v*", "--sort=-v:refname"]);
+    let listed = git_in(root, &["tag", "--list", "v*"]);
     listed
         .lines()
-        .next()
-        .map(str::to_owned)
-        .filter(|tag| !tag.is_empty())
+        .filter_map(|name| {
+            batten::version::Tag::parse(name)
+                .filter(batten::version::Tag::is_release)
+                .map(|tag| (tag.version, name.to_owned()))
+        })
+        .max_by(|(left, _), (right, _)| batten::version::precedence(left, right))
+        .map(|(_, name)| name)
 }
 
 /// The schema this build derives from the config types.

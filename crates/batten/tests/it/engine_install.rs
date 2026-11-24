@@ -203,7 +203,7 @@ pub(crate) fn release_host(
         changelog.join("CHANGELOG.md"),
         format!(
             "# Changelog\n\n## [Unreleased]\n\n## [{}](https://example.invalid) - {MAIN_DATE}\n\n### Added\n\n- a thing\n\n## [8.8.8](https://example.invalid) - 2020-01-01\n",
-            main_pin.trim_start_matches('v')
+            batten::version::Tag::parse(main_pin).map_or_else(String::new, |tag| tag.version.to_string())
         ),
     )
     .unwrap();

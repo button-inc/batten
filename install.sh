@@ -36,7 +36,7 @@ get() {
 	esac
 }
 tag="${BATTEN_VERSION:-v0.0.221}"
-asset="batten-v${tag#v}-$target.tar.gz"
+asset="batten-$tag-$target.tar.gz"
 want=
 if [ -n "${BATTEN_VERSION:-}" ]; then
 	get "$base/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS" 1
