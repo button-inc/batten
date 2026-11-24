@@ -4504,6 +4504,30 @@ mod tests {
         assert_eq!(exec(&["exec", "--", "true"]).format, None);
     }
 
+    /// Fails by: `step env`'s `--exclude` taking one value, so a second
+    /// exclusion is refused or replaces the first rather than joining it.
+    #[test]
+    fn step_env_excludes_every_name_it_is_given() {
+        let Some(Command::Step {
+            command: StepCommand::Env { exclude, patterns },
+        }) = parse(&[
+            "step",
+            "env",
+            "--exclude",
+            "A_PID",
+            "--exclude",
+            "B_PID",
+            "--",
+            "A*",
+        ])
+        .command
+        else {
+            panic!("step env parses to its own arm");
+        };
+        assert_eq!(exclude, ["A_PID", "B_PID"]);
+        assert_eq!(patterns, ["A*"]);
+    }
+
     /// Fails by: an empty reference read as one to replay against.
     #[test]
     fn an_empty_land_reference_is_the_declared_trunk() {

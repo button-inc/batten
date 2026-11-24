@@ -114,4 +114,9 @@ exclude_re = [
   # At `at == end` the slice is empty, `path_at` finds nothing, and the walk
   # steps once past `end` and stops: the extra pass pushes no path (CLOUD-2789).
   'item_index\.rs:\d+:\d+: replace < with <= in paths_in$',
+  # `unexercised`'s outer guard only spares a sweep's setup: with either list
+  # empty its `while` (`swept < len && !unexercised.is_empty()`) runs no pass,
+  # so the same list comes back. Column 32 is the guard's `&&`, never the
+  # loop's, which would spin (CLOUD-2789).
+  'policy\.rs:\d+:32: replace && with \|\| in unexercised$',
 ]
