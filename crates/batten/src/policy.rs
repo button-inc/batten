@@ -8828,16 +8828,19 @@ violation contains {\"rule\": \"p\", \"verdict\": \"p\"} if {\n\tsome word in da
 test_p_matches if {\n\tcount(violation) == 1 with input as {\"call\": {\"command\": \"x\"}} with data.batten.patterns.p as [\"x\"]\n}\n";
 
     /// A `with` on one pattern row is planned: the plan refuses only a deeper
-    /// path. What the planned case then decides is the run's, not the plan's.
+    /// path. What the planned case then decides is the run's, not the plan's,
+    /// so every line this suite reports names the case it planned.
     ///
     /// Fails by: `with data.batten.patterns.p` refused at planning, as though
-    /// it named a path inside a row.
+    /// it named a path inside a row, which leaves the suite program no case.
     #[test]
     fn a_with_on_one_pattern_row_is_planned() {
         let bundle = bundle_of("row", &[("policy/p.rego", PATTERNED)]);
         let splits = suite_splits(&bundle, "{}");
         assert!(
-            !splits.iter().any(|line| line.contains("a `with` on")),
+            splits
+                .iter()
+                .all(|line| line.contains("test_p_matches") && !line.contains("a `with` on")),
             "{splits:?}"
         );
     }
