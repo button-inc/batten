@@ -2071,6 +2071,16 @@ fn parse(source: &str) -> Result<SourceFile, CouldNotLook> {
 mod tests {
     use super::*;
 
+    /// Fails by: a file's module path answered as anything but its own
+    /// segments, a `mod.rs` dropping out of the path it names.
+    #[test]
+    fn a_file_below_its_directory_names_its_module_path() {
+        assert_eq!(module_path(Path::new("schema.rs")), ["schema"]);
+        assert_eq!(module_path(Path::new("a/b.rs")), ["a", "b"]);
+        assert_eq!(module_path(Path::new("a/mod.rs")), ["a"]);
+        assert!(module_path(Path::new("mod.rs")).is_empty());
+    }
+
     fn graph(edges: &[(&str, &[&str])]) -> Graph {
         Graph {
             edges: edges
