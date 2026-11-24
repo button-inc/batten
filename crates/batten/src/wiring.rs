@@ -592,23 +592,101 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     };
     let (root, repo) = (git::canonical(root), git::canonical(repo));
     out.above = repo != root && repo.starts_with(&root);
-    let harness = crate::config_model::Harness::ClaudeCode;
-    let (true, Some(wiring)) = (out.above, harness.wiring()) else {
+    if !out.above {
         return Ok(out);
+    }
+    // `wiring register` as it always was: a surface that will not parse is left
+    // alone and owes nothing, and a link is rewritten only when an event is
+    // owed — never for being a link (CLOUD-2752's Ready block, mechanism 3).
+    let surface = register_root(&root, check || !out.authoritative, false)?;
+    (out.events, out.written) = (surface.events, surface.written);
+    Ok(out)
+}
+
+/// What [`register_root`] found at a root's surface, and did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RootSurface {
+    /// The surface's path.
+    pub path: PathBuf,
+    /// The events the surface lacked batten on.
+    pub events: Vec<String>,
+    /// Whether the surface is a link owed a rewrite as a regular file. Only
+    /// ever true when the caller asked for links to be replaced.
+    pub relink: bool,
+    /// Why the surface could not be read as a JSON object, when it could not.
+    /// Nothing is written then, and nothing is owed that a write could repair.
+    pub unreadable: Option<String>,
+    /// Whether the surface was rewritten. Never under `check`.
+    pub written: bool,
+}
+
+impl RootSurface {
+    /// Whether anything is owed: a missing event, or a link to replace.
+    #[must_use]
+    pub fn owed(&self) -> bool {
+        !self.events.is_empty() || self.relink
+    }
+}
+
+/// Register batten on the project surface of `root` itself, with no test of
+/// where a repository sits or whether the environment is disposable
+/// (CLOUD-2752).
+///
+/// The writer [`register`] gates, pulled out for `batten startup --repair` run
+/// where no config exists: that run IS the consent to write there, so neither of
+/// [`register`]'s tests applies. Answers what the surface owed and whether it was
+/// rewritten — never under `check`.
+///
+/// `relink`: a linked surface is owed a rewrite as a regular file even when it
+/// lacks nothing. `startup` asks for that; [`register`] does not, so its
+/// behaviour is what it was.
+///
+/// # Errors
+///
+/// When the surface parsed and cannot be written back.
+pub fn register_root(root: &Path, check: bool, relink: bool) -> Result<RootSurface> {
+    let harness = crate::config_model::Harness::ClaudeCode;
+    let Some(wiring) = harness.wiring() else {
+        return Ok(RootSurface::default());
     };
     let surface = match wiring.file {
         hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
     };
     let path = root.join(surface);
+    let mut out = RootSurface {
+        path: path.clone(),
+        ..RootSurface::default()
+    };
+    // A link at the root is not a registration `startup` stands behind: what
+    // it resolves to can move or vanish with the checkout it points into, and a
+    // host may refuse to follow it. So, when asked, a linked surface is owed a
+    // rewrite as a regular file carrying what it resolved to, even when that
+    // lacks nothing (CLOUD-2752).
+    out.relink =
+        relink && std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink());
     let mut document = match crate::fsio::read_to_string(&path) {
         Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
             Ok(document) if document.is_object() => document,
-            _ => return Ok(out),
+            Ok(_) => {
+                out.unreadable = Some(String::from("not a JSON object"));
+                out.relink = false;
+                return Ok(out);
+            }
+            Err(error) => {
+                out.unreadable = Some(format!("not JSON: {error}"));
+                out.relink = false;
+                return Ok(out);
+            }
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             serde_json::Value::Object(serde_json::Map::new())
         }
-        Err(_) => return Ok(out),
+        Err(error) => {
+            out.unreadable = Some(format!("unreadable: {error}"));
+            out.relink = false;
+            return Ok(out);
+        }
     };
     let spellings: Vec<&str> = wiring
         .registrations(harness)
@@ -622,12 +700,13 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
         &hook::wiring_command(harness),
         harness,
     );
-    if out.events.is_empty() || check || !out.authoritative {
+    if !out.owed() || check {
         return Ok(out);
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // The rename replaces a link itself, never the file it points at.
     // Write-then-rename for `reclaim`'s reason: the document carries keys this
     // verb never read, and a truncating write could lose them.
     let staged = path.with_extension("json.batten-tmp");

@@ -185,6 +185,36 @@ impl crate::output::Line for Outcome {
     }
 }
 
+/// A member's own `startup` exited non-zero: one of its rows failed.
+pub const MEMBER_FAILED: &str = "member-failed";
+/// A member's own `startup` could not be spawned.
+pub const MEMBER_UNRUNNABLE: &str = "member-unrunnable";
+
+/// Run the authority `member`'s own rows as a child `batten startup` whose
+/// working directory IS that member, repairing when asked (CLOUD-2752).
+///
+/// A CHILD, not the rows run in-process from the root: the engine follows a pin
+/// by reading the working directory's worktree, so rows run from the root would
+/// run under the installed engine and not under the member's pinned one. The
+/// child is spawned through [`ran_clean`], the one spawn path this module has,
+/// and is read by its exit status alone — the member's own report is its own.
+#[must_use]
+pub fn delegate(member: &Path, repair: bool) -> Outcome {
+    let id = member.display().to_string();
+    let Ok(engine) = std::env::current_exe() else {
+        return Outcome::failed(&id, MEMBER_UNRUNNABLE);
+    };
+    let mut argv = vec![engine.to_string_lossy().into_owned(), "startup".to_owned()];
+    if repair {
+        argv.push("--repair".to_owned());
+    }
+    match ran_clean(member, &argv, Decided::ExitStatus) {
+        Some(true) => Outcome::passed(&id),
+        Some(false) => Outcome::failed(&id, MEMBER_FAILED),
+        None => Outcome::failed(&id, MEMBER_UNRUNNABLE),
+    }
+}
+
 /// Run one declared argv under `root` and report whether it exited zero.
 ///
 /// `None` is could-not-look: the program could not be spawned at all, which is

@@ -77,6 +77,30 @@ fn a_setup_run_registers_every_root_a_session_could_have() {
     assert_eq!(settled.status.code(), Some(0), "{}", stderr(&settled));
 }
 
+/// `wiring register` is UNCHANGED by CLOUD-2752: a linked surface that already
+/// carries every event owes nothing and is left a link. Only `startup` replaces
+/// a link. Fails by: `register` asking for the relink, which rewrites the link
+/// as a regular file though no event is owed.
+#[cfg(unix)]
+#[test]
+fn a_linked_surface_owing_no_event_is_left_a_link() {
+    let (home, repo) = layout("wiring-register-linked");
+    let done = register(&home, &repo, "disposable", &[]);
+    assert_eq!(done.status.code(), Some(0), "{}", stderr(&done));
+    let root = home.join("sessions").join("clones");
+    let surface = root.join(".claude/settings.json");
+    let target = root.join("held.json");
+    std::fs::rename(&surface, &target).expect("move the registration aside");
+    std::os::unix::fs::symlink(&target, &surface).expect("link the root surface");
+    let again = register(&home, &repo, "disposable", &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    let meta = std::fs::symlink_metadata(&surface).expect("the root surface");
+    assert!(
+        meta.file_type().is_symlink(),
+        "nothing owed, nothing rewritten"
+    );
+}
+
 #[test]
 fn a_setup_run_never_registers_on_the_user_level_surface() {
     // The bound. The project surface at `$HOME` is the user-level one, loaded by a
