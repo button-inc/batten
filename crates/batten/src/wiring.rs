@@ -592,42 +592,69 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     };
     let (root, repo) = (git::canonical(root), git::canonical(repo));
     out.above = repo != root && repo.starts_with(&root);
-    let harness = crate::config_model::Harness::ClaudeCode;
-    let (true, Some(wiring)) = (out.above, harness.wiring()) else {
+    if !out.above {
         return Ok(out);
+    }
+    (out.events, out.written) = register_root(&root, check || !out.authoritative)?;
+    Ok(out)
+}
+
+/// Register batten on the project surface of `root` itself, with no test of
+/// where a repository sits or whether the environment is disposable
+/// (CLOUD-2752).
+///
+/// The writer [`register`] gates, pulled out for `batten startup --repair` run
+/// where no config exists: that run IS the consent to write there, so neither of
+/// [`register`]'s tests applies. Returns the events the surface lacked batten on
+/// and whether it was rewritten — never under `check`.
+///
+/// # Errors
+///
+/// When the surface parsed and cannot be written back.
+pub fn register_root(root: &Path, check: bool) -> Result<(Vec<String>, bool)> {
+    let harness = crate::config_model::Harness::ClaudeCode;
+    let Some(wiring) = harness.wiring() else {
+        return Ok((Vec::new(), false));
     };
     let surface = match wiring.file {
         hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
     };
     let path = root.join(surface);
+    // A link at the root is not a registration this verb stands behind: what
+    // it resolves to can move or vanish with the checkout it points into, and a
+    // host may refuse to follow it. So a linked surface is owed a rewrite as a
+    // regular file carrying what it resolved to, even when that lacks nothing
+    // (CLOUD-2752).
+    let linked = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink());
     let mut document = match crate::fsio::read_to_string(&path) {
         Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
             Ok(document) if document.is_object() => document,
-            _ => return Ok(out),
+            _ => return Ok((Vec::new(), false)),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             serde_json::Value::Object(serde_json::Map::new())
         }
-        Err(_) => return Ok(out),
+        Err(_) => return Ok((Vec::new(), false)),
     };
     let spellings: Vec<&str> = wiring
         .registrations(harness)
         .into_iter()
         .map(|(_, spelling)| spelling)
         .collect();
-    out.events = add_missing(
+    let events = add_missing(
         &mut document,
         wiring.file,
         &spellings,
         &hook::wiring_command(harness),
         harness,
     );
-    if out.events.is_empty() || check || !out.authoritative {
-        return Ok(out);
+    if (events.is_empty() && !linked) || check {
+        return Ok((events, false));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // The rename replaces a link itself, never the file it points at.
     // Write-then-rename for `reclaim`'s reason: the document carries keys this
     // verb never read, and a truncating write could lose them.
     let staged = path.with_extension("json.batten-tmp");
@@ -636,8 +663,7 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
         format!("{}\n", serde_json::to_string_pretty(&document)?),
     )?;
     std::fs::rename(&staged, &path)?;
-    out.written = true;
-    Ok(out)
+    Ok((events, true))
 }
 
 /// The live session's root: the cwd of the harness process `$CLAUDE_PID`

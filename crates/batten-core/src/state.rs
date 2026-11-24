@@ -244,6 +244,108 @@ pub fn recorded_session_authority_in(state: &Path, session: &str, file: &str) ->
     (root.is_absolute() && root.join(file).is_file()).then_some(root)
 }
 
+/// The file recording the authorities found around a session root (CLOUD-2752),
+/// under the state root `state`.
+///
+/// Keyed by a fingerprint of the root's CANONICAL path, for
+/// [`session_authority_file`]'s reason, and because `startup` writes it from the
+/// directory the Setup script stands in while the hook reads it from wherever the
+/// host roots the session, through whatever symlink either took.
+fn root_authorities_file(state: &Path, root: &Path) -> PathBuf {
+    let key = crate::identity::store_fingerprint(&[&root.to_string_lossy()]).to_hex();
+    state.join("roots").join(key).join("authorities")
+}
+
+/// Record `members` as the authorities found around the session root `root`,
+/// one absolute path per line, in the order given.
+///
+/// # Errors
+///
+/// Returns an error when the state root cannot be resolved or the record cannot
+/// be written.
+pub fn record_root_authorities(root: &Path, members: &[PathBuf]) -> Result<()> {
+    write_root_authorities(&root_authorities_file(&state_root()?, root), members)
+}
+
+fn write_root_authorities(path: &Path, members: &[PathBuf]) -> Result<()> {
+    let mut text = String::new();
+    for member in members {
+        text.push_str(&member.to_string_lossy());
+        text.push('\n');
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    crate::durable::replace(path, text.as_bytes())
+        .with_context(|| format!("write {}", path.display()))
+}
+
+/// Every member recorded for `root` as it stands on disk, ghosts included, or
+/// `None` when `root` is not a registered root.
+fn recorded_root_members(path: &Path) -> Option<Vec<PathBuf>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    Some(
+        text.lines()
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+    )
+}
+
+/// The authorities recorded for the session root `root`, in recorded order, each
+/// still carrying `file`; `None` when `root` is not a registered root.
+#[must_use]
+pub fn recorded_root_authorities(root: &Path, file: &str) -> Option<Vec<PathBuf>> {
+    recorded_root_authorities_in(&state_root().ok()?, root, file)
+}
+
+/// [`recorded_root_authorities`] under the state root `state`.
+///
+/// A member is read with [`recorded_session_authority_in`]'s ghost check: a
+/// checkout deleted since Setup is never pinned for a call.
+#[must_use]
+pub fn recorded_root_authorities_in(state: &Path, root: &Path, file: &str) -> Option<Vec<PathBuf>> {
+    Some(
+        recorded_root_members(&root_authorities_file(state, root))?
+            .into_iter()
+            .filter(|member| member.is_absolute() && member.join(file).is_file())
+            .collect(),
+    )
+}
+
+/// Add the authority `member` to the set recorded for its parent directory, when
+/// that parent is a registered root and the set does not yet name it.
+///
+/// The code calling this knows only its own directory, so it reads the ONE
+/// record keyed by the parent: no record there means no registered root, and
+/// nothing is written. The member joins the children in its sorted place; the
+/// ancestors keep their place after them. Returns whether the record changed.
+///
+/// # Errors
+///
+/// Returns an error when the state root cannot be resolved or the record cannot
+/// be written.
+pub fn grow_root_authorities(member: &Path) -> Result<bool> {
+    let Some(root) = member.parent() else {
+        return Ok(false);
+    };
+    let path = root_authorities_file(&state_root()?, root);
+    let Some(held) = recorded_root_members(&path) else {
+        return Ok(false);
+    };
+    if held.iter().any(|known| known == member) {
+        return Ok(false);
+    }
+    let (mut children, ancestors): (Vec<PathBuf>, Vec<PathBuf>) = held
+        .into_iter()
+        .partition(|known| known.parent() == Some(root));
+    children.push(member.to_path_buf());
+    children.sort();
+    children.extend(ancestors);
+    write_root_authorities(&path, &children)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
