@@ -2467,6 +2467,11 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
         cli::EngineCommand::Digest => writeln!(out, "{}", engine::digest(&root)?)?,
         cli::EngineCommand::Stamp => {
             let digest = engine::digest(&root)?;
+            // THE BINARY ATTESTS ITS OWN SOURCE (CLOUD-2903): the stamp is
+            // written only when the digest the build embedded is this tree's.
+            if let Some(why) = engine::stamp_refusal(config::VERSION, &digest) {
+                return Err(UsageError::raise(format!("engine stamp: {why}")));
+            }
             let binary = std::env::current_exe()?;
             engine::stamp(&binary, &digest)?;
             writeln!(out, "{}", engine::stamp_path(&binary).display())?;
@@ -24142,6 +24147,19 @@ fn adopted_line(tag: &str) -> String {
 /// # Errors
 ///
 /// A config that fails to load, or a write that fails.
+/// Whether a running engine whose identity is `tag` may write itself into an
+/// unpinned consumer config: only a RELEASE.
+///
+/// A DEV BUILD NEVER PINS ITSELF (CLOUD-2906, and the review of #1291's
+/// MEDIUM 3): a dev pre-release IS published (`dev/`, CLOUD-2903) and its
+/// SHA256SUMS answers, so without this a hook engine built from a PR head wrote
+/// `engine = { release = "v…-dev…" }` into a consumer's file. A dev pin is the
+/// deliberate act of a branch pinning its own published build (`engine pin
+/// <tag>`), never something a session adopts.
+fn adoptable(tag: &str) -> bool {
+    crate::version::Tag::parse(tag).is_some_and(|tag| tag.is_release())
+}
+
 fn adopt_engine_key(root: &Path, overrides: &Overrides) -> Result<Option<String>> {
     // An override names ANOTHER authority than `root`'s file, so a clean load
     // under it says nothing about the bytes this would write.
@@ -24161,9 +24179,7 @@ fn adopt_engine_key(root: &Path, overrides: &Overrides) -> Result<Option<String>
     }
     resolve::resolve(root, overrides)?;
     let tag = engine::release();
-    // A DEV BUILD NEVER PINS ITSELF (CLOUD-2906): its identity is a
-    // pre-release, and a pre-release is never shipped.
-    if !crate::version::Tag::parse(&tag).is_some_and(|tag| tag.is_release()) {
+    if !adoptable(&tag) {
         return Ok(None);
     }
     let cache = state::repo_state_dir(root)?;
@@ -34301,7 +34317,6 @@ mod mutation_markers;
 /// The build's identity (CLOUD-2903): `build.rs` stamps it, and this
 /// declaration exists so its cases run here and an integration case can render
 /// one. No library code calls it; see the file's own header.
-#[path = "../build/identity.rs"]
 pub mod build_identity;
 
 #[cfg(test)]
@@ -34529,6 +34544,18 @@ mod tests {
                 .contains("run 77 is seen cancelled"),
         );
         assert_eq!(reads.next(), Some(None), "no read after the conclusion");
+    }
+
+    /// A release adopts itself into an unpinned config; a dev build, an rc and
+    /// a non-tag never do (CLOUD-2906, #1291 review MEDIUM 3).
+    #[test]
+    fn only_a_release_build_adopts_its_own_pin() {
+        assert!(super::adoptable("v0.0.221"));
+        assert!(!super::adoptable(
+            "v0.0.222-dev.pr1291.20261124120000+abcdef012345"
+        ));
+        assert!(!super::adoptable("v0.0.222-rc.1"));
+        assert!(!super::adoptable("0.0.221"));
     }
 
     /// Fails by: a declared pin read as no pin, so `engine install` installs
