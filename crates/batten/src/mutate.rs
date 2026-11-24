@@ -2799,24 +2799,29 @@ fn exits_within(
     count: usize,
     grace: std::time::Duration,
 ) -> usize {
-    let deadline = deadline_after(grace);
+    let started = std::time::Instant::now();
+    exits_within_by(exits, count, grace, || started.elapsed())
+}
+
+/// [`exits_within`] over a caller's reading of the time spent so far. THE
+/// CLOCK IS AN INPUT (CLOUD-2789): a case hands it a fixed reading and asserts
+/// the count, since the crate refuses both an assertion on the clock
+/// (`wall_clock`) and the sleep a delayed exit would need (`waiver add
+/// refused`).
+fn exits_within_by(
+    exits: &std::sync::mpsc::Receiver<()>,
+    count: usize,
+    grace: std::time::Duration,
+    elapsed: impl Fn() -> std::time::Duration,
+) -> usize {
     let mut arrived = 0;
     for _ in 0..count {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        if exits.recv_timeout(left).is_err() {
+        if exits.recv_timeout(grace.saturating_sub(elapsed())).is_err() {
             break;
         }
         arrived += 1;
     }
     arrived
-}
-
-/// The instant `grace` after now: where [`exits_within`] stops waiting. A
-/// SEPARATE FUNCTION so a case can see the deadline lies ahead without a
-/// delayed exit to prove it, since the crate refuses the sleep that would
-/// make one (`waiver add refused`).
-fn deadline_after(grace: std::time::Duration) -> std::time::Instant {
-    std::time::Instant::now() + grace
 }
 
 // ---------------------------------------------------------------------------
@@ -6423,31 +6428,43 @@ mod tests {
     /// An orphaned sweep's group that exits on TERM inside the grace is waited
     /// for, and one that never exits is waited for no longer than the grace.
     ///
-    /// Fails by: the deadline set before now (`+` read as `-`), so a group
-    /// that would have exited cleanly inside the grace gets KILL at once; or
-    /// an exit miscounted.
+    /// Fails by: the time spent read as more than it is, so a group that
+    /// would have exited cleanly inside the grace gets KILL at once; the
+    /// grace ignored, so a group that never exits holds the sweep past it (a
+    /// hang the runner's own timeout reports); or an exit miscounted.
     #[test]
     fn an_orphaned_sweep_waits_the_grace_for_its_groups() {
-        let grace = std::time::Duration::from_secs(30);
-        let before = std::time::Instant::now();
-        assert!(
-            deadline_after(grace) >= before + grace,
-            "the deadline lies a whole grace after now"
-        );
+        use std::time::Duration;
+        let grace = Duration::from_secs(3600);
         let (send, exits) = std::sync::mpsc::channel();
         send.send(()).unwrap();
         assert_eq!(
             exits_within(&exits, 1, grace),
             1,
-            "an exit inside a 30s grace is waited for"
+            "an exit inside the grace is waited for"
         );
-        let started = std::time::Instant::now();
         assert_eq!(
-            exits_within(&exits, 2, std::time::Duration::from_millis(50)),
+            exits_within(&exits, 2, Duration::from_millis(50)),
             0,
             "no exit arrives"
         );
-        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        assert_eq!(
+            exits_within_by(&exits, 1, grace, || grace),
+            0,
+            "a grace already spent waits no longer, though the group is alive"
+        );
+        assert_eq!(
+            exits_within_by(&exits, 3, grace, || grace + grace),
+            0,
+            "nor does one overspent"
+        );
+        send.send(()).unwrap();
+        send.send(()).unwrap();
+        assert_eq!(
+            exits_within_by(&exits, 3, Duration::from_millis(50), || Duration::ZERO),
+            2,
+            "every exit already in is counted, and only those"
+        );
         drop(send);
     }
 
