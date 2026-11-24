@@ -4938,6 +4938,10 @@ description = "Every gate verify runs, and the receipt — invoked through `veri
 # reported only after the full suite and three cross builds. They moved into the
 # body's one fan, below, behind the cheap gates.
 depends = ["tree-clean"]
+# THE DIST LEG AT THE LAP'S COST (CLOUD-2789), declared here rather than as a
+# `VAR=… mise run dist` prefix, which is shell form. Only `--profile dist`
+# reads these, so they reach the dist entry below and no other gate.
+env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "256", CARGO_PROFILE_DIST_OPT_LEVEL = "0", CARGO_PROFILE_DIST_INCREMENTAL = "true" }
 # THE FAN (operator ruling, 2026-11-11). Every independent gate runs in ONE
 # `mise run --continue-on-error` invocation, listed cheapest first: mise starts
 # them in that order within its job limit, so the seconds-cheap gates report
@@ -5046,8 +5050,9 @@ run = [
   # codegen unit cost 878 s cold here, every lap. What this leg proves (cargo-dist
   # builds through `cargo auditable`, the archive stages, the inventory reads
   # the binary) holds at `opt-level = 0`, so the profile is overridden for this
-  # entry alone: 145 s cold, and the same 318 packages inventoried.
-  "CARGO_PROFILE_DIST_LTO=false CARGO_PROFILE_DIST_CODEGEN_UNITS=256 CARGO_PROFILE_DIST_OPT_LEVEL=0 CARGO_PROFILE_DIST_INCREMENTAL=true mise run dist {{vars.dist_host}} --build-tool cargo-dist",
+  # entry alone, through this task's `env`: 145 s cold, and the same 318
+  # packages inventoried.
+  "mise run dist {{vars.dist_host}} --build-tool cargo-dist",
   "mise run sbom-binary target/{{vars.dist_host}}/dist/batten {{vars.dist_host}}",
   "mise run sbom-binary-check",
   "mise run --continue-on-error --jobs 1 verify:ci-suite ::: verify:ci-slow-needed",
