@@ -815,6 +815,11 @@ mod tests {
         };
         assert!(chain(200).is_some(), "a chain under the bound resolves");
         assert_eq!(chain(300), None);
+        // THE BOUND ITSELF (CLOUD-2789): 256 relative moves reach the start
+        // directory at depth 256, which the bound admits; one more does not.
+        // Fails by: the bound read as `>=`, refusing a chain it admits.
+        assert!(chain(256).is_some(), "a chain at the bound resolves");
+        assert_eq!(chain(257), None, "a chain one past the bound is unknown");
     }
 
     // THE CARGO SHAPE (CLOUD-2789): the root forks a child that `chdir`s to its

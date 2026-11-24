@@ -829,7 +829,7 @@ pub fn seed(root: &Path) -> Seeded {
     if on_ci() {
         return Seeded::NotOnCi;
     }
-    if nested() {
+    if nested(|name| std::env::var_os(name)) {
         return Seeded::Nested;
     }
     let Ok(state) = crate::state::repo_state_dir(root).map(|dir| dir.join("test-run")) else {
@@ -854,11 +854,15 @@ fn on_ci() -> bool {
     std::env::var_os("CI").is_some_and(|ci| !ci.is_empty())
 }
 
-/// Whether this process runs inside a reach or sweep run, or is a seed.
-fn nested() -> bool {
+/// Whether this process runs inside a reach or sweep run, or is a seed, read
+/// through `var`. A PARAMETER RATHER THAN THE PROCESS ENVIRONMENT (CLOUD-2789):
+/// a sweep sets [`schema::ACTIVE`] on every case it judges, so a case reading
+/// the real environment there always sees "nested", and the workspace forbids
+/// the `unsafe` that `set_var` would need to make it see anything else.
+fn nested(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
     [SEED_ENV, schema::REACH, schema::RECORD, schema::ACTIVE]
         .iter()
-        .any(|name| std::env::var_os(name).is_some())
+        .any(|name| var(name).is_some())
 }
 
 /// Spawn the seed, or leave it owed while a lap holds the land singleton.
@@ -1353,6 +1357,25 @@ pub fn case_target(program: &str, package_dir: &Path) -> Result<String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    /// Fails by: a process outside every reach and sweep run read as nested,
+    /// so no passing run ever seeds the next head's selection; or one inside
+    /// a run read as free to seed under it (CLOUD-2789).
+    #[test]
+    fn only_a_run_or_seed_variable_makes_a_process_nested() {
+        assert!(!super::nested(|_| None), "no variable set is not nested");
+        for set in [
+            super::SEED_ENV,
+            super::schema::REACH,
+            super::schema::RECORD,
+            super::schema::ACTIVE,
+        ] {
+            assert!(
+                super::nested(|name| (name == set).then(|| "1".into())),
+                "{set} alone makes the process nested"
+            );
+        }
+    }
+
     use super::*;
 
     /// Fails by: a case carrying a `failure`, an `error` or a `skipped` child

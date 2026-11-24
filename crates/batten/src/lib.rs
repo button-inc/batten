@@ -33969,12 +33969,28 @@ mod tests {
     /// The gate is handed the lap's own engine while the tree is the one it was
     /// built from. Its own process, so the once-set lap engine is this case's.
     ///
-    /// Fails by: the engine never handed over, or a placeholder path handed
-    /// over instead of the binary (cargo-mutants on #1276).
+    /// THE TREE IS A FIXTURE, NOT THIS REPOSITORY (CLOUD-2789): a lap that
+    /// misread its unmoved sources as moved builds them, and over this
+    /// repository that build is the whole workspace, which outran the judge's
+    /// bound before the assertion could fail. Over a library named `batten`
+    /// with no binary, as `a_moved_engine_is_built_once_and_then_reused` uses,
+    /// that build is quick and the `Reused` assertion refuses it.
+    ///
+    /// Fails by: the engine never handed over, a placeholder path handed over
+    /// instead of the binary (cargo-mutants on #1276), or unmoved sources
+    /// built (the digest comparison inverted).
     #[test]
     fn the_gate_gets_the_laps_engine_while_its_sources_stand() {
-        // The repository root, two above the crate: the engine digest reads it.
-        let root = &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = &crate::scratch::scratch("lib-lap-engine-stands");
+        crate::gitwrite::init_on_main(root).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"batten\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n\
+             [lib]\npath = \"lib.rs\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("lib.rs"), "").unwrap();
+        crate::gitwrite::commit_paths(root, &["Cargo.toml".to_owned()], "fixture").unwrap();
         let exe = std::env::current_exe().expect("this process's path");
         let digest = super::engine::digest(root).expect("this tree's digest");
         if let Ok(mut cell) = super::LAP_ENGINE.lock() {
