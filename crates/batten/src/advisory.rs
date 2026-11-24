@@ -540,4 +540,21 @@ mod tests {
              token(s), and they could not be stored"
         );
     }
+
+    /// Fails by: the reserved closing pointer emptied, so an entry that only fits
+    /// beside a pointer-less closing line is admitted and the real closing line
+    /// pushes the emission past its ceiling.
+    #[test]
+    fn admission_reserves_room_for_the_widest_closing_pointer() {
+        let emission = emit(
+            vec![
+                entry(AdvisoryTier::Caution, &"a".repeat(40)),
+                entry(AdvisoryTier::Caution, &"b".repeat(40)),
+                entry(AdvisoryTier::Caution, &"c".repeat(400)),
+            ],
+            Some(&Channel { max_tokens: 60 }),
+        );
+        assert_eq!(emission.text, "a".repeat(40), "{}", emission.text);
+        assert_eq!(emission.suppressed, 2);
+    }
 }

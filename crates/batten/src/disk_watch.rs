@@ -1000,4 +1000,25 @@ mod tests {
         assert!(both.as_mut().poll(&mut cx).is_ready(), "the first ends it");
         assert!(ran.get(), "the second was driven");
     }
+
+    /// Fails by: the done-guard joined by `||`, so the second wait is skipped on
+    /// the first poll and then polled again after it finished.
+    #[test]
+    fn the_second_wait_is_driven_on_the_first_poll_and_never_after() {
+        use std::cell::Cell;
+        let polled = Cell::new(0);
+        let first = std::future::poll_fn(|_| std::task::Poll::<()>::Pending);
+        let second = std::future::poll_fn(|_| {
+            polled.set(polled.get() + 1);
+            std::task::Poll::Ready(())
+        });
+        let mut both = std::pin::pin!(until_first(first, second));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(both.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(polled.get(), 1, "driven on the first poll");
+        for _ in 0..3 {
+            assert!(both.as_mut().poll(&mut cx).is_pending());
+        }
+        assert_eq!(polled.get(), 1, "never driven again once it finished");
+    }
 }

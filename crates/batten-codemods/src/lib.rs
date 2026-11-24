@@ -278,3 +278,63 @@ fn stream_adapter_exec(source: &str, base: &str) -> Result<String, CouldNotLook>
     }
     Ok(text)
 }
+
+#[cfg(test)]
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// `files` as the path-to-text map a tree recipe takes.
+    fn tree(files: &[(&str, &str)]) -> BTreeMap<String, String> {
+        files
+            .iter()
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .collect()
+    }
+
+    /// Fails by: the `split-inline-modules` recipe answering anything but the
+    /// split its primitive makes.
+    #[test]
+    fn the_split_recipe_is_the_primitives_split() {
+        let files = tree(&[(
+            "src/check.rs",
+            "pub mod a {\n    pub fn f() {}\n}\npub mod b {\n    pub fn g() {}\n}\n",
+        )]);
+        let recipe = named_tree("split-inline-modules").expect("saved");
+        let split = (recipe.apply)(&files, &BTreeMap::new());
+        assert_eq!(
+            split,
+            batten::module_graph::split_inline_modules(&files),
+            "the recipe is the primitive"
+        );
+        assert!(split.contains_key("src/check/a.rs"), "{split:?}");
+    }
+
+    /// Fails by: the `impl-to-extension-trait` recipe dropping a package its
+    /// manifests declare, or answering an edit no run made.
+    #[test]
+    fn the_extension_trait_recipe_runs_each_declared_package() {
+        let files = tree(&[
+            ("src/lib.rs", "mod model;\nmod rules;\n"),
+            ("src/model.rs", "pub struct Rule { pub x: u8 }\n"),
+            (
+                "src/rules.rs",
+                "use crate::model::Rule;\nimpl Rule {\n    pub fn twice(&self) -> u8 { self.x * 2 }\n}\n",
+            ),
+        ]);
+        let manifests = tree(&[("Cargo.toml", "[package]\nname = \"my-app\"\n")]);
+        let recipe = named_tree("impl-to-extension-trait").expect("saved");
+        let changed = (recipe.apply)(&files, &manifests);
+        assert_eq!(
+            changed,
+            batten::module_graph::impls_to_extension_traits("src", "my_app", &files)
+        );
+        assert!(
+            changed
+                .get("src/rules.rs")
+                .is_some_and(|text| text.contains("pub trait RuleExt")),
+            "{changed:?}"
+        );
+    }
+}

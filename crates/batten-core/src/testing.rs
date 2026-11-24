@@ -803,4 +803,17 @@ mod tests {
             }
         );
     }
+
+    /// Fails by: the resolver named as a value, or a `which` literal, not
+    /// counted up by one each.
+    #[test]
+    fn the_census_counts_an_unnamed_resolver_and_a_which_literal() {
+        let file: syn::File = syn::parse_str(concat!(
+            "fn f() { let r = require_tool; let s = \"whi",
+            "ch\"; }"
+        ))
+        .expect("parses");
+        let census = require_census(&file);
+        assert_eq!((census.unnamed, census.which_literals), (1, 1));
+    }
 }

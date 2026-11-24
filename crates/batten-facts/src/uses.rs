@@ -543,3 +543,22 @@ pub fn use_facts(source: &str) -> Look<UseFile> {
         exports: exports_of(&file),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fails by: the item of an internal edge read as its module, so
+    /// `use crate::a::A` reports `a` twice and never `A`.
+    #[test]
+    fn an_internal_edge_names_its_module_and_its_item() {
+        let Look::Is(edges) = use_edges("use crate::a::A;\n") else {
+            panic!("the fixture parses");
+        };
+        let read: Vec<(&str, &str)> = edges
+            .iter()
+            .map(|edge| (edge.to.as_str(), edge.item.as_str()))
+            .collect();
+        assert_eq!(read, [("a", "A")]);
+    }
+}

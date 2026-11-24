@@ -1928,6 +1928,65 @@ mod tests {
         assert_no_consumer_path(include_str!("census.rs"));
     }
 
+    /// Each spawn site `spawn_sites` reads in `text`, as `(line, function)`.
+    fn sites(text: &str) -> Vec<(usize, Option<String>)> {
+        spawn_sites("f.rs", text)
+            .into_iter()
+            .map(|entry| (entry.line, entry.function))
+            .collect()
+    }
+
+    fn at(line: usize, function: &str) -> (usize, Option<String>) {
+        (line, Some(function.to_owned()))
+    }
+
+    /// Fails by: the `!` dropped from the tuple arm's field test, so a bound
+    /// tuple argv is missed and a struct field's tuple of names is read as one.
+    #[test]
+    fn a_tuple_argv_counts_unless_it_is_a_field_value() {
+        let text = "fn a() {\n    let t = (\"bash\", \"x\");\n    \
+                    let s = S { argv: (\"bash\", \"y\") };\n}\n";
+        assert_eq!(sites(text), [at(2, "a")]);
+    }
+
+    /// Fails by: the macro body's end widened past its closing bracket, or its
+    /// offset in the file multiplied rather than added, so a `vec!` argv is lost
+    /// or placed on the wrong line.
+    #[test]
+    fn a_vec_macro_argv_is_placed_on_its_own_line() {
+        let text = "fn m() {\n    let o = 1;\n    let v = vec![\"bash\", \"x\"];\n}\n";
+        assert_eq!(sites(text), [at(3, "m")]);
+    }
+
+    /// Fails by: `#[test]` matched by `!=`, so a function with any other
+    /// attribute is skipped as test code and a `#[test]` function is walked.
+    #[test]
+    fn only_a_test_attribute_makes_a_function_test_code() {
+        let text = "#[inline]\nfn kept() {\n    let a = [\"bash\", \"x\"];\n}\n\
+                    #[test]\nfn skipped() {\n    let a = [\"bash\", \"y\"];\n}\n";
+        assert_eq!(sites(text), [at(3, "kept")]);
+    }
+
+    /// Fails by: the `&` arm deleted from `literal`, or `literal_argv`/`sequence`
+    /// answering an empty word, so an array argv whose program is borrowed is
+    /// never read as the shell it names.
+    #[test]
+    fn a_borrowed_literal_still_names_the_program() {
+        let text = "fn r() {\n    let a = [&\"bash\", \"x\"];\n}\n";
+        assert_eq!(sites(text), [at(2, "r")]);
+    }
+
+    /// Fails by: `chained_argv` answering nothing, or its computed-word stop
+    /// inverted so the chain stops after the program: `env` alone is no shell,
+    /// and only the `.arg("bash")` link makes it one.
+    #[test]
+    fn a_method_chain_carries_its_links_into_the_argv() {
+        let text = "fn c() {\n    Command::new(\"env\").arg(\"bash\");\n}\n";
+        assert_eq!(sites(text), [at(2, "c")]);
+        let bare = "fn c() {\n    Command::new(\"env\");\n}\n";
+        assert!(sites(bare).is_empty(), "the program alone is not a shell");
+    }
+
     fn assert_no_consumer_path(source: &str) {
         for baked in [
             ["mise", ".toml"].concat(),

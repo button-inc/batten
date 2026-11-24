@@ -500,4 +500,24 @@ mod tests {
                 .all(|unit| unit.kind == "fn" || unit.name.is_empty())
         );
     }
+
+    /// Fails by: the span's line count off its last line, or every function
+    /// read as one line — this one opens on line 2 and spans three.
+    #[test]
+    fn a_function_spans_the_lines_from_its_first_to_its_last() {
+        let found = functions("\nfn f() {\n    g();\n}\n");
+        let spans: Vec<(usize, usize)> = found
+            .iter()
+            .map(|unit| (unit.line, unit.counts.lines))
+            .collect();
+        assert_eq!(spans, [(2, 3)]);
+    }
+
+    /// Fails by: a trait's provided method read as a free item.
+    #[test]
+    fn a_trait_method_is_positioned_in_its_trait() {
+        let found = functions("trait T { fn f() {} }\n");
+        let positions: Vec<&str> = found.iter().map(|unit| unit.position).collect();
+        assert_eq!(positions, ["trait"]);
+    }
 }

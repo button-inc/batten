@@ -6218,3 +6218,90 @@ pub fn shell_streams(map: &serde_json::Map<String, serde_json::Value>) -> (Vec<u
     }
     (bytes, blocks)
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// Fails by: the refusal's list built from the formats that own NO
+    /// extension (only `pkl`) instead of those that own one.
+    #[test]
+    fn the_parseable_list_names_each_format_that_owns_an_extension() {
+        assert_eq!(parseable_extensions(), "json, json5, markdown, toml, yaml");
+    }
+
+    /// Fails by: the text after a fence's opening line starting on that line's
+    /// newline rather than past it.
+    #[test]
+    fn a_fence_opens_past_its_own_newline() {
+        let opened = open_fence("---\nkey: v\n---\n").expect("a YAML fence");
+        assert_eq!(opened.fence.opener, "---");
+        assert_eq!(opened.rest, "key: v\n---\n");
+    }
+
+    /// Fails by: a token of exactly [`TOKEN_MAX`] bytes refused as too long.
+    #[test]
+    fn a_token_at_the_limit_is_kept_and_one_past_it_refused() {
+        let at = "a".repeat(TOKEN_MAX);
+        let node = Node::Text(at.clone());
+        assert_eq!(
+            Reduction::Token.apply(&Look::Is(&node)),
+            Some(serde_json::json!(at))
+        );
+        let over = Node::Text("a".repeat(TOKEN_MAX + 1));
+        assert_eq!(Reduction::Token.apply(&Look::Is(&over)), None);
+    }
+
+    /// Fails by: any one refusal folded into another, so a mint carrying only
+    /// a `/`, only a `\`, or a row with only an empty id reads as admissible.
+    #[test]
+    fn each_malformed_mint_row_is_refused_on_its_own() {
+        let row = |mint: &str, id: &str| MintedQuery {
+            id: id.to_owned(),
+            mint: mint.to_owned(),
+            field: 0,
+            recency: 1,
+            max_age_days: 1,
+        };
+        assert!(!row("ok", "x").malformed());
+        assert!(row("", "x").malformed());
+        assert!(row("a/b", "x").malformed());
+        assert!(row("a\\b", "x").malformed());
+        assert!(row("ok", "").malformed());
+    }
+
+    /// Fails by: an object with neither stream read as an empty text, or an
+    /// array whose blocks are not all text blocks concatenated anyway.
+    #[test]
+    fn a_buffer_with_no_text_has_no_text() {
+        assert_eq!(buffer_text(&serde_json::json!({})), None);
+        assert_eq!(
+            buffer_text(&serde_json::json!({"stdout": "a", "stderr": "b"})),
+            Some(String::from("ab"))
+        );
+        assert_eq!(
+            buffer_text(&serde_json::json!([{"type": "image", "text": "x"}])),
+            None
+        );
+        assert_eq!(
+            buffer_text(&serde_json::json!([{"type": "text", "text": "x"}])),
+            Some(String::from("x"))
+        );
+    }
+
+    /// Fails by: a row declaring both selectors answered by every command but
+    /// its own.
+    #[test]
+    fn a_row_with_both_selectors_is_answered_by_its_command() {
+        let declared: Declared = serde_json::from_value(serde_json::json!({
+            "name": "n",
+            "command": "run me",
+            "tool": "T",
+            "returns": "json-array",
+        }))
+        .expect("a declared row");
+        assert!(declared.answered_here("T", "run me"));
+        assert!(!declared.answered_here("T", "run you"));
+    }
+}
