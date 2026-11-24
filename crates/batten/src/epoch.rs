@@ -1176,6 +1176,31 @@ mod rule_surface_tests {
         assert_ne!(epoch(&dir), moved, "its module moved");
     }
 
+    /// A row with no module reads no file content, so `batten.toml` is still
+    /// projected for it even where its `documents` name the config: another
+    /// rule's row is no input to it.
+    ///
+    /// Fails by: a moduleless row's declared paths read as file content (the
+    /// `reads.is_some()` guard on `read_files` taken as `true`), which hashes
+    /// the whole config and voids its admissions on any edit (CLOUD-2789).
+    #[test]
+    fn a_moduleless_row_naming_the_config_keeps_its_projection() {
+        let moduleless = |severity: &str| {
+            format!(
+                "version = 1\n\n[epoch]\ntracked = [\"batten.toml\", \"AGENTS.md\"]\n\n\
+                 [[rule]]\nid = \"{RULE}\"\nkind = \"command\"\nscope = \"tree\"\n\
+                 glob = \"**\"\ncheck = \"true\"\nseverity = \"deny\"\n\
+                 documents = [\"batten.toml\"]\n\n\
+                 [[rule]]\nid = \"other\"\nkind = \"policy\"\nscope = \"tree\"\n\
+                 module = \"policy/other.rego\"\nseverity = \"{severity}\"\n"
+            )
+        };
+        let dir = repo("epoch-rule-moduleless", &moduleless("deny"));
+        let before = epoch(&dir);
+        fs::write(dir.join("batten.toml"), moduleless("warn")).unwrap();
+        assert_eq!(epoch(&dir), before, "another rule's row is not its input");
+    }
+
     /// Fails by: a read the projection cannot name (`input.facts`) narrowed as
     /// if it were known, or a tracked file the row DOES hand as a document
     /// dropped.

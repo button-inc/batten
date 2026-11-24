@@ -1653,6 +1653,18 @@ mod tests {
         }
     }
 
+    /// The registry's native half is exactly the native classes, by token.
+    ///
+    /// Fails by: `native_tokens` answering any other set, so `policy::load`
+    /// calls a `[[verdict]]` row covering a native class dead vocabulary, or
+    /// lets one nothing raises stand (CLOUD-2789).
+    #[test]
+    fn the_native_tokens_are_the_native_classes() {
+        let expected: BTreeSet<&str> = Native::ALL.iter().map(|native| native.id()).collect();
+        assert_eq!(native_tokens(), expected);
+        assert!(native_tokens().contains(Native::ProtectedMutation.id()));
+    }
+
     /// The vendored table is held to its own validator.
     ///
     /// Non-negotiable rule 2: the refusals `validate` states are worth nothing
