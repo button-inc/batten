@@ -1949,4 +1949,24 @@ mod tests {
             )]
         );
     }
+
+    /// Fails by: a merge whose marked shard is gone taken incrementally, so the
+    /// gone shard's mark outlives it rather than being replayed away.
+    #[test]
+    fn a_marked_shard_that_is_gone_forces_the_full_replay() {
+        let dir = store("shard-gone");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        append(&dir, "shard-a", &entry_for("TODO", Disposition::Acted)).unwrap();
+        append(&dir, "shard-b", &entry_for("TODO", Disposition::Acted)).unwrap();
+        merge(&dir).unwrap();
+        let gone = shard_sizes(&dir).into_keys().next().unwrap();
+        std::fs::remove_file(shards_dir(&dir).join(&gone)).unwrap();
+        let merged = merge(&dir).unwrap();
+        let left = shard_sizes(&dir);
+        assert!(
+            matches!(&merged, Merge::Merged { format, .. } if format.folded == left),
+            "{merged:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

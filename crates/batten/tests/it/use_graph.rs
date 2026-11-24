@@ -320,3 +320,18 @@ fn the_documented_layerings_hold_over_this_tree() {
         "documented layerings this tree violates: {broken:#?}"
     );
 }
+
+/// Fails by: a two-segment `crate::Item` path outside a `use` left uncounted,
+/// which drops every root item an expression names directly.
+#[test]
+fn a_two_segment_crate_path_is_a_root_item_edge() {
+    let Look::Is(edges) = use_edges("fn f() { crate::helper(); }\n") else {
+        panic!("the fixture parses");
+    };
+    assert!(
+        edges.iter().any(|edge| edge.item == "helper"
+            && matches!(edge.origin, Origin::RootItem)
+            && edge.to.is_empty()),
+        "{edges:?}"
+    );
+}

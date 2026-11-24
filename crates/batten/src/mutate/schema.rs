@@ -10584,4 +10584,16 @@ mod tests {
         assert_eq!(format.unprobed, [String::from("u.rs")].into());
         assert_eq!(format.flags, build_flags());
     }
+
+    /// Fails by: a hand-back's journaled verdict reported as another.
+    #[test]
+    fn a_handback_verdict_reports_as_its_own_name() {
+        assert_eq!(handback_tally("unviable"), None);
+        assert_eq!(handback_tally("caught"), Some(Verdict::Caught));
+        assert_eq!(handback_tally("missed"), Some(Verdict::Missed));
+        assert_eq!(handback_tally("timeout"), Some(Verdict::Timeout));
+        assert_eq!(handback_tally("uncovered"), Some(Verdict::Uncovered));
+        assert_eq!(handback_tally("unjudged"), Some(Verdict::Unjudged));
+        assert_eq!(handback_tally("bogus"), Some(Verdict::Error));
+    }
 }
