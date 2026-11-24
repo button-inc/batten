@@ -353,6 +353,23 @@ mod tests {
         assert_eq!((plan.gated, plan.left), (0, 1));
     }
 
+    /// Fails by: a removal that is not a whole `use` item gated as one because
+    /// it starts like one: `use std::fmt` without its `;` is part of an item,
+    /// and is left, never wrapped.
+    #[test]
+    fn a_removal_that_is_not_a_whole_use_item_is_left() {
+        let non_test = format!("{}\n", unused("src/a.rs", 0, 12, 1));
+        let plan = plan(
+            Streams {
+                non_test: &non_test,
+                unit_test: "",
+                other: "",
+            },
+            &reader(),
+        );
+        assert_eq!((plan.gated, plan.left), (0, 1));
+    }
+
     /// Fails by: a line from another package's unit kept, which put a
     /// dependency's non-test warnings in the test stream.
     #[test]

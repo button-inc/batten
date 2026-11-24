@@ -477,6 +477,26 @@ mod tests {
         assert_eq!(star.largest_component, 1);
     }
 
+    /// An upper module depended on by half its lower layer ADDS its share:
+    /// `rule` has 2 dependents of 4 lower files, so it scores 1/5·(1 − 2/4) =
+    /// 0.1 over four last-layer singletons at 1/5 each, DL = 0.9. Fails if the
+    /// upper-layer term is subtracted (0.7) rather than added.
+    #[test]
+    fn a_partly_depended_upon_module_adds_its_share() {
+        let mut graph = FileGraph::new();
+        for client in ["c0", "c1"] {
+            graph
+                .entry(client.to_owned())
+                .or_default()
+                .insert("rule".to_owned());
+        }
+        for file in ["c2", "c3", "rule"] {
+            graph.entry(file.to_owned()).or_default();
+        }
+        let measured = measure(&graph).decoupling_level;
+        assert!((measured - 0.9).abs() < 1e-9, "DL {measured}");
+    }
+
     /// A `uses` edge onto a module reaches every file of that module in the same
     /// crate and none in another; a non-internal edge reaches nothing.
     #[test]
