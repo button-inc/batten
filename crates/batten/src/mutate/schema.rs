@@ -5547,13 +5547,7 @@ fn judge_handbacks(
             // even synced.
             let ran = handback_room(handback, tree).and_then(|()| {
                 synced_run(live, tree, || {
-                    super::cargo_mutant_in_place(
-                        (tree, handback.runner, handback.diff),
-                        &mutant.name,
-                        filter.as_deref(),
-                        bound,
-                        output,
-                    )
+                    run_from_own_line((handback.runner, state), mutant, filter.as_deref(), bound)
                 })
             });
             let outcome = match ran {
@@ -5592,6 +5586,37 @@ fn judge_handbacks(
         classic.len()
     )?;
     Ok((verdicts, unviable))
+}
+
+/// Run `runner` in place over hand-back `mutant` in `state`'s mirror, its
+/// tests narrowed to `filter` within `bound`, listed from the mutant's own
+/// line as the synced mirror holds it ([`super::target_diff`]), so no other
+/// field deletion is judged beside it (CLOUD-2911). Outcome files under
+/// `classic-out`, as [`judge_handbacks`] reads them.
+///
+/// # Errors
+///
+/// The mirror's copy of its file cannot be read or holds no such line, the
+/// diff cannot be written, or `runner` cannot be spawned.
+fn run_from_own_line(
+    (runner, state): (&std::path::Path, &std::path::Path),
+    mutant: &Listed,
+    filter: Option<&str>,
+    bound: std::time::Duration,
+) -> anyhow::Result<super::Outcome> {
+    let (tree, target) = (state.join("classic"), state.join("classic-target.diff"));
+    let line = mutant.span.start.line;
+    let source = crate::fsio::read_to_string(tree.join(&mutant.file))?;
+    let diff = super::target_diff(&mutant.file, &source, line)
+        .ok_or_else(|| anyhow::anyhow!("{} has no line {line} for {}", mutant.file, mutant.name))?;
+    crate::durable::replace(&target, diff)?;
+    super::cargo_mutant_in_place(
+        (&tree, runner, &target),
+        &mutant.name,
+        filter,
+        bound,
+        &state.join("classic-out"),
+    )
 }
 
 /// A hand-back's verdict `name` where a red case `poisoned` its run: a kill,
@@ -8426,9 +8451,13 @@ mod tests {
     /// One hand-back judged with a declared cost no disk holds, over a mirror
     /// that is `warm` (its target built into) or cold, by a runner that does
     /// not exist, so any run it reaches is an `error` and costs nothing. Its
-    /// verdicts, what it said, whether anything was journaled, and whether the
-    /// mirror was synced, which happens only for a hand-back that goes on to run.
-    fn judged_with_no_room(name: &str, warm: bool) -> (Vec<(u32, Verdict)>, String, bool, bool) {
+    /// verdicts, what it said, whether anything was journaled, whether the
+    /// mirror was synced, which happens only for a hand-back that goes on to
+    /// run, and the diff its run was to be listed from (empty when none).
+    fn judged_with_no_room(
+        name: &str,
+        warm: bool,
+    ) -> (Vec<(u32, Verdict)>, String, bool, bool, String) {
         let base = crate::scratch::scratch(name);
         crate::gitwrite::init_on_main(&base).expect("a repository");
         std::fs::create_dir_all(base.join("src")).unwrap();
@@ -8487,11 +8516,14 @@ mod tests {
         .expect("no room degrades, it does not fail the call");
         assert_eq!(unviable, 0);
         let synced = state.join("classic").join("src").join("lib.rs").is_file();
+        let listed_from =
+            crate::fsio::read_to_string(state.join("classic-target.diff")).unwrap_or_default();
         (
             verdicts,
             String::from_utf8(out).unwrap(),
             store.exists(),
             synced,
+            listed_from,
         )
     }
 
@@ -8504,7 +8536,7 @@ mod tests {
     /// refusal journaled, so a later sweep reused it; or the refusal unsaid.
     #[test]
     fn a_handback_the_disk_cannot_hold_is_refused_unjudged() {
-        let (verdicts, said, journaled, synced) =
+        let (verdicts, said, journaled, synced, _) =
             judged_with_no_room("schema-handback-no-room", false);
         assert_eq!(verdicts, [(0, Verdict::Error)], "{said}");
         assert!(
@@ -8524,12 +8556,32 @@ mod tests {
     /// as the mirror never synced for its run.
     #[test]
     fn a_warm_mirror_hands_back_under_the_cold_cost() {
-        let (_, said, _, synced) = judged_with_no_room("schema-handback-warm", true);
+        let (_, said, _, synced, _) = judged_with_no_room("schema-handback-warm", true);
         assert!(
             synced,
             "the warm mirror was synced and its run reached: {said}"
         );
         assert!(!said.contains("no room"), "{said}");
+    }
+
+    /// A hand-back's run is listed from its target's own line and nothing
+    /// else (CLOUD-2911): the diff its run is handed spans line 2 of
+    /// `src/lib.rs`, where the mutant starts, as the synced mirror holds it.
+    ///
+    /// Fails by: the run listed from the branch's diff or the whole workspace
+    /// (no diff written, or another), where cargo-mutants 27.1.0 judges every
+    /// field deletion `--re` cannot exclude beside the target under its filter
+    /// (measured on `lease.rs`: 19 field deletions for one target, each
+    /// printed MISSED); a hunk off by a line, or one spanning the file.
+    #[test]
+    fn a_handback_is_listed_from_its_targets_line_alone() {
+        let (_, said, _, _, listed_from) = judged_with_no_room("schema-handback-own-line", true);
+        assert_eq!(
+            listed_from,
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n\
+             @@ -2,1 +2,1 @@\n-    a == b\n+    a == b\n",
+            "{said}"
+        );
     }
 
     /// A listed mutant of `fn f` in `src/lib.rs` whose function span is known,
