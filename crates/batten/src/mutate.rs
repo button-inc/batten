@@ -5135,20 +5135,24 @@ fn build_if_owed(
     record_document(root, staged, Program::Cargo, &list, &prebuilt.binaries)?;
     let metadata = ["metadata", "--format-version", "1", "--no-deps"].map(String::from);
     record_document(root, staged, Program::Cargo, &metadata, &prebuilt.metadata)?;
-    Some(Prebuilt {
-        // THE BUILD DIRECTORY, where cargo writes dep-info and build-script
-        // output (#1276): `suite_env` puts intermediates in the checkout's
-        // `target`, and only uplifts in `SUITE_TARGET`. Read from the uplift
-        // directory, no `.d` was found, every subject read as unembedded, and
-        // an embedded subject's mutation survived on reused binaries.
-        embedded: embedded_paths(&root.join("target"), staged.dir(), None),
-        test_embedded: embedded_paths(
-            &root.join("target"),
-            staged.dir(),
-            Some(&test_crates(&prebuilt.metadata)),
-        ),
+    // THE BUILD DIRECTORY, where cargo writes dep-info and build-script output
+    // (#1276): `suite_env` puts intermediates in the checkout's `target`, and
+    // only uplifts in `SUITE_TARGET`. Read from the uplift directory, no `.d`
+    // was found, every subject read as unembedded, and an embedded subject's
+    // mutation survived on reused binaries.
+    Some(with_embedded(prebuilt, &root.join("target"), staged.dir()))
+}
+
+/// `prebuilt` with what the build under `target` embeds of `staged`: every
+/// input its dep-info and build scripts name, and apart from them the inputs
+/// of its integration test targets alone, as the recorded `cargo metadata`
+/// lists them.
+fn with_embedded(prebuilt: Prebuilt, target: &Path, staged: &Path) -> Prebuilt {
+    Prebuilt {
+        embedded: embedded_paths(target, staged, None),
+        test_embedded: embedded_paths(target, staged, Some(&test_crates(&prebuilt.metadata))),
         ..prebuilt
-    })
+    }
 }
 
 /// Sweep the enforced set.
@@ -8217,6 +8221,50 @@ mod tests {
         assert!(!built.tests_embed("mise-tasks-other/toy.sh"));
     }
 
+    /// Fails by: the recorded build credited with embedding nothing, or its
+    /// test targets with nothing, so a mutation of a subject the build reads
+    /// is judged on binaries that never saw it.
+    #[test]
+    fn a_recorded_build_embeds_what_its_dep_info_names() {
+        let staged = fixture("embedded-staged");
+        let target = fixture("embedded-target");
+        let deps = target.join("debug/deps");
+        fs::create_dir_all(&deps).unwrap();
+        let at = crate::git::canonical(&staged);
+        put(
+            &deps,
+            "toy-0a.d",
+            &format!("{}:\n", at.join("tests/../mise-tasks/toy.sh").display()),
+        );
+        put(
+            &deps,
+            "libtoy-0b.d",
+            &format!("{}:\n", at.join("src/lib.rs").display()),
+        );
+        let metadata = target.join("cargo-metadata.json");
+        put(
+            &target,
+            "cargo-metadata.json",
+            r#"{"packages": [{"targets": [{"name": "toy", "kind": ["test"]}, {"name": "libtoy", "kind": ["lib"]}]}]}"#,
+        );
+        let built = with_embedded(
+            Prebuilt {
+                binaries: PathBuf::new(),
+                metadata,
+                embedded: Vec::new(),
+                test_embedded: Vec::new(),
+                dirty: std::cell::Cell::new(false),
+            },
+            &target,
+            &staged,
+        );
+        assert_eq!(
+            built.embedded,
+            ["mise-tasks/toy.sh", "src/lib.rs"].map(String::from)
+        );
+        assert_eq!(built.test_embedded, ["mise-tasks/toy.sh"].map(String::from));
+    }
+
     /// Fails by: the suite's binary id answered as nothing; a library target
     /// skipped (its kind test joined with `&&`); or a target whose root file
     /// does not hold the suite, or whose file is no root file, taken as its
@@ -8742,7 +8790,9 @@ mod enrolled_tests {
             resolve(&dir, "toy").is_some(),
             "premise: the task resolves to a gate over its source"
         );
-        let names = ["toy".to_owned()];
+        // `other` is never written and the new glob selects no source of it:
+        // enrolled only where the glob's mere presence is read as a match.
+        let names = ["toy".to_owned(), "other".to_owned()];
         let changed = std::iter::once(config.to_owned()).collect();
         assert_eq!(
             enrolled_since(&dir, "HEAD", &names, &changed),
