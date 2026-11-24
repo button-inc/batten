@@ -96,18 +96,21 @@ read(state, open) := {
 	"children-tasks": {c: open},
 }
 
-spellings := ["archive_session", "mcp__Claude_Code_Remote__archive_session", "mcp__claude-code-remote__archive_session"]
-
-refused_naming_the_child(tool, minted) if {
-	some v in violation with input as archive(tool, minted)
-	v.rule == "task watch pending"
+# Each host spelling is written out: the suite precomputes every `with` value,
+# so one that depends on a loop variable is not a case it can run.
+test_no_read_is_refused_naming_the_child if {
+	some v in violation with input as archive("archive_session", {})
 	v.subjects == [{"artifact": c}]
 }
 
-test_no_read_is_refused_naming_the_child if {
-	every tool in spellings {
-		refused_naming_the_child(tool, {})
-	}
+test_no_read_is_refused_under_the_readable_connector_name if {
+	some v in violation with input as archive("mcp__Claude_Code_Remote__archive_session", {})
+	v.subjects == [{"artifact": c}]
+}
+
+test_no_read_is_refused_under_the_servers_own_name if {
+	some v in violation with input as archive("mcp__claude-code-remote__archive_session", {})
+	v.subjects == [{"artifact": c}]
 }
 
 # The gate keys on the structured tool, never on text: a shell line that only
@@ -134,9 +137,15 @@ test_a_dead_read_with_nothing_open_names_the_child if {
 }
 
 test_a_done_read_admits if {
-	every tool in spellings {
-		count(violation) == 0 with input as archive(tool, read("done", "-"))
-	}
+	count(violation) == 0 with input as archive("archive_session", read("done", "-"))
+}
+
+test_a_done_read_admits_under_the_readable_connector_name if {
+	count(violation) == 0 with input as archive("mcp__Claude_Code_Remote__archive_session", read("done", "-"))
+}
+
+test_a_done_read_admits_under_the_servers_own_name if {
+	count(violation) == 0 with input as archive("mcp__claude-code-remote__archive_session", read("done", "-"))
 }
 
 test_another_childs_done_read_does_not_admit if {
