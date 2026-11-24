@@ -9545,6 +9545,91 @@ module = "policy/harness-grant.rego"
 severity = "deny"
 reason = "The classifier never reads `autoMode` from `.claude/settings.json`. Delete the block; put a needed grant in `~/.claude/settings.json`, managed settings or `--settings`, and committed guidance in CLAUDE.md."
 
+# --- a harness config write, mediated (CLOUD-1636) ---------------------------
+#
+# THE DECLARED HARNESS-SURFACE TABLE: one `harness-config-<harness>` row per
+# `Harness` variant that keeps its hook registration in a file, each matching
+# the committed surface and its `$HOME` form at any directory, so a session
+# root outside the checkout is the same reading. Which spellings are harness
+# configuration HERE is this consumer's (rule 1); `validate_harness_surfaces`
+# refuses the family at load when it leaves a harness out, so a seventh harness
+# cannot rot behind it. The neutral exit-code contract keeps no file and owes no
+# row. The paths are the ones `Harness::wiring` and `Harness::merge_surfaces`
+# name, the same set `harness-wiring` reads above.
+[[pattern]]
+id = "harness-config-claude-code"
+regex = '(^|/)\.claude/(settings|settings\.local|launcher-settings)\.json$'
+
+[[pattern]]
+id = "harness-config-cursor"
+regex = '(^|/)\.cursor/hooks\.json$'
+
+[[pattern]]
+id = "harness-config-copilot-cli"
+regex = '(^|/)\.github/hooks/[^/]+\.json$'
+
+[[pattern]]
+id = "harness-config-gemini-cli"
+regex = '(^|/)\.gemini/settings\.json$'
+
+[[pattern]]
+id = "harness-config-codex-cli"
+regex = '(^|/)\.codex/hooks\.json$'
+
+# A hook registration naming batten's own adjudicator: a `"command"` value that
+# runs `batten … adjudicate`, however it is launched. Every adapted harness
+# spells a hook's program as a `command` string.
+[[pattern]]
+id = "harness-hook-registration"
+regex = '"command"\s*:\s*"[^"]*\bbatten\b[^"]*\badjudicate\b'
+
+# A permission rule list key, on either side of an edit.
+[[pattern]]
+id = "harness-permission-rule"
+regex = '"(allow|deny)"\s*:'
+
+# A HAND-MADE REGISTRATION ROUTES TO BATTEN'S VERB (owner ruling 2026-11-24).
+# A link, a copy or a written body that registers batten's hook on a harness
+# surface is refused, naming `batten startup --repair` (CLOUD-2752 makes that
+# verb write the registration where the platform roots the session).
+[[rule]]
+id = "hook wire wrong"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/harness-config-route.rego"
+severity = "deny"
+
+# Every other write to a harness surface: told the vendor route, the memory
+# owning the permission forms, and the harnesses it left behind. A `warn`,
+# because the vendor route itself writes these files through the same tool.
+[[rule]]
+id = "hook edit early"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/harness-config-advisory.rego"
+severity = "warn"
+
+# One class per module: the boundary speaks a bundle's first violation only, so
+# the memory and the neutrality line each need a module of their own to reach
+# the writer beside the vendor route.
+[[rule]]
+id = "grant edit early"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/harness-grant-advisory.rego"
+severity = "warn"
+
+[[rule]]
+id = "hook edit partial"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/harness-config-neutral.rego"
+severity = "warn"
+
 # Closing the raw path, as a gate rather than as a convention (CLOUD-1260).
 #
 # `documents` rather than `external` for `harness-grant`'s reason one row up: this
@@ -11969,7 +12054,11 @@ gates = [
   "fixture-forks",
   "forge-verdict-required",
   "glob-containment",
+  "harness-config-advisory",
+  "harness-config-neutral",
+  "harness-config-route",
   "harness-grant",
+  "harness-grant-advisory",
   "harness-wiring",
   "hk-fix-selection",
   "hk-plan-required",
@@ -15222,6 +15311,56 @@ The same doctrine as `shell edit refused` and none of its force: this class refu
 id = "rule read first"
 kind = "document"
 target = "rules/toolchain.md"
+
+# --- a harness config write, mediated (CLOUD-1636) ----------------------------
+
+[[verdict]]
+id = "hook wire wrong"
+gloss = "a harness hook registration was linked, copied or hand-written; batten's own verb writes it"
+class = """
+A link, a copy or a hand-written body that registers batten's hook on a harness configuration surface makes a registration nothing owns: it points at one checkout's file, survives that checkout moving, and is invisible to every check that reads the registration batten wrote. Measured 2026-11-24: a resumed container rooted the session outside the checkout, no batten hook ran for seven hours, and the repair was `ln -sfn` of the checkout's settings into the session root, then a hand copy, while `batten startup --repair` was never tried. Run that verb from the directory being registered; it writes the registration there (CLOUD-2752). The harness's own config skill is not the route for this case.
+"""
+
+[[verdict.route]]
+id = "verb run first"
+kind = "command"
+target = "batten startup --repair"
+
+[[verdict]]
+id = "hook edit early"
+gloss = "a write to Claude Code's settings surface; the host's config skill carries the legal forms"
+class = """
+Claude Code ships a skill that edits its own settings files and carries the permission-rule syntax: three legal forms, no `ToolName*` among them. Measured: `90261809` rewrote `.claude/settings.json`'s grant by hand on a wrong theory and reverted in `321ef668`; invoking the skill after the write is what produced the revert, and invoking it before would have produced no write at all. This class refuses nothing, because the skill writes the same files through the same tool.
+"""
+
+[[verdict.route]]
+id = "verb run first"
+kind = "command"
+target = "/update-config"
+
+[[verdict]]
+id = "grant edit early"
+gloss = "a write changes a permission rule list in Claude Code's settings; the memory owning the measured forms comes first"
+class = """
+A permission rule list that does not bind reads to an agent as "the tool is unavailable", and the substitution that follows is what `rules/scanning.md` exists to refuse. The forms that bind were measured on 2026-09-05 and live in one memory, which says in as many words not to replace an enumeration with a broader form. It is read on demand, and nothing in the write path routed to it until this class.
+"""
+
+[[verdict.route]]
+id = "memory read first"
+kind = "document"
+target = ".serena/memories/serena-setup.md"
+
+[[verdict]]
+id = "hook edit partial"
+gloss = "a write reached one harness's configuration surface and left the other declared harnesses' surfaces as they were"
+class = """
+Batten adjudicates for six harnesses, and a repair applied to one harness's file reaches that harness alone: the subjects after the written path are the harnesses whose declared surface this call did not reach. Making each harness work is vendor-specific; batten behaving the same on all of them is not. The change is complete when it is applied to the analogous surface on the others, or scoped to one on purpose with the reason stated. This class reports and refuses nothing, because a scoped decision is legitimate.
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = "rules/harness-config.md"
 
 [[verdict]]
 id = "tool install pending"

@@ -681,7 +681,9 @@ fn a_collapsed_row_is_named_once() {
     let first = fires(&repo, command);
     let repeat = fires(&repo, command);
     assert!(
-        repeat.starts_with("batten deny branch write unsafe; "),
+        // The module's own subject rides the line since a bundle speaks its
+        // structured violation rather than the bare `deny` token (CLOUD-1636).
+        repeat.starts_with("batten deny branch write unsafe at 1; "),
         "named once, its routes after: {repeat}"
     );
     assert!(first.starts_with(&format!("{repeat} — ")), "{first}");

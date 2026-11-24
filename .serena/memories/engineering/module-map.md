@@ -99,6 +99,7 @@ row here, so a new module lands with its line.
 - `invocation.rs` (crate `batten-facts`) — Rust call sites, parsed (CLOUD-914).
 - `uses.rs` (crate `batten-facts`) — the `use` graph (CLOUD-762).
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the wrapper-lookthrough command parser, the matcher, and the per-host shims (CLOUD-44).
+- `landing.rs` (under `hook/`) — what a shell call LANDS at each file it writes by name (CLOUD-1636): each `write-targets` entry placed through `cd` and `$PWD`, a shell's `-c` script re-read as a command line, and the files left at or under the target with their content (a copied or linked file or directory, or what `cat`, `git show`, `echo` or `printf` feed a redirect or `tee`), read bounded; and `prior`, the text a write tool writes over. A registration is decided by what lands, never by how the source is spelled.
 - `recorder.rs` — a post-tool record whose SHAPE is the consumer's and whose columns may carry a value another gate decided (CLOUD-1051).
 - `redirect.rs` — the per-path-class redirect table (CLOUD-280): what to run instead, keyed by what is protected rather than by the verb reaching for it.
 - `ripcord.rs` (crate `batten-base`) — the break-glass a locked-out container can reach (CLOUD-1847).

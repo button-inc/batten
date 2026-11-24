@@ -78,6 +78,8 @@ use crate::severity::{self, ReportLevel, RuleSeverity};
 #[cfg(test)]
 use crate::shell::shell_commands;
 use crate::shell::{Segment, SegmentLine, Separator, segments};
+
+mod landing;
 use crate::verbs::{MutatingVerb, OperandScope};
 
 /// `Harness` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
@@ -7741,6 +7743,82 @@ pub fn write_sites(envelope: &Envelope, start: &Path) -> Option<Vec<(Value, std:
     Some(sites)
 }
 
+/// The files a shell call writes BY NAME (CLOUD-1636), one entry per target:
+/// `{"path", "program", "sources", "symbolic", "resolved", "origins",
+/// "lands"}`. An output redirection's target (`program` null), every `tee`
+/// operand, and the destination of `ln`, `cp`, `mv` and `install` with the
+/// operands it is made from as `sources`; `symbolic` is whether an `ln` makes a
+/// symbolic link. `path` and `sources` are as written, unquoted; `resolved`,
+/// `origins` and `lands` are placed against `start` and every followed `cd`,
+/// and say what arrives at the target ([`landing`]). A shell's `-c` script is
+/// read as the command line it is. `None` for a call that is not a shell
+/// command, whose target is `writes`, and for a command that does not parse.
+///
+/// THE SPELLING STAYS BESIDE THE PLACEMENT: a module matching a declared surface
+/// matches the spelling at any directory, so a target whose `cd` cannot be
+/// placed is still judged by its name, and by its content wherever that reads.
+#[must_use]
+pub fn write_targets(envelope: &Envelope, start: Option<&Path>) -> Option<Vec<Value>> {
+    if envelope.command.is_empty() {
+        return None;
+    }
+    landing::targets(&envelope.command, start)
+}
+
+/// The targets one program writes by name, for [`write_targets`]: a `tee`'s
+/// operands, and the destination a `ln`, `cp`, `mv` or `install` makes, with
+/// the operands it is made from. A `-t`/`--target-directory` names the
+/// destination outright; otherwise it is the last operand, and a lone `ln`
+/// operand links into the current directory.
+fn named_writes(name: &str, arguments: &[&str]) -> Vec<Value> {
+    let copying = matches!(name, "ln" | "cp" | "mv" | "install");
+    if !copying && name != "tee" {
+        return Vec::new();
+    }
+    let mut operands: Vec<String> = Vec::new();
+    let mut directory: Option<String> = None;
+    let mut symbolic = false;
+    let mut words = arguments.iter().map(|word| crate::shell::unquote(word));
+    let mut ended = false;
+    while let Some(word) = words.next() {
+        if ended || word == "-" || !word.starts_with('-') {
+            operands.push(word);
+            continue;
+        }
+        if word == "--" {
+            ended = true;
+        } else if let Some(dir) = word.strip_prefix("--target-directory=") {
+            directory = Some(dir.to_owned());
+        } else if word == "--target-directory" || (copying && word == "-t") {
+            directory = words.next();
+        } else if word == "--symbolic" {
+            symbolic = true;
+        } else if copying && matches!(word.as_str(), "-S" | "-m" | "-o" | "-g" | "--suffix") {
+            // A value-taking option's value is not an operand.
+            words.next();
+        } else if !word.starts_with("--") && word.contains('s') {
+            symbolic = true;
+        }
+    }
+    let entry = |path: &str, sources: &[String]| {
+        serde_json::json!({
+            "path": path,
+            "program": name,
+            "sources": sources,
+            "symbolic": name == "ln" && symbolic,
+        })
+    };
+    if !copying {
+        return operands.iter().map(|path| entry(path, &[])).collect();
+    }
+    match (directory, operands.split_last()) {
+        (Some(dir), _) => vec![entry(&dir, &operands)],
+        (None, Some((last, rest))) if !rest.is_empty() => vec![entry(last, rest)],
+        (None, Some((only, _))) if name == "ln" => vec![entry(".", std::slice::from_ref(only))],
+        _ => Vec::new(),
+    }
+}
+
 /// The directory a written path lands in: its parent.
 fn containing_dir(path: std::path::PathBuf) -> std::path::PathBuf {
     match path.parent() {
@@ -9001,7 +9079,7 @@ fn policy_refusal(
         // own findings are ordered by its own declaration and share its row's
         // severity, so there is nothing to rank between them. Ranking happens
         // ACROSS bundles, below, where the severities can actually differ.
-        if let Some(violation) = denials.first() {
+        if let Some(violation) = speaking(&denials) {
             // THE POINTER IS THE PREDICATE, NOT THE BUNDLE (CLOUD-832).
             // `Module::attribute` resolves a `violation`'s own `rule` id when it
             // named one and falls back to the registering row's id otherwise —
@@ -9060,6 +9138,21 @@ fn policy_refusal(
 ///
 /// A blocking violation empties the result: it is the call's decision, and
 /// saying it twice would put one finding on two channels.
+/// The violation a bundle speaks with: its first STRUCTURED one — a `violation`
+/// entry, which carries the module's `rule` and `subjects` — and only where it
+/// raised none, its first bare `deny` token.
+///
+/// `policy::denials` lists the bare tokens first, and every module derives its
+/// `deny` set from its `violation` set, so `first()` always took the token and
+/// dropped the pointers the module named (CLOUD-1636): measured, a module's
+/// refusal and advisory both printed no ` at ` clause at all.
+fn speaking(denials: &[crate::policy::Violation]) -> Option<&crate::policy::Violation> {
+    denials
+        .iter()
+        .find(|violation| violation.rule.is_some())
+        .or_else(|| denials.first())
+}
+
 fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
     if policy.bundles.is_empty() {
         return Vec::new();
@@ -9072,7 +9165,7 @@ fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
         let crate::facts::Look::Is(denials) = crate::policy::deny(bundle, &input) else {
             continue;
         };
-        let Some(violation) = denials.first() else {
+        let Some(violation) = speaking(&denials) else {
             continue;
         };
         let severity = bundle.severity_for(violation.rule.as_deref());
@@ -9724,6 +9817,13 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             "arguments": arguments,
             "command": envelope.command,
             "writes": envelope.writes,
+            // WHAT A SHELL CALL WRITES BY NAME (CLOUD-1636): redirections,
+            // `tee`, and the destination of `ln`/`cp`/`mv`/`install` with its
+            // sources. `null` for a write tool, whose target is `writes`.
+            "write-targets": write_targets(
+                envelope,
+                facts.reach.cwd.as_deref().map(Path::new),
+            ),
             // WHICH WRITES LAND IN THE LIVE LAP'S CHECKOUT (CLOUD-2832): each
             // as `{"path": …}` or `{"git": <subcommand>}`, judged by the
             // checkout it lands in rather than its path prefix. `null` while no
@@ -9900,6 +10000,15 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
     // macro's recursion limit.
     if let Some(call) = document.get_mut("call").and_then(Value::as_object_mut) {
         call.insert("cwd".to_owned(), serde_json::json!(facts.reach.cwd));
+        // THE TEXT A WRITE TOOL WRITES OVER (CLOUD-1636), so a module tells a
+        // write ADDING a registration from one keeping the file's own.
+        call.insert(
+            "prior".to_owned(),
+            serde_json::json!(landing::prior(
+                envelope,
+                facts.reach.cwd.as_deref().map(Path::new)
+            )),
+        );
         call.insert("roots".to_owned(), serde_json::json!(facts.reach.roots));
         call.insert("home".to_owned(), serde_json::json!(facts.reach.home));
         // THE KIND OF MACHINE (CLOUD-2709), the one fact only the environment
@@ -24986,5 +25095,67 @@ deny contains "refused by themodule" if {
         let passed = mise_task_arguments(&["tasks", "run", "t", "--", "x"]);
         assert_eq!(passed.get("t"), Some(&vec!["x".to_owned()]));
         assert!(mise_task_arguments(&["tasks", "ls", "t", "x"]).is_empty());
+    }
+
+    /// What a shell call writes by name (CLOUD-1636), one shape per arm.
+    ///
+    /// Fails by: a destination read as an operand (`-t`), an option's value
+    /// read as a source (`-m 644`), a lone `ln` operand dropped, or a `tee`
+    /// operand missed — each a write the harness-surface gate would not see.
+    #[test]
+    fn a_shell_call_names_what_it_writes() {
+        use serde_json::Value;
+        let targets = |command: &str| -> Vec<Value> {
+            let envelope = super::decode_value(
+                crate::config_model::Harness::ClaudeCode,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": command},
+                }),
+            )
+            .expect("the envelope decodes");
+            super::write_targets(&envelope, None).expect("a shell command is read")
+        };
+        let only = |command: &str| -> (String, Vec<String>, bool) {
+            let found = targets(command);
+            assert_eq!(found.len(), 1, "{command}: {found:?}");
+            let entry = &found[0];
+            (
+                entry["path"].as_str().unwrap().to_owned(),
+                entry["sources"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|source| source.as_str().unwrap().to_owned())
+                    .collect(),
+                entry["symbolic"].as_bool().unwrap(),
+            )
+        };
+        assert_eq!(
+            only("ln -sfn a/x.json 'b/y.json'"),
+            ("b/y.json".to_owned(), vec!["a/x.json".to_owned()], true)
+        );
+        assert_eq!(
+            only("cp -t dir a b"),
+            (
+                "dir".to_owned(),
+                vec!["a".to_owned(), "b".to_owned()],
+                false
+            )
+        );
+        assert_eq!(
+            only("install -m 644 a dest"),
+            ("dest".to_owned(), vec!["a".to_owned()], false)
+        );
+        assert_eq!(
+            only("ln -s a/x.json"),
+            (".".to_owned(), vec!["a/x.json".to_owned()], true)
+        );
+        assert_eq!(only("echo x > out.json").0, "out.json");
+        let teed: Vec<Value> = targets("tee -a one two < in");
+        assert_eq!(teed.len(), 2, "{teed:?}");
+        assert!(targets("cp lonely").is_empty());
+        assert!(targets("git status").is_empty());
     }
 }

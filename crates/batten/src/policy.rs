@@ -5191,6 +5191,53 @@ fn lap_held_schema() -> serde_json::Value {
     })
 }
 
+/// The call's two write keys: `lap-held` (CLOUD-2832) and `write-targets`
+/// (CLOUD-1636). One call from [`extend_call_schema`], which is at its line
+/// ceiling.
+fn insert_write_schemas(call: &mut serde_json::Map<String, serde_json::Value>) {
+    call.insert("lap-held".to_owned(), lap_held_schema());
+    call.insert("write-targets".to_owned(), write_targets_schema());
+    call.insert(
+        "prior".to_owned(),
+        serde_json::json!({
+            "type": ["string", "null"],
+            "description": "The text of the file a write tool writes over, read bounded before the write. NULL off a write tool, and where the file is absent or unreadable.",
+        }),
+    );
+}
+
+/// The call's `write-targets` key (CLOUD-1636): what a shell call writes by
+/// name, from `hook::write_targets`.
+fn write_targets_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": ["array", "null"],
+        "description": "What a shell call writes BY NAME, a shell's `-c` script included: an output redirection's target (`program` null), each `tee` operand, and the destination of `ln`, `cp`, `mv` or `install` with the operands it is made from as `sources`. `path` and `sources` are as written and unquoted; `resolved` and `origins` are placed against the call's directory and every followed `cd` (null or absent where they cannot be). `symbolic` is whether an `ln` makes a symbolic link. `lands` is each file the write leaves at or under the target with its `content`: a copied or linked file's, each file of a copied directory, or what a redirect or `tee` receives from `cat`, `git show` or `echo`; `content` is null where nothing could be read. NULL for a call that is not a shell command, whose target is `writes`, and for a command that does not parse.",
+        "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "path": {"type": "string"},
+                "program": {"type": ["string", "null"]},
+                "sources": {"type": "array", "items": {"type": "string"}},
+                "symbolic": {"type": "boolean"},
+                "resolved": {"type": ["string", "null"]},
+                "origins": {"type": "array", "items": {"type": "string"}},
+                "lands": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": ["string", "null"]}
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
 /// The keys `call_input_schema` adds after its `json!` document is built: one
 /// more key inline exceeds the macro's recursion limit.
 ///
@@ -5220,7 +5267,7 @@ fn extend_call_schema(document: &mut serde_json::Value) {
         .and_then(serde_json::Value::as_object_mut)
     {
         call.insert("forge".to_owned(), forge);
-        call.insert("lap-held".to_owned(), lap_held_schema());
+        insert_write_schemas(call);
         // CLOUD-2709: the kind of machine, as the environment declared it —
         // `disposable` where `BATTEN_ENVIRONMENT` says so, `machine` otherwise.
         call.insert(

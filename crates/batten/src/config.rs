@@ -1481,6 +1481,12 @@ fn validate_module_vocabulary(config: &Config) -> Result<()> {
         Native::PatternTableRefused,
         crate::pattern::validate(&config.patterns),
     )?;
+    // The harness-surface census (CLOUD-1636): a `harness-config-*` family
+    // names every harness with wiring, so a new harness cannot rot behind it.
+    under(
+        Native::PatternTableRefused,
+        crate::config_check::handler::validate_harness_surfaces(&config.patterns),
+    )?;
     under(
         Native::TraversalTableRefused,
         crate::traversal::validate(&config.traversals),
