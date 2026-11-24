@@ -6439,6 +6439,21 @@ mod tests {
         assert_eq!(handback_tally("no such verdict"), Some(Verdict::Error));
     }
 
+    /// Fails by: a verdict name a hand-back journals read as an `error`, so a
+    /// caught mutant is reported as a fault in the sweep.
+    #[test]
+    fn every_journaled_verdict_name_reports_as_its_own_verdict() {
+        for (name, verdict) in [
+            ("caught", Verdict::Caught),
+            ("missed", Verdict::Missed),
+            ("timeout", Verdict::Timeout),
+            ("uncovered", Verdict::Uncovered),
+            ("unjudged", Verdict::Unjudged),
+        ] {
+            assert_eq!(handback_tally(name), Some(verdict), "{name}");
+        }
+    }
+
     #[cfg(test)]
     #[test]
     fn the_indexed_walk_reaches_what_the_closure_reaches_in_name_order() {

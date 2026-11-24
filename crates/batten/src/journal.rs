@@ -2018,6 +2018,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: an incremental merge's mark moved past a torn final fragment,
+    /// so once a writer completes that line the next merge reads it from its
+    /// middle and the entry is never folded.
+    ///
+    /// The torn fragment follows a whole new line: a merge that reads nothing
+    /// new returns before it writes the marks, so only one that folds an entry
+    /// records where it stopped.
+    #[test]
+    fn a_torn_tail_completed_after_a_merge_is_folded_whole() {
+        let dir = store("merge-torn-tail");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        for _ in 0..3 {
+            append(&dir, "shard", &entry_for("TODO", Disposition::Acted)).unwrap();
+        }
+        let shard = shards_dir(&dir).join("shard.jsonl");
+        let whole = std::fs::read_to_string(&shard).unwrap();
+        let ends: Vec<usize> = whole.match_indices('\n').map(|(at, _)| at + 1).collect();
+        let torn = ends[1] + (ends[2] - ends[1]) / 2;
+        std::fs::write(&shard, &whole[..ends[0]]).unwrap();
+        assert!(
+            matches!(merge(&dir).unwrap(), Merge::Merged { applied: 1, .. }),
+            "the first line is folded, and the shard marked"
+        );
+        // Past the mark now: the incremental read folds the second line and
+        // must leave the third's torn fragment behind the mark it records.
+        std::fs::write(&shard, &whole[..torn]).unwrap();
+        assert!(
+            matches!(merge(&dir).unwrap(), Merge::Merged { applied: 1, .. }),
+            "the whole second line is folded"
+        );
+        std::fs::write(&shard, &whole).unwrap();
+        assert!(
+            matches!(merge(&dir).unwrap(), Merge::Merged { applied: 1, .. }),
+            "the completed third line is folded from its start"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Fails by: a record's line carrying anything but its pointers.
     #[test]
     fn a_disposition_line_is_the_records_pointers() {
