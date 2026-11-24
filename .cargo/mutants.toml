@@ -88,6 +88,10 @@ exclude_re = [
   # The same for the lease's off-Linux `holder_alive`, `#[cfg(not(target_os =
   # "linux"))]` in `off_proc`: no Linux build compiles it (CLOUD-2789).
   'lease\.rs:\d+:\d+: replace off_proc::holder_alive -> bool with true$',
+  # The same for the trace wait's off-Linux `await_trace`, `#[cfg(not(target_os
+  # = "linux"))]` in `off_linux`, named apart from the Linux arm, whose mutants
+  # stay judged: no Linux build compiles it (CLOUD-2902).
+  'trace\.rs:\d+:\d+: replace off_linux::await_trace -> Option<String> with ',
   # COMPILED OUT, not equivalent: column 10 is the `!` of the `#[cfg(windows)]`
   # leg's empty-table guard in `processes`, and mutants run on Linux, where
   # that leg is not built, so no case can reach it (CLOUD-2789).
