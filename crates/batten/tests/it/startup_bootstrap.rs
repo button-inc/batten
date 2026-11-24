@@ -302,6 +302,17 @@ fn a_warm_cache_whose_link_vanished_is_relinked_rather_than_reported_fresh() {
     );
 }
 
+/// This test binary, placed where a release build of the checkout at `dir`
+/// would sit, so it reads as an in-tree engine.
+fn in_tree_engine(dir: &Path) -> std::path::PathBuf {
+    let built = Path::new(env!("CARGO_BIN_EXE_batten"));
+    common::place_build(
+        &dir.join("target")
+            .join("release")
+            .join(built.file_name().expect("a name")),
+    )
+}
+
 /// CLOUD-2617: `provision status` judges the declared link even when the engine
 /// asking is a build of the checkout, which `links_host` keeps from WRITING it.
 ///
@@ -346,12 +357,7 @@ fn status_from_a_checkout_build_still_judges_the_link() {
     assert!(landed.is_file(), "the installed engine links");
 
     // The same engine, placed inside the checkout it judges.
-    let built = Path::new(env!("CARGO_BIN_EXE_batten"));
-    let engine = common::place_build(
-        &dir.join("target")
-            .join("release")
-            .join(built.file_name().expect("a name")),
-    );
+    let engine = in_tree_engine(&dir);
     // `batten_as`, not a bare `Command`: the same pinned state store, or the
     // copy reads an empty cache and reports `missing` for that reason instead.
     let status = || {
@@ -397,12 +403,7 @@ fn apply_from_a_checkout_build_never_writes_the_host_link() {
         dest.to_str().expect("the scratch path is UTF-8"),
         b"#!/bin/sh\nexit 0\n",
     );
-    let built = Path::new(env!("CARGO_BIN_EXE_batten"));
-    let engine = common::place_build(
-        &dir.join("target")
-            .join("release")
-            .join(built.file_name().expect("a name")),
-    );
+    let engine = in_tree_engine(&dir);
     let out = common::batten_as(&engine)
         .current_dir(&dir)
         .args(["provision", "apply"])

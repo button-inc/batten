@@ -75,6 +75,7 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::error::UsageError;
 use crate::hook::{Event, Harness, WiringFile};
+use crate::wiring::same_bytes;
 
 /// The base a comparison is taken against, and the run counts.
 ///
@@ -651,14 +652,6 @@ fn head_could_inherit(base_built_now: bool, head_cleaned: bool) -> bool {
     base_built_now && !head_cleaned
 }
 
-/// Whether two files hold the same bytes; an unreadable side is never "same".
-fn same_bytes(left: &Path, right: &Path) -> bool {
-    match (std::fs::read(left), std::fs::read(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
-}
-
 /// The binary [`base_target_dir`] holds once the base arm has been built.
 #[must_use]
 pub fn base_binary(perf_dir: &Path, key: &str) -> PathBuf {
@@ -1000,7 +993,6 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
 
 //MUTANT-SUITE crates/batten/src/perf.rs
 //MUTANT arm-switch-never|s@^    last != Some(what)$@    false@|switching_arms_drops_the_shared_units
-//MUTANT identical-arms-unguarded|s@^        (Ok(left), Ok(right)) => left == right,$@        (Ok(_), Ok(_)) => false,@|identical_arms_are_the_same_bytes
 
 /// The file in a shared target dir naming the arm last built into it.
 const LAST_ARM: &str = "perf-last-arm";
