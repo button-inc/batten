@@ -791,7 +791,7 @@ fn link_of(entry: &Provision, host: Host<'_>) -> Result<Option<Link>> {
 /// cost two whole binaries per status and broke on upgrade (the new version's
 /// cache is empty until `install`); a path alone would trust whatever replaced
 /// the file later. The record is per entry NAME, so it survives a version bump.
-//MUTANT fallback-claims-a-foreign-name|s@^    !linked.exists()$@    true@|a_fallback_never_takes_a_name_another_tool_owns
+//MUTANT fallback-claims-a-foreign-name|s@^    !linked.exists() @    true @|a_fallback_never_takes_a_name_another_tool_owns
 fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
     let linked = dir.join(&entry.binary);
     !linked.exists() || is_launcher(&linked) || recorded_as_ours(&linked, entry, cache_root)
@@ -2604,10 +2604,41 @@ mod tests {
             claimable(&shared, &entry, &cache),
             "an intent over this entry's own cached bytes is batten's half-finished link"
         );
+        // SAME LENGTH IS NOT SAME BYTES: the size check only short-circuits.
+        let mut lookalike = body.clone();
+        lookalike[0] ^= 1;
+        fs::write(&linked, &lookalike).unwrap();
+        assert!(
+            !claimable(&shared, &entry, &cache),
+            "an intent over same-length foreign bytes"
+        );
+        fs::write(&linked, &body).unwrap();
+
         record_written(&cache, &entry, &linked).unwrap();
         assert!(
             claimable(&shared, &entry, &cache),
+            "the link batten recorded writing"
+        );
+        // THE COMPLETED RECORD STANDS ON ITS STAMP, not on the cache: after a
+        // version bump the new version's cache holds nothing yet, and batten's
+        // own copy must still be batten's.
+        fs::remove_file(&cached).unwrap();
+        assert!(
+            claimable(&shared, &entry, &cache),
             "the link batten recorded writing, whatever version wrote it"
+        );
+
+        // `shared` IS THE FALLBACK'S, NOT EVERY LINK'S: an absolute link names
+        // its own directory, which is never judged for another tool's name.
+        let mut declared = entry.clone();
+        declared.link = Some(shared.to_string_lossy().into_owned());
+        assert_eq!(
+            link_of(&declared, Host::isolated(true)).unwrap(),
+            Some(Link {
+                dir: shared.clone(),
+                shared: false,
+            }),
+            "a declared directory is not a shared one"
         );
 
         // REPLACED AFTERWARDS by another tool: the path still matches the
@@ -2632,6 +2663,15 @@ mod tests {
             freshness_of(&entry, &cache, Some(&link)).unwrap(),
             Freshness::Foreign,
             "a foreign name in a shared directory reads foreign, never fresh"
+        );
+        let unshared = Link {
+            dir: shared.clone(),
+            shared: false,
+        };
+        assert_ne!(
+            freshness_of(&entry, &cache, Some(&unshared)).unwrap(),
+            Freshness::Foreign,
+            "only a SHARED directory's name is judged foreign"
         );
     }
 

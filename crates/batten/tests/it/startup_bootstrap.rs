@@ -382,6 +382,39 @@ fn status_from_a_checkout_build_still_judges_the_link() {
     );
 }
 
+/// CLOUD-2617, the writer's half of [`status_from_a_checkout_build_still_judges_the_link`]:
+/// a build of the checkout may fill the repository's cache, but never writes
+/// the host's link (CLOUD-2124). Status judges every link; apply writes one
+/// only where `links_host` lets it.
+///
+/// Fails by: the writer's host taking the reader's `links: true`.
+#[test]
+fn apply_from_a_checkout_build_never_writes_the_host_link() {
+    let dest = scratch("provision-apply-in-tree-dest");
+    std::fs::create_dir_all(&dest).expect("the destination exists");
+    let (dir, _artifact) = linked_fixture(
+        "provision-apply-in-tree",
+        dest.to_str().expect("the scratch path is UTF-8"),
+        b"#!/bin/sh\nexit 0\n",
+    );
+    let built = Path::new(env!("CARGO_BIN_EXE_batten"));
+    let engine = common::place_build(
+        &dir.join("target")
+            .join("release")
+            .join(built.file_name().expect("a name")),
+    );
+    let out = common::batten_as(&engine)
+        .current_dir(&dir)
+        .args(["provision", "apply"])
+        .output()
+        .expect("the in-tree engine runs");
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        !dest.join("probe").exists(),
+        "a build of the checkout must not write the host's link"
+    );
+}
+
 #[test]
 fn a_relative_link_destination_is_refused_rather_than_resolved() {
     // The direction a miss must fail in. Resolved against the process's own
