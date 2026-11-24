@@ -10308,22 +10308,6 @@ no_fix_reason = "class 3 (a board resolution): a raced claim is resolved on the 
 # EXPECTED TO LAPSE UNUSED. `base = "origin/main"`, so the moment this lands the
 # floor becomes the new count on its own and this row suppresses nothing. It
 # exists to get one commit past the gate, not to stand.
-# The one residual false positive `no-secrets` finds on this tree, measured
-# before the rule landed rather than discovered by it: ripsecrets matches
-# `${GH_PAT}` in a `git config url."https://x-access-token:${GH_PAT}@…"` line as
-# a credential embedded in a URL. It is a shell expansion of an Actions secret
-# injected at runtime — the shape is real, the instance is not.
-#
-# A `[[waiver]]` and never `severity = "allow"`: switching the rule off would
-# suppress every future finding too, while this names one path, states why, and
-# LAPSES. The expiry is the mechanism — when it does, someone re-reads the line
-# rather than inheriting a decision nobody remembers making.
-[[waiver]]
-rule = "source carry unsafe"
-path = ".github/workflows/release-plz.yml"
-reason = "ripsecrets reads the Actions secret expression inside the `GIT_CONFIG_KEY_0` insteadOf URL as an embedded credential; it is expanded by the runner from `secrets.*`, so nothing is committed. Re-check against the pinned scanner's next version."
-expires = "2026-11-14"
-
 # CLOUD-1387's shadow, waived for as long as its fix takes to land and no longer.
 #
 # `claim-before-code` reads `node = "project"` off the capture keyed to one row,
