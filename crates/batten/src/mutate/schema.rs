@@ -3010,7 +3010,7 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     // recorder, which knows it; a case run outside one is not traced. Every
     // case not traced says why in its record ([`Untraced`]).
     let tree = std::env::var_os(TREE_ENV).map(std::path::PathBuf::from);
-    let strace = trace::tracer();
+    let strace = trace::Host::here().tracer();
     let mut why_untraced =
         untraced_reason(tree.is_some(), trace::traced_already(), strace.is_some());
     let mut traced = strace.filter(|_| why_untraced.is_none());

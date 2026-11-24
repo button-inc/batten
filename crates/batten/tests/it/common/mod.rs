@@ -1512,7 +1512,7 @@ pub(crate) fn require_tool(name: &str) -> PathBuf {
 }
 
 /// Whether a reach run started from this case traces its cases, as the schema
-/// asks (`mutate::trace::tracer`): on Linux, with `strace` on `PATH`, and never
+/// asks (`mutate::trace::Host::tracer`): on Linux, with `strace` on `PATH`, and never
 /// from a process already traced. A suite run under `step run`'s own tracer — a
 /// keyed miss of `test:cargo` on Linux (CLOUD-2784) — is such a process, so
 /// every reach it starts records its cases untraced, and each keys on the

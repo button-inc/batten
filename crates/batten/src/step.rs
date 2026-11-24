@@ -1024,7 +1024,7 @@ pub fn run_step(
     let traced = answer
         .recording()
         .is_some()
-        .then(crate::mutate::trace::tracer)
+        .then(|| crate::mutate::trace::Host::here().tracer())
         .flatten()
         .and_then(|strace| Some((strace, trace_file(step)?)));
     let spawned: Vec<String> = match (&traced, running.split_first()) {
@@ -1137,6 +1137,7 @@ fn answer_red(step: &str, key: &str, failure: &Failure, err: &mut dyn Write) -> 
 }
 
 /// What a traced pass's lint leaves the step to do.
+#[derive(Debug, PartialEq, Eq)]
 enum LintStop {
     /// A written or undeclared input: the step fails, unrecorded.
     Fail,
@@ -1611,6 +1612,7 @@ pub fn sweep_orphaned_traces(git_dir: &Path) -> (usize, u64) {
 const TRACES: &str = "batten-step-trace";
 
 /// What a traced run's reads say about its row's declaration.
+#[derive(Debug, PartialEq, Eq)]
 enum Linted {
     /// Every read was declared, outside the worktree, or ignored.
     Declared,
@@ -1647,6 +1649,33 @@ fn lint_trace(step: &str, file: &Path) -> Linted {
             .entry(path.to_owned())
             .or_insert_with(|| crate::git::check_ignore(&root, path).unwrap_or(false))
     };
+    let declaration = Declaration {
+        root: &root,
+        inputs: row.inputs(),
+        exists: &exists_specs(&row),
+    };
+    lint_accessed(&declaration, &accessed, file, &mut ignored)
+}
+
+/// A row's declaration as the trace lint reads it: the worktree it is taken
+/// against, its declared input pathspecs and its existence-only ones.
+struct Declaration<'a> {
+    root: &'a Path,
+    inputs: &'a [String],
+    exists: &'a [String],
+}
+
+/// What `accessed`, a whole trace's reads and writes, says about
+/// `declaration`, writing the offending paths beside `file`. Apart from
+/// [`lint_trace`] so a case can hand it a synthetic trace on any host, traced
+/// or not, `strace` or none (CLOUD-2789).
+fn lint_accessed(
+    declaration: &Declaration<'_>,
+    accessed: &[(std::path::PathBuf, crate::mutate::trace::Access)],
+    file: &Path,
+    ignored: &mut dyn FnMut(&str) -> bool,
+) -> Linted {
+    let root = declaration.root;
     // THE WRITE HAZARD FIRST (CLOUD-2786): a run that wrote a declared input
     // and put it back leaves the key unmoved, though its verdict judged bytes
     // the tree never held (Rattle, Spall et al. OOPSLA 2020).
@@ -1655,7 +1684,7 @@ fn lint_trace(step: &str, file: &Path) -> Linted {
         .filter(|(_, access)| *access == crate::mutate::trace::Access::Write)
         .map(|(path, _)| path.clone())
         .collect();
-    let wrote = written_inputs(&root, row.inputs(), &written, &mut ignored);
+    let wrote = written_inputs(root, declaration.inputs, &written, ignored);
     if !wrote.is_empty() {
         let listing = file.with_extension("wrote");
         let mut body = wrote.join("\n");
@@ -1666,11 +1695,11 @@ fn lint_trace(step: &str, file: &Path) -> Linted {
         return Linted::Wrote(wrote.len(), listing);
     }
     let found = undeclared(
-        &root,
-        row.inputs(),
-        &exists_specs(&row),
-        &accessed,
-        &mut ignored,
+        root,
+        declaration.inputs,
+        declaration.exists,
+        accessed,
+        ignored,
     );
     if found.is_empty() {
         return Linted::Declared;
@@ -2255,6 +2284,114 @@ pub fn tree_inputs_digest(root: &Path) -> Result<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A scratch worktree declaring `src/a.rs`, and the trace file a lint of
+    /// it writes its listings beside (CLOUD-2789).
+    fn lint_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = crate::scratch::scratch(name);
+        let root = dir.join("root");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        (root, dir.join("trace"))
+    }
+
+    /// [`lint_accessed`] over `accessed`, for a row declaring `src/a.rs` in
+    /// `root`, with nothing ignored.
+    fn lint(
+        root: &Path,
+        file: &Path,
+        accessed: &[(std::path::PathBuf, crate::mutate::trace::Access)],
+    ) -> Linted {
+        let declaration = Declaration {
+            root,
+            inputs: &[String::from("src/a.rs")],
+            exists: &[],
+        };
+        lint_accessed(&declaration, accessed, file, &mut |_| false)
+    }
+
+    // Fails by: a run that only READ its declared input read as one that
+    // wrote it (the write filter inverted), or an empty write list read as a
+    // write hazard. A synthetic trace, so it judges on every host, under a
+    // tracer or with no `strace` (CLOUD-2789).
+    #[test]
+    fn a_read_of_a_declared_input_is_declared() {
+        use crate::mutate::trace::Access;
+        let (root, file) = lint_fixture("step-lint-read");
+        let accessed = [(root.join("src/a.rs"), Access::Read)];
+        assert_eq!(lint(&root, &file, &accessed), Linted::Declared);
+    }
+
+    // Fails by: a run that wrote its declared input judged on its reads alone,
+    // or its listing not naming the input written.
+    #[test]
+    fn a_write_to_a_declared_input_is_the_write_hazard() {
+        use crate::mutate::trace::Access;
+        let (root, file) = lint_fixture("step-lint-wrote");
+        let accessed = [
+            (root.join("src/a.rs"), Access::Write),
+            (root.join("other"), Access::Read),
+        ];
+        let listing = file.with_extension("wrote");
+        assert_eq!(
+            lint(&root, &file, &accessed),
+            Linted::Wrote(1, listing.clone())
+        );
+        assert_eq!(crate::fsio::read_to_string(&listing).unwrap(), "src/a.rs\n");
+    }
+
+    // Fails by: a worktree read outside the declaration passed as declared,
+    // or its listing not naming it.
+    #[test]
+    fn a_read_outside_the_declaration_is_undeclared() {
+        use crate::mutate::trace::Access;
+        let (root, file) = lint_fixture("step-lint-undeclared");
+        let accessed = [
+            (root.join("src/a.rs"), Access::Read),
+            (root.join("other"), Access::Read),
+        ];
+        let listing = file.with_extension("undeclared");
+        assert_eq!(
+            lint(&root, &file, &accessed),
+            Linted::Undeclared(1, listing.clone())
+        );
+        assert_eq!(crate::fsio::read_to_string(&listing).unwrap(), "other\n");
+    }
+
+    // Fails by: a hazard or an undeclared read letting the step record, a
+    // trace that cannot be read whole recorded or failed, a clean lint
+    // stopping the step, or a stop not saying why.
+    #[test]
+    fn each_lint_ends_the_step_as_its_kind_requires() {
+        let stop = |linted: Linted| {
+            let mut err = Vec::new();
+            let stop = lint_stop("s", linted, &mut err);
+            (stop, String::from_utf8(err).unwrap())
+        };
+        let listing = std::path::PathBuf::from("l");
+        assert_eq!(
+            stop(Linted::Wrote(2, listing.clone())),
+            (
+                LintStop::Fail,
+                String::from("step run: s wrote 2 declared input(s); read l\n")
+            )
+        );
+        assert_eq!(
+            stop(Linted::Undeclared(3, listing)),
+            (
+                LintStop::Fail,
+                String::from("step run: s read 3 path(s) outside its inputs; read l\n")
+            )
+        );
+        assert_eq!(stop(Linted::Declared), (LintStop::Go, String::new()));
+        assert_eq!(stop(Linted::RowUnread), (LintStop::Go, String::new()));
+        assert_eq!(
+            stop(Linted::Unread),
+            (
+                LintStop::Unrecorded,
+                String::from("step run: s — its trace could not be read whole; not recording\n")
+            )
+        );
+    }
 
     /// Fails by: a cleared red left standing, so a gate started under the
     /// same task reads the last one's failure as its own.
