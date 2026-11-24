@@ -304,6 +304,17 @@ fn watch_on<'scope>(
     })
 }
 
+/// The floor where no runtime could be built: `tick` once per period on the
+/// clock's blocking face until `stop` is set. Its own function so that the
+/// stop test is driven directly, since no kernel this suite runs on refuses
+/// the runtime.
+fn blocking_floor(stop: &AtomicBool, mut tick: impl FnMut()) {
+    while !stop.load(Ordering::Relaxed) {
+        tick();
+        crate::pr_watch::clock::hold(PERIOD, None);
+    }
+}
+
 /// The watcher's loops, on its own current-thread compio runtime: the timer on
 /// every platform, and on Linux the filesystem mark beside it.
 ///
@@ -325,10 +336,7 @@ fn run(sampler: &Sampler<'_, '_>, stop: &AtomicBool, driver: Option<compio::driv
                 PERIOD.as_micros(),
                 why.kind()
             )]);
-            while !stop.load(Ordering::Relaxed) {
-                sampler.sample();
-                crate::pr_watch::clock::hold(PERIOD, None);
-            }
+            blocking_floor(stop, || sampler.sample());
             return;
         }
     };
@@ -555,6 +563,22 @@ impl Drop for Stop<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fails by: the floor's stop test inverted, so a watcher with no runtime
+    /// never samples until it is stopped, and then never ends.
+    #[test]
+    fn the_blocking_floor_ticks_until_it_is_stopped() {
+        let stop = AtomicBool::new(false);
+        let mut ticks = 0;
+        blocking_floor(&stop, || {
+            ticks += 1;
+            if ticks == 3 {
+                stop.store(true, Ordering::Relaxed);
+            }
+        });
+        assert_eq!(ticks, 3);
+    }
+
     #[cfg(test)]
     /// THE WATCHER'S READING IS THE MEASUREMENT A GATE IS JUDGED BY (CLOUD-2781):
     /// a 0 the loop reads is the window's low-water mark, and a reset opens a new

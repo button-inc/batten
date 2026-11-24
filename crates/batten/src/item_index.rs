@@ -2918,6 +2918,66 @@ mod tests {
         );
     }
 
+    /// Fails by: the `Trait` arm deleted from `declared_name`, so a trait is
+    /// an item no path can name.
+    #[test]
+    fn a_trait_declares_its_name() {
+        let parsed = batten_facts::source::rust_parse("trait T {}\n", Edition::Edition2024);
+        let named = parsed
+            .tree()
+            .items()
+            .next()
+            .and_then(|item| declared_name(&item));
+        assert_eq!(named.as_deref(), Some("T"));
+    }
+
+    /// Fails by: either guard of `declared_in` joined by `||`, so a file is
+    /// credited with a sibling file's names or a child file's.
+    #[test]
+    fn a_file_declares_only_its_own_and_its_inline_modules_names() {
+        let index = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod config;\npub mod m;\n"),
+            ("src/config.rs", "pub struct X;\n"),
+            (
+                "src/m.rs",
+                "pub mod inner;\npub struct Z;\nmod inl {\n    pub struct W;\n}\n",
+            ),
+            ("src/m/inner.rs", "pub struct Y;\n"),
+        ]);
+        let declared = index.declared_in("src/m.rs");
+        let names: Vec<(Vec<String>, Vec<String>)> = declared
+            .into_iter()
+            .map(|(module, names)| (module, names.into_iter().collect()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                (Vec::new(), vec!["Z".to_owned()]),
+                (vec!["inl".to_owned()], vec!["W".to_owned()]),
+            ]
+        );
+    }
+
+    /// Fails by: the crate guard of an imported head answered true, so an
+    /// import naming a crate the index has no root for is expanded as one.
+    #[test]
+    fn an_import_from_a_crate_with_no_indexed_root_is_not_expanded() {
+        let index = index(&[ROOT, ("src/m.rs", "pub struct Y;\n")]);
+        // The premise: the module is indexed, its crate's root is not.
+        assert!(
+            index
+                .modules
+                .contains_key(&("app".to_owned(), vec!["m".to_owned()]))
+        );
+        assert!(!index.modules.contains_key(&("app".to_owned(), Vec::new())));
+        let reader = index.reader("src/m.rs", "use app::m;\n");
+        assert_eq!(
+            index.absolute_in(&reader, &["m".to_owned(), "Y".to_owned()]),
+            None
+        );
+    }
+
     /// Fails by: a token any non-comment is read as an identifier, a token
     /// glued to the colon before it read as a path's start, or anything after
     /// a `::` taken as its next segment.
