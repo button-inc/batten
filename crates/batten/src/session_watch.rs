@@ -490,8 +490,11 @@ impl crate::output::Line for Report {
 /// one store, the one the `archive_session` gate reads.
 #[derive(Clone, Copy)]
 pub struct Mints<'a> {
-    sink: Option<&'a dyn Fn(&Value, &Value)>,
+    sink: Option<&'a Sink<'a>>,
 }
+
+/// What [`Mints`] hands each report to: the input and the reading.
+pub type Sink<'a> = dyn Fn(&Value, &Value) + 'a;
 
 impl std::fmt::Debug for Mints<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -504,7 +507,7 @@ impl std::fmt::Debug for Mints<'_> {
 impl<'a> Mints<'a> {
     /// Mint each report through `sink`, called with the input and the reading.
     #[must_use]
-    pub const fn new(sink: &'a dyn Fn(&Value, &Value)) -> Self {
+    pub const fn new(sink: &'a Sink<'a>) -> Self {
         Self { sink: Some(sink) }
     }
 
