@@ -4532,13 +4532,16 @@ env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "25
 run = "mise run dist {{vars.dist_host}} --build-tool cargo-dist"
 
 [tasks."tree-clean"]
+#MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
+#MUTANT engine-unbuilt|s@^depends = \["build:debug"\]$@@|the_gate_set_runs_the_engine_it_built_first
 description = "Gate: the working tree is the bytes at HEAD, so a receipt keyed to HEAD names what was actually validated"
-# `cargo run`, NOT `{{vars.batten}}` (CLOUD-2924): `verify:gated` runs this as
-# its first body entry, before `build:debug` writes the binary its `env` names
-# in `BATTEN_BIN`, so through `{{vars.batten}}` it would run a stale engine on a
-# warm clone and a missing one on a cold clone. It runs alone, so it waits on
-# no sibling build.
-run = "cargo run --quiet -p batten -- receipt clean"
+# THE ENGINE EXISTS BEFORE THIS RUNS IT (CLOUD-2924): `verify:gated` runs this
+# first, as its `depends` and as its first body entry, and its `env` names in
+# `BATTEN_BIN` the binary `build:debug` writes, so every route here builds that
+# binary first. A dirty tree's build is wasted work, never a wrong verdict:
+# this still refuses before any gate runs.
+depends = ["build:debug"]
+run = "{{vars.batten}} receipt clean"
 
 [tasks."verified"]
 description = "Gate: is HEAD verified? Answers from the receipts, so no shell idiom can mask the verdict"
@@ -4936,7 +4939,6 @@ run = [
 
 [tasks."verify:gated"]
 #MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
-#MUTANT engine-unbuilt|s@^  "mise run build:debug",$@@|the_gate_set_runs_the_engine_it_built_first
 #MUTANT engine-unnamed|s@^env = { BATTEN_BIN = "[^"]*" }$@@|the_gate_set_runs_the_engine_it_built_first
 description = "Every gate verify runs, and the receipt — invoked through `verify`, after the claim and linearity questions"
 # Split out of `[tasks.verify]` for CLOUD-407, when `verify` was a mapper that
@@ -5003,14 +5005,13 @@ description = "Every gate verify runs, and the receipt — invoked through `veri
 # reported only after the full suite and three cross builds. They moved into the
 # body's one fan, below, behind the cheap gates.
 #
-# THE ENGINE IS BUILT ONCE, THEN NAMED (CLOUD-2924): `build:debug` is the
-# body's second entry, and `BATTEN_BIN` points every later child `mise run` at
-# the binary it writes. The one entry ahead of it, `tree-clean`, runs
-# `cargo run` itself rather than `{{vars.batten}}`, so it never reads a
-# `BATTEN_BIN` that names a binary not yet built. Without this each of the
-# tiers' `step run` entries was `cargo run -p batten`, which takes cargo's lock
-# and fingerprints the engine before it even looks up its receipt, so a step
-# that hit still queued behind every sibling build.
+# THE ENGINE IS BUILT ONCE, THEN NAMED (CLOUD-2924): `tree-clean`, which opens
+# both this `depends` and the body, depends on `build:debug`, so the binary
+# exists before any `{{vars.batten}}` runs, and `BATTEN_BIN` points every child
+# `mise run` at it. Without this each of the tiers' `step run` entries was
+# `cargo run -p batten`, which takes cargo's lock and fingerprints the engine
+# before it even looks up its receipt, so a step that hit still queued behind
+# every sibling build.
 depends = ["tree-clean"]
 env = { BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}/debug/batten" }
 # THE FAN (operator ruling, 2026-11-11). Every independent gate runs in ONE
@@ -5106,7 +5107,6 @@ env = { BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ 
 # fan width with `--jobs 2` and tier 3 its one-at-a-time with `--jobs 1`.
 run = [
   "mise run tree-clean",
-  "mise run build:debug",
   "mise run record-verdicts",
   "mise run evaluator-io-record",
   "mise run signing-posture-record",
