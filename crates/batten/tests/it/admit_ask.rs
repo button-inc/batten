@@ -29,6 +29,12 @@ fn fixture(name: &str) -> std::path::PathBuf {
              [[pattern]]\n\
              id = \"ledger-pair\"\n\
              regex = '\\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_][A-Za-z0-9_.]*\\[[^\\]]+\\](?:\\.[A-Za-z0-9_]+)*)'\n\n\
+             [[pattern]]\n\
+             id = \"recommendation-marked\"\n\
+             regex = '(?i)(?:\\bnot\\s+)?\\brecommended\\b'\n\n\
+             [[pattern]]\n\
+             id = \"recommendation-tagged\"\n\
+             regex = '(?i)[(\\[]\\s*recommended\\s*[)\\]]'\n\n\
              [[verdict]]\n\
              id = \"call ask loose\"\n\
              gloss = \"a question asks to admit a finding in words the ledger cannot bind\"\n\
@@ -44,9 +50,15 @@ fn fixture(name: &str) -> std::path::PathBuf {
 }
 
 fn ask(dir: &std::path::Path, question: &str, labels: &[&str]) -> String {
-    let options: Vec<serde_json::Value> = labels
+    let options: Vec<(&str, &str)> = labels.iter().map(|label| (*label, "d")).collect();
+    described(dir, question, &options)
+}
+
+/// [`ask`] with each option's description given: `(label, description)`.
+fn described(dir: &std::path::Path, question: &str, options: &[(&str, &str)]) -> String {
+    let options: Vec<serde_json::Value> = options
         .iter()
-        .map(|label| serde_json::json!({"label": label, "description": "d"}))
+        .map(|(label, description)| serde_json::json!({"label": label, "description": description}))
         .collect();
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
@@ -213,5 +225,100 @@ fn a_ledger_question_with_a_recommendation_is_asked() {
     assert!(
         pair_only.contains("\"deny\"") && pair_only.contains(VERDICT),
         "a pair without an `Admit` label is not the ledger's question: {pair_only}"
+    );
+}
+
+/// Fails by: a recommendation spelled other than the harness's `(Recommended)`
+/// label suffix reaching the owner — a `Recommended:` prefix, a description, the
+/// text naming the option, a bare tag in the text — or an option described as
+/// NOT recommended refusing a real choice (CLOUD-2915 review, item 2).
+#[test]
+fn every_spelling_of_a_recommendation_is_refused() {
+    let dir = fixture("admit-ask-spelling");
+    let refused = |said: &str, why: &str| {
+        assert!(
+            said.contains("\"deny\"") && said.contains(VERDICT),
+            "{why}: {said}"
+        );
+    };
+    refused(
+        &ask(
+            &dir,
+            "Keep fix 2?",
+            &["Recommended: Keep fix 2", "Split fix 2 out"],
+        ),
+        "a `Recommended:` label prefix settles it",
+    );
+    refused(
+        &described(
+            &dir,
+            "Keep fix 2?",
+            &[
+                ("Keep fix 2", "Recommended: the evidence settles it"),
+                ("Split fix 2 out", "a second PR"),
+            ],
+        ),
+        "a recommendation in the description settles it",
+    );
+    refused(
+        &ask(
+            &dir,
+            "I recommend keep fix 2. Which?",
+            &["Keep fix 2", "Split fix 2 out"],
+        ),
+        "the text naming the recommended option settles it",
+    );
+    refused(
+        &ask(&dir, "Keep fix 2? (Recommended)", &["Yes", "Split it out"]),
+        "a `(Recommended)` tag in the text settles it",
+    );
+    let against = described(
+        &dir,
+        "Which crate goes first?",
+        &[
+            ("batten-model", "not recommended while the bundle is open"),
+            ("batten-base", "the smaller cut"),
+        ],
+    );
+    assert!(
+        !against.contains(VERDICT),
+        "an option marked NOT recommended settles nothing: {against}"
+    );
+}
+
+/// Fails by: the ledger exemption granted to a question that merely carries
+/// its tokens — a pair mentioned outside an admission, or an `Admit…`
+/// alternative beside a recommendation of something else — so a settled
+/// question reaches the owner; or a genuine admission refused (CLOUD-2915
+/// review, item 3).
+#[test]
+fn the_exemption_is_tied_to_the_admission() {
+    let dir = fixture("admit-ask-exemption");
+    let mentioned = ask(
+        &dir,
+        &format!("Keep fix 2? It touches {FULL}"),
+        &["Admit it (Recommended)", "Split it out"],
+    );
+    assert!(
+        mentioned.contains("\"deny\"") && mentioned.contains(VERDICT),
+        "a pair mentioned in a question that does not ask to admit is not the ledger's: {mentioned}"
+    );
+    let other = ask(
+        &dir,
+        &format!("Admit this finding? {FULL}"),
+        &["Keep it (Recommended)", "Admit"],
+    );
+    assert!(
+        other.contains("\"deny\"") && other.contains(VERDICT),
+        "an admission recommending a non-admission is settled: {other}"
+    );
+    let genuine = ask(
+        &dir,
+        &format!("Admit this finding? {FULL}"),
+        &["Admit it [Recommended]", "Refuse"],
+    );
+    assert!(
+        !genuine.contains(VERDICT),
+        "a genuine admission is asked however it marks the recommendation: {genuine}"
     );
 }

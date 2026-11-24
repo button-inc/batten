@@ -25,8 +25,13 @@
 #MUTANT admit-pair-unchecked|s@^\tnot paired(question)$@\tfalse@|an_admit_ask_naming_no_ledger_pair_is_refused
 #MUTANT single-answer-unchecked|s@^\tsettled(question)$@\tfalse@|a_question_with_one_useful_answer_is_refused
 #MUTANT ledger-exemption-dropped|s@^\tnot ledger_question(question)$@\ttrue@|a_ledger_question_with_a_recommendation_is_asked
-#MUTANT ledger-exemption-label-unchecked|s@^\tlabelled_admit(question)$@\ttrue@|a_ledger_question_with_a_recommendation_is_asked
-#MUTANT ledger-exemption-pair-unchecked|s@^\tpaired(question)$@\ttrue@|a_ledger_question_with_a_recommendation_is_asked
+#MUTANT ledger-exemption-admitting-unchecked|s@^\tquestion in admitting$@\ttrue@|the_exemption_is_tied_to_the_admission
+#MUTANT ledger-exemption-other-unchecked|s@^\tnot recommends_other(question)$@\ttrue@|the_exemption_is_tied_to_the_admission
+#MUTANT recommendation-label-unread|s@^recommends(_, option) if marked(option.label)$@recommends(_, option) if false@|every_spelling_of_a_recommendation_is_refused
+#MUTANT recommendation-description-unread|s@^recommends(_, option) if marked(option.description)$@recommends(_, option) if false@|every_spelling_of_a_recommendation_is_refused
+#MUTANT recommendation-naming-unread|s@^recommends(question, option) if named_recommended(question, option)$@recommends(question, option) if false@|every_spelling_of_a_recommendation_is_refused
+#MUTANT recommendation-tag-unread|s@^settled(question) if regex.*$@settled(question) if false@|every_spelling_of_a_recommendation_is_refused
+#MUTANT recommendation-negation-dropped|s@^\tnot startswith(lower(found), "not")$@\ttrue@|every_spelling_of_a_recommendation_is_refused
 
 # METADATA
 # description: |
@@ -112,19 +117,72 @@ violation contains {
 # owner on 2026-11-24 because "Split" was not on it, and every action verb
 # escapes a list the same way. The remedy is the recommended action, its
 # reasoning recorded where the decision lives, and the owner free to overrule.
-recommended(option) if contains(lower(option.label), "(recommended)")
+#
+# A RECOMMENDATION IS A MARK, NOT A SPELLING (CLOUD-2915 review): the harness's
+# `(Recommended)` suffix is one way to say it; `Recommended: Keep fix 2`,
+# `Keep fix 2 [Recommended]`, a description saying so, or the question text
+# naming the option beside the word are the others, and each settles the
+# question the same way. Matching is case-insensitive and both expressions are
+# the config's (`recommendation-marked`, `recommendation-tagged`). "Not
+# recommended" marks nothing.
+marked(text) if {
+	some found in regex.find_n(data.batten.patterns["recommendation-marked"], text, -1)
+	not startswith(lower(found), "not")
+}
+
+recommends(_, option) if marked(option.label)
+
+recommends(_, option) if marked(option.description)
+
+recommends(question, option) if named_recommended(question, option)
+
+# The question text names an option as the recommended one: its label beside
+# the word, on either side.
+named_after := [" (recommended)", " [recommended]", " is recommended", " - recommended", " — recommended", ", recommended"]
+
+named_before := ["recommended: ", "recommend ", "recommended "]
+
+named_recommended(question, option) if {
+	label := trim_space(lower(option.label))
+	label != ""
+	some suffix in named_after
+	contains(lower(question.question), concat("", [label, suffix]))
+}
+
+named_recommended(question, option) if {
+	label := trim_space(lower(option.label))
+	label != ""
+	some prefix in named_before
+	contains(lower(question.question), concat("", [prefix, label]))
+}
 
 settled(question) if {
 	some option in question.options
-	recommended(option)
+	recommends(question, option)
 }
+
+# A `(Recommended)` tag in the text that names no option still says the asker
+# settled it.
+settled(question) if regex.match(data.batten.patterns["recommendation-tagged"], question.question)
 
 # THE ONE QUESTION A HUMAN MUST ANSWER BY DESIGN: the ledger's own. It binds
 # exactly when an option starts `Admit` and the text carries a `<smell-id> <key>`
-# pair (`asked::Entry::admits`), the word "admit" in the text being no part of it.
+# pair (`asked::Entry::admits`). The exemption is tied to the admission itself,
+# not to those tokens appearing anywhere: the text asks to admit, and every
+# option it recommends is an `Admit…` choice. A question recommending anything
+# else over a pair it merely mentions is settled like any other (CLOUD-2915
+# review). The label and the pair are NOT restated here: an admitting question
+# lacking either is refused by the admission arms above whatever this says, so
+# a conjunct for them decides nothing (the sweep measured both as survivors).
 ledger_question(question) if {
-	labelled_admit(question)
-	paired(question)
+	question in admitting
+	not recommends_other(question)
+}
+
+recommends_other(question) if {
+	some option in question.options
+	recommends(question, option)
+	not startswith(option.label, admit)
 }
 
 violation contains {
@@ -221,6 +279,10 @@ path_regex := `[A-Za-z0-9_./-]+\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[
 
 pair_regex := `\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_][A-Za-z0-9_.]*\[[^\]]+\](?:\.[A-Za-z0-9_]+)*)`
 
+marked_regex := `(?i)(?:\bnot\s+)?\brecommended\b`
+
+tagged_regex := `(?i)[(\[]\s*recommended\s*[)\]]`
+
 ask(question, labels) := {"call": {
 	"tool": "AskUserQuestion",
 	"arguments": {"questions": [{
@@ -229,11 +291,126 @@ ask(question, labels) := {"call": {
 	}]},
 }}
 
-judged(question, labels) := v if {
-	v := violation with input as ask(question, labels)
+judged(question, labels) := described(question, [{"label": label} | some label in labels])
+
+# Options as `{"label", "description"}` objects, for the spellings that sit in a
+# description.
+described(question, options) := v if {
+	v := violation with input as {"call": {
+		"tool": "AskUserQuestion",
+		"arguments": {"questions": [{"question": question, "options": options}]},
+	}}
 		with data.batten.patterns["admit-asked"] as asked_regex
 		with data.batten.patterns["finding-path"] as path_regex
 		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
+}
+
+# --- CLOUD-2915 review, item 2: every spelling of a recommendation ------------
+
+test_a_recommended_prefix_is_refused if {
+	count(judged("Keep fix 2?", ["Recommended: Keep fix 2", "Split fix 2 out"])) == 1
+}
+
+test_a_bracketed_recommendation_is_refused if {
+	count(judged("Keep fix 2?", ["Keep fix 2 [Recommended]", "Split fix 2 out"])) == 1
+}
+
+test_a_lowercase_recommendation_is_refused if {
+	count(judged("Keep fix 2?", ["Keep fix 2 (recommended)", "Split fix 2 out"])) == 1
+}
+
+test_a_recommendation_in_the_description_is_refused if {
+	count(described("Keep fix 2?", [
+		{"label": "Keep fix 2", "description": "Recommended: the evidence settles it"},
+		{"label": "Split fix 2 out", "description": "a second PR"},
+	])) == 1
+}
+
+test_the_text_naming_an_option_as_recommended_is_refused if {
+	count(judged(
+		"Keep fix 2 (Recommended) or split it out?",
+		["Keep fix 2", "Split fix 2 out"],
+	)) == 1
+}
+
+test_the_text_recommending_an_option_by_name_is_refused if {
+	count(judged("I recommend keep fix 2. Which?", ["Keep fix 2", "Split fix 2 out"])) == 1
+}
+
+test_a_recommended_tag_in_the_text_is_refused if {
+	count(judged("Keep fix 2? (Recommended)", ["Yes", "Split it out"])) == 1
+}
+
+# Saying an option is NOT recommended settles nothing on its own.
+test_a_not_recommended_description_is_asked if {
+	count(described("Which crate goes first?", [
+		{"label": "batten-model", "description": "not recommended while #1276 is open"},
+		{"label": "batten-base", "description": "the smaller cut"},
+	])) == 0
+}
+
+# The owner asked for a view: a question about what is recommended marks no
+# option.
+test_asking_which_is_recommended_is_asked if {
+	count(judged("Which runner do you recommend?", ["Dispatched sessions", "CI matrix legs"])) == 0
+}
+
+# --- CLOUD-2915 review, item 3: the exemption is the admission's -------------
+
+# The review's own input: a pair mentioned, an `Admit…` alternative, and the
+# recommendation on something else.
+test_a_recommendation_over_a_mentioned_pair_is_refused if {
+	count(judged(
+		"Keep fix 2? It touches test-removed crates/a/b.rs::x",
+		["Keep fix 2 (Recommended)", "Admit nothing, split it"],
+	)) == 1
+}
+
+test_an_admission_recommending_a_non_admit_option_is_refused if {
+	count(judged(
+		"Admit test-removed crates/batten/tests/it/cli.rs::every_format?",
+		["Keep it (Recommended)", "Admit"],
+	)) == 1
+}
+
+test_a_recommended_admit_without_asking_to_admit_is_refused if {
+	count(judged(
+		"Keep fix 2? It touches test-removed crates/batten/tests/it/cli.rs::every_format",
+		["Admit it (Recommended)", "Split it out"],
+	)) == 1
+}
+
+# Every genuine admission shape stays asked, each spelling of the mark included.
+test_a_genuine_admission_is_asked_however_it_recommends if {
+	every options in [
+		[{"label": "Admit the change (Recommended)"}, {"label": "Refuse"}],
+		[{"label": "Admit the change [Recommended]"}, {"label": "Refuse"}],
+		[{"label": "Admit the change", "description": "recommended"}, {"label": "Refuse"}],
+		[{"label": "Admit the change"}, {"label": "Refuse"}],
+	] {
+		count(described(
+			"Admit rule-predicate-changed rule[layer place wrong].use_sources?",
+			options,
+		)) == 0
+	}
+}
+
+# A label the ledger cannot bind (it must START `Admit`) is refused whatever
+# marks it.
+test_a_recommended_prefix_before_admit_is_refused if {
+	count(judged(
+		"Admit rule-predicate-changed rule[layer place wrong].use_sources?",
+		["Recommended: Admit the change", "Refuse"],
+	)) > 0
+}
+
+test_a_genuine_admission_recommended_in_its_text_is_asked if {
+	count(judged(
+		"Admit test-removed crates/batten/tests/it/cli.rs::every_format? Recommended: admit",
+		["Admit", "Refuse"],
+	)) == 0
 }
 
 # The #1276 fourth round: a path and a rule id in prose, no pair side by side.
