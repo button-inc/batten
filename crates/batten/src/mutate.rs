@@ -2799,7 +2799,7 @@ fn exits_within(
     count: usize,
     grace: std::time::Duration,
 ) -> usize {
-    let deadline = std::time::Instant::now() + grace;
+    let deadline = deadline_after(grace);
     let mut arrived = 0;
     for _ in 0..count {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
@@ -2809,6 +2809,14 @@ fn exits_within(
         arrived += 1;
     }
     arrived
+}
+
+/// The instant `grace` after now: where [`exits_within`] stops waiting. A
+/// SEPARATE FUNCTION so a case can see the deadline lies ahead without a
+/// delayed exit to prove it, since the crate refuses the sleep that would
+/// make one (`waiver add refused`).
+fn deadline_after(grace: std::time::Duration) -> std::time::Instant {
+    std::time::Instant::now() + grace
 }
 
 // ---------------------------------------------------------------------------
@@ -6420,23 +6428,19 @@ mod tests {
     /// an exit miscounted.
     #[test]
     fn an_orphaned_sweep_waits_the_grace_for_its_groups() {
-        let (send, exits) = std::sync::mpsc::channel();
-        let late = send.clone();
-        let sender = std::thread::spawn(move || {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "the delay IS the subject: an exit `50ms` after the wait began, inside its \
-                          `30s` grace, which a deadline set before now never waits for"
-            )]
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            let _ = late.send(());
-        });
-        assert_eq!(
-            exits_within(&exits, 1, std::time::Duration::from_secs(30)),
-            1,
-            "an exit 50ms into a 30s grace is waited for"
+        let grace = std::time::Duration::from_secs(30);
+        let before = std::time::Instant::now();
+        assert!(
+            deadline_after(grace) >= before + grace,
+            "the deadline lies a whole grace after now"
         );
-        sender.join().unwrap();
+        let (send, exits) = std::sync::mpsc::channel();
+        send.send(()).unwrap();
+        assert_eq!(
+            exits_within(&exits, 1, grace),
+            1,
+            "an exit inside a 30s grace is waited for"
+        );
         let started = std::time::Instant::now();
         assert_eq!(
             exits_within(&exits, 2, std::time::Duration::from_millis(50)),
