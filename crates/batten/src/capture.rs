@@ -4374,6 +4374,27 @@ mod tests {
         ));
     }
 
+    /// Fails by: a path into the store spelled through a detour
+    /// (`<sibling>/../captures/…`) read as outside it. Spelled that way it does
+    /// not start with the store's own spelling, so only the canonical side of
+    /// the comparison can recognise it.
+    #[test]
+    fn a_store_path_spelled_through_a_detour_is_still_the_store() {
+        let repo = contained_repo("capture-is-view-detour");
+        let dir = captures_dir(&repo).unwrap();
+        std::fs::create_dir_all(dir.join("views")).unwrap();
+        std::fs::write(dir.join("views").join("x.md"), "x").unwrap();
+        let sibling = dir.with_file_name("captures-sibling");
+        std::fs::create_dir_all(&sibling).unwrap();
+        let detour = sibling
+            .join("..")
+            .join(dir.file_name().unwrap())
+            .join("views")
+            .join("x.md");
+        assert!(!detour.starts_with(&dir), "the premise: spelled apart");
+        assert!(is_view(&repo, &detour));
+    }
+
     /// Fails by: a listing that misses a stored capture, or a prune that
     /// miscounts what it removed.
     #[test]
