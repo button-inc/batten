@@ -131,6 +131,11 @@ fn a_shell_builtin_is_never_pending() {
     setup(&dir, NO_SUCH_PID, "failed");
     let said = call(&dir, "cd /tmp && sh -c true");
     assert!(!held(&said), "`cd` is the shell's own: {said}");
+    let said = call(&dir, "T=/bin/sh; $T -c true");
+    assert!(
+        !held(&said),
+        "an expanded word is the shell's to resolve: {said}"
+    );
     let said = call(&dir, &format!("cd /tmp && {ABSENT} --version"));
     assert!(
         held(&said) && said.contains(ABSENT),

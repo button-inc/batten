@@ -20370,6 +20370,9 @@ fn install_pending_for(
         hook::command_programs(&envelope.command)
             .into_iter()
             .filter(|program| !SHELL_BUILTINS.contains(&program.as_str()))
+            // `$T …` names what the shell expands at run time, not a file this
+            // gate can resolve now; holding it would hold every such call.
+            .filter(|program| !program.contains('$'))
             .filter(|program| match resolve_on_path(program) {
                 None => true,
                 Some(found) => roots.iter().any(|root| found.starts_with(root)),
