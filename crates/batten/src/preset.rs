@@ -476,9 +476,8 @@ pub fn ejected_from(source: &str) -> Option<(String, String, semver::Version)> {
     let (target, version) = header.split_once(" version ")?;
     let (preset, module) = target.split_once('/')?;
     let version = version.trim();
-    let version = semver::Version::parse(version)
-        .ok()
-        .or_else(|| Some(semver::Version::new(0, 0, version.parse().ok()?)))?;
+    let version = crate::version::parse(version)
+        .or_else(|| Some(crate::version::from_integer(version.parse().ok()?)))?;
     Some((preset.to_owned(), module.to_owned(), version))
 }
 

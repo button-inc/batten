@@ -3260,12 +3260,16 @@ fn min_version_weakening(base: &Config, working: &Config) -> Option<Weakening> {
             "absent",
         )),
         Some(candidate) => match semver::Version::parse(candidate) {
-            Ok(parsed) if parsed < floor => Some(Weakening::new(
-                WeakeningKind::MinVersionLowered,
-                "min_batten_version",
-                declared,
-                candidate,
-            )),
+            // PRECEDENCE (CLOUD-2906): a pre-release of the floor lowers it, and
+            // build metadata never does.
+            Ok(parsed) if crate::version::precedence(&parsed, &floor).is_lt() => {
+                Some(Weakening::new(
+                    WeakeningKind::MinVersionLowered,
+                    "min_batten_version",
+                    declared,
+                    candidate,
+                ))
+            }
             _ => None,
         },
     }

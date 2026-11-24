@@ -2416,23 +2416,34 @@ pub fn commits_reachable(
     Ok(commits)
 }
 
-/// The tag nearest to `tag`'s first parent: `git describe --tags --abbrev=0
-/// <tag>^` (CLOUD-174).
+/// The RELEASE tag under `pattern` nearest to `tag`'s first parent (CLOUD-174,
+/// CLOUD-2906): `git describe`'s graph walk, over release tags only.
 ///
 /// **The GRAPH decides the predecessor, never a date.** Creation order sorts
 /// tags cut seconds apart arbitrarily, so a release's range is measured back to
-/// whichever tag the commit graph reaches first — annotated or lightweight, as
-/// `--tags` has it.
+/// whichever release tag the commit graph reaches first — annotated or
+/// lightweight.
+///
+/// **ONLY A RELEASE IS A PREDECESSOR.** A pre-release (`v1.1.0-rc.1`), a dev
+/// build's tag outside the glob, or a tag that is not semver under the glob's
+/// literal prefix is never named, so a release's range is never cut short at
+/// a tag that shipped nothing. The prefix is the consumer's declared glob's,
+/// stripped once ([`batten_base::version::under_glob`]).
 ///
 /// `None` for a tag whose commit has no parent, or whose ancestry carries no
-/// tag: the range is then the tag's whole history, which is what a first
-/// release shipped.
+/// release tag: the range is then the tag's whole history, which is what a
+/// first release shipped.
 ///
 /// # Errors
 ///
 /// A [`UsageError`] when the repository cannot be opened, `refs/tags/<tag>`
 /// does not name a commit, or the graph walk fails — could not look.
-pub fn previous_tag(dir: &Path, tag: &str) -> Result<Option<String>> {
+pub fn previous_tag(dir: &Path, tag: &str, pattern: &str) -> Result<Option<String>> {
+    // A tag that is not itself a RELEASE under the glob has no release
+    // predecessor to range from (CLOUD-2906): `v2` is not semver.
+    if !batten_base::version::is_release_under(tag, pattern) {
+        return Ok(None);
+    }
     let repo = open(dir)?;
     let refused = || UsageError::raise(format!("could not describe the tag before {tag}"));
     let id = repo
@@ -2442,25 +2453,60 @@ pub fn previous_tag(dir: &Path, tag: &str) -> Result<Option<String>> {
     let Some(parent) = commit.parent_ids().next() else {
         return Ok(None);
     };
-    let parent = repo.find_commit(parent.detach()).map_err(|_| refused())?;
-    let found = parent
-        .describe()
-        .names(gix::commit::describe::SelectRef::AllTags)
-        .try_resolve()
+    let mut options = gix::revision::plumbing::describe::Options::default();
+    // Oldest first, so where two release tags name one commit the later insert —
+    // the higher precedence — names it.
+    for (_, name, target) in release_tags(&repo, pattern).map_err(|_| refused())? {
+        options.name_by_oid.insert(
+            target,
+            std::borrow::Cow::Owned(gix::bstr::BString::from(name)),
+        );
+    }
+    let cache = repo.commit_graph_if_enabled().map_err(|_| refused())?;
+    let mut graph = repo.revision_graph(cache.as_ref());
+    let found = gix::revision::plumbing::describe(&parent.detach(), &mut graph, options)
         .map_err(|_| refused())?;
     Ok(found
-        .and_then(|resolution| resolution.outcome.name)
+        .and_then(|outcome| outcome.name)
         .map(|name| name.to_string()))
 }
 
-/// The newest `v*` tag by VERSION order — `git tag --list 'v*'
-/// --sort=-v:refname`'s first line, in-process (#1276).
+/// Every RELEASE tag under `pattern` with the commit it names, oldest first by
+/// semver precedence (CLOUD-2906).
+fn release_tags(
+    repo: &gix::Repository,
+    pattern: &str,
+) -> Result<Vec<(batten_base::version::Version, String, gix::ObjectId)>> {
+    let references = repo.references()?;
+    let mut found = Vec::new();
+    for reference in references.tags()? {
+        let Ok(mut reference) = reference else {
+            continue;
+        };
+        let name = reference.name().shorten().to_string();
+        let Some(version) = batten_base::version::under_glob(&name, pattern) else {
+            continue;
+        };
+        if !batten_base::version::is_release(&version) || !tag_glob_matches(pattern, &name) {
+            continue;
+        }
+        let Ok(target) = reference.peel_to_id() else {
+            continue;
+        };
+        found.push((version, name, target.detach()));
+    }
+    found.sort_by(|(left, ..), (right, ..)| batten_base::version::precedence(left, right));
+    Ok(found)
+}
+
+/// The newest RELEASE tag of batten's own grammar — one `v`, then semver, with
+/// no pre-release — by semver precedence (#1276, CLOUD-2906).
 ///
-/// **VERSION ORDER, NEVER CREATION ORDER OR LEXICAL ORDER:** a re-cut tag must
-/// not reorder the baseline, and `v0.0.10` sorts above `v0.0.9`. Each name's
-/// numeric dot-separated components compare as numbers; a name that does not
-/// parse as one sorts below every one that does. `None` when the repository has
-/// no `v*` tag, which a caller must treat as could-not-look, never a pass.
+/// **PRECEDENCE, NEVER CREATION ORDER OR LEXICAL ORDER:** a re-cut tag must not
+/// reorder the baseline, and `v0.0.10` sorts above `v0.0.9`. A pre-release is
+/// never the newest release, however its digits read, and a tag that is not
+/// semver (`v0.99`) is no release at all. `None` when the repository has no
+/// release tag, which a caller must treat as could-not-look, never a pass.
 ///
 /// # Errors
 ///
@@ -2470,21 +2516,17 @@ pub fn newest_version_tag(dir: &Path) -> Result<Option<String>> {
     let refused = || UsageError::raise("could not list this repository's tags".to_owned());
     let references = repo.references().map_err(|_| refused())?;
     let tags = references.tags().map_err(|_| refused())?;
-    let key = |name: &str| -> Option<Vec<u64>> {
-        name.strip_prefix('v')?
-            .split(['.', '-', '+'])
-            .map(|part| part.parse::<u64>().ok())
-            .take_while(Option::is_some)
-            .collect::<Option<Vec<u64>>>()
-            .filter(|parts| !parts.is_empty())
-    };
     Ok(tags
         .filter_map(Result::ok)
         .filter_map(|reference| {
             let name = reference.name().shorten().to_string();
-            key(&name).map(|parts| (parts, name))
+            batten_base::version::Tag::parse(&name)
+                .filter(batten_base::version::Tag::is_release)
+                .map(|tag| (tag.version, name))
         })
-        .max()
+        .max_by(|(left, left_name), (right, right_name)| {
+            batten_base::version::precedence(left, right).then_with(|| left_name.cmp(right_name))
+        })
         .map(|(_, name)| name))
 }
 
@@ -8130,7 +8172,15 @@ mod tests {
             Some("third\n\nTrailer: x\n\nsecond\n\n")
         );
         assert_eq!(message_of(&dir, &third).unwrap(), "third\n\nTrailer: x\n");
-        assert_eq!(previous_tag(&dir, "v2").unwrap().as_deref(), Some("v1"));
+        // `v1`/`v2` are not semver, so they are no releases (CLOUD-2906); the
+        // graph predecessor is asserted over release tags on the same commits.
+        fixture_ref(&dir, "refs/tags/v1.0.0", &first);
+        fixture_ref(&dir, "refs/tags/v2.0.0", &third);
+        assert_eq!(
+            previous_tag(&dir, "v2.0.0", "v[0-9]*").unwrap().as_deref(),
+            Some("v1.0.0")
+        );
+        assert_eq!(previous_tag(&dir, "v2", "v*").unwrap(), None);
         assert!(has_object(&dir, &first));
         assert!(!has_object(&dir, &"0".repeat(40)));
         assert_eq!(resolve_commit(&dir, "HEAD", "head").unwrap(), third);
@@ -9164,6 +9214,50 @@ mod tests {
             newest_version_tag(&dir).unwrap().as_deref(),
             Some("v1.10.0")
         );
+    }
+
+    /// Fails by: a pre-release, a tag that is not semver, or a tag outside
+    /// batten's own `v` grammar answered as the newest release (CLOUD-2906).
+    #[test]
+    fn the_newest_release_tag_skips_pre_releases_partials_and_tags_outside_v() {
+        let dir = scratch("newest-release-tag");
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        for tag in [
+            "v0.0.220",
+            "v0.0.221-dev.pr1.20261124T050057Z+3f9c2a1b7d04",
+            "v0.99",
+            "0.0.300",
+        ] {
+            git(&dir, &["tag", tag]);
+        }
+        assert_eq!(
+            newest_version_tag(&dir).unwrap().as_deref(),
+            Some("v0.0.220")
+        );
+    }
+
+    /// Fails by: `describe` naming a nearer tag that shipped nothing — a
+    /// pre-release under the glob, or a dev build's tag outside it.
+    #[test]
+    fn the_previous_release_tag_skips_a_nearer_dev_or_pre_release_tag() {
+        let dir = scratch("previous-release-tag");
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        git(&dir, &["tag", "v1.0.0"]);
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        git(&dir, &["tag", "v1.1.0-rc.1"]);
+        git(
+            &dir,
+            &["tag", "0.0.221-dev.pr1.20261124T050057Z+3f9c2a1b7d04"],
+        );
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "three"]);
+        git(&dir, &["tag", "v1.1.0"]);
+        assert_eq!(
+            previous_tag(&dir, "v1.1.0", "v[0-9]*").unwrap().as_deref(),
+            Some("v1.0.0")
+        );
+        assert_eq!(previous_tag(&dir, "v1.0.0", "v[0-9]*").unwrap(), None);
     }
 
     #[test]

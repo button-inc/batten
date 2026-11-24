@@ -5733,7 +5733,7 @@ fn ejected_behind(
         else {
             continue;
         };
-        if recorded >= shipped {
+        if crate::version::precedence(&recorded, &shipped).is_ge() {
             continue;
         }
         let Ok(default) = identity::code_fingerprint(

@@ -2594,23 +2594,17 @@ pub fn notice(body: &Body, from: &str) -> Body {
 ///   the inversion [`Body::writer`]'s own doc refuses when it says the field
 ///   decides nothing on its own.
 ///
-/// A pre-release or build suffix is cut before the comparison rather than
-/// ordered, because the question here is "is the holder behind us" and no
-/// decision in this repository turns on `-rc.1` ordering. Saying so is cheaper
-/// than implementing an ordering nothing asks for.
+/// Semver precedence (CLOUD-2906), not a hand-cut triple: a release outranks
+/// its own pre-release — a dev build of the same patch (CLOUD-2903) is behind
+/// the release — and build metadata never ranks, so two builds of one version
+/// stay equal and neither asks the other to stand down.
 #[must_use]
 pub fn outranks(ours: &str, theirs: &str) -> bool {
-    fn triple(version: &str) -> Option<(u64, u64, u64)> {
-        let core = version.trim().split(['-', '+']).next().unwrap_or_default();
-        let mut parts = core.split('.');
-        let mut next = || parts.next()?.parse::<u64>().ok();
-        let (major, minor, patch) = (next()?, next()?, next()?);
-        // A FOURTH SEGMENT IS NOT A VERSION THIS UNDERSTANDS. Reading `1.2.3.4`
-        // as `1.2.3` would rank two distinct builds equal.
-        parts.next().is_none().then_some((major, minor, patch))
-    }
-    match (triple(ours), triple(theirs)) {
-        (Some(ours), Some(theirs)) => ours > theirs,
+    match (
+        batten_base::version::parse(ours.trim()),
+        batten_base::version::parse(theirs.trim()),
+    ) {
+        (Some(ours), Some(theirs)) => batten_base::version::precedence(&ours, &theirs).is_gt(),
         _ => false,
     }
 }
@@ -6402,6 +6396,19 @@ mod tests {
             ("1.2.3.4", "1.2.0", false),
             ("1.2", "1.1.0", false),
             ("x", "1.0.0", false),
+            ("1.2.3", "1.2.3-rc.1", true),
+            ("1.2.3-rc.2", "1.2.3-rc.1", true),
+            ("1.2.3+b", "1.2.3+a", false),
+            (
+                "0.0.221",
+                "0.0.221-dev.pr1.20261124T050057Z+3f9c2a1b7d04",
+                true,
+            ),
+            (
+                "0.0.221-dev.pr1.20261124T050057Z+3f9c2a1b7d04",
+                "0.0.221",
+                false,
+            ),
         ] {
             assert_eq!(outranks(ours, theirs), newer, "{ours} over {theirs}");
         }

@@ -178,6 +178,7 @@ pub use batten_facts::register;
 pub mod release;
 pub mod release_guard;
 pub use batten_base::release_path;
+pub use batten_base::version;
 pub mod release_state;
 pub mod release_verify;
 pub mod released;
@@ -2025,16 +2026,22 @@ fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -
             };
             // FORWARD ONLY, AS THE PIN IS: a row already past the target is
             // left for `engine gate` to name, never moved back.
-            if engine::release_version(&old).is_ok_and(|have| engine::ahead_of(&have, &version)) {
+            let have = crate::version::parse_lenient(&old);
+            if have
+                .as_ref()
+                .is_some_and(|have| engine::ahead_of(have, &version))
+            {
                 continue;
             }
             // EVERY ARTIFACT IS JUDGED AGAINST THE RELEASE, not only a row whose
             // `version` moves (CLOUD-2418): a row can name the target and still
             // carry another release's url or bytes.
-            let moving = old.trim_start_matches('v') != bare;
+            // IDENTITY over the parsed versions (CLOUD-2906); the row keeps the
+            // spelling it was written in, `v` or not.
+            let moving = have.as_ref() != Some(&version);
             sync_artifacts(row, &bare, moving, sums)?;
-            let fresh = if old.starts_with('v') {
-                format!("v{bare}")
+            let fresh = if crate::version::Tag::parse(&old).is_some() {
+                crate::version::Tag::of(version.clone()).to_string()
             } else {
                 bare.clone()
             };
@@ -2044,7 +2051,7 @@ fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -
         }
     }
     let pin = crate::config_model::Pin {
-        release: Some(format!("v{bare}")),
+        release: Some(crate::version::Tag::of(version).to_string()),
         source: None,
     };
     Ok(engine::rewrite(&doc.to_string(), &pin))
@@ -2141,7 +2148,10 @@ fn pinned_by(pin: Option<crate::config_model::Pin>) -> Result<Option<Want>> {
 /// release and `engine install` wrote the tree build over itself, exiting 0 with
 /// the pin unserved. Only `engine stamp` writes a stamp, and only over a build.
 fn release_bytes(tag: &str, exe: &Path, repository: &str) -> Result<Vec<u8>> {
-    if tag == engine::release() && engine::stamp_of(exe).is_none() {
+    let running = crate::version::Tag::parse(&engine::release());
+    if crate::version::Tag::parse(tag).is_some_and(|tag| running.as_ref() == Some(&tag))
+        && engine::stamp_of(exe).is_none()
+    {
         return Ok(crate::fsio::read(exe)?);
     }
     match engine::fetch_published(repository, tag)? {
@@ -2553,8 +2563,26 @@ fn engine_pin(
             _ => return Ok(ExitCode::Success),
         },
         Some("source") => source()?,
+        Some("version")
+            if !crate::version::Tag::parse(&engine::release())
+                .is_some_and(|tag| tag.is_release()) =>
+        {
+            return Err(UsageError::raise(format!(
+                "engine pin: this build is {}, a pre-release, and a pre-release is never pinned",
+                engine::release()
+            )));
+        }
         Some("version") => release(engine::release()),
-        Some(tag) if tag.starts_with('v') => release(tag.to_owned()),
+        // A RELEASE TAG, PARSED, AND A RELEASE (CLOUD-2906): `vfoo` is no tag,
+        // and a pre-release is never shipped, so it is never pinned.
+        Some(tag) if crate::version::Tag::parse(tag).is_some_and(|tag| tag.is_release()) => {
+            release(tag.to_owned())
+        }
+        Some(tag) if crate::version::Tag::parse(tag).is_some() => {
+            return Err(UsageError::raise(format!(
+                "engine pin: {tag} is a pre-release, and a pre-release is never pinned"
+            )));
+        }
         Some(other) => {
             return Err(UsageError::raise(format!(
                 "engine pin: {other} is not a release tag (v0.0.201), `source` or `version`"
@@ -3076,9 +3104,15 @@ fn release_survey(
         // and the target substituted as its shell does. Only a tarball target
         // has a bootstrap at all; a zip target is binstall's alone.
         if suffix != ".zip" {
+            // The bootstrap names the TAG verbatim (CLOUD-2906); `$target` is
+            // substituted first because `$tag` is a prefix of it.
+            let tag = crate::version::parse(version).map_or_else(
+                || version.to_owned(),
+                |version| crate::version::Tag::of(version).to_string(),
+            );
             let asked = install::bootstrap_asset(name)
-                .replace("${tag#v}", version)
-                .replace("$target", target);
+                .replace("$target", target)
+                .replace("$tag", &tag);
             if asked != dist_name {
                 found.push(install::Disagreement::AssetName {
                     target: target.clone(),
@@ -24127,6 +24161,11 @@ fn adopt_engine_key(root: &Path, overrides: &Overrides) -> Result<Option<String>
     }
     resolve::resolve(root, overrides)?;
     let tag = engine::release();
+    // A DEV BUILD NEVER PINS ITSELF (CLOUD-2906): its identity is a
+    // pre-release, and a pre-release is never shipped.
+    if !crate::version::Tag::parse(&tag).is_some_and(|tag| tag.is_release()) {
+        return Ok(None);
+    }
     let cache = state::repo_state_dir(root)?;
     let repository = releases_repository();
     if engine::pinned_sums(&cache, &repository, &tag).is_err() {
