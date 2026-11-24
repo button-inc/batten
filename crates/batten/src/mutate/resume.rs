@@ -843,10 +843,20 @@ pub fn seed(root: &Path) -> Seeded {
         .and_then(|report| crate::fsio::read_to_string(report).ok())
         .and_then(|xml| passed_cases(&xml))
         .unwrap_or(0);
-    if held >= passed {
+    if covered(held, passed) {
         return Seeded::Covered;
     }
     request_seed(root)
+}
+
+/// Whether a selection that held `held` cases covered a run that passed
+/// `passed`: a selection holding every passed case leaves nothing to seed.
+///
+/// APART FROM [`seed`] so a case can reach it: every case the reach recorder
+/// runs carries the recorder's environment, so [`seed`] answers `Nested` there
+/// before this question is asked (CLOUD-2789).
+const fn covered(held: usize, passed: usize) -> bool {
+    held >= passed
 }
 
 /// Whether a `CI` value names a CI run: present and not empty. Apart from
@@ -1389,6 +1399,17 @@ mod tests {
         assert!(ci_named(Some(std::ffi::OsStr::new("true"))));
         assert!(!ci_named(Some(std::ffi::OsStr::new(""))));
         assert!(!ci_named(None));
+    }
+
+    /// Fails by: a selection that held fewer cases than passed read as
+    /// covering the run, so the seed the next head needs is never spawned, or
+    /// one that held them all spawning a seed for nothing (CLOUD-2789).
+    #[test]
+    fn a_selection_covers_a_run_only_when_it_held_every_passed_case() {
+        assert!(covered(3, 3));
+        assert!(covered(4, 3));
+        assert!(!covered(2, 3));
+        assert!(covered(0, 0));
     }
 
     /// Fails by: a case carrying a `failure`, an `error` or a `skipped` child

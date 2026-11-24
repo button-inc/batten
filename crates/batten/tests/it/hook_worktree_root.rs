@@ -376,6 +376,46 @@ fn a_recorded_root_that_lost_its_authority_is_not_used() {
     );
 }
 
+#[test]
+fn a_repository_holding_no_authority_never_homes_the_session() {
+    // The home is written by the first call whose START directory places an
+    // authority (`seed_hook_authority`), and a repository with no `batten.toml`
+    // places its root without one. Were that root recorded, the session would
+    // be judged by whatever config the repository gains later (CLOUD-2789).
+    let parent = common::scratch_outside_tree("hook-root", "authorityless-start");
+    let repo = parent.join("repo");
+    std::fs::create_dir_all(&repo).expect("create repository");
+    batten::gitwrite::init_on_main(&repo).expect("a repository on main");
+    std::fs::write(repo.join("f"), "x\n").expect("write file");
+    git_in(&repo, &["add", "-A"]);
+    git_in(
+        &repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "fix: base",
+        ],
+    );
+    let session = "cloud-2789-authorityless";
+    assert!(
+        !denied(&hook_in_session(&repo, session)),
+        "a repository declaring nothing refuses nothing"
+    );
+    std::fs::write(repo.join("batten.toml"), ONE_DENY).expect("write config");
+    assert!(
+        denied(&hook_in_session(&repo, "cloud-2789-authorityless-control")),
+        "premise: the repository now refuses the call"
+    );
+    assert!(
+        !denied(&hook_in_session(&parent, session)),
+        "a session whose start held no authority has no home to be judged by"
+    );
+}
+
 // --- CLOUD-2672: the call's target judges, and the session keeps its home ---
 
 /// A repository config refusing `frobnicate`, for the home cases.
