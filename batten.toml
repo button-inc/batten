@@ -10389,6 +10389,21 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (a board resolution): a raced claim is resolved on the board, not in this tree: take the frontier from `batten board check`, and close the competing PR if it is stale rather than racing it"
 
+# THE `test cover unseen` LEGITIMATE CASE, by the route its verdict's own note
+# names, groomed onto CLOUD-2789 before it landed. `trace.rs`'s
+# `a_trace_finished_after_a_partial_read_is_waited_for` covers the Linux-only
+# `await_trace`, which waits on the trace through inotify; off Linux that
+# function is a single read, so the subject is absent there, and the case's
+# FIFO writer synchronises on `rustix::fs::inotify`, which does not compile
+# elsewhere. CI's Linux job runs it. The file's other gated case is portable
+# through `cfg!`, so this is its only one. Expected to lapse unused:
+# `base = "origin/main"`, so the floor rises when this lands.
+[[waiver]]
+rule = "test cover unseen"
+path = "crates/batten/src/mutate/trace.rs"
+reason = "CLOUD-2789: the grace-wait case drives the Linux-only `await_trace` through inotify; the subject does not exist off Linux, which is the case the verdict exempts in prose and routes to a waiver"
+expires = "2026-12-08"
+
 # CLOUD-1387's shadow, waived for as long as its fix takes to land and no longer.
 #
 # `claim-before-code` reads `node = "project"` off the capture keyed to one row,
