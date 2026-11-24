@@ -28,6 +28,14 @@
           inherit version;
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
+          # THE BUILD'S IDENTITY WITHOUT GIT (CLOUD-2903): `src = self` carries no
+          # `.git`, so `build.rs` is handed the commit second and the line, and
+          # told the source IS the tracked tree so it folds the digest from it.
+          # A flake build reports `<next>-dev.nix.<ts>+<digest>`: a source build
+          # naming its tree, never the release (only `dist.yml` is that).
+          BATTEN_BUILD_COMMITTED = toString (self.lastModified or 0);
+          BATTEN_BUILD_LINE = "nix";
+          BATTEN_BUILD_SOURCE_TRACKED = "1";
           cargoBuildFlags = [
             "--package"
             "batten"

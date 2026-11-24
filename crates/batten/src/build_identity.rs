@@ -25,15 +25,15 @@
 //! release and above the one it follows (§11.3). Only the release build,
 //! marked by [`RELEASE_MARKER`], reports the package version exactly.
 //!
-//! # Why this file lives outside `src/`
+//! # Where this file lives, and who reads it
 //!
-//! `build.rs` includes it by `#[path]`, as it includes
-//! `src/mutation_markers.rs`, so it is std plus `sha2` and names nothing in the
-//! crate: a LEAF by construction. The library declares it too, so its cases run
-//! in the library's test target and an integration case can render an identity
-//! from facts it gathers itself. Nothing in the library CALLS it:
-//! `engine::digest` keeps its own fold, and a parity case holds the two to one
-//! answer, so it adds no edge to any module closure.
+//! `src/`, registered like every other module (the layering registry's
+//! `declared_modules`, the module map, `modules.lock`), so every source census
+//! reads it. `build.rs` includes it by `#[path]`, as it includes
+//! `src/mutation_markers.rs`, so it names nothing else in the crate and reads a
+//! version only through the `semver` crate. Nothing in the
+//! library CALLS it: `engine::digest` keeps its own fold, a parity case holds
+//! the two to one answer, and it adds no edge to any module closure.
 //!
 //! Pure functions only: every fact arrives as an argument.
 
@@ -44,6 +44,18 @@ pub const RELEASE_MARKER: &str = "BATTEN_RELEASE_TAG";
 
 /// The variable a builder that knows its pull request sets to its number.
 pub const BUILD_PR: &str = "BATTEN_BUILD_PR";
+
+/// A build with no git (a nix build of `src = self`) names its HEAD's committer
+/// second here: the flake sets it from `self.lastModified`.
+pub const BUILD_COMMITTED: &str = "BATTEN_BUILD_COMMITTED";
+
+/// A build with no git names its line here (the flake sets `nix`).
+pub const BUILD_LINE: &str = "BATTEN_BUILD_LINE";
+
+/// Set to `1` by a builder whose source directory is EXACTLY the tracked tree
+/// (a flake's `src = self`), so the digest may be folded from the directory
+/// itself rather than from git's index.
+pub const BUILD_SOURCE_TRACKED: &str = "BATTEN_BUILD_SOURCE_TRACKED";
 
 /// How many hex digits of the source digest the identity carries.
 pub const DIGEST_HEX: usize = 12;
@@ -125,20 +137,17 @@ pub fn identity(facts: &Facts) -> Result<String, String> {
 }
 
 /// `<major>.<minor>.<patch + 1>` of a package version, its own pre-release or
-/// build metadata dropped.
+/// build metadata dropped. Parsed as semver (CLOUD-2906), never split by hand.
+///
+/// `semver::Version::parse` directly rather than `batten_base::version::parse`
+/// (which is that call): `build.rs` includes this file, and including a
+/// `batten-base` file into the build script would break a mutation sweep of
+/// `batten-base`, which renders its probe into the file it mutates.
 fn next_patch(package: &str) -> Result<String, String> {
-    let refused = || format!("the package version {package} is not <major>.<minor>.<patch>");
-    let core = package.split(['-', '+']).next().unwrap_or_default();
-    let parts: Vec<u64> = core
-        .split('.')
-        .map(str::parse)
-        .collect::<Result<_, _>>()
-        .map_err(|_| refused())?;
-    let [major, minor, patch] = parts[..] else {
-        return Err(refused());
-    };
-    let patch = patch.checked_add(1).ok_or_else(refused)?;
-    Ok(format!("{major}.{minor}.{patch}"))
+    let refused = || format!("the package version {package} is not semver");
+    let version = semver::Version::parse(package).map_err(|_| refused())?;
+    let patch = version.patch.checked_add(1).ok_or_else(refused)?;
+    Ok(semver::Version::new(version.major, version.minor, patch).to_string())
 }
 
 /// The line a build is on: the builder's pull request, then the ref's, then

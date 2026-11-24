@@ -17,7 +17,7 @@
 //! It STAMPS THE BUILD'S IDENTITY (CLOUD-2903) as `BATTEN_BUILD_VERSION`, the
 //! one value `config::VERSION` reads: the package version for the release
 //! build `BATTEN_RELEASE_TAG` marks, a dev pre-release for every other build
-//! (`build/identity.rs` decides; this script only gathers the facts).
+//! (`src/build_identity.rs` decides; this script only gathers the facts).
 //!
 //! It also REFUSES TO BUILD a crate carrying a hand-written Rust mutation
 //! marker or a second cargo-mutants argv ([`mutation_markers`], CLOUD-2253):
@@ -38,7 +38,7 @@ mod mutation_markers;
     unreachable_pub,
     reason = "the library exports these items; only this script's private copy cannot reach them (CLOUD-2903)"
 )]
-#[path = "build/identity.rs"]
+#[path = "src/build_identity.rs"]
 mod identity;
 
 /// The two special tokens: never produced by ordinary encoding, so never in
@@ -126,7 +126,14 @@ fn main() -> Built {
 /// identity is `<next>-dev.unknown`, so no build fails for want of git, and a
 /// tracked input that will not read drops only the digest, with one warning.
 fn stamp_identity(manifest: &Path) -> Built {
-    for name in [identity::RELEASE_MARKER, identity::BUILD_PR, "GITHUB_REF"] {
+    for name in [
+        identity::RELEASE_MARKER,
+        identity::BUILD_PR,
+        identity::BUILD_COMMITTED,
+        identity::BUILD_LINE,
+        identity::BUILD_SOURCE_TRACKED,
+        "GITHUB_REF",
+    ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
     let mut facts = identity::Facts {
@@ -148,9 +155,37 @@ fn stamp_identity(manifest: &Path) -> Built {
             std::env::var("GITHUB_REF").ok().as_deref(),
             branch.as_deref(),
         )?);
-        facts.committed =
-            git_text(&top, &["show", "-s", "--format=%ct", "HEAD"]).and_then(|ct| ct.parse().ok());
+        // `--` and `--no-mailmap`: without them git probes a worktree file
+        // named `HEAD` (revision or path?) and reads `.mailmap`, two reads the
+        // identity never needs and a receipt-keyed step refuses as undeclared.
+        facts.committed = git_text(
+            &top,
+            &["show", "-s", "--no-mailmap", "--format=%ct", "HEAD", "--"],
+        )
+        .and_then(|ct| ct.parse().ok());
         facts.digest = digest(&top);
+    } else if facts.marker.is_none()
+        && let Some(committed) = std::env::var(identity::BUILD_COMMITTED)
+            .ok()
+            .and_then(|committed| committed.parse().ok())
+    {
+        // A SOURCE BUILD WITH NO GIT (nix, CLOUD-2903): the builder names the
+        // commit second and the line, and a builder whose source IS the tracked
+        // tree lets the digest be folded from the directory. So a flake build
+        // reports `<next>-dev.nix.<ts>+<digest>`, honest about being a source
+        // build and naming its tree, rather than `dev.unknown`.
+        facts.committed = Some(committed);
+        facts.line = Some(identity::line(
+            std::env::var(identity::BUILD_PR).ok().as_deref(),
+            None,
+            std::env::var(identity::BUILD_LINE).ok().as_deref(),
+        )?);
+        if std::env::var(identity::BUILD_SOURCE_TRACKED).is_ok_and(|tracked| tracked == "1") {
+            facts.digest = manifest
+                .parent()
+                .and_then(Path::parent)
+                .and_then(digest_of_directory);
+        }
     }
     println!(
         "cargo:rustc-env=BATTEN_BUILD_VERSION={}",
@@ -209,6 +244,44 @@ fn digest(top: &Path) -> Option<String> {
         inputs.insert(path.to_owned(), bytes);
     }
     identity::source_digest(&inputs).map(|digest| digest[..identity::DIGEST_HEX].to_owned())
+}
+
+/// [`digest`] over a source directory that IS the tracked tree (a flake's
+/// `src = self`): every file under `crates/`, plus `Cargo.toml` and
+/// `Cargo.lock`, by its `/`-joined relative path. `None` when one will not read.
+fn digest_of_directory(top: &Path) -> Option<String> {
+    let mut files = Vec::new();
+    every_file(&top.join("crates"), &mut files);
+    files.extend(["Cargo.toml", "Cargo.lock"].map(|name| top.join(name)));
+    let mut inputs = BTreeMap::new();
+    for path in files {
+        let relative = path
+            .strip_prefix(top)
+            .ok()?
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        inputs.insert(relative, std::fs::read(&path).ok()?);
+    }
+    identity::source_digest(&inputs).map(|digest| digest[..identity::DIGEST_HEX].to_owned())
+}
+
+/// Every file under `dir`, recursively, `target/` excluded.
+fn every_file(dir: &Path, into: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|name| name != "target") {
+                every_file(&path, into);
+            }
+        } else {
+            into.push(path);
+        }
+    }
 }
 
 /// `git -C dir args`'s stdout, trimmed, or `None` for a failure or nothing.
