@@ -80,6 +80,44 @@ fn the_ca_selection_matches_vars_pkl_ca() {
     );
 }
 
+/// The one spawn carries the selection: `pkl_command`'s argv is `eval` and then
+/// the flag, so a helper that dropped it would spawn bare `pkl eval` for every
+/// case `every_pkl_spawn_carries_the_ca_selection` routes through it.
+///
+/// Driven with explicit candidates, never the environment: CI sets neither
+/// variable, so an argv read off `pkl_command()` there is `eval` either way
+/// (CLOUD-2917).
+#[test]
+fn the_pkl_spawn_carries_the_selection_after_eval() {
+    let dir = common::scratch("pkl-ca-spawn");
+    common::write(&dir, "ssl.pem", "ssl\n");
+    let ssl = dir.join("ssl.pem");
+    assert_eq!(
+        common::pkl_eval_args(None, Some(ssl.as_os_str().to_owned())),
+        vec![
+            OsString::from("eval"),
+            OsString::from("--ca-certificates"),
+            ssl.as_os_str().to_owned(),
+        ],
+        "pkl_command spawns `pkl eval` with the CA selection appended"
+    );
+    assert_eq!(
+        common::pkl_eval_args(None, None),
+        vec![OsString::from("eval")],
+        "with nothing selected the spawn is plain `pkl eval`"
+    );
+    let live = common::pkl_command();
+    let args: Vec<OsString> = live.get_args().map(ToOwned::to_owned).collect();
+    assert_eq!(
+        args,
+        common::pkl_eval_args(
+            std::env::var_os("BATTEN_CA_BUNDLE"),
+            std::env::var_os("SSL_CERT_FILE"),
+        ),
+        "pkl_command spawns exactly the argv pkl_eval_args builds from the environment"
+    );
+}
+
 /// No test file but the helper's own spawns `pkl` by any other route.
 #[test]
 fn every_pkl_spawn_carries_the_ca_selection() {
