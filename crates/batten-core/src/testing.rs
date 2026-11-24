@@ -871,7 +871,8 @@ mod tests {
     /// nowhere, or counted inside the resolver's own body.
     #[test]
     fn the_resolver_named_as_a_value_is_unnamed_outside_its_own_body() {
-        let census = |text: &str| require_census(&batten_facts::source::rust(text).expect("parses"));
+        let census =
+            |text: &str| require_census(&batten_facts::source::rust(text).expect("parses"));
         assert_eq!(
             census("fn f() { let _ = names.iter().map(require_tool); }").unnamed,
             1
