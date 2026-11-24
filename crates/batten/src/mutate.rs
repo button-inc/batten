@@ -3093,6 +3093,12 @@ pub const SUITE_SCRUBBED: [&str; 2] = ["NEXTEST_", "MUTANT_"];
 /// sweep's own `batten-cover` profile there (#1276), and an inherited
 /// `NEXTEST_RETRIES` turns a kill into a miss. A test body that runs a task
 /// removes the same set ([`SUITE_SCRUBBED`]).
+///
+/// AND THE MUTANT SWITCH ITSELF ([`schema::ACTIVE`]), unless the run sets it
+/// (CLOUD-2789). A sweep run as a case under another sweep's judge inherited
+/// that judge's `BATTEN_MUTANT`, so its own unmutated baseline ran with a
+/// switch on: `mutate_schema`'s control case read its judge-only red case as
+/// baseline-red, and every mutant it reached went unjudged.
 #[must_use]
 pub fn suite_scrubbed(
     inherited: impl IntoIterator<Item = String>,
@@ -3100,7 +3106,9 @@ pub fn suite_scrubbed(
 ) -> Vec<String> {
     inherited
         .into_iter()
-        .filter(|key| SUITE_SCRUBBED.iter().any(|prefix| key.starts_with(prefix)))
+        .filter(|key| {
+            key == schema::ACTIVE || SUITE_SCRUBBED.iter().any(|prefix| key.starts_with(prefix))
+        })
         .filter(|key| !env.iter().any(|(set, _)| set == key))
         .collect()
 }
@@ -6452,13 +6460,22 @@ mod tests {
             "PATH",
             "BATTEN_MUTANT_RECORD",
             "TMPDIR",
+            schema::ACTIVE,
         ]
         .map(String::from);
         assert_eq!(
             suite_scrubbed(inherited.clone(), &[]),
-            ["NEXTEST_PROFILE", "NEXTEST_RETRIES", "MUTANT_JOB_DISK_MB"]
+            [
+                "NEXTEST_PROFILE",
+                "NEXTEST_RETRIES",
+                "MUTANT_JOB_DISK_MB",
+                schema::ACTIVE
+            ]
         );
-        let env = [(String::from("NEXTEST_RETRIES"), String::from("0"))];
+        let env = [
+            (String::from("NEXTEST_RETRIES"), String::from("0")),
+            (String::from(schema::ACTIVE), String::from("none")),
+        ];
         assert_eq!(
             suite_scrubbed(inherited, &env),
             ["NEXTEST_PROFILE", "MUTANT_JOB_DISK_MB"]
