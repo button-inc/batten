@@ -608,9 +608,18 @@ mod tests {
     }
 
     /// Fails by: a second qualified path dropped as a duplicate of the first
-    /// although it names another module and item.
+    /// although it names another module and item, or another module alone
+    /// (either `&&` of the duplicate test in `edges_of` read as `||`).
     #[test]
     fn two_distinct_qualified_paths_are_two_edges() {
+        assert_eq!(
+            edges("fn f() { crate::a::f(); crate::b::f(); crate::a::f(); }\n"),
+            [
+                (String::from("a"), String::from("f"), true),
+                (String::from("b"), String::from("f"), true),
+            ],
+            "one item through two modules is two edges, and a repeat is none"
+        );
         assert_eq!(
             edges("fn f() { crate::a::f(); crate::b::g(); }\n"),
             [

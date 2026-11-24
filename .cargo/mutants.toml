@@ -137,4 +137,12 @@ exclude_re = [
   # char boundary, and only a renamed `_` (one ASCII byte) replaces any bytes, so
   # `at` and `at + replaced` are boundaries alike: `||` and `&&` agree (CLOUD-2789).
   'policy\.rs:\d+:43: replace \|\| with && in guarded_sources_of$',
+  # At `len == 2` the inner segments are `segments[1..1]`, empty, so `contains`
+  # is false under `> 2` and `>= 2` alike (CLOUD-2789).
+  'startup\.rs:\d+:\d+: replace > with >= in configured$',
+  # `||` keeps the wrapper's tokens too: `m`, `!`, `{` before the body and the
+  # newline and `}` after it. None is a colon and `m` is followed by `!`, so no
+  # path starts, continues or is glued there. Column 59 is the window's `&&`,
+  # never the `ident` closure's, which are killed (CLOUD-2789).
+  'item_index\.rs:\d+:59: replace && with \|\| in token_paths$',
 ]
