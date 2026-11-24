@@ -58,6 +58,15 @@ const REVIEW_KEYS: &[(&str, &str)] = &[
 ];
 
 /// A could-not-look refusal, worded once.
+/// The release glob a tag implies when the caller declares none: the tag's
+/// literal prefix (everything before its first ASCII digit), then `*`. So `v1.2.0`
+/// implies `v*` and `release-1.2.0` implies `release-*`; the version after the
+/// prefix is still parsed, never matched by shape.
+fn glob_of(tag: &str) -> String {
+    let end = tag.find(|c: char| c.is_ascii_digit()).unwrap_or(tag.len());
+    format!("{}*", &tag[..end])
+}
+
 fn refuse(why: &str) -> anyhow::Error {
     UsageError::raise(format!("record derive {FAMILY}: {why}. Nothing recorded."))
 }
@@ -73,7 +82,7 @@ fn could_not_run(why: &anyhow::Error) -> anyhow::Error {
 fn only(inputs: &BTreeMap<String, String>) -> Result<()> {
     match inputs
         .keys()
-        .find(|key| !["tag", "hold"].contains(&key.as_str()))
+        .find(|key| !["tag", "hold", "released"].contains(&key.as_str()))
     {
         Some(key) => Err(refuse(&format!("reads no input `{key}`"))),
         None => Ok(()),
@@ -149,6 +158,23 @@ pub fn reading(
         .map(String::as_str)
         .filter(|tag| !tag.is_empty())
         .ok_or_else(|| refuse("needs `--input tag=<release tag>`"))?;
+    // THE CONSUMER'S RELEASE GLOB (CLOUD-2906): the predecessor is the nearest
+    // RELEASE under it, and a tag that is not one records no release. OPTIONAL,
+    // so a caller written before the glob existed (`tag` and `hold` only) keeps
+    // its call shape: absent, the glob is the tag's own literal prefix, which
+    // names the consumer's vocabulary without the core naming any.
+    let derived = glob_of(tag);
+    let glob = inputs
+        .get("released")
+        .map(String::as_str)
+        .filter(|glob| !glob.is_empty())
+        .unwrap_or(&derived);
+    if !crate::version::is_release_under(tag, glob) {
+        return Err(refuse(&format!(
+            "{tag} is not a release under `{glob}`: a pre-release or a tag that is not semver \
+             ships nothing"
+        )));
+    }
     let hold = held_by(patterns, inputs)?;
     let tip = format!("refs/tags/{tag}");
     if crate::git::resolve_ref(root, &tip)?.is_none() {
@@ -157,7 +183,7 @@ pub fn reading(
         )));
     }
     let grammar = Grammar::resolve(patterns)?;
-    let previous = crate::git::previous_tag(root, tag)?;
+    let previous = crate::git::previous_tag(root, tag, glob)?;
     let range = previous
         .as_deref()
         .map_or_else(|| tag.to_owned(), |prev| format!("{prev}..{tag}"));
@@ -338,6 +364,7 @@ mod tests {
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
         assert!(only(&inputs(&["tag", "hold"])).is_ok());
+        assert!(only(&inputs(&["tag", "hold", "released"])).is_ok());
         assert!(only(&inputs(&["tag", "since"])).is_err());
     }
 
@@ -353,6 +380,23 @@ mod tests {
             rule_for("A-2 excluded (unjudgeable-blocker A-9)", "A-2").as_deref(),
             Some("excluded")
         );
+    }
+
+    /// An undeclared glob is the tag's own prefix, so a pre-`released` caller
+    /// keeps its call shape and a pre-release is still no release under it.
+    #[test]
+    fn a_tag_with_no_declared_glob_implies_its_own_prefix() {
+        assert_eq!(super::glob_of("v1.2.0"), "v*");
+        assert_eq!(super::glob_of("release-1.2.0"), "release-*");
+        assert_eq!(super::glob_of("1.2.0"), "*");
+        assert!(crate::version::is_release_under(
+            "v1.2.0",
+            &super::glob_of("v1.2.0")
+        ));
+        assert!(!crate::version::is_release_under(
+            "v1.2.0-rc.1",
+            &super::glob_of("v1.2.0-rc.1")
+        ));
     }
 
     #[test]

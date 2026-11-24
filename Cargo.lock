@@ -3314,6 +3314,7 @@ dependencies = [
  "postcard",
  "rand",
  "regex",
+ "semver",
  "serde",
  "serde_json",
  "spin 0.12.3",

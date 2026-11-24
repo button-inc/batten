@@ -1,7 +1,7 @@
 # The module-graph record (CLOUD-2821): one line per crate source root, held by
 # `batten modules ratchet`. A worse metric is refused; `mise run
 # modules-ratchet` tightens a better one. Never loosen a line by hand.
-crates/batten-base/src cycle=2 propagation=481 impls=0 shims=0
+crates/batten-base/src cycle=2 propagation=470 impls=0 shims=0
 crates/batten-codemods/src cycle=1 propagation=5000 impls=0 shims=0
 crates/batten-core/src cycle=3 propagation=1579 impls=0 shims=0
 crates/batten-facts/src cycle=1 propagation=1661 impls=0 shims=0

@@ -150,7 +150,12 @@ field(i, key) := value if {
 
 # The major.minor of a semver string, which is what "major" means for a
 # pre-1.0 crate: the leading zero is not the compatibility boundary.
+#
+# READ ONLY FROM A VALID VERSION (CLOUD-2906): Rego has no component accessor,
+# so the line is a split, and a split over text that is not semver names a
+# line no crate has. `semver.is_valid` admits the version first.
 line_of(version) := concat(".", [parts[0], parts[1]]) if {
+	semver.is_valid(version)
 	parts := split(version, ".")
 	count(parts) >= 2
 }

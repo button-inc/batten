@@ -347,12 +347,14 @@ pub const BOOTSTRAP_PROGRAMS: &[&str] = &[
 ];
 
 /// What the bootstrap asks the release for: `dist`'s own stem and extension,
-/// with the version left as the shell expression that carries it.
+/// with the TAG left as the shell variable that carries it, verbatim — the
+/// download URL beside it already requires the tag as written, so nothing strips
+/// its `v` (CLOUD-2906).
 #[must_use]
 pub fn bootstrap_asset(name: &str) -> String {
     format!(
         "{}{}",
-        crate::dist::archive_stem(name, "${tag#v}", "$target"),
+        crate::dist::tag_archive_stem(name, "$tag", "$target"),
         crate::dist::archive_ext("x86_64-unknown-linux-gnu")
     )
 }
@@ -386,10 +388,15 @@ impl Lock {
     /// no line for: a bootstrap baked without it would refuse that platform.
     pub fn from_sums(name: &str, tag: &str, sums: &str) -> Result<Self> {
         let mut lines = Vec::new();
+        let version = crate::version::Tag::parse(tag)
+            .map(|tag| tag.version.to_string())
+            .ok_or_else(|| {
+                UsageError::raise(format!("release bake: {tag} is not a release tag"))
+            })?;
         for target in TARGETS {
             let asset = format!(
                 "{}{}",
-                crate::dist::archive_stem(name, tag.trim_start_matches('v'), target),
+                crate::dist::archive_stem(name, &version, target),
                 crate::dist::archive_ext(target)
             );
             let digest = crate::engine::published_digest(sums, &asset).ok_or_else(|| {
@@ -898,11 +905,10 @@ mod tests {
     #[test]
     fn the_bootstrap_asset_is_dists_name_with_the_tags_version() {
         let asset = bootstrap_asset("batten");
-        assert_eq!(asset, "batten-v${tag#v}-$target.tar.gz");
+        assert_eq!(asset, "batten-$tag-$target.tar.gz");
         for target in TARGETS {
-            let concrete = asset
-                .replace("${tag#v}", "1.2.3")
-                .replace("$target", target);
+            // `$target` first: `$tag` is a prefix of it.
+            let concrete = asset.replace("$target", target).replace("$tag", "v1.2.3");
             assert_eq!(
                 concrete,
                 format!(

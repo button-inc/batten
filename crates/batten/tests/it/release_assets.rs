@@ -912,7 +912,8 @@ fn the_names_the_module_demands_are_the_names_the_producers_write() {
         "Cargo.toml",
         &format!(
             "[package]\nname = \"batten\"\nversion = \"{}\"\nedition = \"2021\"\n\n[[bin]]\nname = \"batten\"\npath = \"src/main.rs\"\n\n[workspace]\n",
-            TAG.trim_start_matches('v')
+            batten::version::Tag::parse(TAG)
+                .map_or_else(String::new, |tag| tag.version.to_string())
         ),
     );
     write(&crate_dir, "src/main.rs", "fn main() {}\n");

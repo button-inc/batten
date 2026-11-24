@@ -203,24 +203,27 @@ pub fn is_installed(running: &Path, path: Option<&std::ffi::OsStr>, root: Option
 }
 
 /// Whether release `latest` is newer than release `current`, both `v`-prefixed
-/// tags (CLOUD-2287): `engine update` only ever moves a pin forward.
+/// tags (CLOUD-2287): `engine update` only ever moves a pin forward. Semver
+/// precedence, so build metadata never makes a release newer (CLOUD-2906).
 ///
 /// # Errors
 ///
 /// A [`UsageError`] naming a tag that is not a version.
 pub fn is_newer(latest: &str, current: &str) -> Result<bool> {
-    Ok(release_version(latest)? > release_version(current)?)
+    Ok(crate::version::precedence(&release_version(latest)?, &release_version(current)?).is_gt())
 }
 
-/// The version a release tag names, with or without its `v` (CLOUD-2279): the
-/// one reading of the tag grammar every engine verb shares.
+/// The version a release tag names (CLOUD-2279): exactly one `v`, then semver
+/// (CLOUD-2906), through [`crate::version::Tag::parse`] — the one reading of the
+/// tag grammar every engine verb shares.
 ///
 /// # Errors
 ///
 /// A [`UsageError`] naming a tag that is not a version.
 pub fn release_version(tag: &str) -> Result<semver::Version> {
-    semver::Version::parse(tag.trim_start_matches('v'))
-        .map_err(|_| UsageError::raise(format!("engine: {tag} is not a release tag (v0.0.201)")))
+    crate::version::Tag::parse(tag)
+        .map(|tag| tag.version)
+        .ok_or_else(|| UsageError::raise(format!("engine: {tag} is not a release tag (v0.0.201)")))
 }
 
 /// Write `digest` as the stamp beside `binary`.
@@ -348,7 +351,8 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)
         let Some(version) = item.as_str() else {
             continue;
         };
-        let parsed = release_version(version).ok();
+        // A provision row's `version` is written with or without its `v`.
+        let parsed = crate::version::parse_lenient(version);
         if parsed.as_ref() == Some(&pin) {
             continue;
         }
@@ -674,7 +678,10 @@ pub fn stale(text: &str, stamp: impl FnOnce() -> Option<String>) -> Option<Pin> 
 fn stale_as(text: &str, stamp: impl FnOnce() -> Option<String>, local: bool) -> Option<Pin> {
     let pin = declared(text)?;
     let satisfied = match (pin.release.as_deref(), pin.source.as_deref()) {
-        (Some(tag), None) => tag == release(),
+        // IDENTITY, NOT TEXT (CLOUD-2906): the parsed versions, build metadata
+        // included, and an unparsable pin satisfies nothing.
+        (Some(tag), None) => crate::version::Tag::parse(tag)
+            .is_some_and(|pin| crate::version::Tag::parse(&release()).as_ref() == Some(&pin)),
         // `BATTEN_ENGINE=local` satisfies a source pin here exactly as it does
         // in [`check`]: one answer to "is this the engine", or a test run of
         // the branch would try to BUILD the pin it was told to run without.
@@ -718,10 +725,13 @@ fn target_triple(arch: &str, os: &str, musl: bool, gnu: bool) -> String {
 /// The release archive's asset name for `tag` on `target`.
 #[must_use]
 pub fn release_asset(tag: &str, target: &str) -> String {
-    let version = tag.trim_start_matches('v');
+    // A tag that is not one names no published asset; its text is kept so the
+    // fetch that follows names what it could not find.
+    let version = crate::version::Tag::parse(tag)
+        .map_or_else(|| tag.to_owned(), |tag| tag.version.to_string());
     format!(
         "{}{}",
-        crate::dist::archive_stem("batten", version, target),
+        crate::dist::archive_stem("batten", &version, target),
         crate::dist::archive_ext(target)
     )
 }
@@ -926,6 +936,13 @@ fn heading_of(line: &str) -> Option<(semver::Version, Option<String>)> {
     Some((version, date))
 }
 
+/// The version a changelog line's `## [X]` heading names, parsed (CLOUD-2906):
+/// how a reader finds a release's section by its version rather than its text.
+#[must_use]
+pub fn heading_version(line: &str) -> Option<semver::Version> {
+    heading_of(line).map(|(version, _)| version)
+}
+
 /// Every release section in a changelog body, in the order it lists them, each
 /// with its breaking count and line span (CLOUD-2660).
 ///
@@ -1012,12 +1029,19 @@ pub fn releases_between(headings: &[Heading], pin: &str, latest: &str) -> Result
     let (pin, latest) = (release_version(pin)?, release_version(latest)?);
     let mut newer: Vec<Heading> = headings
         .iter()
-        .filter(|heading| heading.version > pin && heading.version <= latest)
+        .filter(|heading| {
+            crate::version::precedence(&heading.version, &pin).is_gt()
+                && crate::version::precedence(&heading.version, &latest).is_le()
+        })
         .cloned()
         .collect();
-    newer.sort_by(|left, right| left.version.cmp(&right.version));
+    newer.sort_by(|left, right| crate::version::precedence(&left.version, &right.version));
     newer.dedup_by(|left, right| left.version == right.version);
-    if latest > pin && newer.last().is_none_or(|heading| heading.version < latest) {
+    if crate::version::precedence(&latest, &pin).is_gt()
+        && newer
+            .last()
+            .is_none_or(|heading| crate::version::precedence(&heading.version, &latest).is_lt())
+    {
         newer.push(Heading {
             version: latest,
             date: None,
@@ -1207,10 +1231,12 @@ fn item_line(text: &str, item: &toml_edit::Item) -> usize {
 pub fn moved_url(url: &str, new: &str) -> Option<String> {
     let (head, asset) = url.rsplit_once('/')?;
     let (base, segment) = head.rsplit_once('/')?;
-    let old = segment.strip_prefix('v').unwrap_or(segment);
-    semver::Version::parse(old).ok()?;
-    let prefix = if segment.starts_with('v') { "v" } else { "" };
-    let asset = asset.replacen(old, new, 1);
+    // The segment is a release tag or a bare version; its `v` is kept as written.
+    let (prefix, old) = match crate::version::Tag::parse(segment) {
+        Some(tag) => ("v", tag.version),
+        None => ("", crate::version::parse(segment)?),
+    };
+    let asset = asset.replacen(&old.to_string(), new, 1);
     Some(format!("{base}/{prefix}{new}/{asset}"))
 }
 
@@ -1324,7 +1350,7 @@ pub fn pinned_sums(state_dir: &Path, repository: &str, tag: &str) -> Result<Stri
 /// which remedy `engine gate` names for it.
 #[must_use]
 pub fn ahead_of(declared: &semver::Version, pin: &semver::Version) -> bool {
-    declared > pin
+    crate::version::precedence(declared, pin).is_gt()
 }
 
 /// `line` less a YAML comment: from the first `#` that opens the line or
@@ -1352,18 +1378,18 @@ fn yaml_code(line: &str) -> &str {
 const LITERAL_KEYS: [&str; 2] = ["BATTEN_VERSION", "BATTEN_SHA256"];
 
 /// Whether `literal`, the value of `key`, is a copy that disagrees with release
-/// `want` (bare): a version (`v?X.Y.Z`) other than it, or a 64-hex digest not
-/// among `published`. Anything else — an expression, a word — is no copy.
+/// `want`: a version (one optional `v`, then semver) that is not it, build
+/// metadata included, or a 64-hex digest not among `published`. Anything else —
+/// an expression, a word — is no copy.
 fn literal_differs(
     key: &str,
     literal: &str,
-    want: &str,
+    want: Option<&semver::Version>,
     published: &std::collections::BTreeSet<String>,
 ) -> bool {
     let literal = literal.trim();
     if key == "BATTEN_VERSION" {
-        let bare = literal.trim_start_matches('v');
-        semver::Version::parse(bare).is_ok() && bare != want
+        crate::version::parse_lenient(literal).is_some_and(|copy| Some(&copy) != want)
     } else {
         literal.len() == 64
             && literal.chars().all(|c| c.is_ascii_hexdigit())
@@ -1445,8 +1471,9 @@ pub fn workflow_literals(
         /// A sequence.
         Item,
     }
-    let want = tag.trim_start_matches('v');
-    let differs = |key: &str, literal: &str| literal_differs(key, literal, want, published);
+    let want = crate::version::Tag::parse(tag).map(|tag| tag.version);
+    let differs =
+        |key: &str, literal: &str| literal_differs(key, literal, want.as_ref(), published);
     let mut found = Vec::new();
     let Some(events) = yaml_events(text) else {
         for (index, line) in text.lines().enumerate() {
@@ -2087,6 +2114,22 @@ mod tests {
     }
 
     #[test]
+    fn build_metadata_never_makes_a_release_newer() -> Result<()> {
+        assert!(!is_newer("v1.0.0+b", "v1.0.0+a")?);
+        assert!(!is_newer("v1.0.0+a", "v1.0.0")?);
+        assert!(!is_newer(
+            "v1.0.0-dev.pr1.20261124T050057Z+3f9c2a1b7d04",
+            "v1.0.0"
+        )?);
+        assert!(is_newer("v1.0.0", "v1.0.0-rc.1")?);
+        let build = semver::Version::parse("1.0.0+b")?;
+        assert!(!ahead_of(&build, &semver::Version::new(1, 0, 0)));
+        assert!(release_version("vv1.0.0").is_err());
+        assert!(release_version("1.0.0").is_err());
+        Ok(())
+    }
+
+    #[test]
     fn a_release_is_newer_only_when_strictly_above() -> Result<()> {
         assert!(is_newer("v1.0.1", "v1.0.0")?);
         assert!(!is_newer("v1.0.0", "v1.0.0")?);
@@ -2170,6 +2213,13 @@ mod tests {
             ["1.1.0"]
         );
         assert!(releases_between(&[], "v1.0.0", "v1.0.0")?.is_empty());
+        // A pre-release of the latest orders below it, so it is between, and the
+        // release itself is still counted once (CLOUD-2906).
+        let headings = [heading("v1.1.0-rc.1"), heading("v1.0.0")];
+        assert_eq!(
+            versions(releases_between(&headings, "v1.0.0", "v1.1.0")?),
+            ["1.1.0-rc.1", "1.1.0"]
+        );
         Ok(())
     }
 
