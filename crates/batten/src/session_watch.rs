@@ -887,6 +887,15 @@ mod tests {
         }
     }
 
+    /// Fails by: a `Mints` whose debug form hides whether it mints at all,
+    /// which is the one thing a reader of a watch's state needs from it.
+    #[test]
+    fn a_mints_debug_form_says_whether_it_mints() {
+        let sink = |_: &Value, _: &Value| {};
+        assert_eq!(format!("{:?}", Mints::none()), "Mints { sink: false }");
+        assert_eq!(format!("{:?}", Mints::new(&sink)), "Mints { sink: true }");
+    }
+
     /// Fails by: the delay shrinking between polls, which turns a patient
     /// watch into a busy poll; or a poll that never reports the child gone,
     /// which the bounded wait turns from a hang into a failure (CLOUD-2789).
