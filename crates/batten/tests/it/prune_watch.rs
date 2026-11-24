@@ -27,6 +27,7 @@ fn rules(root: &str) -> Prune {
         regrowable: None,
         min_free_mb: None,
         max_free_mb: None,
+        caches: Vec::new(),
     }
 }
 
@@ -113,6 +114,7 @@ fn request<'a>(
         live_since: None,
         copies: None,
         fixtures_since: None,
+        caches: &[],
     }
 }
 
@@ -1441,6 +1443,183 @@ fn a_workspace_wrapper_between_is_run_with_the_compiler() {
     assert!(bin.join("wrapped").is_file(), "the workspace wrapper ran");
     let seen = std::fs::read_to_string(bin.join("ran")).unwrap_or_default();
     assert_eq!(seen.trim(), "-vV", "the compiler's own argv");
+}
+
+/// What one wrapped compile did with a declared next wrapper (CLOUD-2907).
+struct Chained {
+    exit: Option<i32>,
+    /// The next wrapper's argv, or empty where it never ran.
+    next_argv: String,
+    /// Whether the compiler stub ran.
+    compiled: bool,
+    compiler: PathBuf,
+    out_dir: PathBuf,
+}
+
+/// One compile through `batten`, as cargo issues it: `compiler` is the stub's
+/// name, the unit's manifest sits under a fake `CARGO_HOME` when `registry`,
+/// and `next` is what `BATTEN_RUSTC_NEXT` holds (`None` unsets it). The next
+/// wrapper stub records its argv and runs the rest, as a cache does on a miss.
+fn chained(name: &str, compiler: &str, registry: bool, next: Option<&str>) -> Chained {
+    // Outside the checkout: a compile under `CARGO_HOME` has no repository.
+    let dir = common::scratch_outside_tree("prune_watch", name);
+    let home = dir.join("cargo-home");
+    let manifest = if registry {
+        home.join("registry/src/index.crates.io-0000/dep-1.0.0")
+    } else {
+        dir.join("workspace/crates/dep")
+    };
+    std::fs::create_dir_all(&manifest).unwrap();
+    let stub = |path: &Path, body: &str| {
+        std::fs::write(path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    };
+    let compiler = dir.join(compiler);
+    stub(&compiler, "#!/bin/sh\necho ran > \"$0.ran\"\n");
+    let recorder = dir.join("next");
+    stub(
+        &recorder,
+        "#!/bin/sh\necho \"$@\" > \"$0.argv\"\nexec \"$@\"\n",
+    );
+    let out_dir = dir.join("target/debug/deps");
+    let mut command = common::batten();
+    command
+        .current_dir(&manifest)
+        .arg(&compiler)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .env("CARGO_HOME", &home)
+        .env("CARGO_MANIFEST_DIR", &manifest)
+        // Above the default floor: the guard reads nothing and collects nothing.
+        .env("TARGET_PRUNE_FREE_MB", "500000")
+        .stdin(std::process::Stdio::null());
+    match next {
+        Some("recorder") => command.env(batten::RUSTC_NEXT, &recorder),
+        Some(other) => command.env(batten::RUSTC_NEXT, dir.join(other)),
+        None => command.env_remove(batten::RUSTC_NEXT),
+    };
+    let ran = command
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    let mut ran_marker = compiler.clone().into_os_string();
+    ran_marker.push(".ran");
+    Chained {
+        exit: ran.status.code(),
+        next_argv: std::fs::read_to_string(dir.join("next.argv")).unwrap_or_default(),
+        compiled: Path::new(&ran_marker).exists(),
+        compiler,
+        out_dir,
+    }
+}
+
+/// Fails by: a registry unit compiled without its declared next wrapper, the
+/// wrapper handed anything but `<compiler> <args>`, or the guard skipped by
+/// the chain (CLOUD-2907).
+#[test]
+fn a_registry_unit_reaches_the_declared_next_wrapper_after_the_guard() {
+    if !cfg!(unix) {
+        return;
+    }
+    let done = chained("rustc-chain-registry", "rustc", true, Some("recorder"));
+    assert_eq!(done.exit, Some(0));
+    assert_eq!(
+        done.next_argv.trim(),
+        format!(
+            "{} --out-dir {}",
+            done.compiler.display(),
+            done.out_dir.display()
+        )
+    );
+    assert!(done.compiled, "the next wrapper ran the compiler");
+}
+
+/// Fails by: a unit a compiler cache cannot share handed to it anyway — a
+/// workspace unit, a `clippy-driver` check — or a compile with nothing declared
+/// chained at all.
+#[test]
+fn only_a_registry_rustc_unit_is_chained() {
+    if !cfg!(unix) {
+        return;
+    }
+    for (name, compiler, registry, next) in [
+        ("rustc-chain-workspace", "rustc", false, Some("recorder")),
+        (
+            "rustc-chain-clippy",
+            "clippy-driver",
+            true,
+            Some("recorder"),
+        ),
+        ("rustc-chain-undeclared", "rustc", true, None),
+    ] {
+        let done = chained(name, compiler, registry, next);
+        assert_eq!(done.exit, Some(0), "{name}");
+        assert!(done.next_argv.is_empty(), "{name}: {}", done.next_argv);
+        assert!(done.compiled, "{name}: the compiler ran directly");
+    }
+}
+
+/// Fails by: a declared next wrapper that cannot start failing the build. The
+/// cache is an accelerator: without it the unit compiles directly.
+#[test]
+fn an_unstartable_next_wrapper_compiles_directly() {
+    if !cfg!(unix) {
+        return;
+    }
+    let done = chained(
+        "rustc-chain-missing",
+        "rustc",
+        true,
+        Some("no-such-wrapper"),
+    );
+    assert_eq!(done.exit, Some(0));
+    assert!(done.compiled);
+}
+
+/// Fails by: the chain decided on anything but the compiler, a manifest under
+/// an absolute `CARGO_HOME`, and a declared, non-empty next wrapper.
+#[test]
+fn the_chain_decision_names_its_four_inputs() {
+    let next = std::ffi::OsStr::new("sccache");
+    let home = Path::new("/home/u/.cargo");
+    let dep = Path::new("/home/u/.cargo/registry/src/i/dep-1.0.0");
+    let ours = Path::new("/home/u/repo/crates/dep");
+    assert_eq!(
+        batten::chained_wrapper("rustc", Some(dep), Some(home), Some(next)),
+        Some(next)
+    );
+    for (stem, manifest, cargo_home, declared) in [
+        ("clippy-driver", Some(dep), Some(home), Some(next)),
+        ("rustc", Some(ours), Some(home), Some(next)),
+        ("rustc", None, Some(home), Some(next)),
+        ("rustc", Some(dep), None, Some(next)),
+        (
+            "rustc",
+            Some(Path::new(".cargo/registry/x")),
+            Some(Path::new(".cargo")),
+            Some(next),
+        ),
+        (
+            "rustc",
+            Some(dep),
+            Some(home),
+            Some(std::ffi::OsStr::new("")),
+        ),
+        ("rustc", Some(dep), Some(home), None),
+    ] {
+        assert_eq!(
+            batten::chained_wrapper(stem, manifest, cargo_home, declared),
+            None,
+            "{stem} {manifest:?} {cargo_home:?} {declared:?}"
+        );
+    }
 }
 
 /// The probe `mise.toml` sets `RUSTC_WRAPPER` from: this binary answers with

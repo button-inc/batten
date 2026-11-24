@@ -2645,6 +2645,14 @@ pub struct Prune {
     /// pair is a hysteresis band rather than a threshold that re-fires at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_free_mb: Option<u64>,
+    /// Compiler-cache directories, relative to the repository root, that a
+    /// pass empties before it touches any cargo unit (CLOUD-2907): oldest file
+    /// first, until the pass has freed what it needs or the caches are empty.
+    /// A cache is an accelerator, never the authority, so a reclaimed entry is
+    /// a miss the next build refills by compiling. No default: the core names
+    /// no cache tool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caches: Vec<String>,
 }
 
 #[must_use]
