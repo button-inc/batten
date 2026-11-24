@@ -22715,13 +22715,55 @@ fn snapshot_protected(policy: &hook::Policy, envelope: &hook::Envelope, decision
     {
         let _cached = crate::durable::replace(cache, serde_json::json!(state).to_string());
     }
-    let body = serde_json::json!({"root": root, "patterns": patterns, "state": state});
+    // WHERE HISTORY STOOD BEFORE THE CALL (CLOUD-2923): the post-call arm
+    // excuses a change that is only `HEAD` moving forward onto commits these
+    // tips already reached, and it must read them as they were BEFORE the call,
+    // or a call that commits and then moves a remote-tracking ref excuses itself.
+    let head = git::head_commit(&root).ok();
+    let tips = git::remote_tips(&root);
+    let body = serde_json::json!({
+        "root": root, "patterns": patterns, "state": state,
+        "head": head, "remote_tips": tips,
+    });
     if let Some(parent) = path.parent()
         && std::fs::create_dir_all(parent).is_err()
     {
         return;
     }
     let _written = crate::durable::replace(&path, body.to_string());
+}
+
+/// The `paths` whose working-tree bytes equal their blob at the CURRENT `HEAD`,
+/// a path absent from both included (CLOUD-2923). Empty when `HEAD` cannot be
+/// read, which excuses nothing and prescribes `git restore` for every path.
+fn paths_at_head(root: &Path, paths: &[String]) -> std::collections::BTreeSet<String> {
+    let names: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let Some(committed) = git::head_blob_ids(root, &names) else {
+        return std::collections::BTreeSet::new();
+    };
+    paths
+        .iter()
+        .filter(|path| match fsio::read(root.join(path.as_str())) {
+            Ok(bytes) => git::blob_id_of(&bytes).as_ref() == committed.get(path.as_str()),
+            Err(error) => {
+                error.kind() == std::io::ErrorKind::NotFound
+                    && !committed.contains_key(path.as_str())
+            }
+        })
+        .cloned()
+        .collect()
+}
+
+/// Whether the call moved `HEAD` only forward onto history the pre-call snapshot
+/// recorded as already on a remote (CLOUD-2923). A snapshot written before it
+/// carried `head` and `remote_tips` answers `false`, which excuses nothing.
+fn pushed_forward(root: &Path, snapshot: &serde_json::Value) -> bool {
+    let Some(before) = snapshot["head"].as_str() else {
+        return false;
+    };
+    let tips: Vec<String> =
+        serde_json::from_value(snapshot["remote_tips"].clone()).unwrap_or_default();
+    git::head_moved_onto(root, before, &tips) == Some(true)
 }
 
 /// A protected path a shell call changed without naming it (step 14): its
@@ -22795,12 +22837,29 @@ fn protected_escape(
             unnamed.push(changed_path);
         }
     }
+    let at_head = paths_at_head(&root, &unnamed);
+    if pushed_forward(&root, &snapshot) {
+        unnamed.retain(|path| !at_head.contains(path));
+    }
     let Some(first) = unnamed.first() else {
         return Ok(None);
     };
+    // `git restore` ONLY WHERE IT RESTORES SOMETHING (CLOUD-2923): a path whose
+    // bytes already equal `HEAD` is unchanged by it, and prescribing a no-op
+    // sends the reader round a loop the refusal cannot close.
+    let restorable: Vec<&str> = unnamed
+        .iter()
+        .filter(|path| !at_head.contains(*path))
+        .map(String::as_str)
+        .collect();
+    let restore = if restorable.is_empty() {
+        String::new()
+    } else {
+        format!("run git restore {}; ", restorable.join(" "))
+    };
     let reason = format!(
         concat!(
-            "batten deny path write refused at {paths}; run git restore {paths}; ",
+            "batten deny path write refused at {paths}; {restore}",
             "admit with batten override request --rule 'protected-mutation' ",
             "--verdict 'path write refused' --subject '{first} shell' \u{2014} ",
             "a shell call changed a protected path its command line did not name, ",
@@ -22808,6 +22867,7 @@ fn protected_escape(
             "through a script, a redirect or another program."
         ),
         paths = unnamed.join(" "),
+        restore = restore,
         first = first,
     );
     if harness == crate::config_model::Harness::ClaudeCode {
