@@ -782,6 +782,29 @@ mod tests {
         assert_eq!(evaluate(&root, &rows)[0].line(), "toolchain ok");
     }
 
+    /// Fails by: a rule of the row's preset that lists no environments read
+    /// as the one parameterising it (`&&` for `||`), so the row is derived
+    /// with an empty selector instead of passing through unchanged.
+    #[test]
+    fn a_preset_rule_listing_no_environments_derives_nothing() {
+        let config = placed("[\"agent\"]");
+        let mut rule = config.rules[0].clone();
+        rule.environments = None;
+        assert_eq!(
+            crate::config_model::derive_startup(&config.startup, &[rule]),
+            config.startup.clone()
+        );
+    }
+
+    /// Fails by: a name's last segment, its extension, read as an inner
+    /// segment (`len - 1` for `len / 1`), so `tool.x.prod` configures `prod`.
+    #[test]
+    fn an_environment_named_only_by_an_extension_is_not_configured() {
+        let names = [String::from("tool.x.prod")];
+        assert!(!configured(&names, "prod"));
+        assert!(configured(&names, "x"), "the inner segment is configured");
+    }
+
     /// Hand-written rows pass through untouched and in order.
     #[test]
     fn a_config_with_no_preset_row_derives_nothing() {

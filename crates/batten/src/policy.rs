@@ -8875,6 +8875,38 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
         assert_eq!(spanned("x ab y", 2, 4), Some("ab"));
     }
 
+    /// Fails by: a reading rule refused under `with` only when it is both
+    /// called and a function (`||` for `&&`), so a call of a reading rule, or a
+    /// reading function named bare, is redirected instead of refused.
+    #[test]
+    fn a_reading_function_or_a_called_reader_under_with_is_refused() {
+        let refused = Err(String::from("a function reading the input under `with`"));
+        let locals = BTreeSet::new();
+        let mods = [serde_json::json!({"span": {"start": 6, "end": 10}})];
+        for (function, called) in [(false, true), (true, false)] {
+            let facts: BTreeMap<String, RuleFacts> = [(
+                String::from("r"),
+                RuleFacts {
+                    reads: true,
+                    function,
+                    ..RuleFacts::default()
+                },
+            )]
+            .into();
+            let case = CaseText {
+                text: "x := r WITH",
+                package: "p",
+                facts: &facts,
+                locals: &locals,
+            };
+            assert_eq!(
+                redirected_statement(&case, 0, &mods, &[(String::from("r"), 5, 6, called)], "k"),
+                refused,
+                "function {function}, called {called}"
+            );
+        }
+    }
+
     /// Fails by: a rewrite whose start falls inside a character applied (a
     /// panic) because its end happens to fall on a boundary.
     #[test]
