@@ -339,6 +339,39 @@ fn a_pre_call_snapshot_writes_its_digest_cache() {
     assert!(digests.get(GUARDED).is_some(), "{digests}");
 }
 
+/// ONLY A SHELL CALL IS SNAPSHOTTED BEFORE IT RUNS. A pre-call hook for any
+/// other tool leaves no snapshot under its call id; a shell call's does.
+///
+/// Fails by: the operation-or-denial guard of `snapshot_protected` joined with
+/// `&&`, so a read's pre-call hook hashes the protected set and leaves a
+/// snapshot no post-call hook ever consumes (CLOUD-2789).
+#[test]
+fn only_a_shell_calls_pre_hook_snapshots() {
+    let dir = fixture("protected-escape-read-snapshot");
+    let watch = dir.join(".git/batten-facts/protected-watch");
+    let read = format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s1\",\"tool_use_id\":\"call-read\",\
+         \"tool_name\":\"Read\",\"tool_input\":{{\"file_path\":{}}}}}",
+        serde_json::to_string(ORDINARY).expect("a path is encodable")
+    );
+    let pre = run_with_stdin(&dir, &["adjudicate", "--harness", "claude-code"], &read);
+    assert!(!stdout(&pre).contains("\"deny\""), "{}", stdout(&pre));
+    assert!(
+        !watch.join("call-read.json").exists(),
+        "a read's pre-call hook snapshots nothing"
+    );
+    let shell = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload("PreToolUse", "call-shell", "ls"),
+    );
+    assert!(!stdout(&shell).contains("\"deny\""), "{}", stdout(&shell));
+    assert!(
+        watch.join("call-shell.json").exists(),
+        "premise: a shell call's pre-call hook snapshots under its call id"
+    );
+}
+
 /// NO HOLE FOR A LIVE BACKGROUND TASK. A foreground call that really changes a
 /// protected file's bytes is refused whether or not a backgrounded call of the
 /// same session is still running: nothing the hook can observe says which
