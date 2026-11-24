@@ -53,12 +53,17 @@ pub(crate) fn refused(traced: bool, record: Option<&Path>) -> bool {
 /// a sweep run inside another sweep's reach (the schema's own suite does this)
 /// records untraced rather than spawning a tracer that cannot attach.
 pub(crate) fn traced_already() -> bool {
-    crate::fsio::read_to_string("/proc/self/status").is_ok_and(|status| {
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix("TracerPid:"))
-            .is_some_and(|pid| pid.trim() != "0")
-    })
+    crate::fsio::read_to_string("/proc/self/status").is_ok_and(|status| traced_in(&status))
+}
+
+/// Whether a `/proc/<pid>/status` text names a tracer: its `TracerPid` is set
+/// and is not `0`. Apart from the read so a case can hand it either answer,
+/// whether or not the suite itself runs under one (CLOUD-2789).
+fn traced_in(status: &str) -> bool {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("TracerPid:"))
+        .is_some_and(|pid| pid.trim() != "0")
 }
 
 /// The tracer's argv around one case: every syscall that names a path, in the
@@ -719,6 +724,15 @@ mod tests {
         }
         out.push_str("7     +++ exited with 0 +++\n");
         out
+    }
+
+    // Fails by: a zero `TracerPid` read as a tracer, a set one read as none,
+    // or a status with no such line read as traced.
+    #[test]
+    fn a_tracer_is_one_whose_pid_is_set() {
+        assert!(!super::traced_in("Name:\tcase\nTracerPid:\t0\n"));
+        assert!(super::traced_in("Name:\tcase\nTracerPid:\t4242\n"));
+        assert!(!super::traced_in("Name:\tcase\n"));
     }
 
     // Fails by: an escaped quote or backslash refused (the path cut short as
