@@ -7761,6 +7761,69 @@ mod tests {
         assert_eq!(verdicts, [(0, Verdict::Unjudged)]);
     }
 
+    /// Fails by: a hand-back that no case observes and no red case poisons
+    /// read as unjudged without a run (the unjudged test's `&&` read as `||`),
+    /// when its run is what says it is uncovered. The runner here does not
+    /// exist, so the run it is owed errs rather than being skipped.
+    #[test]
+    fn a_handback_no_case_observes_and_none_poisons_is_still_run() {
+        let base = crate::scratch::scratch("schema-handback-unobserved");
+        let live = base.join("live");
+        std::fs::create_dir_all(live.join("src")).unwrap();
+        std::fs::write(live.join("src/lib.rs"), KEYED_SOURCE).unwrap();
+        crate::gitwrite::init_on_main(&live).unwrap();
+        crate::gitwrite::commit_paths(&live, &[String::from("src/lib.rs")], "lib").unwrap();
+        let listed_over = crate::mutate::cover::source_digest(&live).unwrap();
+        let mutants = [keyed("!=")];
+        let elsewhere: Case = (String::from("tests::elsewhere"), String::from("p"));
+        let (reach_by_id, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let red = Red::new();
+        let store = base.join("verdicts");
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &live,
+            mutants: &mutants,
+            reach: &reach_by_id,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &store,
+            red: &red,
+            reuse: None,
+        };
+        let schema = Schema {
+            names: vec![BTreeSet::from([String::from("unrelated")])],
+            ..Schema::default()
+        };
+        let reach = Reach {
+            executed: [(elsewhere, BTreeSet::from([0]))].into(),
+            ..Reach::default()
+        };
+        let nowhere = base.join("nowhere");
+        let handback = Handback {
+            runner: &nowhere,
+            diff: Some(&nowhere),
+        };
+        let state = base.join("state");
+        let mut out = Vec::new();
+        let (verdicts, _) = judge_handbacks(
+            &judging,
+            (&handback, &live, &listed_over, &state),
+            &BTreeSet::from([0]),
+            (&schema, &reach),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(verdicts, [(0, Verdict::Error)]);
+    }
+
     /// Fails by: a journaled `caught` or `unjudged` read as a name no verdict
     /// carries, and so reported as an `error`.
     #[test]
@@ -9458,6 +9521,25 @@ mod tests {
     /// Fails by: a const fn's caller through a const missed (its mutant judged
     /// by no case and read uncovered), an unrelated case selected, or a mutant
     /// with nothing to go on narrowed to nothing.
+    /// Fails by: an `_` read as ending a name (`*c == '_'` as `!=` in
+    /// `function_ident` or in `token_names`' capture), or a captured name that
+    /// opens with `_` refused and one that opens with a digit taken (`c ==
+    /// '_'` as `!=` on the capture's first character).
+    #[test]
+    fn an_underscore_is_part_of_a_name_and_may_open_one() {
+        assert_eq!(function_ident("Foo::read_all").as_deref(), Some("read_all"));
+        let parse = batten_facts::source::rust_parse(
+            "fn f() { g(\"{_x} {a_b} {1y}\"); }\n",
+            ra_ap_syntax::Edition::Edition2024,
+        );
+        let names = names_in(parse.tree().syntax());
+        for name in ["_x", "a_b", "f", "g"] {
+            assert!(names.contains(name), "{name} in {names:?}");
+        }
+        assert!(!names.contains("1y"), "{names:?}");
+        assert!(!names.contains("a"), "{names:?}");
+    }
+
     #[test]
     fn a_handed_back_mutant_is_judged_by_the_cases_that_can_observe_it() {
         assert_eq!(function_ident("Foo::bar").as_deref(), Some("bar"));

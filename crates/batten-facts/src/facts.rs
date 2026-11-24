@@ -6250,6 +6250,34 @@ pub fn shell_streams(map: &serde_json::Map<String, serde_json::Value>) -> (Vec<u
 mod tests {
     use super::*;
 
+    /// Fails by: a blank `command` or `tool` admitted as a selector (either
+    /// emptiness guard in `validate_one` read as `false`), so a row that
+    /// selects nothing loads.
+    #[test]
+    fn a_blank_command_or_tool_is_refused_and_a_written_one_loads() {
+        let row = |selector: &str, value: &str| -> Declared {
+            serde_json::from_value(serde_json::json!({
+                "name": "f",
+                selector: value,
+                "returns": "json-array",
+            }))
+            .expect("a row")
+        };
+        for selector in ["command", "tool"] {
+            assert!(
+                validate(&[row(selector, "x")]).is_ok(),
+                "premise: {selector}"
+            );
+            let refused = validate(&[row(selector, "  ")])
+                .expect_err(selector)
+                .to_string();
+            assert!(
+                refused.contains(&format!("declares an empty `{selector}`")),
+                "{refused}"
+            );
+        }
+    }
+
     /// Fails by: the refusal's list built from the formats that own NO
     /// extension (only `pkl`) instead of those that own one.
     #[test]

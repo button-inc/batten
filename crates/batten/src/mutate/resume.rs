@@ -1370,6 +1370,23 @@ mod tests {
         assert_eq!(passed_cases("<unclosed"), None);
     }
 
+    /// Fails by: a failed, erred or skipped case counted as passed (any `||`
+    /// in `passed_cases` read as `&&`), a report counted as a constant, or a
+    /// report that is not XML answered with a count.
+    #[test]
+    fn only_a_case_with_no_failure_error_or_skip_is_passed() {
+        let report = "<testsuites><testsuite name=\"s\">\
+            <testcase name=\"a\"/>\
+            <testcase name=\"b\"><system-out>x</system-out></testcase>\
+            <testcase name=\"c\"><failure/></testcase>\
+            <testcase name=\"d\"><error/></testcase>\
+            <testcase name=\"e\"><skipped/></testcase>\
+            </testsuite></testsuites>";
+        assert_eq!(passed_cases(report), Some(2));
+        assert_eq!(passed_cases("<testsuites/>"), Some(0));
+        assert_eq!(passed_cases("not xml"), None);
+    }
+
     /// Fails by: a named profile read as `default`, so a journaled run looks
     /// for its report under a profile it never ran; or an empty one kept.
     #[test]

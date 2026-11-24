@@ -2846,6 +2846,21 @@ mod tests {
         assert!(version_drift(&recorded, &[bumped]).is_empty());
     }
 
+    /// Fails by: a comment line read as a row (`!line.is_empty() &&
+    /// !line.starts_with('#')` joined with `||`), so a commented-out row whose
+    /// first word is the preset's name stands in for the row it is not.
+    #[test]
+    fn a_commented_out_row_is_no_row() {
+        let commented = Manifest {
+            name: "#fixture",
+            ..fixture(semver::Version::new(1, 0, 0), BEFORE)
+        };
+        let lock = format!("#fixture 1.0.0 {}\n\n", commented.digest());
+        let drift = version_drift(&lock, &[commented]);
+        assert_eq!(drift.len(), 1, "{drift:?}");
+        assert!(drift[0].contains("has no row"), "{drift:?}");
+    }
+
     const MUTANT_ROW: &[PresetModule] = &[PresetModule {
         scope: RuleScope::Tree,
         provider: None,
