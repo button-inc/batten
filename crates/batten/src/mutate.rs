@@ -2100,6 +2100,28 @@ impl Program<'_> {
     }
 }
 
+/// The image this process runs, named so it still reads after cargo replaced
+/// the file it was started from (CLOUD-2886): on Linux the kernel's own
+/// `/proc/self/exe`, which opens the running inode even once `current_exe()`
+/// names `… (deleted)`; elsewhere `current_exe()`.
+///
+/// MEASURED ON #1276: a sweep started from `target/debug/batten`, a concurrent
+/// build relinked it three minutes in, and the copy of `current_exe()` that
+/// made the reach run's recorder failed `No such file or directory` after a
+/// whole schema build.
+///
+/// # Errors
+///
+/// Neither name can be had for the running image.
+fn running_image() -> std::io::Result<std::path::PathBuf> {
+    let own = Path::new("/proc/self/exe");
+    if own.exists() {
+        Ok(own.to_path_buf())
+    } else {
+        std::env::current_exe()
+    }
+}
+
 /// Run a program to completion in `dir`, capturing what it said.
 fn spawn(
     dir: &Path,
