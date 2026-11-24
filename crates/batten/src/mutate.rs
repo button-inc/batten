@@ -3229,7 +3229,7 @@ fn run_suite(
     // restored (or carries only this row's unembedded mutation), so one build
     // here puts back binaries that see no other row's mutant.
     let dirty = reuse.is_some_and(|built| built.dirty.get());
-    if cargo && (reuse.is_none() || dirty) {
+    if owes_build(cargo, reuse.is_some(), dirty) {
         // AN EMBEDDED SUBJECT ONLY: BUILT UNDER THE BUILD BOUND FIRST, THEN TIMED
         // (review of #962). A mutated embedded source must be recompiled, and
         // paying that inside the per-case bound is how a slow compile reads as
@@ -4122,6 +4122,14 @@ fn unproving(root: &Path, row: &Row) -> Option<Verdict> {
         return Some(Verdict::InertMutation);
     }
     (code_lines_changed(&before, &after) == 0).then_some(Verdict::SelfMutatingRow)
+}
+
+/// Whether [`run_suite`] builds before it runs: only a cargo suite, and only
+/// where the recorded binaries are not reused or a rebuild left them dirty.
+/// Apart so a case can reach it: what a build spent on another runner's suite
+/// changes is time and the uplifted binaries, never a verdict a case can read.
+const fn owes_build(cargo: bool, reused: bool, dirty: bool) -> bool {
+    cargo && (!reused || dirty)
 }
 
 /// Whether a row is judged by its module's own test tier rather than its
@@ -8256,6 +8264,18 @@ mod tests {
         assert!(!built.tests_embed("mise-tasks-other/toy.sh"));
     }
 
+    /// Fails by: a build owed by another runner's suite, by reused binaries
+    /// that are clean, or not owed by a cargo suite that reuses nothing or
+    /// reuses dirty binaries.
+    #[test]
+    fn only_a_cargo_suite_without_clean_binaries_owes_a_build() {
+        assert!(owes_build(true, false, false));
+        assert!(owes_build(true, true, true));
+        assert!(!owes_build(true, true, false));
+        assert!(!owes_build(false, false, false));
+        assert!(!owes_build(false, true, true));
+    }
+
     /// Fails by: the recorded build credited with embedding nothing, or its
     /// test targets with nothing, so a mutation of a subject the build reads
     /// is judged on binaries that never saw it.
@@ -8732,6 +8752,53 @@ mod tests {
             !changed_by(&root, &gate, "limit", &code_changed, &code_changed),
             "the suite does not touch the gate"
         );
+    }
+
+    /// Fails by: a row read as judged by its module's own case on either half
+    /// alone (the two joined by `||`), so a module declaring a `test_` rule
+    /// that no policy row registers drops its suite from the row's key.
+    #[test]
+    fn an_unregistered_module_with_its_own_case_is_judged_by_its_suite() {
+        let root = fixture("unregistered-own-case");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        put(&root, "batten.toml", "version = 1\n");
+        put(
+            &root,
+            "policy/limit.rego",
+            &format!(
+                "#MUTANT-SUITE policy/suite/limit_test.rego\n\
+                 #{ROW}limit-moved|s/^limit := 10$/limit := 11/|limit_is_ten\n\
+                 package batten\n\nlimit := 10\n\n\
+                 test_limit_is_ten if {{\n\tlimit == 10\n}}\n"
+            ),
+        );
+        let suite = "policy/suite/limit_test.rego";
+        put(
+            &root,
+            suite,
+            "package batten\n\ntest_other if {\n\ttrue\n}\n",
+        );
+        crate::gitwrite::commit_paths(
+            &root,
+            &[
+                String::from("batten.toml"),
+                String::from("policy/limit.rego"),
+                String::from(suite),
+            ],
+            "fixture",
+        )
+        .expect("commit");
+        let Some(gate) = resolve(&root, "limit") else {
+            panic!("the module resolves to a gate");
+        };
+        let [row] = gate.rows.as_slice() else {
+            panic!("the module declares exactly one row");
+        };
+        assert!(
+            declares_own_case(&root, row),
+            "premise: the case is its own"
+        );
+        assert!(!judged_by_module(&root, row));
     }
     /// Fails by: no target answered for a suite the recorded metadata
     /// compiles, which runs every mutant's filter unscoped over the workspace.
