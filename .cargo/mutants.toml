@@ -66,4 +66,9 @@ exclude_re = [
   # `at + 1 < len` and `at < len` both hold on every pass; a glob or group end
   # has no leaf for the filter to read (#1276).
   'uses\.rs:\d+:\d+: replace \+ with \* in collect_edges$',
+  # `module_graph::token_paths` reads only a macro's TOKEN_TREE, where the
+  # lexer keeps `::` as two `:` tokens: a joined `::` never reaches it, and the
+  # two-colon arm is the one `a_crate_path_inside_a_macro_names_the_root`
+  # exercises (#1276).
+  'module_graph\.rs:\d+:\d+: delete match arm Some\(SyntaxKind::COLON2\) in token_paths$',
 ]
