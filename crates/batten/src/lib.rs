@@ -33606,6 +33606,62 @@ mod tests {
         assert_eq!(split.only, only);
     }
 
+    /// Fails by: a dropped `LandSingleton` leaving the land lock held, so the
+    /// next lap in the checkout reads a live landing that already ended
+    /// (CLOUD-2789). nextest runs each case in its own process, so the move
+    /// into the fixture repository is this case's: the drop's seed hand-off
+    /// reads the working directory's repository, never the developer's.
+    #[test]
+    fn a_dropped_land_singleton_releases_the_lock() {
+        let scratch = crate::scratch::scratch("lib-land-singleton-drop");
+        crate::testing::contain_state(&scratch.join("state"));
+        let repo = scratch.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        std::env::set_current_dir(&repo).expect("enter the fixture");
+        let git_dir = crate::git::git_dir(&repo).unwrap();
+        let pid = std::process::id().to_string();
+        assert_eq!(
+            batten_base::task::singleton_acquire(
+                &git_dir,
+                super::LAND_TASK,
+                &pid,
+                std::time::Duration::ZERO
+            ),
+            batten_base::task::Claim::Taken
+        );
+        let guard = super::LandSingleton {
+            git_dir: git_dir.clone(),
+            pid: pid.clone(),
+        };
+        assert_eq!(
+            batten_base::task::singleton_holder(&git_dir, super::LAND_TASK),
+            Some(pid),
+            "the premise: this process holds the land lock"
+        );
+        drop(guard);
+        assert_eq!(
+            batten_base::task::singleton_holder(&git_dir, super::LAND_TASK),
+            None
+        );
+    }
+
+    /// Fails by: `verify_stall` answering `None` with the bound switched on
+    /// and a registered task to watch, so a verify that stopped advancing is
+    /// never ended (CLOUD-2789).
+    #[test]
+    fn a_registered_verify_is_watched_for_a_stall() {
+        assert!(
+            std::env::var_os("LAND_SELF_STALL_BEATS").is_none(),
+            "the premise: the bound is the default, switched on"
+        );
+        let repo = crate::scratch::scratch("lib-verify-stall");
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        let stall = super::verify_stall(&repo, Some(4242)).expect("a registered task is watched");
+        assert_eq!(stall.pid, 4242);
+        assert_eq!(stall.beats, 240);
+    }
+
     /// Fails by: the comparison inverted, so a lap whose `HEAD` stood still says
     /// it moved, and one that moved says nothing.
     #[test]

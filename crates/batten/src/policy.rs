@@ -5970,7 +5970,13 @@ fn package_facts(policies: &[serde_json::Value]) -> BTreeMap<String, BTreeMap<St
         }
     }
     for facts in packages.values_mut() {
-        loop {
+        // BOUNDED BY THE RULE COUNT (CLOUD-2789): each pass reads the sets as
+        // the previous one left them, so it carries a flag one reference
+        // further, and no chain of distinct rules is longer than the rules.
+        // `len + 1` passes reach the fixed point and see it hold; a change that
+        // stops a pass from converging ends with a wrong answer a case can
+        // see, rather than spinning until the suite's timeout.
+        for _ in 0..=facts.len() {
             let reads: BTreeSet<String> = facts
                 .iter()
                 .filter(|(_, fact)| fact.reads)
@@ -7372,6 +7378,32 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
             rules.keys().collect::<Vec<_>>()
         );
         assert!(!rules["r"].function);
+    }
+
+    /// Fails by: a `with` or an input read carried less than the whole way
+    /// along a chain of rules: the propagation's `!` dropped, so a rule
+    /// already marked is the only one marked again, or the fixed point left
+    /// after the first pass that changed anything, so a rule two references
+    /// away is never reached (CLOUD-2789).
+    #[test]
+    fn a_with_and_an_input_read_reach_every_rule_a_chain_leads_to() {
+        const MODULE: &str = "package batten.p\nimport rego.v1\n\n\
+            c if {\n\tinput.x with input as {\"x\": 1}\n}\n\n\
+            b if {\n\tc\n}\n\n\
+            a if {\n\tb\n}\n";
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let engine = bundle.evaluator.engine().expect("an interpreter");
+        let ast = Ast::of(engine).expect("the AST serialises");
+        let packages = package_facts(&ast.0);
+        let rules = packages.values().next().expect("the package's facts");
+        assert!(
+            rules["c"].with && rules["c"].reads,
+            "the premise: `c` writes a `with` and reads the input"
+        );
+        for name in ["b", "a"] {
+            assert!(rules[name].with, "`{name}` reaches the `with`");
+            assert!(rules[name].reads, "`{name}` reaches the input read");
+        }
     }
 
     /// Each case of one module by name with how it is decided, and the
