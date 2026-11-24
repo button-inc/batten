@@ -2004,6 +2004,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: a fresh store (no marks, `seqno` 0) taken for a store with
+    /// history and no marks (`>=` for `>`), so its first merge replays and
+    /// rewrites the merged log with nothing to fold.
+    #[test]
+    fn a_fresh_store_with_nothing_to_fold_rewrites_no_merged_log() {
+        let dir = store("merge-fresh");
+        assert!(matches!(
+            merge(&dir).unwrap(),
+            Merge::Merged { applied: 0, .. }
+        ));
+        assert!(!merged_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Fails by: a record's line carrying anything but its pointers.
     #[test]
     fn a_disposition_line_is_the_records_pointers() {

@@ -772,6 +772,15 @@ mod tests {
         );
     }
 
+    /// Fails by: a later segment read as a root (`io`, `m`), or a root that is
+    /// not an identifier (`crate`, `Self`) counted as a crate the file names.
+    #[test]
+    fn only_a_paths_first_identifier_is_a_root() {
+        let tree = parsed("use std::io::Read;\nuse crate::m::x;\nfn f() { Self::new(); }\n")
+            .expect("the fixture parses");
+        assert_eq!(path_roots(&tree), BTreeSet::from(["std".to_owned()]));
+    }
+
     /// Fails by: no file found, a build or fixture or hidden directory walked
     /// (or only those), or a file other than a `.rs` or `Cargo.toml` kept.
     #[test]
