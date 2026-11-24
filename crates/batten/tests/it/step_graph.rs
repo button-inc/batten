@@ -416,7 +416,7 @@ fn a_pass_is_recorded_only_for_a_node_that_exited_zero() {
     let out = graph.run(&["g"]);
     assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
     let passes = std::fs::read_dir(graph.dir.join(".git/batten-records/step-passes"))
-        .map(|entries| entries.count())
+        .map(Iterator::count)
         .unwrap_or_default();
     assert_eq!(passes, 2, "one pass per node that exited 0");
 }
