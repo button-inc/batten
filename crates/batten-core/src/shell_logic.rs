@@ -1230,6 +1230,10 @@ mod tests {
             "pwsh -",
             "powershell -NoLogo Get-Item",
             "powershell -ExecutionPolicy Bypass Get-Item",
+            // A valued switch's value is stepped over, so the `-c` after it is
+            // still read: by its exact short name, and by a 3+ letter prefix.
+            "pwsh -w Hidden -c x",
+            "pwsh -exec Bypass -c x",
         ] {
             assert_eq!(shell(text), "interpreter-script", "{text}");
         }
@@ -1373,6 +1377,15 @@ mod tests {
         assert_eq!(argv("find . -exec rm {} \\;").len(), 6);
         assert_eq!(argv("xargs rm"), ["xargs", "rm"]);
         assert_eq!(argv("env -S 'cargo test'").len(), 3);
+        // The words after the `-S` string, and only those, follow its split.
+        assert_eq!(
+            env_utility(&["-S", "sh -c x", "y"]),
+            Some(vec!["sh", "-c", "x", "y"])
+        );
+        assert_eq!(
+            env_utility(&["-i", "-S", "cargo test", "y"]),
+            Some(vec!["cargo", "test", "y"])
+        );
         assert_eq!(argv("find . -name sh").len(), 4);
     }
 

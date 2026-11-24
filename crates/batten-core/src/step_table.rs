@@ -311,6 +311,26 @@ mod tests {
         Ok(table.step)
     }
 
+    /// Fails by: `tools` answering anything but the declared lists, or a row
+    /// with one list and not the other read as keyed.
+    #[test]
+    fn a_row_is_keyed_by_both_lists_and_answers_its_own_tools() {
+        let keyed = row(&["crates"], &[&["rustc", "--version"]]);
+        assert!(keyed.is_keyed());
+        assert_eq!(
+            keyed.tools(),
+            [vec![String::from("rustc"), String::from("--version")]]
+        );
+        let mut inputs_only = keyed.clone();
+        inputs_only.tools = None;
+        assert!(!inputs_only.is_keyed());
+        assert!(inputs_only.tools().is_empty());
+        let mut tools_only = keyed;
+        tools_only.inputs = None;
+        assert!(!tools_only.is_keyed());
+        assert!(!node("n", &[]).is_keyed());
+    }
+
     #[test]
     fn a_well_formed_row_loads() {
         validate(&[row(&["crates", "."], &[&["rustc", "--version"]])]).unwrap();
