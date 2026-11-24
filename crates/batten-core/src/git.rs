@@ -9895,3 +9895,28 @@ row naming a closure or a disjunction mutates the one operand it is about.
 CLOUD-843's p6-board package: a trunk walk that breaks partway is could-not-look,
 never the shorter history above the break (`messages_reachable_from`).
 */
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod roots_cache_tests {
+    use super::{RootsEntry, read_roots, write_roots};
+
+    /// Fails by: a cached `root` line read as a malformed entry, which turns
+    /// every published answer into a miss and the full walk.
+    #[test]
+    fn a_published_answer_reads_back_whole() {
+        let path = crate::scratch::scratch("git-roots-cache").join("roots");
+        let id = gix::ObjectId::from_hex(b"0123456789abcdef0123456789abcdef01234567").unwrap();
+        let held = RootsEntry {
+            raw: vec![id],
+            tips: vec![id],
+            roots: vec![String::from("89abcdef")],
+        };
+        write_roots(&path, "key", &held);
+        let read = read_roots(&path, "key").unwrap();
+        assert_eq!(
+            (read.raw, read.tips, read.roots),
+            (held.raw, held.tips, held.roots)
+        );
+    }
+}

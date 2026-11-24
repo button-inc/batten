@@ -1368,3 +1368,33 @@ mod module_digest_tests {
         assert!(shell.get("census").is_some(), "{shell}");
     }
 }
+
+/// The projection's two text helpers, each against the one input that tells
+/// its mutant apart (#1276).
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod projection_tests {
+    use super::{TreeReads, allow, rego_code};
+    use std::collections::BTreeSet;
+
+    /// Fails by: a lone table (`[hook]`) read as a scalar knob, which keeps a
+    /// table the module is never handed in its epoch.
+    #[test]
+    fn a_lone_table_the_module_never_reads_is_dropped() {
+        let mut value: toml::Table =
+            toml::from_str("strictness = \"strict\"\n[hook]\nx = 1\n").unwrap();
+        let tree = TreeReads::of(&BTreeSet::new()).unwrap();
+        allow(&mut value, &tree);
+        assert_eq!(
+            value.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["strictness"]
+        );
+    }
+
+    /// Fails by: a raw string closing on its first character, which leaves
+    /// the rest of its body in the code text.
+    #[test]
+    fn a_raw_string_body_is_blanked_to_its_closing_backtick() {
+        assert_eq!(rego_code("`ab` x"), "`` x");
+    }
+}

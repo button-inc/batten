@@ -399,6 +399,13 @@ mod tests {
         assert_eq!((chain.nesting, chain.decisions), (1, 2));
     }
 
+    /// Fails by: a closure's body read at its enclosing level.
+    #[test]
+    fn a_closure_deepens_nesting() {
+        let counts = one("fn f() { let g = || { if h() { g(); } }; }");
+        assert_eq!(counts.nesting, 2);
+    }
+
     /// Fails by: a run of one operator counted per operand, the first match
     /// arm counted, or a change of operator merged into the run.
     #[test]
