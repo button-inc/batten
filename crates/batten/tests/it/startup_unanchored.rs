@@ -280,13 +280,75 @@ fn a_linked_root_surface_is_replaced_by_a_regular_file() {
     );
 }
 
+/// A FRESH registration where the surface is a DANGLING link — nothing to read,
+/// so every event is owed. Fails by: a write through the link, which leaves the
+/// link and creates the file it points at; only the write-then-rename replaces
+/// the link itself with a regular file.
+#[cfg(unix)]
 #[test]
 fn a_fresh_registration_is_a_regular_file() {
     let (root, home) = layout("regular-file");
     checkout(&root, "repo", "version = 1\n");
+    let surface = root.join(".claude/settings.json");
+    let target = root.parent().unwrap().join("elsewhere.json");
+    std::fs::create_dir_all(surface.parent().unwrap()).expect("the root's .claude");
+    std::os::unix::fs::symlink(&target, &surface).expect("a dangling link");
     let output = startup(&root, &home, &["--repair"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    let meta = std::fs::symlink_metadata(root.join(".claude/settings.json"))
-        .expect("the root surface exists");
+    let meta = std::fs::symlink_metadata(&surface).expect("the root surface exists");
     assert!(meta.file_type().is_file(), "never a link");
+    assert!(registers_batten(&root), "{}", stderr(&output));
+    assert!(!target.exists(), "nothing is written through the link");
+}
+
+/// A link that already resolves to a complete registration is OWED its rewrite,
+/// and bare `startup` says so: exit 1 and a line, the link left as it is. Fails
+/// by: the rewrite owed but unreported, which exits 0 over a surface `--repair`
+/// would then change.
+#[cfg(unix)]
+#[test]
+fn bare_startup_reports_a_linked_surface_as_owed() {
+    let (root, home) = layout("linked-bare");
+    let repo = checkout(&root, "repo", "version = 1\n");
+    let first = startup(&root, &home, &["--repair"]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let surface = root.join(".claude/settings.json");
+    let target = repo.join(".claude/settings.json");
+    std::fs::create_dir_all(target.parent().unwrap()).expect("the checkout's .claude");
+    std::fs::rename(&surface, &target).expect("move the registration into the checkout");
+    std::os::unix::fs::symlink(&target, &surface).expect("link the root surface");
+    let output = startup(&root, &home, &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("is a link; its rewrite as a regular file owed"),
+        "{}",
+        stderr(&output)
+    );
+    let meta = std::fs::symlink_metadata(&surface).expect("the root surface");
+    assert!(meta.file_type().is_symlink(), "bare startup writes nothing");
+}
+
+/// A root surface this verb cannot read is a REFUSAL: exit 1 and a line naming
+/// the file, nothing written. Fails by: an unreadable surface read as nothing
+/// owed, which exits 0 with no line while the session rooted there runs
+/// unmediated.
+#[test]
+fn an_unreadable_root_surface_is_refused_with_a_line() {
+    for (name, raw) in [("not-an-object", "[]\n"), ("not-json", "{ not json\n")] {
+        let (root, home) = layout(&format!("unreadable-{name}"));
+        checkout(&root, "repo", "version = 1\n");
+        common::write(&root, ".claude/settings.json", raw);
+        let output = startup(&root, &home, &["--repair"]);
+        assert_eq!(output.status.code(), Some(1), "{name}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("so nothing is registered at"),
+            "{name}: {}",
+            stderr(&output)
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".claude/settings.json")).unwrap(),
+            raw,
+            "{name}: the surface is left as it was"
+        );
+    }
 }

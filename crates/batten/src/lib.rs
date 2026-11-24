@@ -3357,7 +3357,7 @@ fn run_startup_unanchored(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let root = git::canonical(&std::env::current_dir()?);
+    let root = unanchored_root(&std::env::current_dir()?);
     // No resolvable home is refused too: a write whose bound cannot be checked
     // is the one this arm must never make.
     let home = std::env::var_os("HOME").map(|home| git::canonical(Path::new(&home)));
@@ -3370,11 +3370,32 @@ fn run_startup_unanchored(
         report_startup(&[], json, out, err)?;
         return Ok(ExitCode::Success);
     }
-    let (events, written) = wiring::register_root(&root, !repair)?;
-    let verb = if written { "registered" } else { "owed" };
-    for event in &events {
+    let surface = wiring::register_root(&root, !repair, true)?;
+    let verb = if surface.written {
+        "registered"
+    } else {
+        "owed"
+    };
+    for event in &surface.events {
         let registered = format!("startup: claude-code:{event} {verb} at {}", root.display());
         writeln!(err, "{registered}")?;
+    }
+    if surface.relink {
+        writeln!(
+            err,
+            "startup: {} is a link; its rewrite as a regular file {verb}",
+            surface.path.display()
+        )?;
+    }
+    // A surface this verb cannot read is a REFUSAL, never a quiet success: the
+    // session rooted here would run unmediated, and exit 0 says it is not.
+    if let Some(why) = &surface.unreadable {
+        writeln!(
+            err,
+            "startup: {} is {why}, so nothing is registered at {}; repair or remove it and re-run",
+            surface.path.display(),
+            root.display()
+        )?;
     }
     let members = root_authorities(&root);
     if repair && !members.is_empty() {
@@ -3392,11 +3413,22 @@ fn run_startup_unanchored(
         .map(|member| startup::delegate(member, repair))
         .collect();
     let failed = report_startup(&outcomes, json, out, err)?;
-    Ok(if failed == 0 && (repair || events.is_empty()) {
-        ExitCode::Success
-    } else {
-        ExitCode::Usage
-    })
+    Ok(
+        if failed == 0 && surface.unreadable.is_none() && (repair || !surface.owed()) {
+            ExitCode::Success
+        } else {
+            ExitCode::Usage
+        },
+    )
+}
+
+/// The key the unanchored arm records under: the canonical spelling of `cwd`
+/// (CLOUD-2752). The hook reads the record by the canonical root, so a Setup run
+/// whose directory is spelled through a link — a junction or substituted drive
+/// where the platform's working directory is not already resolved — must key the
+/// same record.
+fn unanchored_root(cwd: &Path) -> PathBuf {
+    git::canonical(cwd)
 }
 
 /// The authorities around the session root `root`, in the one fixed order: its
@@ -35020,6 +35052,25 @@ mod tests {
 
     /// Fails by: the forge asked when the request already names its PR, or
     /// when no row carries one.
+    /// CLOUD-2752: the root the unanchored arm records under is the CANONICAL
+    /// spelling of the working directory, so a Setup run through a link keys the
+    /// record the hook reads by the real path. Fails by: `git::canonical`
+    /// removed, which keys the record under the link's spelling.
+    #[cfg(unix)]
+    #[test]
+    fn the_unanchored_root_is_the_canonical_spelling_of_the_cwd() {
+        let base =
+            std::env::temp_dir().join(format!("batten-unanchored-root-{}", std::process::id()));
+        let real = base.join("real");
+        let link = base.join("link");
+        std::fs::create_dir_all(&real).expect("the real root");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&real, &link).expect("a link to the root");
+        assert_eq!(unanchored_root(&link), git::canonical(&real));
+        assert_ne!(unanchored_root(&link), link);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn the_forge_is_asked_only_for_a_live_pr_the_request_does_not_name() {
         let issue = |live_pr: Option<&str>| claim::Issue {
