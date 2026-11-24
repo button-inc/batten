@@ -229,11 +229,13 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
         return None;
     }
     let cwds = Cwds::read(trace, cwd);
+    let resumed = resumptions(trace);
     let mut out = Vec::new();
     for (index, line) in trace.lines().enumerate() {
         if trace_event(line).is_some() {
             continue;
         }
+        let outcome = resumed.get(&index).copied().unwrap_or(line);
         let pid = line.split(' ').next().unwrap_or_default();
         let cwd = cwds.at(pid, index);
         let cwd = cwd.as_deref();
@@ -249,7 +251,7 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
             && let Some(quote) = line[open..].find('"')
         {
             let (argument, after) = quoted_arg(&line[open + quote + 1..])?;
-            if library_lookup(&argument, line) || url_lookup(&argument, line) {
+            if library_lookup(&argument, line) || url_lookup(&argument, line, outcome) {
                 continue;
             }
             if !LINK_CONTENT.contains(&syscall(line)) {
@@ -318,9 +320,15 @@ fn library_lookup(argument: &str, line: &str) -> bool {
 /// The ARGUMENT names a remote, not a file, so it is dropped, and only where
 /// dropping it loses nothing: a lookup that found something is kept (a tree
 /// really holding `https:/…` reads it), and a write is never dropped.
-fn url_lookup(argument: &str, line: &str) -> bool {
+///
+/// A CALL STRACE SPLIT ACROSS TWO LINES is judged on both: the argument sits on
+/// the `<unfinished ...>` half and the result, and any flag past the split, on
+/// the `<... resumed>` half, `outcome` ([`resumptions`]). Read off the first
+/// half alone, three of the five probes of one cold `deny` run still refused.
+fn url_lookup(argument: &str, line: &str, outcome: &str) -> bool {
     let missed = access_of(line) != Access::Write
-        && result_of(line).is_some_and(|result| result.starts_with("-1 ENOENT"));
+        && access_of(outcome) != Access::Write
+        && result_of(outcome).is_some_and(|result| result.starts_with("-1 ENOENT"));
     missed
         && argument.split_once("://").is_some_and(|(scheme, _)| {
             scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
@@ -328,6 +336,27 @@ fn url_lookup(argument: &str, line: &str) -> bool {
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
         })
+}
+
+/// Each `<unfinished ...>` line's index, mapped to the same pid's next
+/// `<... resumed>` line: the half that carries the call's result.
+fn resumptions(trace: &str) -> std::collections::HashMap<usize, &str> {
+    let mut pending = std::collections::HashMap::new();
+    let mut out = std::collections::HashMap::new();
+    for (index, line) in trace.lines().enumerate() {
+        let Some((pid, rest)) = line.split_once(' ') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        if rest.starts_with("<... ") {
+            if let Some(began) = pending.remove(pid) {
+                out.insert(began, line);
+            }
+        } else if rest.ends_with("<unfinished ...>") {
+            pending.insert(pid, index);
+        }
+    }
+    out
 }
 
 /// Whether `name` is a shared object's name: a nonempty stem, `.so`, then
@@ -1010,7 +1039,9 @@ mod tests {
     /// dropping its not-a-write clause (the failed create vanishes); or
     /// loosening the scheme to any text before `://` (the digit-led, the
     /// slashed and the spaced paths vanish) or to `:/` (the single-slash path
-    /// vanishes).
+    /// vanishes); reading a split call's result off its first half (the missed
+    /// half stays); pairing halves across pids (the found half vanishes); or
+    /// judging write flags on the first half alone (the split create vanishes).
     #[test]
     fn a_url_looked_up_as_a_path_is_no_touch() {
         use super::Access::{Probe, Read, Write};
@@ -1064,6 +1095,28 @@ mod tests {
                 "{line}"
             );
         }
+        // Split calls, interleaved across two pids: each half pairs with its
+        // own pid's resumed half, never the next line's.
+        assert_eq!(
+            accessed(&[
+                "7     newfstatat(AT_FDCWD</repo>, \"https://h/a\", <unfinished ...>",
+                "8     newfstatat(AT_FDCWD</repo>, \"https://h/b\", <unfinished ...>",
+                "8     <... newfstatat resumed>0x1, 0) = 0",
+                "7     <... newfstatat resumed>0x1, 0) = -1 ENOENT (No such file or directory)",
+                "8     +++ exited with 0 +++",
+            ]),
+            vec![(PathBuf::from("/repo/https:/h/b"), Probe)],
+            "the missed half drops, the found half stays"
+        );
+        assert_eq!(
+            accessed(&[
+                "7     openat(AT_FDCWD</repo>, \"https://h/c\", <unfinished ...>",
+                "7     <... openat resumed>O_WRONLY|O_CREAT, 0644) = -1 ENOENT (No such file or \
+                 directory)",
+            ]),
+            vec![(PathBuf::from("/repo/https:/h/c"), Read)],
+            "a create whose flags sit past the split is never dropped"
+        );
     }
 
     // Fails by: a symlink's target text read as a path (CLOUD-2789) — gix's
