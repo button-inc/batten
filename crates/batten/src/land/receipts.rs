@@ -77,6 +77,11 @@ const STATEMENT: &str = "statement";
 const COMPAT: &str = "compat";
 /// Spent override records, by name.
 const OVERRIDE: &str = "override";
+/// The producer of every other entry, as `<kind>.<name>` holding one
+/// `Name <email>` line (row §5): the accountable identity from `[attribution]`
+/// that published it, so a consumer policy can narrow which producers it
+/// honours before signing lands (CLOUD-877).
+const PRODUCER: &str = "producer";
 
 /// Where the state repository is, as this machine sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +91,11 @@ pub enum Remote {
     /// The variable is set and the project has no `http(s)` origin to derive
     /// the remote from.
     NoHttpOrigin,
+    /// The variable names the SAME repository as origin, under some spelling —
+    /// case, a `.git` suffix, a URL or an origin-host prefix. Refused: receipts
+    /// are session data and session data never reaches origin (owner ruling,
+    /// 2026-11-24), and an equal-by-normalisation target is origin.
+    IsOrigin,
     /// The state repository's smart-HTTP URL.
     At(String),
 }
@@ -113,19 +123,98 @@ pub fn remote_for(origin: &str, value: &str) -> Option<String> {
     Some(format!("{scheme}://{host}/{}", value.trim_matches('/')))
 }
 
+/// A repository URL's `(host, path)`, normalised for comparison: host
+/// lowercased with any userinfo dropped, path lowercased with surrounding `/`
+/// and any `.git` suffix removed. `http(s)` URLs and scp-style `user@host:path`
+/// both parse; a bare local path is `None`.
+fn repository_of(url: &str) -> Option<(String, String)> {
+    let url = url.trim();
+    let (authority, path) = if let Some((_, rest)) = url.split_once("://") {
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        (authority, path)
+    } else {
+        // scp-style: a `:` before any `/`.
+        let (authority, path) = url.split_once(':')?;
+        if authority.contains('/') {
+            return None;
+        }
+        (authority, path)
+    };
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    if host.is_empty() {
+        return None;
+    }
+    Some((host.to_ascii_lowercase(), normal_path(path)))
+}
+
+/// A repository path, lowercased, without query, fragment, surrounding `/` or
+/// any `.git` suffix — the spellings a forge resolves to one repository.
+fn normal_path(path: &str) -> String {
+    let mut path = path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    loop {
+        let trimmed = path.trim_matches('/');
+        let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+        if trimmed.len() == path.len() {
+            return path;
+        }
+        path = trimmed.to_owned();
+    }
+}
+
+/// Whether the variable's `value` names `origin`'s own repository, in any
+/// spelling: the bare path, a case variant, a `.git` suffix, a full URL, an
+/// scp form, or the path prefixed with origin's host.
+///
+/// Conservative by design: a refusal here costs one misconfigured publish, and
+/// a miss pushes session data to origin.
+#[must_use]
+pub fn names_origin(origin: &str, value: &str) -> bool {
+    let Some((host, path)) = repository_of(origin) else {
+        return false;
+    };
+    let value = value.trim();
+    let mut candidates = vec![normal_path(value)];
+    if let Some((_, named)) = repository_of(value) {
+        candidates.push(named);
+    }
+    // `host/owner/name`, with or without a port on either side.
+    let bare_host = host.split(':').next().unwrap_or_default().to_owned();
+    for candidate in candidates.clone() {
+        if let Some((first, rest)) = candidate.split_once('/')
+            && (first == host || first.split(':').next() == Some(bare_host.as_str()))
+        {
+            candidates.push(normal_path(rest));
+        }
+    }
+    candidates.contains(&path)
+}
+
 /// Resolve the state repository from the variable's value and the origin.
 ///
 /// Both passed in, so the decision is a pure function of them: unset decides
-/// before anything is derived.
+/// before anything is derived, and a value naming origin's own repository is
+/// [`Remote::IsOrigin`] before any URL is formed — compared on the value AND on
+/// the derived remote, so no spelling routes around the check.
 #[must_use]
 pub fn state_remote(value: Option<&str>, origin: Option<&str>) -> Remote {
     let value = value.map(str::trim).unwrap_or_default();
     if value.is_empty() {
         return Remote::Off;
     }
-    origin
-        .and_then(|origin| remote_for(origin, value))
-        .map_or(Remote::NoHttpOrigin, Remote::At)
+    let Some(origin) = origin else {
+        return Remote::NoHttpOrigin;
+    };
+    let Some(remote) = remote_for(origin, value) else {
+        return Remote::NoHttpOrigin;
+    };
+    if names_origin(origin, value) || repository_of(&remote) == repository_of(origin) {
+        return Remote::IsOrigin;
+    }
+    Remote::At(remote)
 }
 
 /// The ref a branch's receipt set lives at, or a usage error for a branch name
@@ -162,13 +251,26 @@ fn plain(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
-/// Whether a `$GIT_DIR/batten-receipts/` file is carried.
+/// The claim receipt `branch` keys — `claim`'s own spelling, so the filter and
+/// the writer cannot disagree.
+fn claim_of(branch: &str) -> String {
+    crate::claim::receipt_name(branch)
+}
+
+/// Whether a `$GIT_DIR/batten-receipts/` file is carried on the ref whose
+/// branch's claim is `claim`.
 ///
-/// A step receipt (never `batten-check`'s, CLOUD-725), a branch-keyed claim, or
+/// A step receipt (never `batten-check`'s, CLOUD-725), THIS branch's claim, or
 /// a head-keyed compatibility receipt `<check>.<sha>`. Everything else in that
 /// directory — read receipts, punts, histories — costs one call to re-derive
 /// and stays local.
-fn carried_compat(name: &str) -> bool {
+///
+/// **Only this branch's claim.** Another branch's claim is that branch's
+/// state: carried here, a `claim --adopt-from` that moved and deleted it would
+/// see the next pull write it back, so the published set could only grow. The
+/// same filter on what [`pull`] and [`publish`] read off the ref drops one an
+/// older engine published, so the next publish prunes it.
+fn carried_compat(name: &str, claim: &str) -> bool {
     if !plain(name) {
         return false;
     }
@@ -176,7 +278,7 @@ fn carried_compat(name: &str) -> bool {
         return !name.starts_with("step.batten-check.");
     }
     if name.starts_with("claim.") {
-        return true;
+        return name == claim;
     }
     name.rsplit_once('.')
         .is_some_and(|(check, sha)| !check.is_empty() && is_hex(sha, 40))
@@ -216,11 +318,17 @@ fn files(dir: &Path) -> Vec<(String, std::path::PathBuf)> {
 /// The receipt set this checkout holds, as `<kind>/<name>` to bytes.
 ///
 /// `receipts_dir` is the canonical store (`<state>/receipts`) and `compat_dir`
-/// is `$GIT_DIR/batten-receipts`. A file that cannot be read or parsed is left
+/// is `$GIT_DIR/batten-receipts`; `branch` is the branch the set is published
+/// for, whose claim alone travels. A file that cannot be read or parsed is left
 /// out rather than refused: one unreadable receipt must not stop the rest
 /// travelling, and it would read `Missing` wherever it landed.
 #[must_use]
-pub fn local_set(receipts_dir: &Path, compat_dir: &Path) -> BTreeMap<String, Vec<u8>> {
+pub fn local_set(
+    receipts_dir: &Path,
+    compat_dir: &Path,
+    branch: &str,
+) -> BTreeMap<String, Vec<u8>> {
+    let claim = claim_of(branch);
     let mut set = BTreeMap::new();
     for (name, path) in files(receipts_dir) {
         if !Path::new(&name)
@@ -250,7 +358,7 @@ pub fn local_set(receipts_dir: &Path, compat_dir: &Path) -> BTreeMap<String, Vec
         }
     }
     for (name, path) in files(compat_dir) {
-        if carried_compat(&name)
+        if carried_compat(&name, &claim)
             && let Ok(bytes) = std::fs::read(&path)
         {
             set.insert(format!("{COMPAT}/{name}"), bytes);
@@ -259,9 +367,69 @@ pub fn local_set(receipts_dir: &Path, compat_dir: &Path) -> BTreeMap<String, Vec
     set
 }
 
+/// Whether a producer blob is one line naming an identity.
+fn producer_line(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_ok_and(|text| {
+        let line = text.strip_suffix('\n').unwrap_or(text);
+        !line.trim().is_empty()
+            && !line.contains('\n')
+            && line.contains(" <")
+            && line.ends_with('>')
+    })
+}
+
+/// The producer entry's path for a receipt's `<kind>/<name>`.
+fn producer_path(path: &str) -> Option<String> {
+    let (kind, name) = path.split_once('/')?;
+    (kind != PRODUCER).then(|| format!("{PRODUCER}/{kind}.{name}"))
+}
+
+/// Keep only receipts that carry a producer, and producers whose receipt is
+/// present: row §5's "on every published blob", enforced on both what is
+/// read and what is written, so a blob with no accountable producer neither
+/// travels nor lands.
+fn paired(mut set: BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<u8>> {
+    let present: std::collections::BTreeSet<String> = set.keys().cloned().collect();
+    set.retain(|path, _| {
+        path.starts_with("producer/")
+            || producer_path(path).is_some_and(|producer| present.contains(&producer))
+    });
+    let wanted: std::collections::BTreeSet<String> =
+        set.keys().filter_map(|path| producer_path(path)).collect();
+    set.retain(|path, _| !path.starts_with("producer/") || wanted.contains(path));
+    set
+}
+
+/// `local` with every receipt's producer entry set to `producer`.
+///
+/// # Errors
+///
+/// A [`UsageError`] when `producer` is not one `Name <email>` line: a set
+/// published with no accountable producer is the one this row refuses.
+pub fn produced_by(
+    local: &BTreeMap<String, Vec<u8>>,
+    producer: &str,
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    let line = format!("{}\n", producer.trim());
+    if !producer_line(line.as_bytes()) {
+        return Err(UsageError::raise(
+            "receipt publish: no accountable producer identity ([attribution])",
+        ));
+    }
+    let mut set = BTreeMap::new();
+    for (path, bytes) in local {
+        let Some(producer) = producer_path(path) else {
+            continue;
+        };
+        set.insert(path.clone(), bytes.clone());
+        set.insert(producer, line.clone().into_bytes());
+    }
+    Ok(set)
+}
+
 /// Whether a published path is one this module would have written: the filter
 /// [`local_set`] applies, applied again to what a remote hands back.
-fn admissible(path: &str, bytes: &[u8]) -> bool {
+fn admissible(path: &str, bytes: &[u8], claim: &str) -> bool {
     let Some((kind, name)) = path.split_once('/') else {
         return false;
     };
@@ -274,7 +442,28 @@ fn admissible(path: &str, bytes: &[u8]) -> bool {
                 == Some(name)
         }
         OVERRIDE => plain(name) && spent(bytes),
-        COMPAT => carried_compat(name),
+        COMPAT => carried_compat(name, claim),
+        PRODUCER => {
+            plain(name)
+                && producer_line(bytes)
+                && name
+                    .split_once('.')
+                    .is_some_and(|(kind, rest)| admissible_name(kind, rest, claim))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `<kind>/<name>` names a receipt this module could have written,
+/// judged on the name alone — what a producer entry can be checked against.
+fn admissible_name(kind: &str, name: &str, claim: &str) -> bool {
+    match kind {
+        STATEMENT => name
+            .strip_suffix(".json")
+            .and_then(|stem| stem.split_once('.'))
+            .is_some_and(|(fingerprint, subject)| is_hex(fingerprint, 64) && is_hex(subject, 40)),
+        OVERRIDE => plain(name),
+        COMPAT => carried_compat(name, claim),
         _ => false,
     }
 }
@@ -438,8 +627,9 @@ fn entries(body: &[u8]) -> Result<Vec<(String, String, bool)>> {
         .collect())
 }
 
-/// Read what `remote` holds at `name`, fetching into `repo`'s transport.
-fn held(remote: &str, repo: &Path, name: &str) -> Result<Held> {
+/// Read what `remote` holds at `name`, fetching into `repo`'s transport, with
+/// `claim` the one claim receipt the ref may carry.
+fn held(remote: &str, repo: &Path, name: &str, claim: &str) -> Result<Held> {
     let advertised = lease::advertise(remote, Service::UploadPack)?;
     if advertised.head_of(name) == ZERO {
         return Ok(Held {
@@ -472,7 +662,7 @@ fn held(remote: &str, repo: &Path, name: &str) -> Result<Held> {
             }
             let path = format!("{kind}/{name}");
             let bytes = body_of(&objects, repo, &blob, gix::object::Kind::Blob)?;
-            if admissible(&path, &bytes) {
+            if admissible(&path, &bytes, claim) {
                 set.insert(path, bytes);
             }
         }
@@ -480,7 +670,7 @@ fn held(remote: &str, repo: &Path, name: &str) -> Result<Held> {
     Ok(Held {
         head: fetched.head,
         root,
-        set,
+        set: paired(set),
     })
 }
 
@@ -499,8 +689,13 @@ pub struct Moved {
 /// Publish `local` to `name` on `remote`, unioned with what is already there.
 ///
 /// `repo` is the checkout whose odb the fetch negotiates from; nothing is
-/// written into it. A set the remote already holds whole is not pushed again:
-/// the same tree under a new commit would move the ref for no new fact.
+/// written into it. `branch` is the branch `name` keys, whose claim alone the
+/// ref may carry: what the ref holds is read through that filter, so a claim an
+/// older engine published for another branch is PRUNED here rather than
+/// carried. `local` is [`produced_by`]'s set: a receipt without its producer
+/// entry is not published. A set the remote already holds whole is not pushed
+/// again: the same tree under a new commit would move the ref for no new fact.
+/// `count` is receipts, never producer entries.
 ///
 /// # Errors
 ///
@@ -510,11 +705,13 @@ pub fn publish(
     remote: &str,
     repo: &Path,
     name: &str,
+    branch: &str,
     local: &BTreeMap<String, Vec<u8>>,
     seconds: i64,
 ) -> Result<Moved> {
+    let claim = claim_of(branch);
     for _ in 0..CAS_TRIES {
-        let theirs = held(remote, repo, name)?;
+        let theirs = held(remote, repo, name, &claim)?;
         let mut union = theirs.set;
         // Local wins a name both hold: every name is content-keyed but a
         // claim's and a compatibility receipt's, and for those this checkout's
@@ -524,6 +721,11 @@ pub fn publish(
                 .iter()
                 .map(|(path, bytes)| (path.clone(), bytes.clone())),
         );
+        let union = paired(union);
+        let count = union
+            .keys()
+            .filter(|path| !path.starts_with("producer/"))
+            .count();
         let mut objects = tree_objects(&union)?;
         let root = objects
             .last()
@@ -533,10 +735,10 @@ pub fn publish(
             return Ok(Moved {
                 reference: name.to_owned(),
                 commit: theirs.head,
-                count: union.len(),
+                count,
             });
         }
-        let commit = commit_over(&root, union.len(), &theirs.head, seconds)?;
+        let commit = commit_over(&root, count, &theirs.head, seconds)?;
         let new = commit.id.clone();
         objects.push(commit);
         let pack = lease::pack_of(&objects)?;
@@ -550,7 +752,7 @@ pub fn publish(
                 return Ok(Moved {
                     reference: name.to_owned(),
                     commit: new,
-                    count: union.len(),
+                    count,
                 });
             }
             Outcome::Rejected { .. } => {}
@@ -598,7 +800,9 @@ fn destination(
     }
 }
 
-/// Pull `name` from `remote` into this checkout's stores.
+/// Pull `name` from `remote` into this checkout's stores. `branch` is the
+/// branch `name` keys: another branch's claim on the ref is never written, so
+/// one `claim --adopt-from` deleted stays deleted.
 ///
 /// # Errors
 ///
@@ -608,11 +812,12 @@ pub fn pull(
     remote: &str,
     repo: &Path,
     name: &str,
+    branch: &str,
     receipts_dir: &Path,
     compat_dir: &Path,
     head: &str,
 ) -> Result<Moved> {
-    let theirs = held(remote, repo, name)?;
+    let theirs = held(remote, repo, name, &claim_of(branch))?;
     let mut count = 0;
     for (path, bytes) in &theirs.set {
         let Some(target) = destination(path, receipts_dir, compat_dir, head) else {
@@ -655,11 +860,97 @@ mod tests {
 
     #[test]
     fn batten_checks_step_receipt_never_travels() {
-        assert!(carried_compat("step.cargo-test.abc"));
-        assert!(!carried_compat("step.batten-check.abc"));
-        assert!(carried_compat("claim.feat-x"));
-        assert!(carried_compat(&format!("verify.{}", "a".repeat(40))));
-        assert!(!carried_compat("issue-read.CLOUD-1"));
-        assert!(!carried_compat("../claim.x"));
+        let claim = claim_of("feat/x");
+        assert!(carried_compat("step.cargo-test.abc", &claim));
+        assert!(!carried_compat("step.batten-check.abc", &claim));
+        assert!(carried_compat("claim.feat-x", &claim));
+        assert!(carried_compat(
+            &format!("verify.{}", "a".repeat(40)),
+            &claim
+        ));
+        assert!(!carried_compat("issue-read.CLOUD-1", &claim));
+        assert!(!carried_compat("../claim.x", &claim));
+    }
+
+    /// Fails by: a claim keyed to another branch travelling on this one's ref,
+    /// so a `claim --adopt-from` that deleted it sees the next pull restore it.
+    #[test]
+    fn only_this_branchs_claim_travels() {
+        let claim = claim_of("feat/x");
+        assert!(!carried_compat("claim.other", &claim));
+        assert!(!admissible("compat/claim.other", b"base x\n", &claim));
+        assert!(admissible("compat/claim.feat-x", b"base x\n", &claim));
+    }
+
+    /// Fails by: any spelling of origin's own repository resolving to a remote
+    /// (the privacy rule's one escape), one assertion per spelling.
+    #[test]
+    fn a_state_repo_naming_origin_is_refused_in_every_spelling() {
+        let origin = "https://github.com/button-inc/batten";
+        for value in [
+            "button-inc/batten",
+            "Button-Inc/Batten",
+            "button-inc/batten.git",
+            "BUTTON-INC/BATTEN.GIT",
+            "/button-inc/batten/",
+            "button-inc/batten.git/",
+            "https://github.com/button-inc/batten",
+            "https://github.com/button-inc/batten.git",
+            "https://user@GitHub.com/Button-Inc/Batten.git",
+            "git@github.com:button-inc/batten.git",
+            "github.com/button-inc/batten",
+            "GitHub.com/button-inc/batten.git",
+        ] {
+            assert_eq!(
+                state_remote(Some(value), Some(origin)),
+                Remote::IsOrigin,
+                "{value}"
+            );
+        }
+        // Origin's own spelling varies too: `.git`, case, userinfo.
+        for origin in [
+            "https://github.com/button-inc/batten.git",
+            "https://x-access-token:t@GitHub.com/Button-Inc/Batten.git/",
+        ] {
+            assert_eq!(
+                state_remote(Some("button-inc/batten"), Some(origin)),
+                Remote::IsOrigin,
+                "{origin}"
+            );
+        }
+        // The control: the private state repository on the same host resolves.
+        assert_eq!(
+            state_remote(Some("button-inc/batten-state"), Some(origin)),
+            Remote::At("https://github.com/button-inc/batten-state".to_owned())
+        );
+    }
+
+    /// Fails by: a receipt with no producer entry being kept, or a producer
+    /// entry outliving its receipt (row §5: a producer on every published blob).
+    #[test]
+    fn every_kept_receipt_carries_its_producer() {
+        let mut local = BTreeMap::new();
+        local.insert("compat/claim.feat-x".to_owned(), b"base x\n".to_vec());
+        let produced = produced_by(&local, "Alice Example <alice@example.com>");
+        assert!(produced.is_ok(), "one `Name <email>` line is a producer");
+        let produced = produced.unwrap_or_default();
+        assert_eq!(
+            produced
+                .get("producer/compat.claim.feat-x")
+                .map(Vec::as_slice),
+            Some(&b"Alice Example <alice@example.com>\n"[..])
+        );
+        assert!(
+            produced_by(&local, "  ").is_err(),
+            "no identity, no publish"
+        );
+        let mut orphaned = produced.clone();
+        orphaned.insert("compat/step.x.y".to_owned(), b"z".to_vec());
+        orphaned.insert(
+            "producer/compat.step.gone.y".to_owned(),
+            b"A <a@b>\n".to_vec(),
+        );
+        let kept = paired(orphaned);
+        assert_eq!(kept, produced);
     }
 }

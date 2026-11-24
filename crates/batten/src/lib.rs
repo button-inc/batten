@@ -474,7 +474,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::HookField { harness, field }) => run_hook_field(harness, field, out),
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.
-        Some(Command::Receipt { command }) => run_receipt(command, mode, out, err),
+        Some(Command::Receipt { command }) => run_receipt(command, &overrides, mode, out, err),
         Some(Command::Policy { command }) => run_policy(command, &overrides, mode, out, err),
         // `lint <kind>` reads text the caller names and answers about its shape.
         // The §8 config chain is deliberately not threaded through it: the schema
@@ -6925,6 +6925,7 @@ fn run_checks(
 /// other verb's is not.
 fn run_receipt(
     command: ReceiptCommand,
+    overrides: &Overrides,
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -6945,8 +6946,8 @@ fn run_receipt(
             receipt::run_status_any(&checks, key, base.as_deref(), json, out)
         }
         ReceiptCommand::Verified => receipt::run_verified(out),
-        ReceiptCommand::Publish => run_receipt_transfer(true, out),
-        ReceiptCommand::Pull => run_receipt_transfer(false, out),
+        ReceiptCommand::Publish => run_receipt_transfer(true, overrides, out),
+        ReceiptCommand::Pull => run_receipt_transfer(false, overrides, out),
     }
 }
 
@@ -6956,11 +6957,19 @@ fn run_receipt(
 ///
 /// **Unset is inert and says so**: `off`, exit `0`, before a remote is derived,
 /// a call is made or a file is written. A project with no `http(s)` origin is
-/// `no-http-origin`, exit `1`. Otherwise one pointer line — the ref, the commit
+/// `no-http-origin`, exit `1`. A variable naming origin's own repository, in any
+/// spelling, is `state-repo-is-origin`, exit `1`, before a call is made: the
+/// privacy rule's one escape, closed. A publish with no accountable producer
+/// identity (`[attribution]`, row §5) is refused, exit `1`, before a call is
+/// made. Otherwise one pointer line — the ref, the commit
 /// it reads, and how many receipts moved — and never a receipt body. A remote
 /// that cannot be reached is an error, exit `3`; never `2`, because a publish
 /// that fails is not a gate's verdict.
-fn run_receipt_transfer(publish: bool, out: &mut dyn Write) -> Result<ExitCode> {
+fn run_receipt_transfer(
+    publish: bool,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
     let here = Path::new(".");
     let value = std::env::var(session::STATE_REPO_ENV).ok();
     let origin = git::remotes(here)
@@ -6976,6 +6985,10 @@ fn run_receipt_transfer(publish: bool, out: &mut dyn Write) -> Result<ExitCode> 
             writeln!(out, "no-http-origin")?;
             return Ok(ExitCode::Usage);
         }
+        land::receipts::Remote::IsOrigin => {
+            writeln!(out, "state-repo-is-origin")?;
+            return Ok(ExitCode::Usage);
+        }
         land::receipts::Remote::At(remote) => remote,
     };
     let repo_root = git::repo_root(here)?;
@@ -6989,17 +7002,31 @@ fn run_receipt_transfer(publish: bool, out: &mut dyn Write) -> Result<ExitCode> 
     let receipts_dir = state::repo_state_dir(&repo_root)?.join("receipts");
     let compat_dir = git_dir.join("batten-receipts");
     let moved = if publish {
-        let local = land::receipts::local_set(&receipts_dir, &compat_dir);
+        let producer =
+            attribution::producer(here, &attribution_policy(overrides)?)?.unwrap_or_default();
+        let local = land::receipts::produced_by(
+            &land::receipts::local_set(&receipts_dir, &compat_dir, &branch),
+            &producer,
+        )?;
         land::receipts::publish(
             &remote,
             &git_dir,
             &name,
+            &branch,
             &local,
             i64::try_from(now_unix()).unwrap_or(i64::MAX),
         )?
     } else {
         let head = git::head_commit(here)?;
-        land::receipts::pull(&remote, &git_dir, &name, &receipts_dir, &compat_dir, &head)?
+        land::receipts::pull(
+            &remote,
+            &git_dir,
+            &name,
+            &branch,
+            &receipts_dir,
+            &compat_dir,
+            &head,
+        )?
     };
     writeln!(out, "{} {} {}", moved.reference, moved.commit, moved.count)?;
     Ok(ExitCode::Success)

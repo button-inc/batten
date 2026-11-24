@@ -12939,7 +12939,10 @@ expires = "2027-02-28"
 [[hook.handler]]
 id = "session-receipts"
 on = "session-start"
-run = ["batten", "receipt", "pull"]
+# Through a task that asks the engine whether it has the verb first: the
+# installed engine predates `receipt pull` until a release ships it, and a bare
+# call there exits non-zero at every session start (`session:receipts`).
+run = ["mise", "run", "session:receipts"]
 # One advertisement and one fetch of a small tree.
 timeout_ms = 30000
 owner = "CLOUD-1544"

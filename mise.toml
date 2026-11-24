@@ -3723,6 +3723,26 @@ run = "batten wiring register"
 # releases or fourteen days behind is stale. Its stdout IS the notice, so it is
 # not silenced; `quiet` drops only mise's own echo. Never installs, never
 # blocks, always exits 0.
+[tasks."session:receipts"]
+description = "Session start: pull this branch's published receipts from the private state repository — inert on an engine that predates the verb (CLOUD-1544)"
+# GUARDED ON THE VERB, NOT THE VERSION, because the row ran ahead of its engine.
+# The session-start row runs the INSTALLED engine (never a compile, CLOUD-1620),
+# and until a release carries `receipt pull` that engine answers clap's
+# `unrecognized subcommand`, exit 2 — every session start failing for a verb that
+# merely has not shipped. Asking the engine whether it parses the verb is the
+# one predicate that is true exactly when the call can run; a version compare
+# would encode a release number this file cannot know in advance. On an engine
+# that has the verb, the verb's own exit stands: `off` with the variable unset,
+# `1` for a misconfigured state repository, `3` for one that cannot be reached.
+# QUIET BY DECLARATION (CLOUD-1991): the pointer line is not session advice.
+quiet = true
+silent = "stdout"
+run = """
+if batten receipt pull --help >/dev/null 2>&1; then
+  exec batten receipt pull
+fi
+"""
+
 [tasks."session:engine-notice"]
 description = "Session start: say when the engine pin is behind the latest release, and record how far"
 quiet = true
