@@ -261,6 +261,25 @@ fn a_cache_miss_pages_from_the_start_and_rebuilds_the_same_answer() {
     assert_eq!(reports[0].inventory, rebuilt);
 }
 
+/// Fails by: an archived child watched when none is named (it takes no further
+/// turn), or the live one beside it dropped.
+#[test]
+fn an_archived_child_is_not_watched_unless_named() {
+    let mut source = Recorded::new(100)
+        .child(
+            row("session_live", "IDLE", None),
+            events("worker-events.json"),
+        )
+        .child(
+            row("session_gone", "ARCHIVED", None),
+            events("worker-events.json"),
+        );
+    let mut watch = Watch::new(Vec::new());
+    let (reports, _) = watch.poll(&mut source, &cache("archived")).unwrap();
+    let sessions: Vec<&str> = reports.iter().map(|r| r.session.as_str()).collect();
+    assert_eq!(sessions, ["session_live"]);
+}
+
 /// Fails by: a source that could not be read answered as done, or as no
 /// children and therefore nothing to wait on.
 #[test]
