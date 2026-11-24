@@ -22002,6 +22002,36 @@ deny contains "refused by themodule" if {
         assert!(!ceiling_policy(Vec::new()).reads_pinned(&call));
     }
 
+    /// The shell-introduced fact is resolved for a PRE-tool write only, even
+    /// where a policy row selects a later event's write (CLOUD-2335).
+    ///
+    /// Fails by: `shell_introduced_for`'s event test joined to the rest by
+    /// `||`, which resolves it for every selected write, post-tool included
+    /// (CLOUD-2789).
+    #[test]
+    fn the_shell_fact_is_resolved_for_a_pre_tool_write_only() {
+        use crate::facts::Look;
+        let policy = ceiling_policy(vec![policy_row("p")]);
+        let post = Envelope {
+            event: Event::PostTool,
+            ..write_envelope("Write", "x.sh")
+        };
+        assert!(
+            policy.reads_pinned(&post),
+            "premise: a policy row selects it"
+        );
+        assert_eq!(
+            crate::shell_introduced_for(&policy, &post),
+            Look::CouldNotLook
+        );
+        // ANTI-VACUITY: the same write before the tool runs is looked at.
+        let pre = write_envelope("Write", "x.sh");
+        assert_ne!(
+            crate::shell_introduced_for(&policy, &pre),
+            Look::CouldNotLook
+        );
+    }
+
     /// The task receipt is read only for a policy row that names a manifest.
     ///
     /// Fails by: a constant answer, the kind or emptiness test inverted, or
