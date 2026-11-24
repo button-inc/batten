@@ -1205,6 +1205,119 @@ fn a_rebase_onto_an_unrelated_trunk_commit_hits() {
     );
 }
 
+// ---- a commit-metadata step keys its commits (CLOUD-2897) ------------------
+
+/// This repository's own `[[step]]` row `id`, as a fixture authority holding it
+/// alone: the case judges the row as declared, never a copy of it.
+fn declared_step_table(id: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let authority: toml::Table = std::fs::read_to_string(path)
+        .expect("this repository's batten.toml")
+        .parse()
+        .expect("this repository's batten.toml parses");
+    let row = authority["step"]
+        .as_array()
+        .expect("a [[step]] table")
+        .iter()
+        .find(|row| row.get("id").and_then(toml::Value::as_str) == Some(id))
+        .unwrap_or_else(|| panic!("a [[step]] row `{id}`"))
+        .clone();
+    let mut table = toml::Table::new();
+    table.insert(String::from("version"), toml::Value::Integer(1));
+    table.insert(String::from("step"), toml::Value::Array(vec![row]));
+    toml::to_string(&table).expect("the row renders")
+}
+
+/// A COMMIT-METADATA STEP KEYS WHAT IT JUDGES (CLOUD-2897). `commit-attribution`
+/// judges each commit's author and committer identity and its message;
+/// `commit-check` judges each message. Both are handed refs (`origin/main..HEAD`),
+/// so a row keyed on files and tool versions alone keeps its key across a rewrite
+/// that leaves the tree identical, and replays the verdict of commits that no
+/// longer exist: measured on #1276, a committer rewrite replayed `commit own
+/// refused` for the rewritten sha while `attribution check` over the range
+/// exited 0.
+///
+/// Fails by: either row's key unmoved by a rewrite of exactly what it judges,
+/// so the second run answers from the first run's failure instead of running.
+#[test]
+fn a_rewrite_of_what_a_commit_step_judges_misses_though_the_tree_is_identical() {
+    // (row, the rewrite of only what that row judges)
+    let rewrites: [(&str, &[&str]); 2] = [
+        (
+            "commit-attribution",
+            &[
+                "-c",
+                "user.name=Owner",
+                "-c",
+                "user.email=owner@example.com",
+                "commit",
+                "-q",
+                "--amend",
+                "--no-edit",
+                "--reset-author",
+            ],
+        ),
+        (
+            "commit-check",
+            &["commit", "-q", "--amend", "-m", "feat: the subject, rewritten"],
+        ),
+    ];
+    for (step, rewrite) in rewrites {
+        let repo = Repo::new(&format!("commit-keyed-{step}"));
+        common::write(&repo.dir, "batten.toml", &declared_step_table(step));
+        // A `cargo` that answers its version, as the row's tool probe asks.
+        common::write(&repo.dir, "bin/cargo", "#!/bin/sh\necho 'cargo 1.0.0'\n");
+        common::git_in(&repo.dir, &["commit", "-qam", "the row"]);
+        common::git_in(&repo.dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        common::write(&repo.dir, "input.txt", "two\n");
+        common::git_in(
+            &repo.dir,
+            &[
+                "-c",
+                "user.name=Vendor",
+                "-c",
+                "user.email=vendor@example.com",
+                "commit",
+                "-qam",
+                "feat: the subject",
+            ],
+        );
+        let tree = common::git_in(&repo.dir, &["rev-parse", "HEAD^{tree}"]);
+
+        let refused = repo.run_step(&[step], &["red"], &[("STUB_CODE", "1")]);
+        assert_eq!(
+            refused.status.code(),
+            Some(1),
+            "{step}: {}",
+            common::stderr(&refused)
+        );
+        let replayed = repo.run_step(&[step], &["red"], &[("STUB_CODE", "0")]);
+        assert_eq!(
+            read(&repo.path("bin/red.log")).lines().count(),
+            1,
+            "{step}: the premise: an unchanged range answers from its receipt: {}",
+            common::stderr(&replayed)
+        );
+
+        common::git_in(&repo.dir, rewrite);
+        assert_eq!(
+            common::git_in(&repo.dir, &["rev-parse", "HEAD^{tree}"]),
+            tree,
+            "{step}: the rewrite leaves the tree identical"
+        );
+        let rerun = repo.run_step(&[step], &["red"], &[("STUB_CODE", "0")]);
+        assert_eq!(
+            (
+                rerun.status.code(),
+                read(&repo.path("bin/red.log")).lines().count()
+            ),
+            (Some(0), 2),
+            "{step}: a rewrite of what the step judges runs it again: {}",
+            common::stderr(&rerun)
+        );
+    }
+}
+
 // ---- the write hazard (CLOUD-2786) -----------------------------------------
 //
 // The read half was already there: `record` refuses when the key moved while
