@@ -1522,3 +1522,79 @@ fn a_failure_receipt_never_reads_as_a_pass_to_the_key_reader() {
     assert_eq!(key.len(), 64, "the key rides the first line: {body}");
     assert_ne!(first.split_whitespace().last(), Some(key), "{body}");
 }
+
+/// What in a `tests/it` module's source makes one of its cases reach a tracer
+/// (CLOUD-2789): the case asks itself, or it spawns a `step run` (which traces
+/// a miss) or a mutation sweep (whose reach traces each case).
+const REACHES_A_TRACER: [&str; 6] = [
+    "common::traced()",
+    "trace::Host::here()",
+    "\"step\", \"run\"",
+    "\"mutate\"",
+    "RUN_ARG",
+    "__mutate-schema",
+];
+
+/// Every `tests/it` module whose source holds a [`REACHES_A_TRACER`] marker,
+/// sorted.
+fn modules_reaching_a_tracer() -> Vec<String> {
+    let dir = common::at_root("crates/batten/tests/it");
+    let mut out: Vec<String> = std::fs::read_dir(&dir)
+        .expect("list tests/it")
+        .map(|entry| entry.expect("a tests/it entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .filter(|path| path.file_stem().is_some_and(|stem| stem != "main"))
+        .filter(|path| {
+            let source = std::fs::read_to_string(path).expect("read a tests/it module");
+            REACHES_A_TRACER
+                .iter()
+                .any(|marker| source.contains(marker))
+        })
+        .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    out.sort();
+    out
+}
+
+/// THE TRACED LANE RUNS EVERY MODULE THAT REACHES A TRACER, as CI's `ci` job
+/// does (CLOUD-2789). There, under `CI=true`, the suite runs outside `step run`
+/// and each such case takes its traced branch; locally the suite runs under
+/// `step run`'s tracer and takes only the fallback, so `test:traced` is the
+/// one local place those branches run.
+///
+/// Fails by: a module that reaches a tracer missing from the lane (its traced
+/// branch first judged on CI), a module the lane names that no longer does, or
+/// the lane run without CI's `CI=true` or the required-trace guard.
+#[test]
+fn the_traced_lane_runs_every_module_that_reaches_a_tracer() {
+    let manifest: toml::Table = std::fs::read_to_string(common::at_root("mise.toml"))
+        .expect("read mise.toml")
+        .parse()
+        .expect("mise.toml is TOML");
+    let task = manifest
+        .get("tasks")
+        .and_then(|tasks| tasks.get("test:traced"))
+        .expect("a `test:traced` task");
+    let suite = task
+        .get("run")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_str)
+        .find(|argv| argv.contains("--test it"))
+        .expect("a `test:traced` argv over the `it` binary");
+    let mut named: Vec<String> = suite
+        .split_whitespace()
+        .filter_map(|word| word.strip_suffix("::"))
+        .map(str::to_owned)
+        .collect();
+    named.sort();
+    assert_eq!(named, modules_reaching_a_tracer());
+    let env = task.get("env").expect("`test:traced` sets its env");
+    assert_eq!(env.get("CI").and_then(toml::Value::as_str), Some("true"));
+    assert_eq!(
+        env.get(common::TRACED_REQUIRED)
+            .and_then(toml::Value::as_str),
+        Some("1")
+    );
+}

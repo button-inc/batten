@@ -1518,19 +1518,32 @@ run = "{{vars.batten}} step run test:cargo -- cargo nextest run --workspace"
 # `verify` runs these beside `test:cargo`: measured, the full suite's report was
 # replaced by a 12-case one. `junit_wired.rs` holds every filtered nextest task here
 # to a profile of its own.
-# THE TRACED BRANCH, JUDGED SOMEWHERE (CLOUD-2789, CLOUD-2784). These cases
-# assert a traced selection where their reach runs can trace and the untraced
-# fallback where they cannot (`common::traced`). Every suite lane is the second
-# kind: `test:cargo` runs under `step run`, which traces a miss, so no second
-# tracer attaches, and the mutants jobs install no `strace`. So a `tracer()`
-# answering `None` passed every gate. This lane runs them OUTSIDE `step run`,
-# with `strace` provisioned, and `BATTEN_TEST_TRACED_REQUIRED` turns an
-# untraceable host into a failure, never the fallback. NOT receipt-routed, for
-# that reason: a `step run` miss would trace the suite and fail it.
+# THE TRACED BRANCH, JUDGED SOMEWHERE (CLOUD-2789, CLOUD-2784). A case takes a
+# traced branch where a process in it asks `trace::Host::tracer` and is answered:
+# the case itself (`common::traced`, `Host::here`), or a `batten` it spawns that
+# traces a `step run` miss or a sweep's reach. Locally every suite lane is
+# untraced there: `test:cargo` runs under `step run`, which traces a miss, so no
+# second tracer attaches. CI's `ci` job is the other kind: under `CI=true` its
+# `step run` is bypassed, so with `strace` installed every such case takes its
+# TRACED branch there and nowhere here. So a red only that branch shows was
+# found by CI, a whole lap late.
+#
+# THIS LANE RUNS THOSE BRANCHES HERE, as CI's `ci` job does: outside `step run`,
+# `CI=true`, `strace` provisioned, and `BATTEN_TEST_TRACED_REQUIRED` turning an
+# untraceable host into a failure, never the fallback. Its modules are every
+# `tests/it` module whose source asks for a tracer or spawns what does, and
+# `the_traced_lane_runs_every_module_that_reaches_a_tracer` derives that set from
+# the source and holds this line to it, so a new such module cannot be missed.
+# Two argvs, the `it` modules and the lib's tracer cases, since a positional
+# filter would match the lib's whole `mutate::` tree too. NOT receipt-routed:
+# a `step run` miss would trace the suite and fail it.
 [tasks."test:traced"]
-description = "Gate: the cases whose subject is a traced selection, run where tracing works (CLOUD-2789)"
-run = "cargo nextest run -p batten --no-tests=fail a_step_run_with_no_sweep_seeds_the_next_heads_selection a_globbing_case_reruns_only_when_its_directory_listing_moves a_sweep_judges_every_verdict_and_a_second_reuses_the_first mutate::trace::tests::"
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow", BATTEN_TEST_TRACED_REQUIRED = "1", NEXTEST_PROFILE = "narrow" }
+description = "Gate: every case that takes a traced branch on CI's `ci` job, run here as that job runs it (CLOUD-2789)"
+run = [
+  "cargo nextest run -p batten --no-tests=fail --test it ci_tools:: land:: mutate:: mutate_schema:: prune_watch:: step_cover:: step_journal:: step_receipt::",
+  "cargo nextest run -p batten --no-tests=fail --lib mutate::trace::tests::",
+]
+env = { CI = "true", BATTEN_TEST_SCRATCH_LANE = "narrow", BATTEN_TEST_TRACED_REQUIRED = "1", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:reference-coverage"]
 description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"
