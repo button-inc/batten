@@ -2119,6 +2119,128 @@ mod tests {
         assert_eq!(g.largest_component(), 3);
     }
 
+    /// Fails by: an edge onto a node whose component already closed lowering
+    /// the node it leaves, which merges `a` and `c` into one component when
+    /// `c` only reaches the finished `b`.
+    #[test]
+    fn an_edge_onto_a_closed_component_joins_nothing() {
+        let g = graph(&[("a", &["b", "c"]), ("b", &[]), ("c", &["b"])]);
+        assert_eq!(g.largest_component(), 1);
+    }
+
+    fn sources(rows: &[(&str, &str)]) -> BTreeMap<String, String> {
+        rows.iter()
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .collect()
+    }
+
+    /// Fails by: an enum not read as a declared type, a generic argument read
+    /// into the impl's type name, or a `super::` import not rebased onto the
+    /// crate path it names; each leaves the impl's home unresolved (`?`).
+    #[test]
+    fn an_impls_home_is_found_through_enums_generics_and_super() {
+        let files = sources(&[
+            ("src/lib.rs", "mod a;\nmod b;\n"),
+            ("src/a.rs", "pub enum E { X }\npub struct W<T>(T);\n"),
+            (
+                "src/b.rs",
+                "use crate::a::{E, W};\nimpl E {\n    fn e(&self) {}\n}\nimpl W<u8> {\n    fn w(&self) {}\n}\n",
+            ),
+        ]);
+        assert_eq!(
+            impl_plan("src", &files),
+            ["src/b.rs:2 E -> a (3 lines)", "src/b.rs:5 W -> a (3 lines)"]
+        );
+    }
+
+    /// Fails by: a `super::` import the moved impl names carried as written,
+    /// which names a different module from the impl's new file.
+    #[test]
+    fn a_super_import_is_carried_rebased_onto_the_crate() {
+        let files = sources(&[
+            ("src/lib.rs", "mod a;\nmod b;\n"),
+            ("src/a.rs", "pub struct T { x: u8 }\n"),
+            ("src/b.rs", "mod c;\npub fn helper() -> u8 { 1 }\n"),
+            (
+                "src/b/c.rs",
+                "use crate::a::T;\nuse super::helper;\nimpl T {\n    fn get(&self) -> u8 { helper() + self.x }\n}\n",
+            ),
+        ]);
+        let moved = move_impls_home("src", &files);
+        let landed = &moved["src/a.rs"];
+        assert!(landed.contains("use crate::b::helper;"), "{landed}");
+        assert!(!landed.contains("super"), "{landed}");
+    }
+
+    /// Fails by: the crate root read as a module named `lib`, so what an impl
+    /// moved out of it names is imported from `crate::lib`.
+    #[test]
+    fn an_impl_moved_out_of_the_crate_root_imports_from_the_root() {
+        let files = sources(&[
+            (
+                "src/lib.rs",
+                "mod a;\nfn helper() -> u8 { 1 }\nimpl a::T {\n    fn get(&self) -> u8 { helper() }\n}\n",
+            ),
+            ("src/a.rs", "pub struct T;\n"),
+        ]);
+        let moved = move_impls_home("src", &files);
+        let landed = moved.get("src/a.rs").expect("the impl moved home");
+        assert!(landed.contains("use crate::helper;"), "{landed}");
+    }
+
+    /// Fails by: an enum the old file declares not read as an item the moved
+    /// impl names, so its new file is left without the import.
+    #[test]
+    fn an_enum_a_moved_impl_names_is_imported_and_raised() {
+        let files = sources(&[
+            ("src/lib.rs", "mod a;\nmod b;\n"),
+            ("src/a.rs", "pub struct T;\n"),
+            (
+                "src/b.rs",
+                "use crate::a::T;\nenum Kind { X }\nimpl T {\n    fn k(&self) -> Kind { Kind::X }\n}\n",
+            ),
+        ]);
+        let moved = move_impls_home("src", &files);
+        let landed = &moved["src/a.rs"];
+        assert!(landed.contains("use crate::b::Kind;"), "{landed}");
+        assert!(
+            moved["src/b.rs"].contains("pub(crate) enum Kind"),
+            "{}",
+            moved["src/b.rs"]
+        );
+    }
+
+    /// Fails by: a moved impl landing before the file's first module of any
+    /// kind rather than before its test module.
+    #[test]
+    fn a_moved_impl_lands_before_the_test_module_not_the_first_module() {
+        let files = sources(&[
+            ("src/lib.rs", "mod a;\nmod b;\n"),
+            (
+                "src/a.rs",
+                "pub mod inner {}\npub struct T { x: u8 }\n#[cfg(test)]\nmod tests {}\n",
+            ),
+            (
+                "src/b.rs",
+                "use crate::a::T;\nimpl T {\n    fn get(&self) -> u8 { self.x }\n}\n",
+            ),
+        ]);
+        let moved = move_impls_home("src", &files);
+        let landed = &moved["src/a.rs"];
+        let (impl_at, inner_at, tests_at) = (
+            landed.find("impl T").expect("the impl landed"),
+            landed.find("pub mod inner").expect("inner kept"),
+            landed.find("mod tests").expect("tests kept"),
+        );
+        assert!(inner_at < impl_at && impl_at < tests_at, "{landed}");
+    }
+
+    /// Fails by: a `union` the crate root declares missing from its items.
+    #[test]
+    fn a_root_union_is_one_of_its_items() {
+        assert!(lib_items("pub union U { a: u8 }\n").unwrap().contains("U"));
+    }
+
     /// Fails by: a cycle's members given different levels, or a node placed
     /// at or below something it reaches.
     #[test]
