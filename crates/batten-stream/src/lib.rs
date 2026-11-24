@@ -341,4 +341,12 @@ mod tests {
         ));
         assert_eq!(seen.bytes(), b"hello");
     }
+
+    /// Fails by: a `write` that reports success while taking no bytes.
+    #[test]
+    fn a_shared_write_takes_and_reports_its_bytes() {
+        let mut sink = Shared::new(Vec::new());
+        assert_eq!(sink.write(b"abc").expect("writes"), 3);
+        assert_eq!(sink.bytes(), b"abc");
+    }
 }

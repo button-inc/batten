@@ -962,6 +962,19 @@ fn sliced(seconds: f64, stop: &std::sync::atomic::AtomicBool, sleep: &dyn Fn(f64
 mod tests {
     use super::*;
 
+    /// Fails by: the injected pacing debug-printed as nothing, so a `{:?}`
+    /// of a watch's arguments silently drops the seam it ran under.
+    #[test]
+    fn pacing_debugs_as_its_name_and_hides_its_closures() {
+        let read = |_: &Config, _: Option<&str>| None;
+        let pause = |_: f64| {};
+        let pacing = Pacing {
+            read: &read,
+            pause: &pause,
+        };
+        assert_eq!(format!("{pacing:?}"), "Pacing { .. }");
+    }
+
     /// The slices one wait of `seconds` asks the sleeper for, the flag raised
     /// at slice `stop_after` so a wait that never ends still returns.
     fn slices(seconds: f64, stop_after: usize) -> Vec<f64> {

@@ -411,4 +411,19 @@ mod tests {
         ])
         .unwrap();
     }
+
+    /// Fails by: a keyed row's declared tools read as none, or a
+    /// schedule-only node read as keyed.
+    #[test]
+    fn a_keyed_row_carries_its_tools_and_a_node_keys_nothing() {
+        let keyed = row(&["."], &[&["rustc", "--version"]]);
+        assert_eq!(
+            keyed.tools(),
+            [vec![String::from("rustc"), String::from("--version")]]
+        );
+        assert!(keyed.is_keyed());
+        let node = node("n", &[]);
+        assert!(node.tools().is_empty());
+        assert!(!node.is_keyed());
+    }
 }

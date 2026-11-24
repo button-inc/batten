@@ -1259,4 +1259,48 @@ mod module_digest_tests {
         assert_eq!(reads("x := data.batten.patterns[\"a\\\"b\"]\n"), None);
         assert_eq!(reads("metadata := 1\n"), ids(&[]));
     }
+
+    /// A config with the own rule, another rule declaring a delta, two
+    /// recorders and a census table: one of each table [`super::allow`] sorts.
+    const PROJECTED: &str = "[[rule]]\nid = \"own\"\nmodule = \"m.rego\"\n\n\
+        [[rule]]\nid = \"other\"\nbase = \"main\"\ndelta_sources = [\"x\"]\n\n\
+        [[recorder]]\nrecord = \"a\"\n\n[[recorder]]\nrecord = \"b\"\n\n\
+        [census.shell]\nexempt = []\n";
+
+    /// The projection of [`PROJECTED`] for a module whose input reads `input`.
+    fn projected(input: &[&str]) -> serde_json::Value {
+        let answer = |_: &str| -> anyhow::Result<super::Reads> {
+            Ok(super::Reads {
+                patterns: None,
+                input: Some(input.iter().map(|path| (*path).to_owned()).collect()),
+            })
+        };
+        let (bytes, _) =
+            super::project_reading(PROJECTED.as_bytes(), "own", "held", &answer).unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// Fails by: another row's delta pair kept for a module that reads no
+    /// `base-delta`, a recorder kept whose store the module never reads, or
+    /// `[census]` dropped for a module reading `shell`.
+    #[test]
+    fn a_projection_keeps_only_the_tables_its_tree_reads_build() {
+        let documents = projected(&["tree.documents"]);
+        assert_eq!(
+            documents["rule"].as_array().map(Vec::len),
+            Some(1),
+            "{documents}"
+        );
+        assert!(documents.get("census").is_none(), "{documents}");
+        let delta = projected(&["tree.base-delta"]);
+        assert_eq!(delta["rule"].as_array().map(Vec::len), Some(2), "{delta}");
+        let records = projected(&["tree.records.a"]);
+        assert_eq!(
+            records["recorder"],
+            serde_json::json!([{"record": "a"}]),
+            "{records}"
+        );
+        let shell = projected(&["tree.shell"]);
+        assert!(shell.get("census").is_some(), "{shell}");
+    }
 }

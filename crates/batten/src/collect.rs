@@ -2299,6 +2299,23 @@ mod tests {
         assert!(idle.exists());
     }
 
+    /// Fails by: a killed step's swept trace subtracted from the bytes freed
+    /// rather than added. nextest runs each case in its own process, so the
+    /// move into the fixture repository is this case's.
+    #[test]
+    fn a_swept_trace_counts_toward_the_bytes_freed() {
+        let repo = scratch("pass-trace").join("repo");
+        std::fs::create_dir_all(&repo).expect("mkdir");
+        std::fs::write(repo.join("f"), b"f").expect("write");
+        crate::gitwrite::commit_paths(&repo, &["f".to_owned()], "fixture").expect("commit");
+        std::env::set_current_dir(&repo).expect("enter the fixture");
+        let git_dir = crate::git::git_dir(Path::new(".")).expect("the fixture's git dir");
+        std::fs::write(git_dir.join("batten-step-trace-killed.trace"), b"orphaned")
+            .expect("write the trace");
+        let (pass, _) = super::pass_of(&ask(&[], &[], u64::MAX));
+        assert_eq!((pass.removed, pass.freed_bytes), (1, 8));
+    }
+
     /// Fails by: the deadline read the wrong way round. Time is the input here:
     /// a deadline an hour off stops nothing, one already reached stops all.
     #[test]

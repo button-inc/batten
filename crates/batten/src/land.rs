@@ -6976,4 +6976,17 @@ mod hold_tests {
             "the entry is the time to the first lap"
         );
     }
+
+    /// Fails by: the held lap's record line replaced, so the head, the entry
+    /// and each step's cost are not what the record carries.
+    #[test]
+    fn a_held_line_names_the_head_the_entry_and_each_step() {
+        let mut hold = Hold::new(true);
+        hold.entry_ms = Some(5);
+        hold.phases = vec![(Step::Verify, 7)];
+        assert_eq!(
+            hold.line("abc"),
+            format!("held abc entry-ms=5 {}-ms=7", Step::Verify.as_str())
+        );
+    }
 }

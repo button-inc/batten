@@ -269,4 +269,13 @@ mod tests {
         let err = format!("{:#}", crate::config::parse(&text, "test").unwrap_err());
         assert!(err.contains("may not also declare"), "{err}");
     }
+
+    /// Fails by: the `_` arm of the name alphabet inverted, so an underscore
+    /// is refused and any other punctuation admitted.
+    #[test]
+    fn an_environment_name_admits_underscore_and_no_other_punctuation() {
+        let names = |name: &str| super::environment_names("r", &[name.to_owned()], ":");
+        assert!(names("ci_agent").is_ok());
+        assert!(names("ci.agent").is_err());
+    }
 }

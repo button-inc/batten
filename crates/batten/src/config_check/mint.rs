@@ -441,3 +441,40 @@ impl DeclaredExt for Declared {
         self.after_mode.unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[derive(serde::Deserialize)]
+    struct Rows {
+        mint: Vec<Declared>,
+    }
+
+    fn rows(text: &str) -> Vec<Declared> {
+        toml::from_str::<Rows>(text)
+            .expect("the fixture parses")
+            .mint
+    }
+
+    /// Fails by: the writer's mode joined to its name by `||`, so any writing
+    /// row answers an `after` that names a row nobody declared.
+    #[test]
+    fn an_after_naming_no_writer_is_refused_whatever_else_writes() {
+        let declare = |after: &str| {
+            rows(&format!(
+                "[[mint]]\nname = \"dispatch\"\ntool = \"t1\"\nkey = \"branch\"\n\
+                 mode = \"replace\"\nbody = \"b\"\n\n\
+                 [[mint]]\nname = \"done\"\ntool = \"t2\"\nkey = \"branch\"\n\
+                 mode = \"replace\"\nbody = \"b\"\nafter = \"{after}\"\n"
+            ))
+        };
+        let refused = validate_across(&declare("missing")).expect_err("no writer is named");
+        assert!(
+            refused.to_string().contains("could never mint"),
+            "{refused}"
+        );
+        assert!(validate_across(&declare("dispatch")).is_ok());
+    }
+}

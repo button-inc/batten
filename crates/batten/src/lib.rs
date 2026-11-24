@@ -34300,6 +34300,88 @@ mod tests {
             "raised, but the result does not fit"
         );
     }
+
+    /// Fails by: the engine build answered as built whatever cargo said. The
+    /// directory is outside any workspace, so cargo finds no manifest to build.
+    #[test]
+    fn an_engine_build_cargo_refuses_is_not_built() {
+        let dir = std::env::temp_dir().join(format!("batten-no-engine-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(
+            !dir.ancestors().any(|at| at.join("Cargo.toml").exists()),
+            "the premise: no manifest above {}",
+            dir.display()
+        );
+        assert!(!super::build_engine(&dir));
+    }
+
+    /// Fails by: the voided gate's line not written, so the lap goes round
+    /// saying nothing about why.
+    #[test]
+    fn a_moved_tree_names_both_heads_and_the_dirty_count() {
+        let mut out = Vec::new();
+        super::say_tree_moved(&mut out, "0123456789abcdef", "fedcba9876543210", 3).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "land: the tree moved under the gate (0123456 -> fedcba9, 3 dirty); lapping\n"
+        );
+    }
+
+    /// Fails by: the process directory answered as an empty path.
+    #[test]
+    fn the_process_directory_is_the_working_directory() {
+        assert_eq!(
+            super::current_process_dir(),
+            Some(std::env::current_dir().unwrap())
+        );
+    }
+
+    /// Fails by: a server answered as declared where no MCP source is.
+    #[test]
+    fn no_declared_mcp_source_answers_no_server() {
+        let dir = crate::scratch::scratch("lib-mcp-answers");
+        std::fs::write(dir.join("batten.toml"), "version = 1\n").unwrap();
+        let resolved = crate::resolve::resolve(&dir, &crate::resolve::Overrides::default())
+            .expect("the authority resolves");
+        assert!(resolved.mcp.is_none(), "the premise: no MCP source");
+        assert!(!super::mcp_answers(&resolved, &dir, "linear"));
+    }
+
+    /// Fails by: a text leaf at or under the kept size replaced by the pointer,
+    /// so a bounded result loses the short fields that carried no bulk. nextest
+    /// runs each case in its own process, so the move into the fixture
+    /// repository is this case's.
+    #[test]
+    fn a_bounded_result_replaces_only_its_bulky_leaves() {
+        let scratch = crate::scratch::scratch("lib-bound-leaves");
+        crate::testing::contain_state(&scratch.join("state"));
+        let repo = scratch.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("batten.toml"), "version = 1\n").unwrap();
+        crate::gitwrite::commit_paths(&repo, &["batten.toml".to_owned()], "fixture").unwrap();
+        std::env::set_current_dir(&repo).expect("enter the fixture");
+        let kept = "k".repeat(crate::stream_input::LEAF_KEEP_BYTES);
+        let result = serde_json::json!({
+            "stdout": "word ".repeat(200_000),
+            "kept": kept,
+            "short": "s",
+        });
+        let payload = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "bound",
+            "tool_name": "Bash",
+            "tool_input": { "command": "cat big.log" },
+            "tool_response": result,
+        });
+        let harness = crate::config_model::Harness::ClaudeCode;
+        let envelope =
+            crate::hook::decode(harness, &payload.to_string()).expect("the envelope decodes");
+        let (bounded, _) =
+            super::bound_result(harness, &envelope, &result).expect("the result is over its bound");
+        assert_ne!(bounded["stdout"], result["stdout"], "the bulk is replaced");
+        assert_eq!(bounded["kept"], result["kept"]);
+        assert_eq!(bounded["short"], result["short"]);
+    }
 }
 
 /// The lap's engine bookkeeping (CLOUD-2783).

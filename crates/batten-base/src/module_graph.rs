@@ -2681,4 +2681,200 @@ mod tests {
             .collect();
         assert_eq!(fns, [true, false]);
     }
+
+    /// `files` as the path-to-text map the recipes take.
+    fn tree(files: &[(&str, &str)]) -> BTreeMap<String, String> {
+        files
+            .iter()
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .collect()
+    }
+
+    /// Fails by: the crate root's re-export read from another file's `use`
+    /// items, so an impl reaching its type through it goes unresolved; a bare
+    /// child-module path resolved from outside the crate root, where it names
+    /// no child; or a generic argument's `<` unwinding the depth it opens.
+    #[test]
+    fn an_impl_resolves_through_the_roots_reexport_and_only_the_roots_child_paths() {
+        let through_root = impls(
+            &[
+                ("lib.rs", "mod a;\nmod b;\npub use crate::a::T;\n"),
+                ("a.rs", "pub struct T;\n"),
+                ("b.rs", "impl crate::T { fn f() {} }\n"),
+            ],
+            "impls-root-alias",
+        );
+        assert_eq!(
+            through_root,
+            ImplCensus {
+                outside: 1,
+                ambiguous: 0
+            }
+        );
+        let bare = impls(
+            &[
+                ("lib.rs", "mod a;\nmod b;\n"),
+                ("a.rs", "pub struct T;\n"),
+                ("b.rs", "impl a::T { fn f() {} }\n"),
+            ],
+            "impls-bare-child",
+        );
+        assert_eq!(
+            bare,
+            ImplCensus {
+                outside: 0,
+                ambiguous: 1
+            }
+        );
+        let generic = impls(
+            &[
+                ("lib.rs", "mod a;\nmod b;\n"),
+                ("a.rs", "pub struct T<X>(X);\n"),
+                ("b.rs", "impl crate::a::T<u8> { fn f() {} }\n"),
+            ],
+            "impls-generic",
+        );
+        assert_eq!(
+            generic,
+            ImplCensus {
+                outside: 1,
+                ambiguous: 0
+            }
+        );
+    }
+
+    /// Fails by: the plan empty or a blank row, or its line read off by one —
+    /// the impl here opens on line 2 and spans three.
+    #[test]
+    fn the_plan_points_at_each_impl_outside_its_home_by_line() {
+        let files = tree(&[
+            ("src/lib.rs", "mod a;\nmod b;\n"),
+            ("src/a.rs", "pub struct T;\n"),
+            ("src/b.rs", "\nimpl crate::a::T {\n    fn f() {}\n}\n"),
+        ]);
+        assert_eq!(impl_plan("src", &files), ["src/b.rs:2 T -> a (3 lines)"]);
+    }
+
+    /// Fails by: a moved impl's `use` rebased wrongly — a crate root's
+    /// `self::` or child-module path, or a `super::` chain, left relative to the
+    /// file it left; a type alias it names neither imported nor raised; or a
+    /// private method only the impl itself calls raised to `pub(crate)`.
+    #[test]
+    fn a_moved_impls_imports_are_rebased_to_the_crate_root() {
+        let files = tree(&[
+            (
+                "src/lib.rs",
+                "mod a;\nmod b;\nmod c;\nuse c::One;\nuse self::c::Two;\nimpl a::T {\n    fn f(_: One, _: Two) {}\n}\n",
+            ),
+            ("src/a.rs", "pub struct T;\npub struct U;\n"),
+            (
+                "src/b.rs",
+                "use super::c::Three;\ntype Width = u8;\nimpl crate::a::U {\n    fn g(_: Three) -> Width { Self::k() }\n    fn k() -> Width { 0 }\n}\n",
+            ),
+            (
+                "src/c.rs",
+                "pub struct One;\npub struct Two;\npub struct Three;\n",
+            ),
+        ]);
+        let moved = move_impls_home("src", &files);
+        let home = &moved["src/a.rs"];
+        for line in [
+            "use crate::c::One;",
+            "use crate::c::Two;",
+            "use crate::c::Three;",
+            "use crate::b::Width;",
+            "    fn k() -> Width { 0 }",
+            "    fn g(_: Three) -> Width { Self::k() }",
+        ] {
+            assert!(home.lines().any(|held| held == line), "{line}: {home}");
+        }
+        assert!(
+            moved["src/b.rs"].contains("pub(crate) type Width = u8;"),
+            "{}",
+            moved["src/b.rs"]
+        );
+    }
+
+    /// Fails by: an impl beside its own type made a trait; a file outside the
+    /// package's targets (`build.rs`) given the import; or the in-crate and
+    /// outside-crate readings of a `pub(crate)` trait swapped, so the crate's
+    /// own caller loses its import and a test target gains one it cannot use.
+    #[test]
+    fn an_extension_trait_is_imported_only_where_it_can_be_named() {
+        let files = |method: &str| {
+            tree(&[
+                ("src/lib.rs", "mod model;\nmod rules;\nmod user;\n"),
+                (
+                    "src/model.rs",
+                    "pub struct Rule { pub x: u8 }\npub struct Home;\nimpl Home { pub fn here(&self) {} }\n",
+                ),
+                (
+                    "src/rules.rs",
+                    &format!(
+                        "use crate::model::Rule;\nimpl Rule {{\n    {method} twice(&self) -> u8 {{ self.x * 2 }}\n}}\n"
+                    ),
+                ),
+                (
+                    "src/user.rs",
+                    "use crate::model::Rule;\nfn f(r: &Rule) -> u8 { r.twice() }\n",
+                ),
+                (
+                    "tests/it.rs",
+                    "fn t(r: &app::model::Rule) -> u8 { r.twice() }\n",
+                ),
+                ("build.rs", "fn b(r: &Rule) -> u8 { r.twice() }\n"),
+            ])
+        };
+        let private = impls_to_extension_traits("src", "app", &files("fn"));
+        assert_eq!(
+            private.keys().collect::<Vec<_>>(),
+            ["src/rules.rs", "src/user.rs"]
+        );
+        assert!(
+            private["src/user.rs"].starts_with("use crate::rules::RuleExt as _;\n"),
+            "{}",
+            private["src/user.rs"]
+        );
+        let public = impls_to_extension_traits("src", "app", &files("pub fn"));
+        assert_eq!(
+            public.keys().collect::<Vec<_>>(),
+            ["src/rules.rs", "src/user.rs", "tests/it.rs"]
+        );
+    }
+
+    /// Fails by: a `mod.rs` read as the module `mod`, so its children land a
+    /// directory too deep; or the two-module floor inverted, so a file of
+    /// three is left whole and a file of one is split.
+    #[test]
+    fn a_mod_rs_of_three_splits_beside_itself_and_a_single_module_stays() {
+        let files = tree(&[
+            (
+                "src/m/mod.rs",
+                "pub mod a {\n    pub fn f() {}\n}\npub mod b {\n    pub fn g() {}\n}\npub mod c {\n    pub fn h() {}\n}\n",
+            ),
+            ("src/one.rs", "pub mod a {\n    pub fn f() {}\n}\n"),
+        ]);
+        let split = split_inline_modules(&files);
+        assert_eq!(
+            split.keys().collect::<Vec<_>>(),
+            ["src/m/a.rs", "src/m/b.rs", "src/m/c.rs", "src/m/mod.rs"]
+        );
+    }
+
+    /// Fails by: an enum or a const left out of the root's items.
+    #[test]
+    fn a_lib_enum_and_const_are_lib_items() {
+        let items = lib_items("pub enum E {}\npub const C: u8 = 1;\nmod m;\n").unwrap();
+        assert_eq!(
+            items,
+            BTreeSet::from([String::from("C"), String::from("E")])
+        );
+    }
+
+    /// Fails by: the walk past a `::` in a token tree landing anywhere but on
+    /// the next segment, so a `super::super::` chain loses the name it reaches.
+    #[test]
+    fn a_super_chain_inside_a_macro_reaches_the_root_name() {
+        assert_eq!(names("fn f() { m!(super::super::a); }", &["x", "y"]), ["a"]);
+    }
 }

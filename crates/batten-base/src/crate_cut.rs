@@ -739,3 +739,69 @@ fn workspace_sources(root: &std::path::Path) -> std::io::Result<Vec<std::path::P
     }
     Ok(found)
 }
+
+#[cfg(test)]
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn respelled(body: &str) -> Option<String> {
+        respell_body(body, "crate", &BTreeSet::from(["moved"]), "batten_new")
+    }
+
+    /// Inside a macro's token tree `::` is two `:` tokens. Fails by: a lone
+    /// `:` after the root read as a separator, so `crate: x moved` respells; a
+    /// later segment's preceding `::` not read (the second-`:` arm dropped), so
+    /// `x::crate::moved` respells its middle; or the token two BEFORE the root
+    /// read as the one two after it, so `a: crate::moved` is left as a later
+    /// segment.
+    #[test]
+    fn a_macro_path_is_respelled_only_at_its_root() {
+        assert_eq!(
+            respelled("{ m!(crate: x moved); }").as_deref(),
+            Some("{ m!(crate: x moved); }")
+        );
+        assert_eq!(
+            respelled("{ m!(x::crate::moved); }").as_deref(),
+            Some("{ m!(x::crate::moved); }")
+        );
+        assert_eq!(
+            respelled("{ m!(a: crate::moved); }").as_deref(),
+            Some("{ m!(a: batten_new::moved); }")
+        );
+    }
+
+    /// Fails by: no file found, a build or fixture or hidden directory walked
+    /// (or only those), or a file other than a `.rs` or `Cargo.toml` kept.
+    #[test]
+    fn the_workspace_walk_keeps_sources_and_skips_build_output() {
+        let root = batten_facts::scratch::scratch("crate-cut-workspace-sources");
+        for dir in ["sub", "target", "fixtures", ".hidden"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in [
+            "Cargo.toml",
+            "a.rs",
+            "notes.txt",
+            "sub/b.RS",
+            "target/c.rs",
+            "fixtures/d.rs",
+            ".hidden/e.rs",
+        ] {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+        let mut found: Vec<String> = workspace_sources(&root)
+            .unwrap()
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        found.sort();
+        assert_eq!(found, ["Cargo.toml", "a.rs", "sub/b.RS"]);
+    }
+}

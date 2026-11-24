@@ -2649,4 +2649,88 @@ mod tests {
             changed["src/exec.rs"]
         );
     }
+
+    /// Fails by: a nested `main.rs` read as a binary root, a `type` alias
+    /// declaring no name, a `crate::` target left unanchored, or a comment's
+    /// end placed past where it ends.
+    #[test]
+    fn the_small_readers_answer_their_own_shapes() {
+        let roots = [(String::new(), "app".to_owned())];
+        assert_eq!(
+            module_of(&roots, "src/bin/main.rs"),
+            Some(("app".to_owned(), vec!["bin".to_owned(), "main".to_owned()]))
+        );
+        assert_eq!(module_of(&roots, "src/main.rs"), None);
+        let parsed = batten_facts::source::rust_parse("type A = u8;\n", Edition::Edition2024);
+        let item = parsed.tree().items().next().expect("one item");
+        assert_eq!(declared_name(&item).as_deref(), Some("A"));
+        assert_eq!(
+            Index::anchored("app", &[], &["crate".to_owned(), "a".to_owned()]),
+            Some(vec!["app".to_owned(), "a".to_owned()])
+        );
+        assert_eq!(comment_spans("// a\nx"), [(0, 4)]);
+    }
+
+    /// Fails by: a file's module path answered as anything but its own, a root
+    /// child module anchored from a file that is not the root, or a `self::`
+    /// import's head dropped when the reader has a crate.
+    #[test]
+    fn a_path_is_anchored_only_where_its_reader_can_name_it() {
+        let index = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod config;\npub mod m;\n"),
+            ("src/config.rs", "pub struct X;\n"),
+            ("src/m.rs", "pub mod inner;\n"),
+            ("src/m/inner.rs", "pub struct Y;\n"),
+        ]);
+        assert_eq!(
+            index.module_path_of("src/config.rs"),
+            Some(&["config".to_owned()][..])
+        );
+        let path = ["config".to_owned(), "X".to_owned()];
+        assert_eq!(index.absolute("app", false, &path), None);
+        assert_eq!(
+            index.absolute("app", true, &path),
+            Some(vec!["app".to_owned(), "config".to_owned(), "X".to_owned()])
+        );
+        let reader = index.reader("src/m.rs", "use self::inner;\n");
+        assert_eq!(
+            index.absolute_in(&reader, &["inner".to_owned(), "Y".to_owned()]),
+            Some(["app", "m", "inner", "Y"].map(str::to_owned).to_vec())
+        );
+    }
+
+    /// Fails by: a token any non-comment is read as an identifier, a token
+    /// glued to the colon before it read as a path's start, or anything after
+    /// a `::` taken as its next segment.
+    #[test]
+    fn a_token_path_is_identifiers_joined_by_adjacent_colons() {
+        assert_eq!(
+            token_paths("a::b"),
+            [(0, vec!["a".to_owned(), "b".to_owned()], 4)]
+        );
+        assert_eq!(token_paths("\"s\"::x"), []);
+        assert_eq!(token_paths("x::1::y::z"), []);
+        assert_eq!(token_paths("a:: b"), []);
+    }
+
+    /// Fails by: a `use` already gated to test builds gated again, its own
+    /// `#[cfg(test)]` read as no reason to leave it alone.
+    #[test]
+    fn a_use_already_gated_to_tests_is_left_alone() {
+        let changed = respelled(&[
+            ROOT,
+            ("src/lib.rs", "pub mod config;\npub mod action;\n"),
+            ("src/config.rs", "pub fn other() {}\n"),
+            (
+                "src/action.rs",
+                "fn run() {}\n#[cfg(test)]\nuse crate::config;\n#[cfg(test)]\nmod tests {\n    use super::*;\n    fn t() { config::other() }\n}\n",
+            ),
+        ]);
+        assert!(
+            !changed.contains_key("src/action.rs"),
+            "{:?}",
+            changed.get("src/action.rs")
+        );
+    }
 }
