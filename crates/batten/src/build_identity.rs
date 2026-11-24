@@ -275,15 +275,19 @@ pub fn source_digest(inputs: &BTreeMap<String, Vec<u8>>) -> Option<String> {
         count += 1;
     }
     (count > 0).then(|| {
+        use std::fmt::Write as _;
         hasher
             .finalize()
             .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+            .fold(String::new(), |mut text, byte| {
+                let _ = write!(text, "{byte:02x}");
+                text
+            })
     })
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

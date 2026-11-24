@@ -9,6 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
@@ -298,7 +299,6 @@ fn pinned(config: &str) -> Option<String> {
 /// state inside the case, neither `CI` nor the local-engine override ambient,
 /// `stdin` on a pipe when given.
 fn following(dir: &Path, args: &[&str], env: &[(&str, &str)], stdin: Option<&str>) -> Output {
-    let release = this_build();
     use common::StateHome as _;
     use std::io::Write as _;
     let mut command = common::batten();
@@ -545,7 +545,7 @@ fn an_install_of_a_named_version_writes_no_pin() {
     let (_host, served) = release_host(&dir, &release, &release);
     common::write(&dir, "batten.toml", "version = 1\n");
     let mut env = served_env(&served);
-    env.push(("BATTEN_VERSION", RELEASE));
+    env.push(("BATTEN_VERSION", &release));
     let output = installing(&dir, &env);
     assert!(output.status.success(), "{}", text(&output));
     assert_eq!(

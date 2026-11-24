@@ -31,6 +31,13 @@ use std::path::{Path, PathBuf};
 #[path = "src/mutation_markers.rs"]
 mod mutation_markers;
 
+// `pub` for the library, which declares the same file as `pub mod
+// build_identity` so an integration case can render an identity; here it is
+// a private module, where that visibility reaches nothing.
+#[expect(
+    unreachable_pub,
+    reason = "the library exports these items; only this script's private copy cannot reach them (CLOUD-2903)"
+)]
 #[path = "build/identity.rs"]
 mod identity;
 
