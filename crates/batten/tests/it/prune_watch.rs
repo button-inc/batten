@@ -1422,21 +1422,20 @@ fn a_workspace_wrapper_between_is_run_with_the_compiler() {
     std::fs::create_dir_all(&bin).unwrap();
     let wrapper = bin.join("cargo-auditable");
     let rustc = bin.join("rustc");
-    std::fs::write(
+    common::stub_at(
         &wrapper,
-        "#!/bin/sh\necho wrapped > \"$(dirname \"$0\")/wrapped\"\nexec \"$@\"\n",
-    )
-    .unwrap();
-    std::fs::write(
+        &serde_json::json!([{ "steps": [
+            { "write": [bin.join("wrapped").display().to_string(), "wrapped\n"] },
+            { "exec": ["{argv-from:1}"] },
+        ] }]),
+    );
+    common::stub_at(
         &rustc,
-        "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/ran\"\nexit 7\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    for program in [&wrapper, &rustc] {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+        &serde_json::json!([{ "steps": [
+            { "write": [bin.join("ran").display().to_string(), "{argv}\n"] },
+            { "exit": 7 },
+        ] }]),
+    );
     let ran = common::batten()
         .current_dir(&dir)
         .arg(&wrapper)

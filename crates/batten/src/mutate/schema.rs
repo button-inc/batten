@@ -7196,12 +7196,7 @@ mod tests {
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let stub = bin.join("pgrep");
-        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        crate::exec::stub_at(&stub, &serde_json::json!([{ "steps": [{ "exit": 0 }] }]));
         let config: toml::Table = crate::fsio::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.config/nextest.toml"),
         )
