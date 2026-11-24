@@ -730,12 +730,13 @@ mod tests {
         "show agent",
         "spec",
         "state list",
-        // The step noun's reading leaves (CLOUD-2786/2787/2788): `base`,
-        // `cover` and `env` read and write nothing; the noun stays off
-        // for `capture`'s reason, since `run` executes.
+        // The step noun's reading leaves (CLOUD-2786/2787/2788/2835): `base`,
+        // `cover`, `env` and `exists` read and write nothing; the noun stays
+        // off for `capture`'s reason, since `run` executes.
         "step base",
         "step cover",
         "step env",
+        "step exists",
         // The verb, never the `worktree` noun: the noun stays
         // `Unclassified`, so it is off this list (CLOUD-51, CLOUD-780).
         // The two `task` leaves that read: the registry's report, which
@@ -1404,6 +1405,7 @@ mod tests {
             "step check".to_owned(),
             "step cover".to_owned(),
             "step env".to_owned(),
+            "step exists".to_owned(),
             "step graph".to_owned(),
             "step graph run".to_owned(),
             "step record".to_owned(),

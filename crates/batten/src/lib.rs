@@ -4935,9 +4935,7 @@ fn run_session(
         )?;
         return Ok(ExitCode::Internal);
     };
-    for report in &reports {
-        writeln!(out, "{}", report.line())?;
-    }
+    output::lines(out, &reports)?;
     let inventory = dir.join("inventory.json");
     durable::replace(
         &inventory,
