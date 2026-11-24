@@ -398,7 +398,7 @@ fn a_shebang_program_is_refused_where_no_census_table_is_declared() {
          documents = [\"batten.toml\"]\n\
          line_sources = [\"mise.toml\"]\n"
     );
-    let dir = Fixture::new("shell-ban-undeclared")
+    let dir = Fixture::new("shell-ban-undeclared-shebang")
         .config(&config)
         .files(&[("README.md", "x\n")])
         .git()
