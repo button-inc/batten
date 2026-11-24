@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.221](https://github.com/button-inc/batten/compare/v0.0.220...v0.0.221) - 2026-11-24
+
+### Fixed
+
+- *(provision)* an intent keeps batten's stamp; PATH is compared by file
+- *(provision)* record only shared links; an intent vouches only for cached bytes
+- *(provision)* refuse a foreign name in a shared bin dir, out loud
+- *(provision)* recognise batten's own fallback link by record, not by bytes
+- *(provision)* a fallback link never takes a name another tool owns
+- *(provision)* name an absolute link portably; state what the fallback shares
+- *(provision)* gate the declared-string link adapter to its one caller
+- *(provision)* keep link_onto_path's signature; resolve the link beside it
+- *(provision)* keep status and apply patch-compatible beside the host-aware forms
+- *(provision)* a declared link follows engine install's PATH fallback
+
+### Other
+
+- *(provision)* read the vouched stamp once; one by-file PATH test
+- *(provision)* one foreign check, a refused apply forgets its record
+- *(provision)* compare the crash path's bytes without a size guard
+- *(provision)* kill the guard's surviving mutants; rows at column 0
+- *(provision)* a foreign fallback name is its own verdict, refused before any fetch
+- *(provision)* name the reader's and writer's hosts; pin the stale reading
+- *(provision)* move the Command expectation to the helper that builds one
+- *(provision)* an in-tree build's status still judges the host link
+- *(provision)* resolve each link once, from the one host constructor
+- *(provision)* assert on both HOME arms rather than returning early
+- *(provision)* run the link-fallback case on every target
+- *(provision)* catch the isolated host's writability and the published wrappers
+
 ## [0.0.220](https://github.com/button-inc/batten/compare/v0.0.219...v0.0.220) - 2026-11-07
 
 ### Fixed
