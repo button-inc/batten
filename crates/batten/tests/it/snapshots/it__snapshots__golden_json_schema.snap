@@ -4591,6 +4591,32 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "release previous",
+          "id": "release.previous",
+          "about": "Print the nearest ancestor release tag before a release tag, under a glob; exit 2 when the tag is not a release under it",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "pattern",
+              "short": null,
+              "long": "pattern",
+              "takes_value": true,
+              "positional": false,
+              "help": "The glob a release tag matches; its literal prefix is stripped once, then the version is parsed as semver"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": "tag",
+              "takes_value": true,
+              "positional": false,
+              "help": "The release tag whose nearest ancestor release is printed"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "release settings",
           "id": "release.settings",
           "about": "Exit 0 only when the rulesets and release settings the release path rests on hold",
@@ -6014,6 +6040,10 @@ expression: stdout_of(&output)
     {
       "id": "release.pin",
       "path": "release pin"
+    },
+    {
+      "id": "release.previous",
+      "path": "release previous"
     },
     {
       "id": "release.settings",

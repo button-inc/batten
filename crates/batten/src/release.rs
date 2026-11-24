@@ -1014,11 +1014,49 @@ pub fn run(
             out,
             err,
         ),
+        crate::cli::ReleaseCommand::Previous { tag, pattern } => {
+            run_previous(std::path::Path::new("."), &tag, &pattern, out, err)
+        }
         crate::cli::ReleaseCommand::Install
         | crate::cli::ReleaseCommand::Verify { .. }
         | crate::cli::ReleaseCommand::Path { .. } => Err(anyhow::anyhow!(
             "release install, verify and path are answered by the engine's own dispatch, never here"
         )),
+    }
+}
+
+/// `release previous` (CLOUD-2906): the nearest ancestor RELEASE tag under
+/// `pattern` before `tag`, one line (empty when there is none), exit 0. Exit 2
+/// when `tag` is not a release under `pattern` (a pre-release or a tag that is
+/// not semver ships nothing, so it has no predecessor to record from), and 3
+/// when the repository could not be read.
+///
+/// # Errors
+///
+/// Only a write to `out` or `err` failing.
+pub fn run_previous(
+    root: &std::path::Path,
+    tag: &str,
+    pattern: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    if !crate::version::is_release_under(tag, pattern) {
+        writeln!(
+            err,
+            "release previous: {tag} is not a release under `{pattern}`"
+        )?;
+        return Ok(ExitCode::Violation);
+    }
+    match crate::git::previous_tag(root, tag, pattern) {
+        Ok(previous) => {
+            writeln!(out, "{}", previous.unwrap_or_default())?;
+            Ok(ExitCode::Success)
+        }
+        Err(why) => {
+            writeln!(err, "batten: release previous: could not look: {why}")?;
+            Ok(ExitCode::Internal)
+        }
     }
 }
 

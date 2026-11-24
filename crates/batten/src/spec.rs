@@ -719,6 +719,9 @@ mod tests {
         "release in-flight",
         "release land-state",
         "release pin",
+        // CLOUD-2906: the nearest ancestor release under a glob, read off the
+        // tag graph; it writes nothing.
+        "release previous",
         "release settings",
         // CLOUD-1180's recovered `agent` slice. BOTH the noun and its
         // leaf are read, and that is the row's §2 predicate rather than
@@ -1349,6 +1352,7 @@ mod tests {
             "release land-state".to_owned(),
             "release path".to_owned(),
             "release pin".to_owned(),
+            "release previous".to_owned(),
             "release settings".to_owned(),
             // The checksum manifest (CLOUD-843, retiring `checksums`): a forge
             // read and a file write, off the allowlist.

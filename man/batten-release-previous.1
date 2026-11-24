@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-release-previous 1  batten 
+.SH NAME
+batten\-release\-previous \- Print the nearest ancestor release tag before a release tag, under a glob; exit 2 when the tag is not a release under it
+.SH SYNOPSIS
+\fBbatten release previous\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-tag\fR> <\fB\-\-pattern\fR> 
+.SH DESCRIPTION
+Print the nearest ancestor release tag before a release tag, under a glob; exit 2 when the tag is not a release under it
+.SH OPTIONS
+.TP
+\fB\-\-tag\fR \fI<tag>\fR
+The release tag whose nearest ancestor release is printed
+.TP
+\fB\-\-pattern\fR \fI<pattern>\fR
+The glob a release tag matches; its literal prefix is stripped once, then the version is parsed as semver
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

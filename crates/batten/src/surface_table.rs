@@ -3552,6 +3552,20 @@ pub(crate) const BACKFILL_PATTERN: FlagDecl = FlagDecl {
     )
 };
 
+/// `--tag <tag>` on `release previous`: the release whose predecessor is asked.
+pub(crate) const PREVIOUS_TAG: FlagDecl = required(
+    "tag",
+    "tag",
+    "The release tag whose nearest ancestor release is printed",
+);
+
+/// `--pattern <glob>` on `release previous`: what a release tag is.
+pub(crate) const PREVIOUS_PATTERN: FlagDecl = required(
+    "pattern",
+    "pattern",
+    "The glob a release tag matches; its literal prefix is stripped once, then the version is parsed as semver",
+);
+
 /// `--dry-run` on `release backfill`.
 pub(crate) const BACKFILL_DRY_RUN: FlagDecl = FlagDecl::switch(
     "dry_run",
@@ -4265,6 +4279,18 @@ pub const SURFACE: &[CommandDecl] = &[
             BACKFILL_POLL_INTERVAL,
             BACKFILL_MAX_POLLS,
         ],
+    },
+    // The predecessor reader a workflow calls (CLOUD-2906), replacing a
+    // `describe` over every tag: only RELEASES under the glob are candidates, so
+    // a dev or pre-release tag nearer the head is never the range's start.
+    CommandDecl {
+        path: "release previous",
+        id: "release.previous",
+        about: "Print the nearest ancestor release tag before a release tag, under a glob; exit 2 when the tag is not a release under it",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[PREVIOUS_TAG, PREVIOUS_PATTERN],
     },
     CommandDecl {
         path: "config",
