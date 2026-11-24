@@ -436,6 +436,27 @@ fn an_untracked_file_inside_the_specs_is_no_key() {
     assert_eq!(repo.check(&["whole"]), "miss");
 }
 
+/// ONE RUNNER PER STEP (CLOUD-2783): the step's command runs under the
+/// step's lock, so the lock's file is in the git dir while it runs.
+///
+/// Fails by: no lock taken, so a second runner of the same step would run
+/// beside this one instead of waiting for its receipt.
+#[test]
+fn a_step_runs_under_its_lock() {
+    let repo = Repo::new("locked");
+    let out = repo.run_step(
+        &["never-declared"],
+        &["sh", "-c", "ls .git | grep -q '^batten-step-lock-'"],
+        &[],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the lock is held while the command runs: {}",
+        common::stderr(&out)
+    );
+}
+
 #[test]
 fn an_undeclared_step_always_runs() {
     let repo = Repo::new("unknown");
