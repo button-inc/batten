@@ -2700,7 +2700,7 @@ impl Fact {
             }),
             Fact::InstallPending => serde_json::json!({
                 "type": ["object", "null"],
-                "description": "Fact::InstallPending (CLOUD-2840). The session's setup task, read from the task registry: `state` is `running`, `ok`, `failed` or `crashed` (the task's own last phase, or a pid gone without one), `task` its registry name and `pid` its pid. `pending` lists this call's command-position programs that resolve to nothing on PATH or resolve under the environment manager's install root -- what the task may still be installing -- and is empty once the task said `ok`, when nothing is resolved at all. NULL when no setup task is recorded or the registry could not be read.",
+                "description": "Fact::InstallPending (CLOUD-2840). The session's setup task, read from the task registry: `state` is `running`, `ok`, `failed` or `crashed` (the task's own last phase, or a pid gone without one), `task` its registry name and `pid` its pid. `pending` lists this call's command-position programs that resolve to nothing on PATH or, while the task is `running`, resolve under the environment manager's install root -- what the task may still be installing. After `failed` or `crashed` it lists only programs that resolve to nothing (CLOUD-2921), and it is empty once the task said `ok`, when nothing is resolved at all. The record read is the newest `session-setup` entry by `started_at`. NULL when no setup task is recorded or the registry could not be read.",
                 "properties": {
                     "state": {"enum": ["running", "ok", "failed", "crashed"]},
                     "task": {"type": "string"},

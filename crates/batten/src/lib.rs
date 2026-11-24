@@ -20416,11 +20416,16 @@ fn install_pending_for(
     if !session_setup::started(&git_dir) {
         return None;
     }
+    // THE NEWEST RECORD IS THE SETUP'S STATE (CLOUD-2921). A re-run registers
+    // beside the failed record it answers rather than over it, and the gone
+    // records sort by pid, so taking the first one found let a stale `failed`
+    // outlive the `ok` that superseded it.
     let (running, gone) = task::partition(&git_dir);
     let entry = running
         .into_iter()
         .chain(gone)
-        .find(|entry| entry.task == session_setup::TASK)?;
+        .filter(|entry| entry.task == session_setup::TASK)
+        .max_by_key(|entry| entry.started_at.parse::<u64>().unwrap_or(0))?;
     let state = match task::state(&entry) {
         task::State::Running => "running",
         task::State::Ok => "ok",
@@ -20437,9 +20442,16 @@ fn install_pending_for(
             // `$T …` names what the shell expands at run time, not a file this
             // gate can resolve now; holding it would hold every such call.
             .filter(|program| !program.contains('$'))
+            // UNDER AN INSTALL ROOT IS PENDING ONLY WHILE THE TASK RUNS: there a
+            // file may be a shim with nothing behind it yet. Once the task has
+            // ended nothing more will be installed, so a file that exists is
+            // what the install produced (CLOUD-2921: `opa`, by full path, held
+            // ~20 hours after a failed setup).
             .filter(|program| match resolve_on_path(program) {
                 None => true,
-                Some(found) => roots.iter().any(|root| found.starts_with(root)),
+                Some(found) => {
+                    state == "running" && roots.iter().any(|root| found.starts_with(root))
+                }
             })
             .collect()
     };
