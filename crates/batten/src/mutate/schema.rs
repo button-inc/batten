@@ -11273,4 +11273,33 @@ pub fn repo() -> u8 {{ scratch() }}
             .expect("an item");
         assert_eq!(item_names(&item), [String::from("Alias")]);
     }
+
+    /// Fails by: a union answering to every word inside it rather than to its
+    /// own name (the `Union` arm of `item_names` deleted).
+    #[test]
+    fn a_union_answers_to_its_own_name_alone() {
+        let names: Vec<Vec<String>> = items_of("union U { a: Field }\n")
+            .iter()
+            .map(item_names)
+            .collect();
+        assert_eq!(names, [vec![String::from("U")]]);
+    }
+
+    /// Fails by: an include through two macros that are not `concat!` over
+    /// `env!` read as rooted at `CARGO_MANIFEST_DIR` (the guard dropped, or
+    /// either name alone taken as enough).
+    #[test]
+    fn only_concat_over_env_roots_an_include_at_the_manifest_dir() {
+        for source in [
+            "include!(joined!(var!(\"CARGO_MANIFEST_DIR\"), \"/data/x.rs\"));\n",
+            "include!(concat!(var!(\"CARGO_MANIFEST_DIR\"), \"/data/x.rs\"));\n",
+            "include!(joined!(env!(\"CARGO_MANIFEST_DIR\"), \"/data/x.rs\"));\n",
+        ] {
+            let items = items_of(source);
+            let Some(ast::Item::MacroCall(call)) = items.first() else {
+                panic!("an item-position macro call: {items:?}");
+            };
+            assert_eq!(include_path(call, "crates/x/src/lib.rs"), None, "{source}");
+        }
+    }
 }
