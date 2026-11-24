@@ -1687,7 +1687,7 @@ mod tests {
         let path = ["one", "error", "sub", "deeper", "Thing"].map(str::to_owned);
         let (key, used) = index
             .resolve_through(&path, 8, true)
-            .expect("the glob binds `sub`");
+            .unwrap_or_else(|| panic!("the glob binds `sub`"));
         assert_eq!(
             (key.0.as_str(), key.1.as_str(), used),
             ("two/src/error/sub/deeper.rs", "Thing", 5)
