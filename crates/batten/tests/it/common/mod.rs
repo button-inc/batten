@@ -2741,10 +2741,12 @@ pub(crate) fn init_repo(dir: &Path) {
 /// Point `refs/remotes/origin/main` at `refs/heads/main` by writing the loose
 /// ref.
 ///
-/// That is the whole of what `git update-ref` does on a repository this young,
-/// minus a reflog nothing in this workspace reads: all of `crates/batten/src`
-/// mentions reflogs twice, to switch one off and to say there are none, and no
-/// `<ref>@{n}` revision suffix exists in src or tests outside a policy string.
+/// That is what `git update-ref` does on a repository this young, MINUS THE
+/// REFLOG, and the reflog is read: `git::remote_tips_before` takes a remote
+/// tip's pre-call value from its reflog (CLOUD-2923), so a ref pinned here
+/// counts as no tip before a call. A fixture that needs history already on a
+/// remote when a call begins publishes it through `update-ref` instead —
+/// `publish_origin_main(dir, Published::BeforeTheCall)` in `protected_escape.rs`.
 ///
 /// # Panics
 ///
