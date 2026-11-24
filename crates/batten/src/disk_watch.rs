@@ -845,10 +845,16 @@ mod tests {
             );
             // THE ARMED LINE REACHES THE SINK FIRST; the body waits for the
             // batch a collection hands over, the event this case is about.
+            // The bound is only a backstop (CLOUD-2789): a collection whose
+            // lines never reach the sink fails the case below instead of
+            // holding it until the suite's timeout.
             let (live, lines) = around_on(driver, Some(watch), || {
-                arrived
-                    .iter()
-                    .find(|batch| batch.iter().any(|line| line.starts_with("disk-collected ")))
+                std::iter::from_fn(|| {
+                    arrived
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .ok()
+                })
+                .find(|batch| batch.iter().any(|line| line.starts_with("disk-collected ")))
             });
             assert!(
                 live.is_some(),
@@ -859,6 +865,40 @@ mod tests {
                 "{driver:?}: the fixture was not collected: {lines:?}"
             );
         }
+    }
+
+    /// A VOLUME ABOVE THE FLOOR IS NEVER COLLECTED, however many samples read it.
+    ///
+    /// ORDERED BY EVENTS: the reader signals on its 200th reading, and the bound
+    /// is only a backstop.
+    ///
+    /// Fails by: the floor test inverted, so a sample above the floor starts a
+    /// collection and the stale fixture goes.
+    #[test]
+    fn a_volume_above_the_floor_is_never_collected() {
+        use std::sync::atomic::AtomicUsize;
+        let (repo, stale, config) = stale_repo("disk-watch-above-floor");
+        let (reached, settled) = std::sync::mpsc::channel();
+        let samples = AtomicUsize::new(0);
+        let watch = DiskWatch {
+            repo,
+            config: &config,
+            free_mb: Box::new(move || {
+                if samples.fetch_add(1, Ordering::SeqCst) == 200 {
+                    let _ = reached.send(());
+                }
+                Ok(50)
+            }),
+            kept: Vec::new(),
+            record: None,
+        };
+        let (observed, lines) = around(Some(watch), || {
+            settled
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .is_ok()
+        });
+        assert!(observed, "THE PREMISE: the watcher sampled: {lines:?}");
+        assert!(stale.exists(), "collected above the floor: {lines:?}");
     }
 
     /// THE WATCHER NAMES HOW IT IS WOKEN (CLOUD-2782): one armed line with the

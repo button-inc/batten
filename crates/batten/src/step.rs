@@ -2787,6 +2787,52 @@ mod tests {
         .unwrap()
     }
 
+    /// Fails by: more rows at once than the bound, a row started past a failed
+    /// dependency or before a passing one, a row's verdict line dropped, or a
+    /// run that never returns once every row has answered.
+    #[test]
+    fn a_graph_runs_within_its_bound_and_skips_past_a_failure() {
+        let row = |id: &str, after: &[&str]| -> Step {
+            let after: Vec<String> = after.iter().map(|id| format!("\"{id}\"")).collect();
+            toml::from_str(&format!(
+                "id = \"{id}\"\ninputs = [\"input\"]\ntools = [[\"echo\", \"v1\"]]\n\
+                 depends_on = [{}]\n",
+                after.join(", ")
+            ))
+            .unwrap()
+        };
+        let rows = [
+            row("a", &[]),
+            row("b", &[]),
+            row("c", &["a"]),
+            row("d", &["b"]),
+            row("e", &["d"]),
+        ];
+        let rows: Vec<&Step> = rows.iter().collect();
+        let run = |step: &Step| (if step.id == "b" { 5 } else { 0 }, None);
+        for bound in [1, 2] {
+            let mut done = BTreeMap::new();
+            let mut emitted = Vec::new();
+            let scheduled = schedule("g", &rows, bound, &mut done, &run, &mut |line| {
+                emitted.push(line);
+            });
+            assert_eq!(scheduled.peak, bound, "a and b may start together");
+            assert_eq!(scheduled.worst, 5);
+            let codes: Vec<(&str, i32)> =
+                done.iter().map(|(id, code)| (id.as_str(), *code)).collect();
+            assert_eq!(
+                codes,
+                [("a", 0), ("b", 5), ("c", 0), ("d", SKIPPED), ("e", SKIPPED)]
+            );
+            assert_eq!(
+                emitted.len(),
+                3,
+                "one verdict line per row run: {emitted:?}"
+            );
+            assert_eq!(scheduled.lines.len(), 5, "{:?}", scheduled.lines);
+        }
+    }
+
     /// `vars` as the process environment iterator [`env_lines`] reads.
     fn env_vars(
         pairs: &[(&str, &str)],
