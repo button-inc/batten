@@ -149,4 +149,12 @@ exclude_re = [
   # path starts, continues or is glued there. Column 59 is the window's `&&`,
   # never the `ident` closure's, which are killed (CLOUD-2789).
   'item_index\.rs:\d+:59: replace && with \|\| in token_paths$',
+  # The `<=` twin of `respell_body`'s `==` entry above: a body that parses after `fn f() `
+  # opens with `{`, `->`, `where` or `;` at offset 7, none a path root, so no
+  # splice starts at or before it and `< 7` and `<= 7` agree (CLOUD-2789).
+  'crate_cut\.rs:\d+:\d+: replace < with <= in respell_body$',
+  # `switch_script`'s one `>` is the full name's length: with `name.len() >= 3`
+  # a 3-character full name that starts with `name` IS `name`, which the
+  # `*full == name` arm already accepts, so `> 3` and `>= 3` agree (CLOUD-2789).
+  'shell_logic\.rs:\d+:\d+: replace > with >= in switch_script$',
 ]

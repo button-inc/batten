@@ -6374,6 +6374,26 @@ mod tests {
         assert!(!declared.answered_here("T", "run you"));
     }
 
+    /// Fails by: a tool row read as well formed whatever it holds, or any one
+    /// malformation of either key component needing another beside it to be
+    /// refused (an `||` read as `&&` in `ToolQuery::malformed`).
+    #[test]
+    fn each_malformed_tool_row_is_refused_on_its_own() {
+        let row = |tool: &str, version: &str| ToolQuery {
+            id: String::from("q"),
+            tool: tool.to_owned(),
+            version: version.to_owned(),
+            input: String::from("f"),
+            run: Vec::new(),
+        };
+        assert!(!row("t", "1").malformed());
+        let separated = format!("a{KEY_SEPARATOR}b");
+        for part in ["", separated.as_str(), "a/b", "a\\b"] {
+            assert!(row(part, "1").malformed(), "tool {part:?}");
+            assert!(row("t", part).malformed(), "version {part:?}");
+        }
+    }
+
     /// Fails by: a mint name carrying a path separator admitted.
     #[test]
     fn a_minted_query_naming_a_path_is_malformed() {

@@ -1988,7 +1988,8 @@ fn token_paths(tree: &SyntaxNode, module: &[String]) -> Vec<String> {
         if let Some(name) = from_root(&segments, module) {
             found.push(name);
         }
-        at = next.max(at + 1);
+        // `next` starts past `at` and only grows, so the walk always advances.
+        at = next;
     }
     found
 }

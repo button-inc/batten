@@ -856,27 +856,25 @@ fn is_ident_byte(byte: u8) -> bool {
 /// A `::`-separated path of two or more identifiers at the start of `text`,
 /// and its length in bytes.
 fn path_at(text: &str) -> Option<(Vec<String>, usize)> {
+    // EVERY PASS ONLY SHORTENS `rest`, so the walk ends on any text: an
+    // offset stepped by arithmetic spun forever when a step went wrong.
     let mut segments = Vec::new();
-    let mut at = 0;
+    let mut rest = text;
     loop {
-        let ident: String = text[at..]
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-            .collect();
+        let (ident, after) = rest.split_at(rest.bytes().take_while(|b| is_ident_byte(*b)).count());
         if ident.is_empty() || ident.as_bytes()[0].is_ascii_digit() {
             break;
         }
-        at += ident.len();
-        segments.push(ident);
-        if text[at..].starts_with("::")
-            && text[at + 2..].starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-        {
-            at += 2;
-        } else {
-            break;
+        segments.push(ident.to_owned());
+        rest = after;
+        match after.strip_prefix("::") {
+            Some(next) if next.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') => {
+                rest = next;
+            }
+            _ => break,
         }
     }
-    (segments.len() >= 2).then_some((segments, at))
+    (segments.len() >= 2).then_some((segments, text.len() - rest.len()))
 }
 
 /// Where a file's paths are read from: its crate and module, and whether it
@@ -2494,6 +2492,37 @@ mod tests {
             Index::anchored("app", &owned(&["m"]), &owned(&["self", "inner"])),
             Some(owned(&["app", "m", "inner"]))
         );
+    }
+
+    /// Fails by: the `super`-or-empty arm of `anchored` deleted, so a
+    /// `super::` target is kept as written (a path no crate is named by) and
+    /// an empty one anchors at nothing instead of declining.
+    #[test]
+    fn a_super_or_empty_target_is_not_anchored() {
+        let target = ["super".to_owned(), "inner".to_owned()];
+        assert_eq!(Index::anchored("app", &["m".to_owned()], &target), None);
+        assert_eq!(Index::anchored("app", &[], &[]), None);
+    }
+
+    /// Fails by: `path_at` stepping anywhere but forward past a `::` (it read
+    /// the same segment again forever), or answering a single identifier or
+    /// no identifier at all as a path (which a comment walk then took as one).
+    #[test]
+    fn a_path_is_two_or_more_segments_read_forward() {
+        let owned = |segments: &[&str]| -> Vec<String> {
+            segments
+                .iter()
+                .map(|segment| (*segment).to_owned())
+                .collect()
+        };
+        assert_eq!(
+            path_at("ab::cd::ef x"),
+            Some((owned(&["ab", "cd", "ef"]), 10))
+        );
+        assert_eq!(path_at("ab"), None);
+        assert_eq!(path_at(" ab::cd"), None);
+        assert_eq!(path_at(""), None);
+        assert_eq!(paths_in("// x ab::cd y"), [(5, owned(&["ab", "cd"]), 6)]);
     }
 
     /// Fails by: the `self` arm of `first_shim` deleted, so a `pub use
