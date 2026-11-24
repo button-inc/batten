@@ -952,7 +952,10 @@ fn a_refusing_stop_row_still_speaks() {
     stub(&dir, 2, "refused for turn 14");
     let output = hook(&dir, &stop_with_transcript(&dir, "Landed and pushed."));
     let stdout = stdout_of(&output);
-    assert!(stdout.contains("refused for turn 14"), "the reason travels: {stdout}");
+    assert!(
+        stdout.contains("refused for turn 14"),
+        "the reason travels: {stdout}"
+    );
     assert!(
         stdout.contains("hook.handler.finding-sink"),
         "and so does the row that said it: {stdout}"
