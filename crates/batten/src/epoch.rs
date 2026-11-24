@@ -1234,6 +1234,17 @@ mod rule_surface_tests {
         assert_eq!(reads(&["tree.records"]).records, None);
     }
 
+    /// Fails by: a module reading a key built from every row's declarations
+    /// read as opening only its own row's files, so its admission narrows to
+    /// one row while another row's edit moves its value (CLOUD-2789).
+    #[test]
+    fn a_whole_config_key_opens_more_than_its_row_declares() {
+        assert!(reads(&["tree.documents"]).opens_only_declared_files());
+        assert!(!reads(&["tree.git"]).opens_only_declared_files());
+        assert!(!reads(&["tree.traversals"]).opens_only_declared_files());
+        assert!(!reads(&["tree.shell"]).opens_only_declared_files());
+    }
+
     /// Fails by: a store read by its exact name, or through a field beneath
     /// it, judged unread — or another store judged read.
     #[test]

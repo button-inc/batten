@@ -33575,6 +33575,41 @@ mod tests {
         assert_eq!(String::from_utf8(err).unwrap(), "batten note a\n");
     }
 
+    /// Fails by: a commit's subject read where no `[commit]` convention is
+    /// declared, or at an event other than `PreTool` (CLOUD-2789).
+    #[test]
+    fn a_commit_subject_is_read_only_under_a_convention_at_pre_tool() {
+        let harness = crate::config_model::Harness::ClaudeCode;
+        let call = |event: &str| {
+            super::hook::decode(
+                harness,
+                &format!(
+                    r#"{{"hook_event_name":"{event}","tool_name":"Bash","tool_input":{{"command":"git commit -m 'feat: x'"}}}}"#
+                ),
+            )
+            .unwrap()
+        };
+        let bare = super::hook::Policy::declaring_nothing(harness);
+        let mut declared = bare.clone();
+        declared.commit = Some(crate::config_model::Commit {
+            subject_pattern: String::from("^"),
+            claims: None,
+        });
+        let (pre, post) = (call("PreToolUse"), call("PostToolUse"));
+        assert_eq!(
+            super::commit_subject_for(&declared, &pre),
+            super::facts::Look::Is(String::from("feat: x"))
+        );
+        assert_eq!(
+            super::commit_subject_for(&bare, &pre),
+            super::facts::Look::CouldNotLook
+        );
+        assert_eq!(
+            super::commit_subject_for(&declared, &post),
+            super::facts::Look::CouldNotLook
+        );
+    }
+
     /// Fails by: any adjacent word pair read as `capture show`.
     #[test]
     fn only_a_windowed_capture_show_shows_a_capture() {

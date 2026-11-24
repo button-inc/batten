@@ -22921,6 +22921,27 @@ deny contains "refused by themodule" if {
         }
     }
 
+    /// A `cd` inside `( … )` or a substitution moves only the stages inside
+    /// it, so a script a later stage outside it runs is still read where the
+    /// call placed that stage.
+    ///
+    /// Fails by: a segment that is grouped but not nested, or nested but not
+    /// grouped, read as not enclosed, so its unplaceable `cd` unplaces every
+    /// later stage and the script reads as opaque (CLOUD-2789).
+    #[test]
+    fn an_enclosed_cd_leaves_the_stages_outside_it_placed() {
+        let root = crate::scratch::scratch("hook-enclosed-cd");
+        std::fs::write(root.join("s.sh"), "git push\n").unwrap();
+        for inner in ["(cd sub)", "echo $(cd sub)"] {
+            let command = format!("cd {} && {inner}; bash s.sh", root.display());
+            let reach = program_reach(&command);
+            assert!(
+                reach.iter().any(|entry| entry["name"] == "git"),
+                "{command}: {reach:?}"
+            );
+        }
+    }
+
     /// `cargo run` reaches the binary it starts, named by `--bin`, `--example`
     /// or `-p`, handed what follows `--`; `batten step run` reaches the argv
     /// after its `--` (step 14).
@@ -24831,6 +24852,21 @@ deny contains "refused by themodule" if {
     fn a_copy_with_one_operand_writes_nothing() {
         assert!(program_writes(&["cp", "a"]).is_empty());
         assert_eq!(program_writes(&["cp", "a", "d"]), vec!["d", "d/a"]);
+    }
+
+    /// `-t` and `--target-directory` each name the destination directory, so
+    /// every operand is a source written into it.
+    ///
+    /// Fails by: either spelling read as a bare option, so its directory is
+    /// taken for a source and the last source for the destination (CLOUD-2789).
+    #[test]
+    fn a_target_directory_option_names_the_destination() {
+        let expected = vec!["d", "d/a", "d/b"];
+        assert_eq!(program_writes(&["cp", "-t", "d", "a", "b"]), expected);
+        assert_eq!(
+            program_writes(&["cp", "--target-directory", "d", "a", "b"]),
+            expected
+        );
     }
 
     /// A Perl or Ruby spawn with no arguments spawns nothing a reader can name.

@@ -851,7 +851,13 @@ pub fn seed(root: &Path) -> Seeded {
 
 /// Whether this process runs on CI: `CI` set to anything but empty.
 fn on_ci() -> bool {
-    std::env::var_os("CI").is_some_and(|ci| !ci.is_empty())
+    ci_named(std::env::var_os("CI").as_deref())
+}
+
+/// Whether a `CI` value names a CI run: present and not empty. Apart from
+/// [`on_ci`] so a case judges it without setting the process's environment.
+fn ci_named(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|ci| !ci.is_empty())
 }
 
 /// Whether this process runs inside a reach or sweep run, or is a seed, read
@@ -1377,6 +1383,16 @@ mod tests {
     }
 
     use super::*;
+
+    /// Fails by: an empty `CI` read as a CI run, or a set one read as none,
+    /// so a local seed is skipped or a CI seed spends metered minutes
+    /// (CLOUD-2789).
+    #[test]
+    fn only_a_nonempty_ci_names_a_ci_run() {
+        assert!(ci_named(Some(std::ffi::OsStr::new("true"))));
+        assert!(!ci_named(Some(std::ffi::OsStr::new(""))));
+        assert!(!ci_named(None));
+    }
 
     /// Fails by: a case carrying a `failure`, an `error` or a `skipped` child
     /// counted as passed, which reads one run's journal as more done than it
