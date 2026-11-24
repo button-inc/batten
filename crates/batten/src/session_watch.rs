@@ -482,8 +482,10 @@ impl crate::output::Line for Report {
 /// id as the input's `session_id` and [`Report::reading`] as the result. Which
 /// receipt that writes, if any, is the consumer's row to declare.
 ///
-/// **The store is the root's own git dir**, as `batten mcp call` mints. A watch
-/// run from another linked worktree mints where that worktree's gates read.
+/// **The store is [`store_root`]'s git dir**, the checkout the hook judges a
+/// structured call from: a linked worktree carrying the authority is its own
+/// root, so the watch's read and the `send_message` hook's clear of it land in
+/// one store, the one the `archive_session` gate reads.
 #[derive(Debug, Clone, Copy)]
 pub struct Mints<'a> {
     root: Option<&'a Path>,
@@ -527,6 +529,20 @@ impl<'a> Mints<'a> {
             None,
         );
     }
+}
+
+/// The checkout a watch run from `start` mints into (CLOUD-2900): the linked
+/// worktree's own root when it carries the authority, else the repository's,
+/// which is the root the hook anchors a call with no path target on
+/// (`config::anchor_at`). [`crate::git::repo_root`] alone is the MAIN checkout
+/// from a linked worktree, where the hook's clear and the gate's read would
+/// never meet the receipt.
+///
+/// # Errors
+///
+/// As [`crate::config::authority_root`]: `start` is not inside a repository.
+pub fn store_root(start: &Path) -> anyhow::Result<PathBuf> {
+    crate::config::authority_root(start)
 }
 
 /// How a watch ended, ordered by precedence: one dead child is the answer

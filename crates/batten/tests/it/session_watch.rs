@@ -625,15 +625,80 @@ fn a_poll_mints_each_childs_state_through_the_declared_row() {
     };
     assert_eq!(read("session_W01"), ["waiting", "bgwg3bqcd"]);
     assert_eq!(read("session_D01"), ["done", "-"]);
+}
 
-    // A poll handed no rows mints nothing.
-    std::fs::remove_dir_all(&store).expect("clear the store");
-    watch
-        .poll(&mut source, &cache("mints-none"), &Mints::none())
-        .expect("the source answers");
-    assert!(
-        !store.exists(),
-        "Mints::none() minted into {}",
-        store.display()
+/// Fails by: a watch in a linked worktree minting into the MAIN checkout's
+/// store while the hook clears the worktree's, so a message to the child never
+/// clears the read the archive gate admits on (the #1285 review).
+#[test]
+fn a_watch_in_a_linked_worktree_mints_where_the_hook_clears() {
+    // The hook loads every registered module, so the checkout carries them.
+    let staged = common::Fixture::new("session-watch-wt-main")
+        .config(include_str!("../../../../batten.toml"));
+    let modules = staged.path().join("policy");
+    std::fs::create_dir_all(&modules).unwrap();
+    let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy");
+    for entry in std::fs::read_dir(&committed).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "rego")
+        {
+            std::fs::copy(&path, modules.join(path.file_name().unwrap())).unwrap();
+        }
+    }
+    let main = staged.git().base_commit().build();
+    let worktree = common::scratch("session-watch-wt-linked");
+    std::fs::remove_dir(&worktree).expect("git worktree add wants the path absent");
+    common::git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            worktree.to_str().unwrap(),
+            "HEAD",
+        ],
     );
+    let worktree = std::fs::canonicalize(&worktree).unwrap();
+
+    let root = batten::session_watch::store_root(&worktree).expect("the worktree roots");
+    assert_eq!(
+        root, worktree,
+        "a worktree carrying the authority is its own root"
+    );
+    let resolved = batten::resolve::resolve(&root, &batten::resolve::Overrides::default())
+        .expect("the committed rows resolve");
+    let mut finished = events("worker-events.json");
+    finished.extend(events("shard-exit.json"));
+    let mut source = Recorded::new(100).child(row("session_D02", "IDLE", None), finished);
+    Watch::new(Vec::new())
+        .poll(
+            &mut source,
+            &cache("wt-mints"),
+            &Mints::new(&root, &resolved.mints),
+        )
+        .expect("the source answers");
+    let minted = receipts(&worktree).join("child-state.session_D02");
+    assert!(minted.exists(), "the read is in the worktree's own store");
+    assert!(
+        !receipts(&main).join("child-state.session_D02").exists(),
+        "the read is not in the main checkout's store"
+    );
+
+    // The hook, judging from the worktree, clears that same receipt.
+    let _ = common::run_with_stdin(
+        &worktree,
+        &["adjudicate", "--harness", "exit-code"],
+        &serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "cwd": worktree,
+            "tool_name": "mcp__claude-code-remote__send_message",
+            "tool_input": {"session_id": "session_D02", "message": "are you stuck?"},
+            "tool_response": [{"type": "text", "text": "sent"}],
+        })
+        .to_string(),
+    );
+    assert!(!minted.exists(), "the message cleared the worktree's read");
 }

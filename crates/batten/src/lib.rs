@@ -4930,8 +4930,9 @@ fn run_session(
     // bounded by each child's terminal state, and could-not-look ends it.
     let mut wait = |delay| pr_watch::clock::hold(delay, None);
     // CLOUD-2900: every poll mints each child's reading through the declared
-    // rows, into this checkout's store, as `mcp call` does.
-    let mints = session_watch::Mints::new(&repo, &resolved.mints);
+    // rows, into the store the hook clears and the archive gate reads.
+    let store = session_watch::store_root(Path::new("."))?;
+    let mints = session_watch::Mints::new(&store, &resolved.mints);
     let Some((reports, ending)) =
         session_watch::run(&mut watch, &mut source, &cache, &mints, &mut wait)
     else {

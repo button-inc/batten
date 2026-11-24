@@ -12159,6 +12159,7 @@ gates = [
   "profile-read-first",
   "profile-stripped",
   "sed-line-address",
+  "archive-held",
 ]
 
 # WHICH RECEIPTS A HEAD MUST CARRY TO BE CALLED VERIFIED (CLOUD-1338).
