@@ -1893,4 +1893,50 @@ mod tests {
             }
         }
     }
+
+    /// Fails by: a shortened `PowerShell` parameter name not read as the full
+    /// valued one, so its value (`-c` here) is taken for the command switch.
+    #[test]
+    fn a_shortened_valued_powershell_parameter_consumes_its_value() {
+        assert!(!switch_script("pwsh", &["-workingd", "-c", "x.ps1"]));
+        assert!(switch_script("pwsh", &["-workingd", "dir", "-c", "x"]));
+    }
+
+    /// Fails by: any `cmd.exe` argument read as `/C`, `/K` or `/R`.
+    #[test]
+    fn only_a_run_switch_makes_cmd_run_a_script() {
+        assert!(!switch_script("cmd", &["/d", "/q"]));
+        assert!(!cmd_switch("/d"));
+        assert!(!cmd_switch("c"));
+        assert!(cmd_switch("/K"));
+    }
+
+    /// Fails by: the words after an attached `-S` string resumed from the
+    /// wrong place, so the options before it are re-read as the utility's.
+    #[test]
+    fn an_attached_env_split_string_keeps_only_what_follows_it() {
+        assert_eq!(
+            env_utility(&["-i", "-Spython3 x.py", "y"]),
+            Some(vec!["python3", "x.py", "y"])
+        );
+    }
+
+    /// Fails by: a valued option's value not skipped, or the walk not
+    /// advancing past an option at all.
+    #[test]
+    fn xargs_options_and_their_values_are_skipped_to_the_utility() {
+        assert_eq!(
+            after_options(&["-n", "1", "-t", "sh", "x.sh"], XARGS_VALUED),
+            ["sh", "x.sh"]
+        );
+    }
+
+    /// Fails by: a closing quote never closing, so a glob after a quoted
+    /// span reads as quoted.
+    #[test]
+    fn a_glob_after_a_closed_quote_is_bare() {
+        assert_eq!(bare_pattern("'a'*"), Some("glob"));
+        assert_eq!(bare_pattern("\"a\"?"), Some("glob"));
+        assert_eq!(bare_pattern("'a*'"), None);
+    }
 }

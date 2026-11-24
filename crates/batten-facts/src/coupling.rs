@@ -450,4 +450,32 @@ mod tests {
         assert!(measure(&padded).propagation_cost < measure(&tangled).propagation_cost);
         assert!(measure(&padded).decoupling_level < measure(&clusters(5, 4)).decoupling_level);
     }
+
+    /// Equation 2 worked by hand on an uneven hierarchy: a lowest layer of 3
+    /// files (1 · 3/4) under one upper file depended on once, whose lower layer
+    /// is the 3 files outside it (1/4 · (1 − 1/3)). Fails by: the upper set
+    /// read as the lowest layer's components, the lower layer added to rather
+    /// than subtracted from, or the ratio multiplied.
+    #[test]
+    fn decoupling_level_matches_equation_two_on_an_uneven_hierarchy() {
+        let level = decoupling_level_of(&[(3, 0, 0), (1, 1, 1)], 4);
+        let expected = 0.75 + 0.25 * (1.0 - 1.0 / 3.0);
+        assert!((level - expected).abs() < 1e-9, "{level} vs {expected}");
+    }
+
+    /// A 5-file cycle with one edge out to `x`: the cycle's own 5 internal
+    /// edges of 20 possible give IMCF 0.75, so it scores 5/6 · 0.75, and `x`
+    /// scores 1/6 · (1 − 1/5). Fails by: the edge leaving the cycle counted
+    /// as one of its internal edges.
+    #[test]
+    fn an_edge_leaving_a_module_is_not_internal_to_it() {
+        let mut graph = clusters(1, 5);
+        graph.get_mut("g0f0").expect("g0f0").insert("x".to_owned());
+        let expected = 5.0 / 6.0 * 0.75 + 1.0 / 6.0 * (1.0 - 1.0 / 5.0);
+        let measured = measure(&graph).mscore;
+        assert!(
+            (measured - expected).abs() < 1e-9,
+            "{measured} vs {expected}"
+        );
+    }
 }

@@ -24153,4 +24153,73 @@ deny contains "refused by themodule" if {
         let after = protected_state_of(&root, &patterns, Some(&prior)).unwrap();
         assert_eq!(after["guarded.rego"], format!("{identity}#lent"));
     }
+
+    /// Fails by: the call's own parenthesis forgotten at a top-level newline,
+    /// so a Python call whose argv opens on the next line reads as no argument.
+    #[test]
+    fn a_parenthesised_call_runs_past_a_newline_inside_it() {
+        let py = "import subprocess\nsubprocess.run(\n    ['git', 'push'],\n)\n";
+        assert_eq!(
+            spawns_in(Language::Python, py, "s.py", false),
+            vec![Spawned::Argv(vec!["git".into(), "push".into()])]
+        );
+    }
+
+    /// Fails by: any second argument read as the options object, so a Node
+    /// spawn whose argv is a variable reads as the bare program rather than
+    /// opaque.
+    #[test]
+    fn only_an_object_after_the_program_is_the_node_calls_options() {
+        let js = "const cp = require('child_process');\n\
+                  cp.spawnSync('cargo', argv);\n\
+                  cp.spawnSync('git', { stdio: 'inherit' });\n";
+        assert_eq!(
+            spawns_in(Language::Node, js, "s.js", false),
+            vec![
+                Spawned::Opaque {
+                    source: "s.js".into(),
+                    trusted: false
+                },
+                Spawned::Argv(vec!["git".into()]),
+            ]
+        );
+    }
+
+    /// Fails by: the directory option read from the program word itself, an
+    /// attached `-C` read only for `cargo` or a bare `-C` read as attached, a
+    /// `mise` flag ending its options where a bare word should, or a cargo
+    /// manifest naming itself rather than its directory.
+    #[test]
+    fn a_programs_directory_option_moves_where_it_acts() {
+        let here = Path::new("/repo");
+        let acting = |command: &str| {
+            let tokens: Vec<&str> = command.split(' ').collect();
+            option_acting_dir(&tokens, here)
+        };
+        assert_eq!(acting("make -C sub"), Some(here.join("sub")));
+        assert_eq!(acting("make -Csub"), Some(here.join("sub")));
+        assert_eq!(acting("mise -C sub run x"), Some(here.join("sub")));
+        assert_eq!(acting("mise -q -C sub run x"), Some(here.join("sub")));
+        assert_eq!(acting("mise run x -C other"), None);
+        assert_eq!(
+            acting("cargo build --manifest-path sub/Cargo.toml"),
+            Some(here.join("sub"))
+        );
+        assert_eq!(acting("ls -C sub"), None);
+    }
+
+    /// Fails by: the event guard joined by `&&`, so a granting module answers
+    /// a pre-tool call that is no permission event.
+    #[test]
+    fn a_grant_answers_a_permission_event_only() {
+        const GRANTS: &str = "package batten\n\nimport rego.v1\n\n\
+            rules contains \"module-gate\"\n\n\
+            preapprove contains \"module-gate\" if { input.call.command != \"\" }\n";
+        let policy = module_policy("permission-grant", GRANTS);
+        assert_eq!(permission_grant(&policy, &envelope("ls")), None);
+        assert_eq!(
+            permission_grant(&policy, &envelope_at(Event::PermissionRequest, "ls")).as_deref(),
+            Some("module-gate")
+        );
+    }
 }
