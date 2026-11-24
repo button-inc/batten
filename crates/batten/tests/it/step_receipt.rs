@@ -1053,7 +1053,7 @@ fn an_undeclared_read_fails_a_traced_miss() {
     common::git_in(&repo.dir, &["add", "other.txt"]);
     repo.script("readb", "#!/bin/sh\ncat input.txt other.txt >/dev/null\n");
     let (out, after) = repo.traced_run("readb");
-    if batten::mutate::trace::tracer().is_some() {
+    if batten::mutate::trace::Host::here().tracer().is_some() {
         assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
         let stderr = common::stderr(&out);
         assert!(
@@ -1096,7 +1096,7 @@ fn a_step_run_already_under_a_tracer_runs_untraced() {
     repo.script("readb", "#!/bin/sh\ncat input.txt other.txt >/dev/null\n");
     // NO TRACER ON THIS HOST: nothing is nested, and the plain run records.
     // Both arms assert; neither returns early (`silent_skip`).
-    if let Some(strace) = batten::mutate::trace::tracer() {
+    if let Some(strace) = batten::mutate::trace::Host::here().tracer() {
         nested_run_passes(&repo, &strace);
     } else {
         let (out, after) = repo.traced_run("readb");
@@ -1146,7 +1146,7 @@ fn a_probe_for_a_missing_path_outside_the_inputs_is_undeclared() {
         "#!/bin/sh\ncat input.txt >/dev/null\ntest -e c\nexit 0\n",
     );
     let (out, after) = repo.traced_run("probe");
-    if batten::mutate::trace::tracer().is_some() {
+    if batten::mutate::trace::Host::here().tracer().is_some() {
         assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
         assert!(
             common::stderr(&out).contains("read 1 path(s) outside its inputs"),
@@ -1370,7 +1370,7 @@ fn a_step_that_rewrites_a_declared_input_and_restores_it_takes_no_receipt() {
         "one\n",
         "the premise: restored"
     );
-    if batten::mutate::trace::tracer().is_some() {
+    if batten::mutate::trace::Host::here().tracer().is_some() {
         let stderr = common::stderr(&out);
         assert_eq!(out.status.code(), Some(2), "{stderr}");
         let listing = stderr

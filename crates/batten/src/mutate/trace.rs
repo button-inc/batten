@@ -9,24 +9,57 @@
 
 use std::path::{Path, PathBuf};
 
-/// The syscall tracer a case's file reads are recorded with, where the host
-/// has one: `strace` on Linux. Elsewhere no case is traced, and each keys on
-/// every non-Rust file, which is the sound answer, not a cheaper one.
-#[must_use]
-pub fn tracer() -> Option<String> {
-    if !cfg!(target_os = "linux") {
-        return None;
+/// What a process's tracer offer is decided from ([`Host::tracer`]): the
+/// platform, whether a tracer already holds the process, the reach record it
+/// runs in, and its `PATH`.
+///
+/// THE FACTS ARE READ APART FROM THE DECISION (CLOUD-2789), so a case can hand
+/// the decision any host: a run under `step run`'s tracer, or a mutants job
+/// with no `strace`, could otherwise only ever see `None` from it, and a
+/// decision that answered `None` everywhere passed both.
+#[derive(Debug, Clone)]
+pub struct Host {
+    /// Whether this is Linux, the one platform with a tracer here.
+    linux: bool,
+    /// Whether a tracer already holds the process ([`traced_already`]).
+    traced: bool,
+    /// The reach record directory the process runs in, if any.
+    record: Option<PathBuf>,
+    /// The process's `PATH`.
+    path: Option<std::ffi::OsString>,
+}
+
+impl Host {
+    /// This process's own facts.
+    #[must_use]
+    pub fn here() -> Self {
+        Self {
+            linux: cfg!(target_os = "linux"),
+            traced: traced_already(),
+            record: std::env::var_os(super::schema::RECORD).map(PathBuf::from),
+            path: std::env::var_os("PATH"),
+        }
     }
-    let record = std::env::var_os(super::schema::RECORD).map(PathBuf::from);
-    if refused(traced_already(), record.as_deref()) {
-        return None;
+
+    /// The syscall tracer a case's file reads are recorded with, where the
+    /// host has one: `strace` on Linux. Elsewhere no case is traced, and each
+    /// keys on every non-Rust file, which is the sound answer, not a cheaper
+    /// one.
+    #[must_use]
+    pub fn tracer(&self) -> Option<String> {
+        if !self.linux {
+            return None;
+        }
+        if refused(self.traced, self.record.as_deref()) {
+            return None;
+        }
+        self.path.as_ref().and_then(|path| {
+            std::env::split_paths(path)
+                .map(|dir| dir.join("strace"))
+                .find(|candidate| candidate.is_file())
+                .map(|found| found.to_string_lossy().into_owned())
+        })
     }
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("strace"))
-            .find(|candidate| candidate.is_file())
-            .map(|found| found.to_string_lossy().into_owned())
-    })
 }
 
 /// The file a case's reach record holds once a process in the case asked for
@@ -773,7 +806,7 @@ mod tests {
             None
         };
         traceable_where_required(expected.is_some());
-        assert_eq!(super::tracer(), expected);
+        assert_eq!(super::Host::here().tracer(), expected);
     }
 
     /// The `test:traced` task sets `BATTEN_TEST_TRACED_REQUIRED` on the one
@@ -785,6 +818,85 @@ mod tests {
             traceable || std::env::var_os("BATTEN_TEST_TRACED_REQUIRED").is_none(),
             "this lane must trace: Linux, `strace` on PATH, no tracer attached"
         );
+    }
+
+    /// A Linux host, untraced and outside any reach record, whose `PATH` is
+    /// `path`: the facts a case hands [`super::Host::tracer`] whatever host it
+    /// runs on (CLOUD-2789).
+    fn linux_untraced(path: &[&Path]) -> super::Host {
+        super::Host {
+            linux: true,
+            traced: false,
+            record: None,
+            path: Some(std::env::join_paths(path).unwrap()),
+        }
+    }
+
+    /// Two `PATH` entries in a fresh scratch directory: the first holds a
+    /// DIRECTORY named `strace`, the second a file of that name, which is the
+    /// one a tracer offer finds.
+    fn planted(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let dir = crate::scratch::scratch(name);
+        let decoy = dir.join("decoy");
+        std::fs::create_dir_all(decoy.join("strace")).unwrap();
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("strace"), "").unwrap();
+        (dir, decoy, bin)
+    }
+
+    // Fails by: an untraced Linux host with a `strace` file on its `PATH`
+    // offered no tracer (`tracer` answering `None`, or its platform test
+    // inverted), offered something other than that file, or offered a
+    // DIRECTORY named `strace`. Planted, never read from this host, so it
+    // asserts the offer under `step run`'s tracer and in a mutants job with no
+    // `strace` alike (CLOUD-2789).
+    #[test]
+    fn an_untraced_linux_host_is_offered_the_strace_file_on_its_path() {
+        let (_dir, decoy, bin) = planted("trace-offer");
+        let expected = bin.join("strace").to_string_lossy().into_owned();
+        assert_eq!(linux_untraced(&[&decoy, &bin]).tracer(), Some(expected));
+    }
+
+    // Fails by: a host off Linux offered the `strace` on its path, which only
+    // Linux traces with.
+    #[test]
+    fn a_host_off_linux_is_offered_no_tracer() {
+        let (_dir, decoy, bin) = planted("trace-off-linux");
+        let host = super::Host {
+            linux: false,
+            ..linux_untraced(&[&decoy, &bin])
+        };
+        assert_eq!(host.tracer(), None);
+    }
+
+    // Fails by: a process a tracer already holds offered a second, which
+    // cannot attach; or, inside a reach record, the refusal not said there.
+    #[test]
+    fn a_traced_host_is_refused_a_tracer_and_its_record_says_so() {
+        let (dir, decoy, bin) = planted("trace-refused");
+        let record = dir.join("record");
+        std::fs::create_dir_all(&record).unwrap();
+        let host = super::Host {
+            traced: true,
+            record: Some(record.clone()),
+            ..linux_untraced(&[&decoy, &bin])
+        };
+        assert_eq!(host.tracer(), None);
+        assert!(record.join(super::REFUSED).is_file());
+    }
+
+    // Fails by: a `PATH` with no `strace` file, or no `PATH` at all, offered
+    // a tracer.
+    #[test]
+    fn a_path_with_no_strace_file_offers_no_tracer() {
+        let (_dir, decoy, _bin) = planted("trace-none");
+        assert_eq!(linux_untraced(&[&decoy]).tracer(), None);
+        let host = super::Host {
+            path: None,
+            ..linux_untraced(&[])
+        };
+        assert_eq!(host.tracer(), None);
     }
 
     // Fails by: a zero `TracerPid` read as a tracer, a set one read as none,
@@ -814,7 +926,7 @@ mod tests {
             None
         };
         traceable_where_required(expected.is_some());
-        assert_eq!(super::tracer(), expected);
+        assert_eq!(super::Host::here().tracer(), expected);
     }
 
     // Fails by: this process's own status not the one read (`traced_already`
