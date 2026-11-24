@@ -49,6 +49,8 @@ use crate::config_model::LAP_RECORD;
 use crate::gitwrite::{self, Rebase};
 use crate::preset_catalog::RED_HEAD;
 
+pub mod receipts;
+
 /// What one replay did.
 ///
 /// Three outcomes rather than a `Result`, because none of them is an error: a

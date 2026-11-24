@@ -6358,6 +6358,29 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         flags: &[],
     },
+    // CLOUD-1544. A WRITE TO A REMOTE, the private state repository named by
+    // `BATTEN_STATE_REPO` and never origin. Exit `3` when the remote cannot be
+    // reached and never `2`: a publish that fails is not a gate's verdict.
+    CommandDecl {
+        path: "receipt publish",
+        id: "receipt.publish",
+        about: "Publish this checkout's receipts to the state repository named by BATTEN_STATE_REPO, as one parentless commit",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // CLOUD-1544. Writes under `$GIT_DIR` and the state directory: a pulled
+    // receipt lands beside the local stores, never over a local mint.
+    CommandDecl {
+        path: "receipt pull",
+        id: "receipt.pull",
+        about: "Pull this branch's published receipts from the state repository into this checkout",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[],
+    },
     // The noun only dispatches; its subtree carries a write verb, so the parent
     // stays unclassified rather than advertising a write-bearing `read` prefix
     // on the derived allowlist (CLOUD-170) — the posture `receipt` and `state`

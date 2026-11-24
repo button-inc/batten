@@ -6945,7 +6945,58 @@ fn run_receipt(
             receipt::run_status_any(&checks, key, base.as_deref(), json, out)
         }
         ReceiptCommand::Verified => receipt::run_verified(out),
+        ReceiptCommand::Publish => run_receipt_transfer(true, out),
+        ReceiptCommand::Pull => run_receipt_transfer(false, out),
     }
+}
+
+/// `batten receipt publish` and `pull` (CLOUD-1544): the one place the
+/// environment, the clone and the state directory meet the transport in
+/// [`land::receipts`].
+///
+/// **Unset is inert and says so**: `off`, exit `0`, before a remote is derived,
+/// a call is made or a file is written. A project with no `http(s)` origin is
+/// `no-http-origin`, exit `1`. Otherwise one pointer line — the ref, the commit
+/// it reads, and how many receipts moved — and never a receipt body. A remote
+/// that cannot be reached is an error, exit `3`; never `2`, because a publish
+/// that fails is not a gate's verdict.
+fn run_receipt_transfer(publish: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let here = Path::new(".");
+    let value = std::env::var(session::STATE_REPO_ENV).ok();
+    let origin = git::remotes(here)
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let remote = match land::receipts::state_remote(value.as_deref(), origin.as_deref()) {
+        land::receipts::Remote::Off => {
+            writeln!(out, "off")?;
+            return Ok(ExitCode::Success);
+        }
+        land::receipts::Remote::NoHttpOrigin => {
+            writeln!(out, "no-http-origin")?;
+            return Ok(ExitCode::Usage);
+        }
+        land::receipts::Remote::At(remote) => remote,
+    };
+    let repo_root = git::repo_root(here)?;
+    let git_dir = git::git_dir(here)?;
+    let Some(branch) = git::current_branch(here)? else {
+        return Err(UsageError::raise(
+            "receipt: HEAD is detached, so there is no branch to key the receipt set on",
+        ));
+    };
+    let name = land::receipts::reference(&branch)?;
+    let receipts_dir = state::repo_state_dir(&repo_root)?.join("receipts");
+    let compat_dir = git_dir.join("batten-receipts");
+    let moved = if publish {
+        let local = land::receipts::local_set(&receipts_dir, &compat_dir);
+        land::receipts::publish(&remote, &git_dir, &name, &local, i64::try_from(now_unix()).unwrap_or(i64::MAX))?
+    } else {
+        let head = git::head_commit(here)?;
+        land::receipts::pull(&remote, &git_dir, &name, &receipts_dir, &compat_dir, &head)?
+    };
+    writeln!(out, "{} {} {}", moved.reference, moved.commit, moved.count)?;
+    Ok(ExitCode::Success)
 }
 
 /// The task registry's reader (CLOUD-425), ported off `mise-tasks/alive.sh`.
