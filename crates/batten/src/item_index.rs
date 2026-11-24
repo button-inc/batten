@@ -2291,6 +2291,130 @@ mod tests {
         );
     }
 
+    /// Fails by: a `lib.rs` below a crate's `src/` root read as the crate
+    /// root, or a read file's module path not answered.
+    #[test]
+    fn a_nested_lib_rs_is_a_module_and_a_files_module_path_is_answered() {
+        let roots = crate_roots(&tree(&[ROOT]).1);
+        assert_eq!(
+            module_of(&roots, "src/a/lib.rs"),
+            Some((
+                String::from("app"),
+                vec![String::from("a"), String::from("lib")]
+            ))
+        );
+        let built = index(&[ROOT, ("src/lib.rs", "pub mod a;\n"), ("src/a.rs", "")]);
+        assert_eq!(
+            built.module_path_of("src/a.rs"),
+            Some(&[String::from("a")][..])
+        );
+    }
+
+    /// Fails by: a union left undeclared, or a `self::` alias read as a crate
+    /// named `self`; either path then stays as written.
+    #[test]
+    fn a_union_and_a_self_alias_each_resolve() {
+        let built = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod m;\n"),
+            (
+                "src/m.rs",
+                "pub union U { a: u32 }\npub mod inner { pub struct X; }\npub use self::inner::X;\n",
+            ),
+        ]);
+        let empty = BTreeMap::new();
+        assert_eq!(
+            canonical("crate::m::U", "app", &built, &empty),
+            "⟨src/m.rs#U⟩"
+        );
+        assert_eq!(
+            canonical("crate::m::X", "app", &built, &empty),
+            "⟨src/m.rs#X⟩"
+        );
+    }
+
+    /// Fails by: a path through a test build's glob counting the wrong number
+    /// of its own segments consumed, or the glob hop spending no depth.
+    #[test]
+    fn a_glob_hop_in_the_test_build_counts_its_segments_and_spends_depth() {
+        let built = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", "pub struct X;\n"),
+            ("src/b.rs", "pub use crate::a::*;\n"),
+        ]);
+        let path: Vec<String> = ["app", "b", "X", "new"].map(String::from).to_vec();
+        assert_eq!(
+            built.resolve_through(&path, 2, true),
+            Some((("src/a.rs".to_owned(), "X".to_owned()), 3))
+        );
+        assert_eq!(built.resolve_through(&path, 1, true), None);
+    }
+
+    /// Fails by: another file's module (the crate root's) read as one of this
+    /// file's.
+    #[test]
+    fn a_files_declared_names_are_its_own_modules_only() {
+        let built = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub struct Root;\n"),
+            (
+                "src/a.rs",
+                "pub struct X;\npub mod inner { pub struct Y; }\n",
+            ),
+        ]);
+        let expected: BTreeMap<Vec<String>, std::collections::BTreeSet<String>> = BTreeMap::from([
+            (vec![], std::collections::BTreeSet::from(["X".to_owned()])),
+            (
+                vec!["inner".to_owned()],
+                std::collections::BTreeSet::from(["Y".to_owned()]),
+            ),
+        ]);
+        assert_eq!(built.declared_in("src/a.rs"), expected);
+    }
+
+    /// Fails by: a segment glued onto a leading `::` read as a path head, a
+    /// non-identifier after `::` taken as a segment, or a trailing `::`
+    /// counted into the path's length.
+    #[test]
+    fn a_path_is_identifiers_joined_by_adjacent_separators() {
+        assert!(token_paths("::a::b").is_empty());
+        assert!(token_paths("a::<b>").is_empty());
+        assert_eq!(
+            path_at("a::b::"),
+            Some((vec!["a".to_owned(), "b".to_owned()], 4))
+        );
+    }
+
+    /// Fails by: a comment's span shifted off its text, or a path read from
+    /// the middle of an identifier or after a `::` inside a comment.
+    #[test]
+    fn a_comment_path_starts_only_where_no_identifier_or_colon_precedes() {
+        assert_eq!(
+            paths_in("// a::b"),
+            [(3, vec!["a".to_owned(), "b".to_owned()], 4)]
+        );
+        assert!(paths_in("// 1a::b").is_empty());
+        assert!(paths_in("// ::a::b").is_empty());
+    }
+
+    /// Fails by: `respell` asked at a body offset rather than the file offset
+    /// the body starts at, for a `use` leaf or for a path.
+    #[test]
+    fn a_respelling_is_asked_at_the_file_offset_of_each_path_and_use() {
+        let at_file = |want: usize, written: &'static str| {
+            move |at: usize, _: &[String]| (at == want).then(|| written.to_owned())
+        };
+        assert_eq!(
+            respell_body_with("{ use a::b; }", 10, &at_file(12, "c::b")),
+            "{ use c::b; }"
+        );
+        assert_eq!(
+            respell_body_with("{ x::y; }", 10, &at_file(12, "z::y")),
+            "{ z::y; }"
+        );
+    }
+
     /// Fails by: an alias cycle followed forever. It stops, unresolved.
     #[test]
     fn an_alias_cycle_stops_at_the_depth_bound() {
