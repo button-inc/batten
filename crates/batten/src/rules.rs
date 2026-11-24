@@ -16074,6 +16074,25 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         assert_eq!(declaring, Vec::<&str>::new());
     }
 
+    /// `base` acquires the base fact on a `policy` row alone: on a ratchet it
+    /// names the rev a count is read since, and acquires nothing.
+    ///
+    /// Fails by: the kind test negated (`==` for `!=`), so a ratchet's `base`
+    /// declares the fact and a policy row's does not (CLOUD-2789).
+    #[test]
+    fn only_a_policy_rows_base_declares_the_base_fact() {
+        let declares_base = |kind| {
+            Rule {
+                base: Some(String::from("origin/main")),
+                ..blank("p", kind)
+            }
+            .census_facts()
+            .any(|fact| fact == crate::facts::Fact::Base)
+        };
+        assert!(declares_base(RuleKind::Policy));
+        assert!(!declares_base(RuleKind::Ratchet));
+    }
+
     /// A pipeline row carrying `verdict` without `filters` is half a family and
     /// is refused; carrying both is whole.
     ///

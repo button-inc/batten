@@ -6250,6 +6250,30 @@ pub fn shell_streams(map: &serde_json::Map<String, serde_json::Value>) -> (Vec<u
 mod tests {
     use super::*;
 
+    /// Fails by: every prompt channel read as the default (`is_default` as
+    /// `true`), so a row declaring `positional` loses it on the way out and
+    /// re-reads as stdin (CLOUD-2789).
+    #[test]
+    fn a_positional_prompt_survives_serialization_and_stdin_stays_quiet() {
+        let row = |prompt_arg: Option<&str>| -> ReviewQuery {
+            let mut row = serde_json::json!({
+                "id": "r",
+                "prompt": "p",
+                "runner": "x",
+                "version": "1",
+                "subject": "s",
+            });
+            if let Some(arg) = prompt_arg {
+                row["prompt_arg"] = serde_json::json!(arg);
+            }
+            serde_json::from_value(row).expect("a review row")
+        };
+        let positional = serde_json::to_value(row(Some("positional"))).expect("serializes");
+        assert_eq!(positional["prompt_arg"], "positional");
+        let stdin = serde_json::to_value(row(None)).expect("serializes");
+        assert!(stdin.get("prompt_arg").is_none(), "{stdin}");
+    }
+
     /// Fails by: a blank `command` or `tool` admitted as a selector (either
     /// emptiness guard in `validate_one` read as `false`), so a row that
     /// selects nothing loads.

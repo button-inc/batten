@@ -991,6 +991,22 @@ mod tests {
         assert_eq!(chain(257), None, "a chain one past the bound is unknown");
     }
 
+    // A FORK CYCLE IS BOUNDED TOO (CLOUD-2789): a reused pid can make two pids
+    // each other's parent, and the walk up through them must count each hop,
+    // so it ends unknown instead of recursing without end. Fails by: the
+    // parent hop's depth never growing (`+` for `*`), so the walk overflows
+    // its stack.
+    #[test]
+    fn a_fork_cycle_through_a_reused_pid_is_unknown() {
+        let trace = whole(&[
+            "7     chdir(\"/x\") = 0",
+            "9     clone(child_stack=NULL, flags=SIGCHLD) = 8",
+            "8     clone(child_stack=NULL, flags=SIGCHLD) = 9",
+            "8     stat(\"c\", 0x1) = -1 ENOENT (No such file or directory)",
+        ]);
+        assert_eq!(super::touched(&trace, Some(Path::new("/repo"))), None);
+    }
+
     // THE CARGO SHAPE (CLOUD-2789): the root forks a child that `chdir`s to its
     // package before exec, and that child probes a bare name. Read as
     // one `chdir` anywhere disabling every pid's start directory, this trace
