@@ -18727,9 +18727,13 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // cases that can observe each, under the same journal: the classic stage
     // this replaces paid a copy, a full build, a baseline run and the whole
     // suite per mutant on every lap.
+    // A HAND-BACK'S BUILD IS SIZED BEFORE IT RUNS (CLOUD-2882): a declared
+    // cost the disk above the collector's floor cannot hold refuses that
+    // hand-back as could-not-look, where a forced build failed and read unviable.
     let handback = mutate::schema::Handback {
         runner: &runner,
         diff: listing,
+        disk: Some((mutate::JobCost::declared()?.disk_mb, floor)),
     };
     let swept = mutate::schema::sweep(
         root,

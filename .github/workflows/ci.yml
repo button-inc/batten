@@ -1152,6 +1152,17 @@ jobs:
     permissions:
       contents: read
     steps:
+      # THE `ci` JOB'S RECLAIM, FOR ITS REASON (CLOUD-2882): the schema build's
+      # target reached 6 GB on #1276, and a hand-back's build needs another
+      # 6.2 GB (`MUTANT_JOB_DISK_MB`); a runner that ran out recorded mutants
+      # unviable. Bare steps and `continue-on-error`, exactly as there.
+      - name: Disk before the reclaim
+        run: df -h /
+      - name: Reclaim runner disk before the build
+        continue-on-error: true
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift
+      - name: Disk after the reclaim
+        run: df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -1227,6 +1238,15 @@ jobs:
     permissions:
       contents: read
     steps:
+      # `mutants (reach)`'s reclaim, for its reason: a shard builds every
+      # hand-back in its slice, at 6.2 GB each (CLOUD-2882).
+      - name: Disk before the reclaim
+        run: df -h /
+      - name: Reclaim runner disk before the build
+        continue-on-error: true
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift
+      - name: Disk after the reclaim
+        run: df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # `MUTANT_CHANGED_SINCE=origin/main` diffs the branch against trunk.
