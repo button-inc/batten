@@ -12692,10 +12692,17 @@ expires = "2027-02-28"
 # dates refinement against is written by `batten hook` itself at SessionStart,
 # before any row below runs — the engine reads it, so the engine writes it, and a
 # consumer no longer has to know to declare the step its gate depends on.
+#MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
+#MUTANT session-install-preinstall-on|s@^run = \["env", "MISE_TASK_RUN_AUTO_INSTALL=false", "mise", "run", "session:install"\]$@run = ["mise", "run", "session:install"]@|the_install_handler_skips_the_unlocked_pre_task_install
 [[hook.handler]]
 id = "session-install"
 on = "session-start"
-run = ["mise", "run", "session:install"]
+# `mise run` installs every missing tool BEFORE a task's body, and that install
+# does not see the task's `env`: under `lockfile = false` it resolves through
+# api.github.com, which the proxy refuses (CLOUD-2881). Measured cold: seven
+# tools 403'd and the locked body never ran. Off for this one call, the body's
+# own locked install is the only install.
+run = ["env", "MISE_TASK_RUN_AUTO_INSTALL=false", "mise", "run", "session:install"]
 # Ten minutes. The measured cold figure for ONE tool was 24s (`pipx:serena-agent`,
 # CLOUD-196); this installs the whole `[tools]` table on a container with no
 # cache, and it is the step every other one depends on.

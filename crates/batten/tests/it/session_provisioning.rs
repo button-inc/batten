@@ -999,6 +999,45 @@ fn the_install_step_is_declared_locked() {
     );
 }
 
+/// The locked body above never runs if the handler's own `mise run` fails
+/// first (CLOUD-2881). `mise run` installs every missing tool before a task's
+/// body, without that task's `env`, so under `lockfile = false` it resolves
+/// through the forge's API. Measured cold: seven tools refused 403 and the task
+/// body never started. The handler turns that pre-task install off, so the
+/// body's locked install is the only one.
+#[test]
+fn the_install_handler_skips_the_unlocked_pre_task_install() {
+    let row = session_rows()
+        .into_iter()
+        .find(|row| row.id == "session-install")
+        .expect("the install handler is declared");
+    let argv: Vec<&str> = row
+        .run
+        .trim_matches(|c| c == '[' || c == ']')
+        .split(',')
+        .map(|word| word.trim().trim_matches('"'))
+        .collect();
+    let off = argv
+        .iter()
+        .position(|word| *word == "MISE_TASK_RUN_AUTO_INSTALL=false")
+        .unwrap_or_else(|| panic!("the handler turns the pre-task install off: {}", row.run));
+    let runner = argv
+        .iter()
+        .position(|word| *word == "mise")
+        .unwrap_or_else(|| panic!("the handler runs the task through mise: {}", row.run));
+    assert_eq!(
+        argv.first(),
+        Some(&"env"),
+        "the setting is an env assignment: {}",
+        row.run
+    );
+    assert!(
+        off < runner,
+        "the setting precedes the runner it governs: {}",
+        row.run
+    );
+}
+
 /// CLOUD-2198 RETIRES CLOUD-1329's EDGE. `build:release` once declared
 /// `depends = ["target-prune"]` so the first build of a session ran the disk
 /// precondition; the precondition was v0.0.214's floor model, which refused a
