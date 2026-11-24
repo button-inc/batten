@@ -1200,8 +1200,14 @@ fn paths_in(body: &str) -> Vec<(usize, Vec<String>, usize)> {
     let mut found = token_paths(body);
     for (start, end) in comment_spans(body) {
         let mut at = start;
-        while at < end {
-            let rest = &body[at..end];
+        // BOUNDED BY THE COMMENT'S LENGTH (CLOUD-2789), as `token_paths` is by
+        // its token count: every pass moves `at` forward by at least one byte,
+        // so `end - start` passes reach the end. A change that stops it
+        // advancing ends the scan with a wrong answer rather than spinning.
+        for _ in start..end {
+            let Some(rest) = body.get(at..end).filter(|rest| !rest.is_empty()) else {
+                break;
+            };
             let bytes = body.as_bytes();
             let starts_path = at == 0 || !(is_ident_byte(bytes[at - 1]) || bytes[at - 1] == b':');
             if starts_path && let Some((segments, len)) = path_at(rest) {

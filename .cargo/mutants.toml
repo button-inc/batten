@@ -119,4 +119,14 @@ exclude_re = [
   # so the same list comes back. Column 32 is the guard's `&&`, never the
   # loop's, which would spin (CLOUD-2789).
   'policy\.rs:\d+:32: replace && with \|\| in unexercised$',
+  # `replaced` is 0 or 1 (`guarded_sources_of`'s argument above), so
+  # `at * replaced` is 0 or `at`, both char boundaries once the first check
+  # admitted `at`; and `at + 1` always is, after the ASCII `_` at `at`.
+  # Pinned to the column: the splice's own `+` on the next line is killed (CLOUD-2789).
+  'policy\.rs:\d+:72: replace \+ with \* in guarded_sources_of$',
+  # `!flag && reaches` read as `||` sets a flag that is already true to true:
+  # the value is the same, and only `changed` differs, which the pass bound
+  # now caps. Columns 31 and 32 are the `with` and `reads` lines' `&&`, never
+  # the reference filter's, which is killed (CLOUD-2789).
+  'policy\.rs:\d+:3[12]: replace && with \|\| in package_facts$',
 ]

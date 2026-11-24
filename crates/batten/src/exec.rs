@@ -4044,6 +4044,40 @@ mod tests {
         assert!(!escalate_group(&pid), "nor anything to escalate");
     }
 
+    /// Fails by: `detached_in` answering a pid that is not its child's, so the
+    /// task the hook registers names another process (CLOUD-2789).
+    #[test]
+    fn a_child_detached_in_a_directory_answers_its_own_pid() {
+        let root = contained("exec-detached-in");
+        if !cfg!(unix) {
+            assert!(
+                detached_in(
+                    Path::new("cmd"),
+                    &["/c".to_owned(), "exit".to_owned()],
+                    &[],
+                    &root
+                )
+                .is_some(),
+                "the child starts"
+            );
+            return;
+        }
+        let pid = Fifo::at(root.join("pid"));
+        let script = format!("{}; while :; do :; done", pid.write("$$"));
+        let answered = detached_in(Path::new("/bin/sh"), &["-c".to_owned(), script], &[], &root)
+            .expect("the child starts");
+        let mut group = Group {
+            pid: pid.first("the detached child writing its pid"),
+            reaped: false,
+        };
+        assert_eq!(answered.to_string(), group.pid, "the child's own pid");
+        assert!(
+            terminate_group(&group.pid),
+            "the spinner was asked to leave"
+        );
+        reap(&mut group);
+    }
+
     /// Fails by: the owned-group cancel reporting nothing over a live group.
     #[test]
     fn cancelling_the_owned_group_reaches_a_live_one() {

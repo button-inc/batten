@@ -7822,8 +7822,15 @@ fn git_acting_dir(tokens: &[&str], current: &Path) -> Option<std::path::PathBuf>
     let mut dir = current.to_path_buf();
     let (mut work_tree, mut git_dir) = (None, None);
     let mut index = 0;
-    while index < end {
-        let word = arguments[index];
+    let head = arguments.get(..end).unwrap_or(arguments);
+    // BOUNDED BY THE WORD COUNT (CLOUD-2789): every pass moves `index` forward
+    // by at least one word, so `head.len()` passes reach the end. A change that
+    // stops it advancing ends the walk with a wrong directory a case can see,
+    // rather than spinning until the suite's timeout.
+    for _ in 0..head.len() {
+        let Some(&word) = head.get(index) else {
+            break;
+        };
         let (option, value) = match word {
             "-C" | "--git-dir" | "--work-tree" => (word, arguments.get(index + 1).copied()),
             _ => match word.split_once('=') {
