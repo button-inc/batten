@@ -17,6 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::common::{Fixture, StateHome as _, batten, git_in, scratch, stdout};
+use batten::capture::StreamedChild as _;
 use batten::land::receipts;
 
 /// Any URL: the stand-in answers every call, so the host is never resolved.
@@ -39,8 +40,10 @@ fn git_with(dir: &Path, args: &[&str], input: &[u8]) -> Vec<u8> {
         .stderr(Stdio::piped())
         .spawn()
         .expect("start git");
+    // Taken and dropped, so git reads EOF: both services read the whole request
+    // before they answer, so writing it first cannot deadlock.
     child.stdin.take().unwrap().write_all(input).unwrap();
-    let output = child.wait_with_output().unwrap();
+    let output = child.streamed_wait().unwrap();
     assert!(
         output.status.success(),
         "git {args:?}: {}",
