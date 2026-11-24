@@ -474,75 +474,70 @@ impl crate::output::Line for Report {
     }
 }
 
-/// Where a poll mints each child's reading (CLOUD-2900): the checkout's root
-/// and its resolved `[[mint]]` rows.
+/// Where a poll mints each child's reading (CLOUD-2900): a sink handed each
+/// report's input (`{"session_id": <id>}`) and its [`Report::reading`].
 ///
-/// **The engine names no receipt.** Every poll hands each report to the crate's
-/// one minting authority under the bare method [`LIST_EVENTS`], with the child's
-/// id as the input's `session_id` and [`Report::reading`] as the result. Which
-/// receipt that writes, if any, is the consumer's row to declare.
+/// **The engine names no receipt, and this module names no minting authority.**
+/// `run_session` passes a sink over the crate's one minting authority, the
+/// resolved `[[mint]]` rows, the bare method [`LIST_EVENTS`] and
+/// [`store_root`]'s checkout; which receipt that writes, if any, is the
+/// consumer's row to declare. Injected rather than called, so this module's
+/// closure stays its own (`module_closure.rs`).
 ///
 /// **The store is [`store_root`]'s git dir**, the checkout the hook judges a
 /// structured call from: a linked worktree carrying the authority is its own
 /// root, so the watch's read and the `send_message` hook's clear of it land in
 /// one store, the one the `archive_session` gate reads.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Mints<'a> {
-    root: Option<&'a Path>,
-    declared: &'a [crate::config_model::MintDeclared],
+    sink: Option<&'a dyn Fn(&Value, &Value)>,
+}
+
+impl std::fmt::Debug for Mints<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Mints")
+            .field("sink", &self.sink.is_some())
+            .finish()
+    }
 }
 
 impl<'a> Mints<'a> {
-    /// Mint through `declared` into `root`'s receipt store.
+    /// Mint each report through `sink`, called with the input and the reading.
     #[must_use]
-    pub const fn new(root: &'a Path, declared: &'a [crate::config_model::MintDeclared]) -> Self {
-        Self {
-            root: Some(root),
-            declared,
-        }
+    pub const fn new(sink: &'a dyn Fn(&Value, &Value)) -> Self {
+        Self { sink: Some(sink) }
     }
 
-    /// No rows and no store: a poll handed this mints nothing.
+    /// No sink: a poll handed this mints nothing.
     #[must_use]
     pub const fn none() -> Mints<'static> {
-        Mints {
-            root: None,
-            declared: &[],
-        }
+        Mints { sink: None }
     }
 
     /// Mint `report`'s reading. Silent on every failure, as the mint boundary
     /// has always been: the gate that reads the receipt simply refuses again.
     fn mint(&self, report: &Report) {
-        let Some(root) = self.root else {
-            return;
-        };
-        if self.declared.is_empty() {
-            return;
+        if let Some(sink) = self.sink {
+            sink(
+                &serde_json::json!({"session_id": report.session}),
+                &report.reading(),
+            );
         }
-        crate::mint_receipts(
-            self.declared,
-            LIST_EVENTS,
-            &serde_json::json!({"session_id": report.session}),
-            &report.reading(),
-            root,
-            None,
-        );
     }
 }
 
 /// The checkout a watch run from `start` mints into (CLOUD-2900): the linked
 /// worktree's own root when it carries the authority, else the repository's,
 /// which is the root the hook anchors a call with no path target on
-/// (`config::anchor_at`). [`crate::git::repo_root`] alone is the MAIN checkout
+/// (`config::anchor_at`, which asks the same question). [`crate::git::repo_root`] alone is the MAIN checkout
 /// from a linked worktree, where the hook's clear and the gate's read would
 /// never meet the receipt.
 ///
 /// # Errors
 ///
-/// As [`crate::config::authority_root`]: `start` is not inside a repository.
+/// As [`crate::git::authority_root`]: `start` is not inside a repository.
 pub fn store_root(start: &Path) -> anyhow::Result<PathBuf> {
-    crate::config::authority_root(start)
+    crate::git::authority_root(start, crate::config_model::CONFIG_FILE)
 }
 
 /// How a watch ended, ordered by precedence: one dead child is the answer

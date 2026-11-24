@@ -589,7 +589,17 @@ fn a_poll_mints_each_childs_state_through_the_declared_row() {
         .build();
     let resolved = batten::resolve::resolve(&dir, &batten::resolve::Overrides::default())
         .expect("the committed rows resolve");
-    let mints = Mints::new(&dir, &resolved.mints);
+    let sink = |input: &Value, reading: &Value| {
+        batten::mint_receipts_for_test(
+            &resolved.mints,
+            batten::session_watch::LIST_EVENTS,
+            input,
+            reading,
+            &dir,
+            None,
+        );
+    };
+    let mints = Mints::new(&sink);
 
     let mut finished = events("worker-events.json");
     finished.extend(events("shard-exit.json"));
@@ -670,6 +680,16 @@ fn a_watch_in_a_linked_worktree_mints_where_the_hook_clears() {
     );
     let resolved = batten::resolve::resolve(&root, &batten::resolve::Overrides::default())
         .expect("the committed rows resolve");
+    let sink = |input: &Value, reading: &Value| {
+        batten::mint_receipts_for_test(
+            &resolved.mints,
+            batten::session_watch::LIST_EVENTS,
+            input,
+            reading,
+            &root,
+            None,
+        );
+    };
     let mut finished = events("worker-events.json");
     finished.extend(events("shard-exit.json"));
     let mut source = Recorded::new(100).child(row("session_D02", "IDLE", None), finished);
@@ -677,7 +697,7 @@ fn a_watch_in_a_linked_worktree_mints_where_the_hook_clears() {
         .poll(
             &mut source,
             &cache("wt-mints"),
-            &Mints::new(&root, &resolved.mints),
+            &Mints::new(&sink),
         )
         .expect("the source answers");
     let minted = receipts(&worktree).join("child-state.session_D02");

@@ -4932,7 +4932,17 @@ fn run_session(
     // CLOUD-2900: every poll mints each child's reading through the declared
     // rows, into the store the hook clears and the archive gate reads.
     let store = session_watch::store_root(Path::new("."))?;
-    let mints = session_watch::Mints::new(&store, &resolved.mints);
+    let sink = |input: &serde_json::Value, reading: &serde_json::Value| {
+        mint_receipts(
+            &resolved.mints,
+            session_watch::LIST_EVENTS,
+            input,
+            reading,
+            &store,
+            None,
+        );
+    };
+    let mints = session_watch::Mints::new(&sink);
     let Some((reports, ending)) =
         session_watch::run(&mut watch, &mut source, &cache, &mints, &mut wait)
     else {

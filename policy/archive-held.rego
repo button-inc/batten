@@ -43,11 +43,11 @@ archiving if input.call.tool == "archive_session"
 
 archiving if endswith(input.call.tool, "__archive_session")
 
-# The child the call archives, or "" when the call names none.
-child := id if {
-	id := input.call.arguments.session_id
-	is_string(id)
-} else := ""
+# The child the call archives, or "" when the call names none. Two complete
+# definitions rather than an `else`, which the two evaluators decided apart.
+child := input.call.arguments.session_id if is_string(input.call.arguments.session_id)
+
+child := "" if not is_string(input.call.arguments.session_id)
 
 # The newest complete read of this child says `done`.
 settled if {
@@ -61,11 +61,18 @@ open_tasks contains task if {
 	not task in {"", "-"}
 }
 
-held := [{"artifact": task} | some task in sort(open_tasks)] if {
-	count(open_tasks) > 0
-} else := [{"artifact": child}] if {
+# Each open task, else the child, else the tool: three exclusive definitions.
+held := [{"artifact": task} | some task in sort(open_tasks)] if count(open_tasks) > 0
+
+held := [{"artifact": child}] if {
+	count(open_tasks) == 0
 	child != ""
-} else := [{"artifact": input.call.tool}]
+}
+
+held := [{"artifact": input.call.tool}] if {
+	count(open_tasks) == 0
+	child == ""
+}
 
 violation contains {
 	"rule": "task watch pending",
