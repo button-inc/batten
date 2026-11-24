@@ -7974,8 +7974,14 @@ fn git_pathspecs(tokens: &[&str], current: &Path) -> Pathspecs {
     } else {
         let before = &rest[..dash.unwrap_or(rest.len())];
         let mut index = 0;
-        while index < before.len() {
-            let word = before[index];
+        // BOUNDED BY A PASS COUNT (CLOUD-2789), as `trace::quoted_arg` is:
+        // every pass moves `index` forward, so `before.len()` passes reach the
+        // end, and a change that steps it back ends the walk rather than
+        // cycling `-s <tree>` forever.
+        for _ in 0..before.len() {
+            let Some(&word) = before.get(index) else {
+                break;
+            };
             if matches!(word, "-s" | "--source") {
                 index += 2;
                 continue;
@@ -10698,7 +10704,13 @@ fn inner_scripts(name: &str, arguments: &[&str], stage: Stage<'_>) -> Vec<String
         "watch" => {
             const VALUED: [&str; 4] = ["-n", "--interval", "-q", "--equexit"];
             let mut at = 0;
-            while at < arguments.len() && arguments[at].starts_with('-') {
+            // BOUNDED BY A PASS COUNT (CLOUD-2789): each pass moves `at`
+            // forward, so `arguments.len()` passes reach the end, and a change
+            // that stops it advancing ends the walk rather than spinning.
+            for _ in 0..arguments.len() {
+                if !arguments.get(at).is_some_and(|word| word.starts_with('-')) {
+                    break;
+                }
                 at += if VALUED.contains(&arguments[at]) {
                     2
                 } else {
@@ -22912,6 +22924,12 @@ deny contains "refused by themodule" if {
             source("cd sub; bash script.sh"),
             Some(serde_json::json!("sub/script.sh"))
         );
+        // A `cd` on an EARLIER LINE of a segment moves the lines after it,
+        // whatever ends the segment. Fails by: only the terminator asked.
+        assert_eq!(
+            source("cd sub\nbash script.sh | true"),
+            Some(serde_json::json!("sub/script.sh"))
+        );
         for command in ["cd sub | true; bash script.sh", "cd sub & bash script.sh"] {
             assert_eq!(
                 source(command),
@@ -24796,6 +24814,13 @@ deny contains "refused by themodule" if {
             .map(|rule| rule.id.as_str())
             .collect();
         assert_eq!(ids, vec!["covers-and-blocks"]);
+        // A WRITE AFTER THE FACT selects none (CLOUD-2789): only a pre-tool
+        // write can be refused. Fails by: the event and operation guards
+        // joined by `&&`, so a post-tool write still reads the ratchets.
+        let mut after = envelope.clone();
+        after.event = Event::PostTool;
+        assert!(after.writes.is_some(), "premise: still a write");
+        assert!(policy.ratchets_for(&after).is_empty());
     }
 
     /// A git work tree names where git writes, whichever order the options

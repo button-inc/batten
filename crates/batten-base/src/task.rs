@@ -561,8 +561,15 @@ pub struct Alive {
 /// whether a tool it installs may run yet; a stale record read as live would
 /// hold that gate shut on a process that is not the task. Where no tick reads
 /// (off Linux) the digest decides, as before.
+///
+/// **AN UNREAPED PROCESS HAS EXITED (CLOUD-2789).** A detached task's parent
+/// is gone, so it is reparented to pid 1, and where pid 1 does not reap (a
+/// container's) it stays a zombie: its pid answers `kill(pid, 0)`, its start
+/// tick still reads, and its cmdline is empty, which the digest reads as
+/// unevaluable and so alive. A setup task that exited short of a terminal
+/// phase then read as running forever.
 fn task_alive(entry: &Entry) -> bool {
-    if !pid_exists(&entry.pid) {
+    if !pid_exists(&entry.pid) || exited(&entry.pid) {
         return false;
     }
     if let Some(live) = process_start(&entry.pid)
@@ -574,6 +581,21 @@ fn task_alive(entry: &Entry) -> bool {
         return true;
     };
     entry.cmdline_sha256.is_empty() || entry.cmdline_sha256 == live
+}
+
+/// Whether `pid` has exited and only waits to be reaped: its `/proc/<pid>/stat`
+/// state, field 3, is `Z` (zombie) or `X` (dead). `false` where the file is
+/// unreadable (off Linux, or the pid is gone), which [`pid_exists`] decides.
+fn exited(pid: &str) -> bool {
+    crate::fsio::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| exited_in(&stat))
+}
+
+/// Whether a `/proc/<pid>/stat` text's state field names an exited process.
+/// Counted after the LAST `)`, as [`process_start`] counts.
+fn exited_in(stat: &str) -> bool {
+    stat.rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .is_some_and(|state| state == "Z" || state == "X")
 }
 
 /// A process's start time, field 22 of `/proc/<pid>/stat`, in clock ticks since
@@ -1691,6 +1713,19 @@ mod tests {
         assert!(!pid_exists("not-a-pid"));
         // Off unix there is no probe, so no parseable pid is ever called gone.
         assert_eq!(pid_exists(NO_SUCH_PID), cfg!(not(unix)));
+    }
+
+    /// Fails by: a running or sleeping state read as exited, a zombie or a
+    /// dead one read as running, or the state read before the command name's
+    /// last `)` (CLOUD-2789).
+    #[test]
+    fn only_a_zombie_or_dead_state_has_exited() {
+        assert!(exited_in("42 (setup) Z 1 42 42 0"));
+        assert!(exited_in("42 (setup) X 1 42 42 0"));
+        assert!(!exited_in("42 (setup) S 1 42 42 0"));
+        assert!(!exited_in("42 (setup) R 1 42 42 0"));
+        assert!(!exited_in("42 (a) Z b) S 1 42 42 0"));
+        assert!(!exited_in(""));
     }
 
     /// Fails by: a live registrant whose recorded cmdline still matches read as

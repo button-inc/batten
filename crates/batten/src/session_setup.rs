@@ -361,6 +361,52 @@ pub fn surface(git_dir: &Path) -> Vec<Refusal> {
 mod tests {
     use super::*;
 
+    /// A setup task that exited and was never reaped reads as crashed, not
+    /// running (CLOUD-2789). `detached_in` never waits, so its child stays a
+    /// zombie of this test process until the process ends, on any Linux.
+    ///
+    /// Fails by: `task_alive`'s exit test dropped, so a zombie's empty cmdline
+    /// reads as unevaluable and the task as running forever, which is how
+    /// `session_start`'s `settle` waited out its bound on `run -> true`.
+    #[test]
+    fn an_unreaped_setup_task_reads_as_crashed() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let git_dir = crate::scratch::scratch("session-setup-zombie");
+        let Some(pid) = crate::exec::detached_in(Path::new("true"), &[], &[], &git_dir) else {
+            panic!("premise: `true` spawns");
+        };
+        let pid = pid.to_string();
+        let exited = || {
+            crate::fsio::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                stat.rsplit_once(')')
+                    .and_then(|(_, rest)| rest.split_whitespace().next())
+                    == Some("Z")
+            })
+        };
+        // BOUNDED BY A PASS COUNT, never the clock: `true` exits at once.
+        let mut zombie = false;
+        for _ in 0..1_000_000 {
+            if exited() {
+                zombie = true;
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(zombie, "premise: the child exited unreaped");
+        task::register(&git_dir, TASK, &pid, "start", 100);
+        let task::Reading::Lines(lines) = task::alive(&git_dir, task::Alive { now: 160 }) else {
+            panic!("one whole record");
+        };
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with(&format!("{TASK} crashed(start) "))),
+            "{lines:?}"
+        );
+    }
+
     /// Fails by: the spooled payload's path answered as an empty path, so the
     /// handlers read nothing where `start` wrote the host's payload.
     #[test]
