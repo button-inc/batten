@@ -363,6 +363,16 @@ fn a_release_pin_naming_a_dev_prerelease_passes_and_a_source_pin_still_does_not(
     );
     common::write(&dir, "lane.yml", LANE);
     let (_host, served) = crate::engine_install::release_host(&dir, pin, pin);
+    // THE FORGE'S LAYOUT, SPELLED HERE rather than through `forge_tag`: the
+    // fixture places the release with the function under test, so without this
+    // a gate asking under the bare pin would agree with a fixture serving there.
+    assert!(
+        dir.join("www")
+            .join(crate::engine_install::REPO)
+            .join("releases/download/dev/v0.0.222-dev.pr1290.20261124120000/SHA256SUMS")
+            .is_file(),
+        "the dev pre-release is published under dev/, its metadata dropped"
+    );
     let gate = |dir: &Path| {
         common::batten()
             .state_dir(&data_dir(dir))
