@@ -414,11 +414,14 @@ mod tests {
         Ok(())
     }
 
+    /// A pid no live process holds.
+    const GONE: &str = "4194305";
+
     /// A git dir whose setup task is `GONE` and left `phase`, with the task's
     /// own directory present and holding neither an outcome nor its marker.
     fn task_left(name: &str, phase: &str) -> PathBuf {
         let git_dir = crate::scratch::scratch(&format!("session-setup-{name}"));
-        std::fs::create_dir_all(dir(&git_dir)).unwrap();
+        std::fs::create_dir_all(dir(&git_dir)).expect("the task directory");
         task::register(&git_dir, TASK, GONE, phase, 0);
         git_dir
     }

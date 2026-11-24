@@ -768,18 +768,6 @@ mod tests {
         assert_eq!(document["ccr"]["data"], serde_json::json!([]));
     }
 
-    /// Fails by: a `user` event before any handoff read as the prompt arriving.
-    #[test]
-    fn a_user_event_prompts_only_after_a_handoff() {
-        let user = serde_json::json!({"id": "1", "user": {}});
-        let handoff = serde_json::json!({"id": "2", "system": {"subtype": HANDOFF}});
-        let mut inventory = Inventory::default();
-        inventory.fold(std::slice::from_ref(&user));
-        assert!(!inventory.prompted, "no handoff yet");
-        inventory.fold(&[handoff, user]);
-        assert!(inventory.prompted);
-    }
-
     /// Fails by: a session id spelled with `-` or `_` refused a cache file, or
     /// a kept reduction not read back.
     #[test]

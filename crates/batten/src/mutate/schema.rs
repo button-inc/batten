@@ -10614,6 +10614,8 @@ mod tests {
     fn a_still_checkout_judges_a_poisoned_handback_unjudged() {
         let base = crate::scratch::scratch("schema-handback-still");
         crate::gitwrite::init_on_main(&base).unwrap();
+        std::fs::write(base.join("lib.rs"), "fn f() {}\n").unwrap();
+        crate::gitwrite::commit_paths(&base, &[String::from("lib.rs")], "base").unwrap();
         let over = super::super::cover::source_digest(&base).unwrap();
         let mutants = [Listed {
             function: None,
