@@ -270,7 +270,8 @@ you see that.
 
 Declared repairs also run by themselves in the session's setup task (a committed
 `repair` is the authorisation to run it), so `--repair` is for provisioning a
-container out of band, as an environment's setup script does after `install.sh`.
+container out of band, as an environment's setup script does after `install.sh`;
+the exact line is in `README.md` under "Cloud environment Setup field".
 A row with no `repair` is reported and never acted on.
 
 What a row means is its `gloss` in `batten.toml`: the report is pointer-only, so

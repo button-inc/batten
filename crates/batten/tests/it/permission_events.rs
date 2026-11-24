@@ -328,32 +328,30 @@ fn no_argument_reaches_the_gap_list() {
 /// branch moved below `dispatch_handlers` (`permission-event-readjudicates`).
 #[test]
 fn no_handler_runs_at_a_permission_event() {
-    // The handler is a `#!/bin/sh` script, which only a unix host executes; the
-    // case compiles everywhere and asserts there (CLOUD-1148's `cfg!` shape).
+    // The handler is the test stand-in run by relative path, which only a unix
+    // host resolves as a symlink; the case compiles everywhere and asserts there
+    // (CLOUD-1148's `cfg!` shape).
     if !cfg!(unix) {
         return;
     }
     let root = root("no-handler");
-    common::write(&root, "mark.sh", "#!/bin/sh\ntouch handler-ran\n");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(root.join("mark.sh"), std::fs::Permissions::from_mode(0o755))
-            .expect("chmod");
-    }
+    common::stub_at(
+        &root.join("mark"),
+        &serde_json::json!([{ "steps": [{ "write": ["handler-ran", ""] }] }]),
+    );
     let config = root.join("batten.toml");
     let mut text = std::fs::read_to_string(&config).expect("read the fixture config");
     for event in ["permission-request", "permission-denied"] {
         use std::fmt::Write as _;
         write!(
             text,
-            "\n[[hook.handler]]\nid = \"mark-{event}\"\non = \"{event}\"\nrun = [\"./mark.sh\"]\n\
+            "\n[[hook.handler]]\nid = \"mark-{event}\"\non = \"{event}\"\nrun = [\"./mark\"]\n\
              timeout_ms = 5000\nowner = \"CLOUD-2768\"\n"
         )
         .expect("append to a String");
     }
     std::fs::write(&config, text).expect("write the fixture config");
-    common::git_in(&root, &["add", "mark.sh", "batten.toml"]);
+    common::git_in(&root, &["add", "mark", "mark.plan.json", "batten.toml"]);
     common::git_in(
         &root,
         &[

@@ -1,5 +1,7 @@
 #MUTANT-SUITE crates/batten/tests/it/connector_not_granted.rs
 #MUTANT write-grant-refused|s@^\tnot unreduced\[trim_prefix(entry, "mcp__Linear__")\]$@\ttrue@|a_raw_write_grant_is_clean
+#MUTANT raw-grant-admitted|s@^\tcount(granted) > 0$@\tfalse@|a_named_raw_grant_is_refused
+#MUTANT prefix-narrowed-to-one-name|s@^\tstartswith(entry, reduced_connector)$@\tentry == "mcp__Linear__get_issue"@|a_wildcard_server_grant_is_refused
 
 # METADATA
 # description: |
@@ -106,7 +108,8 @@ violation contains {
 # `input.tree.documents` for this path, or that it distinguishes an unparseable
 # settings file from one carrying no grant — a `with input as` case fabricates the
 # very shape the engine may be unable to produce. That is
-# `crates/batten/tests/connector_not_granted.rs`, over the compiled binary.
+# `crates/batten/tests/it/connector_not_granted.rs`, over the compiled binary,
+# and it is the suite the `#MUTANT` rows above name.
 
 settings(entries) := {"tree": {"documents": {".claude/settings.json": {"permissions": {"allow": entries}}}}}
 

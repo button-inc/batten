@@ -59,30 +59,61 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-/// A tool whose answer the case controls or breaks.
-const TOOL: &str = "#!/bin/sh\nif [ -n \"${STUB_TOOL_FAIL:-}\" ]; then exit 9; fi\necho \"${STUB_TOOL:-tool-1.0}\"\n";
+/// A tool whose answer the case controls (`STUB_TOOL`) or breaks
+/// (`STUB_TOOL_FAIL`, exit 9).
+fn tool() -> serde_json::Value {
+    serde_json::json!([
+        {"env": "STUB_TOOL_FAIL", "steps": [{"exit": 9}]},
+        {"env": "STUB_TOOL", "steps": [{"stdout": "{env:STUB_TOOL}\n"}]},
+        {"steps": [{"stdout": "tool-1.0\n"}]},
+    ])
+}
 
 /// A tool printing a declaration file's bytes, as `mise tasks info` prints a task.
-const DECL: &str = "#!/bin/sh\ncat \"$1\"\n";
+fn decl() -> serde_json::Value {
+    serde_json::json!([{"steps": [{"cat": "{argv:1}"}]}])
+}
 
 /// A step command that leaves a mark each time it RUNS, so a hit is observable.
-const OK: &str = "#!/bin/sh\necho ran >>bin/ran.log\n";
+fn ok() -> serde_json::Value {
+    serde_json::json!([{"steps": [{"append": ["bin/ran.log", "ran\n"]}]}])
+}
 
-/// A step command that fails with the code the case chooses.
-const FAIL: &str = "#!/bin/sh\necho 'stub failure detail' >&2\nexit \"${STUB_CODE:-2}\"\n";
+/// A step command that fails with the code the case chooses (`STUB_CODE`, any
+/// exit code, else 2).
+fn fail() -> serde_json::Value {
+    let detail = serde_json::json!({"stderr": "stub failure detail\n"});
+    serde_json::json!([
+        {"env": "STUB_CODE", "steps": [detail, {"exit-with": "{env:STUB_CODE}"}]},
+        {"steps": [detail, {"exit": 2}]},
+    ])
+}
 
 /// A step command that leaves a mark each time it RUNS and exits with the code
 /// the case chooses, so a failure answered from its receipt is observable.
-const RED: &str =
-    "#!/bin/sh\necho ran >>bin/red.log\necho 'red detail' >&2\nexit \"${STUB_CODE:-0}\"\n";
+fn red() -> serde_json::Value {
+    let ran = serde_json::json!({"append": ["bin/red.log", "ran\n"]});
+    let detail = serde_json::json!({"stderr": "red detail\n"});
+    serde_json::json!([
+        {"env": "STUB_CODE", "steps": [ran, detail, {"exit-with": "{env:STUB_CODE}"}]},
+        {"steps": [ran, detail, {"exit": 0}]},
+    ])
+}
 
 /// A step command that PASSES after leaving the committed authority unloadable,
 /// so the record after it cannot recompute the key.
-const BREAK: &str = "#!/bin/sh\necho ran >>bin/ran.log\nprintf 'version = [\\n' >batten.toml\n";
+fn breaks() -> serde_json::Value {
+    serde_json::json!([{"steps": [
+        {"append": ["bin/ran.log", "ran\n"]},
+        {"write": ["batten.toml", "version = [\n"]},
+    ]}])
+}
 
 /// A `cargo` standing in for nextest: it logs the argv it was handed, so a
 /// case can see whether the journal's `--config-file` was added to it.
-const CARGO: &str = "#!/bin/sh\necho \"$@\" >>bin/cargo.log\n";
+fn cargo() -> serde_json::Value {
+    serde_json::json!([{"steps": [{"append": ["bin/cargo.log", "{argv}\n"]}]}])
+}
 
 /// A committed authority that will not parse.
 const UNLOADABLE: &str = "version = [\n";
@@ -142,22 +173,16 @@ struct Repo {
 impl Repo {
     fn new(name: &str) -> Self {
         let dir = common::scratch(&format!("step-receipt-{name}"));
-        for (file, body) in [
-            ("bin/toolv", TOOL),
-            ("bin/decl", DECL),
-            ("bin/ok", OK),
-            ("bin/fail", FAIL),
-            ("bin/red", RED),
-            ("bin/break", BREAK),
-            ("bin/cargo", CARGO),
+        for (file, plan) in [
+            ("bin/toolv", tool()),
+            ("bin/decl", decl()),
+            ("bin/ok", ok()),
+            ("bin/fail", fail()),
+            ("bin/red", red()),
+            ("bin/break", breaks()),
+            ("bin/cargo", cargo()),
         ] {
-            common::write(&dir, file, body);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                std::fs::set_permissions(dir.join(file), std::fs::Permissions::from_mode(0o755))
-                    .expect("chmod");
-            }
+            common::stub_at(&dir.join(file), &plan);
         }
         common::write(&dir, "bin/taskfile", "body bytes v1\n");
         common::write(&dir, "input.txt", "one\n");
@@ -1293,7 +1318,10 @@ fn a_rewrite_of_what_a_commit_step_judges_misses_though_the_tree_is_identical() 
         let repo = Repo::new(&format!("commit-keyed-{step}"));
         common::write(&repo.dir, "batten.toml", &declared_step_table(step));
         // A `cargo` that answers its version, as the row's tool probe asks.
-        common::write(&repo.dir, "bin/cargo", "#!/bin/sh\necho 'cargo 1.0.0'\n");
+        common::stub_at(
+            &repo.dir.join("bin/cargo"),
+            &serde_json::json!([{ "steps": [{ "stdout": "cargo 1.0.0\n" }] }]),
+        );
         common::git_in(&repo.dir, &["commit", "-qam", "the row"]);
         common::git_in(
             &repo.dir,

@@ -35,9 +35,9 @@ import rego.v1
 
 # A gate outside $MUTANT_GATES with no row here fails `mise run mutant-census`.
 #
-# The exemption is DISCHARGED as of CLOUD-931: `tests/privileged-lane.bats` drives
-# the compiled binary over a real tree, so there is now a named case a mutation
-# can turn red, and this gate joins $MUTANT_GATES.
+# The exemption is DISCHARGED as of CLOUD-931: a compiled tier, today
+# `crates/batten/tests/it/privileged_lane.rs`, drives the binary over a real
+# tree, so there is a named case a mutation can turn red.
 #
 # THE HEAD-RESOLUTION CONJUNCT IS THE ONE WORTH CORRUPTING, and choosing an input
 # for it took two attempts — which is the whole value of declaring a mutation

@@ -86,7 +86,7 @@ same evidence N times.
 Two bounds, so this is not read as complete. A green suite does not establish that a
 test discriminates (CLOUD-418's class — leg 4 is the partial answer). And a suite
 verdict is a property of the whole tree **including base you did not author**:
-measured 2026-08-22, `tests/land.bats:1310` failed inside a full parallel `verify` on
+measured 2026-08-22, a `land` bats case failed inside a full parallel `verify` on
 a speculatively linearized tree and passed in isolation on the same content
 (CLOUD-466). That is why the HEAD run is a sweep-level check and never per-row
 evidence.
@@ -367,7 +367,7 @@ key that appears ONLY in a PR body typed by hand — the port dropped the `gh pr
 view` read, because a network call cannot fit the mediated path's latency
 budget. The duplicate-claim half is `claim-race-check`, a `tree`-scoped
 `command` row (`claim-not-raced`) that `batten check` runs under `verify`; it
-refuses a key already claimed by a different open PR, and `mise-tasks/issue-guard.sh`
+refuses a key already claimed by a different open PR, and the issue-guard script
 is deleted.
 
 ### This applies to transitions ONLY — never to issue content
@@ -608,7 +608,7 @@ Review`, exit 1. It is `landed-check`'s terminal twin — both name In Review
   `/fast-forward` on `mise run release-due`: the PR lands once `main` has been
   quiet for `RELEASE_QUIET_MINUTES` or the last release is older than
   `RELEASE_MAX_WAIT_HOURS`, whichever comes first, and a cron is what asks.
-  `mise-tasks/release-due.sh` owns both windows; read them there rather than here
+  `batten.toml` owns both windows; read them there rather than here
   (CLOUD-770). So **In Review is the truthful column for longer**, by design — a
   batch is accumulating in the open release PR, and one tag sweeps all of it.
   Nothing about the sweep changes; what changes is that "landed, not yet tagged"

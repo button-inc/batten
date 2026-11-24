@@ -296,7 +296,7 @@ check. Two in one session, both wrong, both one command from being settled:
 | asserted blocker                                                                 | why it was false                                                                                                  | cost of testing it                   |
 | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
 | "measuring whether CodeRabbit reviews drafts needs a fresh draft PR" (CLOUD-847) | three PRs that session were opened as drafts and readied later; the experiment was already in their event history | one `list_workflow_runs` call        |
-| "the `land.bats` hang is a race" (CLOUD-848)                                     | inferred from a single green suite run; never reproduced                                                          | a bounded loop, free local execution |
+| "the `land` bats hang is a race" (CLOUD-848)                                     | inferred from a single green suite run; never reproduced                                                          | a bounded loop, free local execution |
 
 **A real block and an assumed one are indistinguishable in prose, and that is the
 defect.** Both come out as one confident sentence, so the punt predicate cannot

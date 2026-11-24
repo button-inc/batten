@@ -29,11 +29,11 @@
 # over. So a declaration reaches this rule only when its own file names the
 # suite, and the sweep stays the authority for the rest.
 #
-# The live instance that leaves uncaught is named rather than glossed over:
-# `mise-tasks/graph-check.sh`'s `receipt-carries-no-ids` declares no suite, and
-# both its declaration and the bats title it has drifted from are in files
-# `shell-retirement` admits only retiring whole. It stays blocked on that
-# retirement, which is CLOUD-843's queue.
+# The live instance that left uncaught was named rather than glossed over:
+# `mise-tasks/graph-check.sh`'s `receipt-carries-no-ids` declared no suite, and
+# both its declaration and the bats title it had drifted from were in files
+# `shell-retirement` admitted only retiring whole. It stayed blocked on that
+# retirement, which was CLOUD-843's queue.
 #
 # POINTER-ONLY (non-negotiable rule 4). The finding carries the declaring file
 # and the suite path, never the case body and never the mutation's `sed`

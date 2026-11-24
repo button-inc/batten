@@ -59,7 +59,15 @@
 # `path:line` — never the reference's surrounding prose, and never a line of a
 # memory. The predecessor emitted the same shape for the same reason.
 #
-#MUTANT-EXEMPT CLOUD-1267|no `tests/memories.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `shell add refused` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/memories.rs`, neither of which is what the mutation runner drives
+#MUTANT-SUITE crates/batten/tests/it/memories.rs
+#MUTANT rootless-graph-passes|s@^\tnot root_memory in tracked_set$@\tfalse@|a_missing_graph_root_is_reported
+#MUTANT memoryless-tree-judged|s@^\tcount(memory_files) > 0$@\ttrue@|a_repository_with_no_memories_is_not_judged
+#MUTANT unspellable-name-passes|s@^\tnot regex.match(data.batten.patterns\["memory-name"\], name_of(path))$@\tfalse@|a_name_outside_the_reference_charset_is_reported
+#MUTANT dangling-reference-passes|s@^\tnot concat("", \[memories_dir, name, ".md"\]) in tracked_set$@\tfalse@|a_dangling_reference_is_reported_with_its_pointer
+#MUTANT pointer-off-by-one|s@^\tnumber := index + 1$@\tnumber := index@|a_dangling_reference_is_reported_with_its_pointer
+#MUTANT changelog-scanned|s@^\tpath != "CHANGELOG.md"$@\ttrue@|the_excluded_referrers_are_not_judged
+#MUTANT template-scanned|s@^\tpath != template$@\ttrue@|the_excluded_referrers_are_not_judged
+#MUTANT shadowed-name-passes|s@^\tendswith(name_of(path), ".md")$@\tfalse@|a_shadowed_name_is_reported_as_a_duplicate
 
 # METADATA
 # description: |
@@ -194,8 +202,8 @@ violation contains {
 #
 # These pin the PREDICATE. They cannot pin that the ENGINE selects the markdown
 # this rule declares, nor that it populates `missing` for a file it could not
-# read — `crates/batten/tests/memories.rs` is that tier, over the compiled binary
-# and real scratch trees, and it is why that file exists.
+# read — `crates/batten/tests/it/memories.rs` is that tier, over the compiled
+# binary and real scratch trees, and the `#MUTANT` rows above name its cases.
 
 graph(tracked, lines) := {"tree": {"tracked": tracked, "lines": lines, "missing": {}}}
 

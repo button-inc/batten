@@ -42,7 +42,7 @@ Here that was three commands and no CI minutes:
 
 ```sh
 git worktree add --detach "$SCRATCH/wt" HEAD   # the condition: no current branch
-cd "$SCRATCH/wt" && mise exec -- ./mise-tasks/<gate>.sh
+cd "$SCRATCH/wt" && mise run <gate>
 git worktree remove --force "$SCRATCH/wt"      # clean up, or `git worktree prune`
 ```
 

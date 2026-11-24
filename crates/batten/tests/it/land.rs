@@ -443,7 +443,7 @@ fn a_conflict_with_no_path_still_refuses() {
 /// a bare `true` would resolve against whatever the runner's `PATH` happens to
 /// carry — which is the harness answering a question about the engine.
 fn gate(repo: &Path, name: &str, code: i32) -> String {
-    script(repo, name, &format!("exit {code}\n"))
+    script(repo, name, &serde_json::json!([{ "exit": code }]))
 }
 
 /// The lap record this branch has accumulated, or an empty string where the
@@ -541,15 +541,11 @@ fn an_unconfigured_gate_refuses_rather_than_guessing_and_writes_no_record() {
     );
 }
 
-/// A gate program in the fixture with `body` as its script.
-fn script(repo: &Path, name: &str, body: &str) -> String {
+/// A gate program in the fixture running `steps`: the test stand-in, never
+/// authored shell (CLOUD-2336).
+fn script(repo: &Path, name: &str, steps: &serde_json::Value) -> String {
     let path = repo.join(name);
-    std::fs::write(&path, format!("#!/bin/sh\n{body}")).expect("write the gate");
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .expect("make the gate executable");
-    }
+    common::stub_at(&path, &serde_json::json!([{ "steps": steps }]));
     path.display().to_string()
 }
 
@@ -591,13 +587,15 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
 fn a_verify_that_never_advances_stops_itself() {
     let repo = repo("land-verify-stalls");
     let marker = repo.join("gate.pid");
+    // Reports one phase, notes its own pid, then holds still far past the bound.
     let gate = script(
         &repo,
-        "wedged.sh",
-        &format!(
-            "\"$BATTEN_BIN\" task phase 424242 wedged\necho $$ > {}\nexec sleep 12\n",
-            marker.display()
-        ),
+        "wedged",
+        &serde_json::json!([
+            { "run": ["{env:BATTEN_BIN}", "task", "phase", "424242", "wedged"] },
+            { "write": [marker.to_str().expect("utf-8"), "{pid}"] },
+            { "sleep": 600_000 },
+        ]),
     );
     let (code, out) = land_verify_supervised(&repo, &gate, "424242", "2");
     assert_eq!(code, 3, "a stall is could-not-finish, not a verdict: {out}");
@@ -629,11 +627,18 @@ fn a_verify_that_never_advances_stops_itself() {
 #[test]
 fn a_verify_that_keeps_advancing_is_never_stalled() {
     let repo = repo("land-verify-advances");
-    let gate = script(
-        &repo,
-        "moving.sh",
-        "for step in 1 2 3 4 5; do \"$BATTEN_BIN\" task phase 424243 \"step$step\"; sleep 1; done\n",
-    );
+    // Five steps, each a phase report then a second's work.
+    let steps: Vec<serde_json::Value> = (1..=5)
+        .flat_map(|step| {
+            [
+                serde_json::json!({ "run": [
+                    "{env:BATTEN_BIN}", "task", "phase", "424243", format!("step{step}"),
+                ] }),
+                serde_json::json!({ "sleep": 1000 }),
+            ]
+        })
+        .collect();
+    let gate = script(&repo, "moving", &serde_json::Value::Array(steps));
     let (code, out) = land_verify_supervised(&repo, &gate, "424243", "3");
     assert_eq!(code, 0, "a gate that advances finishes: {out}");
     assert!(!out.contains("verify stalled"), "{out}");
@@ -645,7 +650,7 @@ fn a_verify_that_keeps_advancing_is_never_stalled() {
 #[test]
 fn a_verify_that_never_reports_is_never_stalled() {
     let repo = repo("land-verify-silent");
-    let gate = script(&repo, "silent.sh", "sleep 5\n");
+    let gate = script(&repo, "silent", &serde_json::json!([{ "sleep": 5000 }]));
     let (code, out) = land_verify_supervised(&repo, &gate, "424244", "2");
     assert_eq!(code, 0, "a silent gate finishes: {out}");
     assert!(!out.contains("verify stalled"), "{out}");
@@ -679,18 +684,9 @@ fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
         .git()
         .base_commit()
         .build();
-    let failing = repo
-        .parent()
-        .expect("the fixture's scratch")
-        .join("fail.sh");
-    std::fs::write(&failing, "#!/bin/sh\nexit 5\n").expect("write the step");
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755))
-            .expect("make the step executable");
-    }
+    let failing = repo.parent().expect("the fixture's scratch").join("fail");
+    common::stub_at(&failing, &serde_json::json!([{ "steps": [{ "exit": 5 }] }]));
     let engine = env!("CARGO_BIN_EXE_batten");
-    let step = format!("{engine} step run red -- {}", failing.display());
     let seeded = batten()
         .args(["step", "run", "red", "--", &failing.display().to_string()])
         .current_dir(&repo)
@@ -707,11 +703,15 @@ fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
     // case for ten minutes until the suite's timeout.
     let gate = script(
         &repo,
-        "red.sh",
-        &format!(
-            "unset CI BATTEN_STEP_RECEIPT_BYPASS\n{step}\necho $$ > {}\nexec sleep 12\n",
-            marker.display()
-        ),
+        "red",
+        &serde_json::json!([
+            { "run": [
+                "env", "-u", "CI", "-u", "BATTEN_STEP_RECEIPT_BYPASS",
+                engine, "step", "run", "red", "--", failing.display().to_string(),
+            ] },
+            { "write": [marker.display().to_string(), "{pid}"] },
+            { "sleep": 12_000 },
+        ]),
     );
     let (code, out) = land_verify_supervised(&repo, &gate, "424245", "600");
     assert_eq!(code, 2, "a known-red tree is refused: {out}");

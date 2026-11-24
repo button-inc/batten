@@ -126,7 +126,7 @@ const CONFIG_FROM: FlagDecl = FlagDecl {
 /// The sibling of [`CONFIG_FROM`], and the distinction is the whole reason it
 /// exists: `--config-from` names a git **ref**, resolved inside the repository
 /// the run discovered. A verb run inside a `git init`-ed scratch repository —
-/// which 50 of 144 `tests/*.bats` suites create, to keep receipt writes off the
+/// which 50 of 144 `tests/*.bats` suites created, to keep receipt writes off the
 /// real checkout (CLOUD-512) — has no ref to name and no `batten.toml` to read,
 /// so no spelling of the existing flag reaches that case.
 ///

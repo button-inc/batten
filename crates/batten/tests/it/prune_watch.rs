@@ -1154,13 +1154,42 @@ fn a_step_run_build_is_watched() {
     // stop on an unwind (CLOUD-2376), which hung the case outright rather than
     // making it slow. This number is proportion to a measured path, nothing
     // more.
-    let waits = "for i in $(seq 1 200); do \
-                 [ -e target/debug/.fingerprint/aged-dddddddddddddddd ] || exit 0; \
-                 sleep 0.05; done; exit 1";
+    //
+    // The stand-in polls by re-running itself: while the unit is there it
+    // counts one try and runs itself again after 0.05s; once it is gone it
+    // records `gone`, and at the 200th try it records `present` instead. The
+    // record is the verdict the loop's exit code used to be.
+    let stub_dir = common::scratch("step-run-watched-stub");
+    let waits = stub_dir.join("waits");
+    let tries = stub_dir.join("tries").display().to_string();
+    let verdict = stub_dir.join("verdict");
+    let aged = profile
+        .join(".fingerprint/aged-dddddddddddddddd")
+        .display()
+        .to_string();
+    common::stub_at(
+        &waits,
+        &serde_json::json!([
+            {
+                "file_contains": [tries, ".".repeat(200)],
+                "steps": [{ "write": [verdict.display().to_string(), "present"] }],
+            },
+            {
+                "file_exists": aged,
+                "steps": [
+                    { "append": [tries, "."] },
+                    { "sleep": 50 },
+                    { "run": [waits.display().to_string()] },
+                ],
+            },
+            { "steps": [{ "write": [verdict.display().to_string(), "gone"] }] },
+        ]),
+    );
     let ran = common::batten()
         .current_dir(&dir)
         .env("TMPDIR", own_temp(&dir))
-        .args(["step", "run", "probe", "--", "sh", "-c", waits])
+        .args(["step", "run", "probe", "--"])
+        .arg(&waits)
         .env("TARGET_PRUNE_FREE_MB", "50")
         .stdin(std::process::Stdio::null())
         .streamed_output_keeping(batten::capture::Keep {
@@ -1170,9 +1199,10 @@ fn a_step_run_build_is_watched() {
         })
         .expect("the binary runs");
     let said = common::stderr(&ran);
+    assert_eq!(ran.status.code(), Some(0), "the step ran clean: {said}");
     assert_eq!(
-        ran.status.code(),
-        Some(0),
+        std::fs::read_to_string(&verdict).unwrap_or_default(),
+        "gone",
         "the unit went while it ran: {said}"
     );
     assert!(!present(&profile, "aged", "dddddddddddddddd"), "{said}");
@@ -1221,16 +1251,13 @@ fn a_wrapped_compile_collects_under_pressure() {
         let bin = dir.join("fake-bin");
         std::fs::create_dir_all(&bin).unwrap();
         let rustc = bin.join("rustc");
-        std::fs::write(
+        common::stub_at(
             &rustc,
-            "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/ran\"\nexit 7\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+            &serde_json::json!([{ "steps": [
+                { "write": [bin.join("ran").display().to_string(), "{argv}\n"] },
+                { "exit": 7 },
+            ] }]),
+        );
         let out_dir = dir.join("target/debug/deps");
         let ran = common::batten()
             .current_dir(&dir)
@@ -1311,12 +1338,7 @@ fn a_wrapped_compile_in_a_worktree_reads_the_worktrees_prune() {
         4096,
     );
     let rustc = main.join("rustc");
-    std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    common::stub_at(&rustc, &serde_json::json!([{ "steps": [{ "exit": 0 }] }]));
     let out_dir = linked.join("target/debug/deps");
     std::fs::create_dir_all(&out_dir).unwrap();
     let ran = common::batten()
@@ -1361,12 +1383,7 @@ fn a_wrapped_compile_above_the_floor_reads_no_config() {
         4096,
     );
     let rustc = dir.join("rustc");
-    std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    common::stub_at(&rustc, &serde_json::json!([{ "steps": [] }]));
     let ran = common::batten()
         .current_dir(&dir)
         .arg(&rustc)
@@ -1405,21 +1422,20 @@ fn a_workspace_wrapper_between_is_run_with_the_compiler() {
     std::fs::create_dir_all(&bin).unwrap();
     let wrapper = bin.join("cargo-auditable");
     let rustc = bin.join("rustc");
-    std::fs::write(
+    common::stub_at(
         &wrapper,
-        "#!/bin/sh\necho wrapped > \"$(dirname \"$0\")/wrapped\"\nexec \"$@\"\n",
-    )
-    .unwrap();
-    std::fs::write(
+        &serde_json::json!([{ "steps": [
+            { "write": [bin.join("wrapped").display().to_string(), "wrapped\n"] },
+            { "exec": ["{argv-from:1}"] },
+        ] }]),
+    );
+    common::stub_at(
         &rustc,
-        "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/ran\"\nexit 7\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    for program in [&wrapper, &rustc] {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+        &serde_json::json!([{ "steps": [
+            { "write": [bin.join("ran").display().to_string(), "{argv}\n"] },
+            { "exit": 7 },
+        ] }]),
+    );
     let ran = common::batten()
         .current_dir(&dir)
         .arg(&wrapper)

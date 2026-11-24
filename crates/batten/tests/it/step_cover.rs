@@ -14,10 +14,14 @@ use std::path::PathBuf;
 use std::process::Output;
 
 /// A step command that passes.
-const OK: &str = "#!/bin/sh\nexit 0\n";
+fn ok() -> serde_json::Value {
+    serde_json::json!([{ "steps": [{ "exit": 0 }] }])
+}
 
 /// A tool whose version line keys the row.
-const TOOL: &str = "#!/bin/sh\necho tool-1.0\n";
+fn tool() -> serde_json::Value {
+    serde_json::json!([{ "steps": [{ "stdout": "tool-1.0\n" }] }])
+}
 
 /// Row `a` is a keyed step; nothing in the table names a CI check.
 const TABLE: &str = r#"version = 1
@@ -41,14 +45,8 @@ struct Repo {
 impl Repo {
     fn new(name: &str) -> Self {
         let dir = common::scratch(&format!("step-cover-{name}"));
-        for (file, body) in [("bin/toolv", TOOL), ("bin/ok", OK)] {
-            common::write(&dir, file, body);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                std::fs::set_permissions(dir.join(file), std::fs::Permissions::from_mode(0o755))
-                    .expect("chmod");
-            }
+        for (file, plan) in [("bin/toolv", tool()), ("bin/ok", ok())] {
+            common::stub_at(&dir.join(file), &plan);
         }
         common::write(&dir, "input.txt", "one\n");
         common::write(&dir, ".gitignore", "bin/\n");

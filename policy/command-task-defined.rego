@@ -57,7 +57,7 @@ defined contains name if {
 }
 
 # FILE TASKS, from the walk the run already did. A task directory entry is a task
-# named by its basename, and the runner strips a single extension — `land.sh` is
+# named by its basename, and the runner strips a single extension — a `land.sh` is
 # `mise run land`. Both spellings are recorded rather than chosen between,
 # because a row naming either resolves.
 defined contains name if {
@@ -128,7 +128,7 @@ violation contains {
 	# a fixture that copies `batten.toml` and nothing else — every `mise run` row
 	# reads as naming a missing task, and the gate reports a row-per-violation
 	# verdict about a tree it could not assess. Measured: seven findings against
-	# `tests/prebuilt-lint.bats`, whose first case is named "this repository is
+	# `tests/prebuilt-lint.bats`, whose first case was named "this repository is
 	# clean today". An empty namespace is could-not-look, and the clause below
 	# says so ONCE.
 	count(defined) > 0
