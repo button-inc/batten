@@ -279,3 +279,32 @@ fn a_call_a_recorder_and_a_mint_both_select_replays_both() {
         "the shared entry carried the launch HEAD"
     );
 }
+
+/// Fails by: a backgrounded call whose tool a row names, but whose command the
+/// row does not select, kept for a replay that can record nothing (`&&` read
+/// as `||` in `defer_backgrounded`): a call no row is about leaves nothing
+/// behind.
+#[test]
+fn a_backgrounded_call_no_row_selects_is_not_kept() {
+    let root = repo("background-unselected");
+    let transcript = root.join("transcript.jsonl");
+    std::fs::write(&transcript, "").expect("transcript");
+    let git_dir = common::git_in(&root, &["rev-parse", "--absolute-git-dir"]);
+    let pending = Path::new(git_dir.trim()).join("batten-pending");
+    hook_running(
+        &root,
+        "PostToolUse",
+        "echo unrelated",
+        &backgrounded("b9"),
+        &transcript,
+    );
+    assert!(
+        !pending.join("b9.json").exists(),
+        "no row selects `echo`, so nothing is kept"
+    );
+    hook(&root, "PostToolUse", &backgrounded("b10"), &transcript);
+    assert!(
+        pending.join("b10.json").exists(),
+        "anti-vacuity: the fetch the row selects is kept"
+    );
+}
