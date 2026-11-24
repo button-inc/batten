@@ -22716,14 +22716,19 @@ fn snapshot_protected(policy: &hook::Policy, envelope: &hook::Envelope, decision
         let _cached = crate::durable::replace(cache, serde_json::json!(state).to_string());
     }
     // WHERE HISTORY STOOD BEFORE THE CALL (CLOUD-2923): the post-call arm
-    // excuses a change that is only `HEAD` moving forward onto commits these
-    // tips already reached, and it must read them as they were BEFORE the call,
-    // or a call that commits and then moves a remote-tracking ref excuses itself.
+    // excuses a change that is only `HEAD` moving forward onto commits the
+    // remote-tracking tips already reached, and it must read them as they were
+    // BEFORE the call, or a call that commits and then moves a remote-tracking
+    // ref excuses itself. `HEAD` and the moment are recorded here; the tips are
+    // read back from their reflogs as of that moment, and only when a protected
+    // path changed (`git::remote_tips_before`), not on every call.
     let head = git::head_commit(&root).ok();
-    let tips = git::remote_tips(&root);
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
     let body = serde_json::json!({
         "root": root, "patterns": patterns, "state": state,
-        "head": head, "remote_tips": tips,
+        "head": head, "at": at,
     });
     if let Some(parent) = path.parent()
         && std::fs::create_dir_all(parent).is_err()
@@ -22754,15 +22759,14 @@ fn paths_at_head(root: &Path, paths: &[String]) -> std::collections::BTreeSet<St
         .collect()
 }
 
-/// Whether the call moved `HEAD` only forward onto history the pre-call snapshot
-/// recorded as already on a remote (CLOUD-2923). A snapshot written before it
-/// carried `head` and `remote_tips` answers `false`, which excuses nothing.
+/// Whether the call moved `HEAD` only forward onto history that was already on
+/// a remote when the pre-call snapshot was taken (CLOUD-2923). A snapshot
+/// without `head` and `at` answers `false`, which excuses nothing.
 fn pushed_forward(root: &Path, snapshot: &serde_json::Value) -> bool {
-    let Some(before) = snapshot["head"].as_str() else {
+    let (Some(before), Some(at)) = (snapshot["head"].as_str(), snapshot["at"].as_i64()) else {
         return false;
     };
-    let tips: Vec<String> =
-        serde_json::from_value(snapshot["remote_tips"].clone()).unwrap_or_default();
+    let tips = git::remote_tips_before(root, at);
     git::head_moved_onto(root, before, &tips) == Some(true)
 }
 
