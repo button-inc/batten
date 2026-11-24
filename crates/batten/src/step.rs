@@ -1504,10 +1504,7 @@ fn report_flaky(step: &str, root: &Path, err: &mut dyn Write) -> Option<(usize, 
     use std::fmt::Write as _;
     let (suspects, failed) = crate::mutate::resume::flaky_suspects(root)?;
     let counts = (suspects.len(), failed);
-    let Some(listing) = trace_file(step)
-        .map(|file| file.with_extension("flaky"))
-        .filter(|_| failed > 0)
-    else {
+    let Some(listing) = flaky_listing(trace_file(step), failed) else {
         return Some(counts);
     };
     let body = suspects
@@ -1525,6 +1522,14 @@ fn report_flaky(step: &str, root: &Path, err: &mut dyn Write) -> Option<(usize, 
         );
     }
     Some(counts)
+}
+
+/// Where a red run's suspects are listed, beside its `trace`: only where a
+/// case `failed`.
+fn flaky_listing(trace: Option<std::path::PathBuf>, failed: usize) -> Option<std::path::PathBuf> {
+    trace
+        .map(|file| file.with_extension("flaky"))
+        .filter(|_| failed > 0)
 }
 
 /// Where a step's traced run writes its trace: a file directly under the git
@@ -2253,6 +2258,40 @@ mod tests {
     }
 
     #[cfg(test)]
+    /// Fails by: a miss or a suspect recording under any key but its own, or
+    /// a hit recording at all.
+    #[test]
+    fn an_answer_records_under_its_own_key() {
+        assert_eq!(Answer::Miss(String::from("k1")).recording(), Some("k1"));
+        assert_eq!(Answer::Suspect(String::from("k2")).recording(), Some("k2"));
+        assert_eq!(Answer::Hit(String::from("k3")).recording(), None);
+        assert_eq!(Answer::NoKey.recording(), None);
+    }
+
+    /// Fails by: a pass, a signal (`128 + N`) or a shell that could not run
+    /// the child recorded as a verdict over the inputs.
+    #[test]
+    fn only_a_childs_own_failure_code_is_recordable() {
+        for code in [1, 2, 125] {
+            assert!(recordable_failure(code), "{code}");
+        }
+        for code in [0, 126, 127, 130, -1] {
+            assert!(!recordable_failure(code), "{code}");
+        }
+    }
+
+    /// Fails by: a run with no failed case listing its suspects.
+    #[test]
+    fn suspects_are_listed_only_where_a_case_failed() {
+        let trace = || Some(std::path::PathBuf::from("/g/step.trace"));
+        assert_eq!(flaky_listing(trace(), 0), None);
+        assert_eq!(
+            flaky_listing(trace(), 1),
+            Some(std::path::PathBuf::from("/g/step.flaky"))
+        );
+        assert_eq!(flaky_listing(None, 1), None);
+    }
+
     #[test]
     fn a_held_step_lock_excludes_its_own_step_and_no_other() {
         // Fails by: the lock not exclusive (two runners of one step both run),

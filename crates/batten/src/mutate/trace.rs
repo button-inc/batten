@@ -626,6 +626,30 @@ mod tests {
         out
     }
 
+    // Fails by: an escaped quote or backslash refused (the path cut short as
+    // unreadable), or kept with its backslash.
+    #[test]
+    fn a_quoted_argument_unescapes_a_quote_and_a_backslash() {
+        assert_eq!(
+            super::quoted_arg(r#"a\"b\\c", rest"#),
+            Some((String::from("a\"b\\c"), ", rest"))
+        );
+        assert_eq!(super::quoted_arg(r#"a\nb""#), None);
+        assert_eq!(super::quoted_arg(r#"cut"..."#), None);
+    }
+
+    // Fails by: an absent trace read as an empty one (every case keyed on
+    // nothing rather than on every file), or a whole one not read back.
+    #[test]
+    fn an_absent_trace_is_none_and_a_whole_one_is_read() {
+        let dir = crate::scratch::scratch("trace-await");
+        assert_eq!(super::await_trace(&dir.join("absent")), None);
+        let file = dir.join("whole");
+        let text = whole(&[]);
+        std::fs::write(&file, &text).unwrap();
+        assert_eq!(super::await_trace(&file), Some(text));
+    }
+
     // A SHELL PROBE NAMES NO DIRECTORY (CLOUD-2784): `test -e c` is `stat("c")`.
     // With the step's directory it resolves; without one it is unresolvable,
     // the reach recorder's reading.
