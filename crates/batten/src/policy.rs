@@ -9313,6 +9313,23 @@ violation contains {\"rule\": \"d\", \"verdict\": \"d\"} if {\n\tinput.call.oper
         );
     }
 
+    /// Fails by: a `:=` binding's right side taken as bound, as only `=`'s is,
+    /// so `input` read before a `with` counts as a case local and the read of
+    /// `input` under `with` is desugared rather than refused (CLOUD-2789).
+    #[test]
+    fn a_colon_assignment_reading_input_binds_only_its_left_side() {
+        const READ: &str = "package batten.c\nimport rego.v1\n\n\
+            test_c if {\n\ty := input\n\tinput.x == 1 with input as {\"x\": 1}\n}\n\n\
+            test_plain if {\n\t1 == 1\n}\n";
+        let found = splits(READ);
+        assert!(
+            found
+                .iter()
+                .any(|line| line.contains("a read of `input` or `data` under `with`")),
+            "{found:?}"
+        );
+    }
+
     /// Fails by: a helper that writes its own `with` not recorded as one, so a
     /// case calling it is desugared as if the helper were plain.
     #[test]

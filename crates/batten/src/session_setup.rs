@@ -409,6 +409,19 @@ mod tests {
         assert_eq!(Some(workspace.refusal()), inline.finding());
     }
 
+    /// Fails by: the setup task never registered under its pid, so no gate
+    /// that holds on it ever sees it start (CLOUD-2789).
+    #[test]
+    fn a_setup_task_is_registered_under_its_pid() {
+        let git_dir = crate::scratch::scratch("session-setup-registered");
+        assert_eq!(task::read_field(&git_dir, "4194305", "task"), None);
+        register_once(&git_dir, "4194305", 100);
+        assert_eq!(
+            task::read_field(&git_dir, "4194305", "task").as_deref(),
+            Some(TASK)
+        );
+    }
+
     /// Fails by: `started` answering true where no setup task ever ran.
     #[test]
     fn a_task_is_started_only_once_its_directory_exists() -> std::io::Result<()> {

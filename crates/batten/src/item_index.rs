@@ -1212,7 +1212,9 @@ fn paths_in(body: &str) -> Vec<(usize, Vec<String>, usize)> {
             let starts_path = at == 0 || !(is_ident_byte(bytes[at - 1]) || bytes[at - 1] == b':');
             if starts_path && let Some((segments, len)) = path_at(rest) {
                 found.push((at, segments, len));
-                at += len;
+                // A path is never empty; the floor keeps a zero length from
+                // standing the walk still forever (CLOUD-2789).
+                at += len.max(1);
                 continue;
             }
             at += rest.chars().next().map_or(1, char::len_utf8);
