@@ -4066,6 +4066,16 @@ mod tests {
         let script = format!("{}; while :; do :; done", pid.write("$$"));
         let answered = detached_in(Path::new("/bin/sh"), &["-c".to_owned(), script], &[], &root)
             .expect("the child starts");
+        // ASKED OF THE KERNEL BEFORE THE PIPE IS READ: a pid that names no
+        // child started here answers at once, where waiting on the pipe for a
+        // child that never ran would hang the case to its bound.
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                std::fs::read_link(format!("/proc/{answered}/cwd")).ok(),
+                root.canonicalize().ok(),
+                "the answered pid is a process standing in the directory asked"
+            );
+        }
         let mut group = Group {
             pid: pid.first("the detached child writing its pid"),
             reaped: false,
