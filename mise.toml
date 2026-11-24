@@ -4212,9 +4212,12 @@ description = "Gate: the macOS targets actually LINK from Linux, which is what p
 # NO ARGUMENT LINKS BOTH TRIPLES (CLOUD-2789). `verify` runs this bare, and the
 # bare form linked only `aarch64-apple-darwin` while CI links both as matrix
 # legs, so the Intel leg could go red in CI where no local gate looked. A CI leg
-# still passes its one triple; with none, each entry falls back to the two
-# `choices`, which `ci-parity`'s leg clause reads from this body. One zigbuild
-# with two `--target`s, so the bare form is one step and one receipt.
+# still passes its one triple; with none, the first two entries link
+# `aarch64-apple-darwin` and the last two `x86_64-apple-darwin`, which render
+# empty when a triple is given. Both triples are named in this body, where
+# `ci-parity`'s leg clause reads them. ONE STEP PER TRIPLE, the receipts a CI
+# leg takes: one zigbuild with two `--target`s also read the root `.gitignore`,
+# outside the step's declared inputs, and the trace refused it.
 usage = '''
 arg "[target]" help="the Darwin triple to link; with none, both" {
   choices "aarch64-apple-darwin" "x86_64-apple-darwin"
@@ -4222,8 +4225,9 @@ arg "[target]" help="the Darwin triple to link; with none, both" {
 '''
 run = [
   "mise run target-ensure {% if usage.target %}{{usage.target}}{% else %}aarch64-apple-darwin{% endif %}",
-  "mise run target-ensure {% if usage.target %}{{usage.target}}{% else %}x86_64-apple-darwin{% endif %}",
-  "{{vars.batten}} step run darwin-link --arg {% if usage.target %}{{usage.target}}{% else %}both{% endif %} -- cargo zigbuild --workspace --profile darwin-link {% if usage.target %}--target {{usage.target}}{% else %}--target aarch64-apple-darwin --target x86_64-apple-darwin{% endif %}",
+  "{{vars.batten}} step run darwin-link --arg {% if usage.target %}{{usage.target}}{% else %}aarch64-apple-darwin{% endif %} -- cargo zigbuild --workspace --profile darwin-link --target {% if usage.target %}{{usage.target}}{% else %}aarch64-apple-darwin{% endif %}",
+  "{% if not usage.target %}mise run target-ensure x86_64-apple-darwin{% endif %}",
+  "{% if not usage.target %}{{vars.batten}} step run darwin-link --arg x86_64-apple-darwin -- cargo zigbuild --workspace --profile darwin-link --target x86_64-apple-darwin{% endif %}",
 ]
 
 [tasks.cross-check]
