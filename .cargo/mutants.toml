@@ -92,6 +92,12 @@ exclude_re = [
   # = "linux"))]` in `off_linux`, named apart from the Linux arm, whose mutants
   # stay judged: no Linux build compiles it (CLOUD-2902).
   'trace\.rs:\d+:\d+: replace off_linux::await_trace -> Option<String> with ',
+  # A fork's `= 0` keyed as a child: `>=` adds only the parent row keyed "0",
+  # which `walk_back` reads for no pid but one a trace line is prefixed with,
+  # and no traced process is pid 0 (the kernel's idle task). Every other row
+  # is the same under both. Column 70 is the `> 0`; the line's other compares
+  # are not this argument's (CLOUD-2789).
+  'trace\.rs:\d+:70: replace > with >= in Cwds::read$',
   # COMPILED OUT, not equivalent: column 10 is the `!` of the `#[cfg(windows)]`
   # leg's empty-table guard in `processes`, and mutants run on Linux, where
   # that leg is not built, so no case can reach it (CLOUD-2789).

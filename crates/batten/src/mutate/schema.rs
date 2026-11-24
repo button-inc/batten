@@ -5049,7 +5049,13 @@ fn position_free(name: &str) -> String {
     let parts: Vec<&str> = name.split(':').collect();
     let mut kept: Vec<&str> = Vec::with_capacity(parts.len());
     let mut at = 0;
-    while let Some(part) = parts.get(at) {
+    // ONE PASS PER PART AT MOST, as a pass count rather than a cursor test
+    // (CLOUD-2789): a change that stops `at` advancing repeats a part instead
+    // of spinning on it, which the cases read as a wrong key.
+    for _ in 0..parts.len() {
+        let Some(part) = parts.get(at) else {
+            break;
+        };
         if at > 0 && numeric(part) && parts.get(at + 1).is_some_and(|next| numeric(next)) {
             at += 2;
             continue;
@@ -5255,7 +5261,9 @@ fn mentioners(
 /// enclosing function, and each whose functions name its function through
 /// any chain of items ([`mentioners`]). `None` when neither can be said (no
 /// enclosing probe and no function name), so every case must judge it.
+/// `root` is the tree whose test functions [`direct_tests`] reads.
 fn handback_cases(
+    root: &std::path::Path,
     id: u32,
     mutant: &Listed,
     schema: &Schema,
@@ -5286,22 +5294,55 @@ fn handback_cases(
         return None;
     }
     let observers = name.map_or_else(BTreeSet::new, |name| mentioners(&name, &schema.mentions));
+    // A `#[test]` FUNCTION CARRIES NO PROBE (CLOUD-2789): a unit case that
+    // calls the mutant's function directly, where that function has no probe
+    // of its own, ran no probe naming it and was left out. Measured on shard
+    // 12/16: `with_embedded`'s two field deletions judged MISSED on 31 sweep
+    // cases while the one case asserting both fields never ran. So each case
+    // named after a test in the mutant's own file whose text names an
+    // observer observes it too; a case of another binary sharing the name
+    // only lengthens the run.
+    let direct = direct_tests(root, &mutant.file, &observers);
     Some(
         reach
             .executed
             .iter()
-            .filter(|(_, ran)| {
-                ran.iter().any(|probe| {
-                    enclosing.contains(probe)
-                        || schema
-                            .names
-                            .get(*probe)
-                            .is_some_and(|names| !names.is_disjoint(&observers))
-                })
+            .filter(|((case, _), ran)| {
+                direct.contains(case.rsplit("::").next().unwrap_or(case))
+                    || ran.iter().any(|probe| {
+                        enclosing.contains(probe)
+                            || schema
+                                .names
+                                .get(*probe)
+                                .is_some_and(|names| !names.is_disjoint(&observers))
+                    })
             })
             .map(|(case, _)| case.clone())
             .collect(),
     )
+}
+
+/// The `#[test]` functions in `file` under `root` whose own text names any
+/// of `observers` as a whole identifier. Empty where the file cannot be read.
+fn direct_tests(
+    root: &std::path::Path,
+    file: &str,
+    observers: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let Ok(source) = crate::fsio::read_to_string(root.join(file)) else {
+        return BTreeSet::new();
+    };
+    test_texts(&source)
+        .into_iter()
+        .filter(|(_, texts)| {
+            texts.iter().any(|text| {
+                let own = text.split('\x1f').next().unwrap_or_default();
+                own.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .any(|word| observers.contains(word))
+            })
+        })
+        .map(|(name, _)| name)
+        .collect()
 }
 
 /// A handed-back mutant's verdict from the outcome file that NAMES it:
@@ -5430,7 +5471,7 @@ fn judge_handbacks(
         let Some(mutant) = judging.mutants.get(id as usize) else {
             continue;
         };
-        let observing = handback_cases(id, mutant, schema, reach);
+        let observing = handback_cases(judging.root, id, mutant, schema, reach);
         let cases = observing.clone().unwrap_or_else(|| every.clone());
         // THE SAME RULE AS THE SCHEMA'S: a red case is never run, never a
         // kill and never in a key, so a hand-back runs only its green cases,
@@ -10880,6 +10921,7 @@ mod tests {
             .into(),
             ..Reach::default()
         };
+        let nowhere = std::path::Path::new("/nonexistent-batten-handback-root");
         let named = |function: Option<&str>| {
             let mut mutant = listed("FnValue", "0", (1, 1), (1, 2));
             mutant.function = function.map(|name| Function {
@@ -10890,17 +10932,17 @@ mod tests {
             mutant
         };
         assert_eq!(
-            handback_cases(0, &named(Some("seed")), &schema, &reach),
+            handback_cases(nowhere, 0, &named(Some("seed")), &schema, &reach),
             Some(BTreeSet::from([chain.clone()])),
             "the case naming CHAIN observes seed"
         );
         assert_eq!(
-            handback_cases(2, &named(None), &schema, &reach),
+            handback_cases(nowhere, 2, &named(None), &schema, &reach),
             Some(BTreeSet::from([body])),
             "the case that ran its enclosing function"
         );
         assert_eq!(
-            handback_cases(1, &named(None), &schema, &reach),
+            handback_cases(nowhere, 1, &named(None), &schema, &reach),
             None,
             "nothing to go on"
         );
@@ -10909,9 +10951,54 @@ mod tests {
         let mut blind = named(Some("seed"));
         blind.file = String::from("src/unprobed.rs");
         assert_eq!(
-            handback_cases(0, &blind, &schema, &reach),
+            handback_cases(nowhere, 0, &blind, &schema, &reach),
             None,
             "an unprobed file's hand-back is judged by every case"
+        );
+    }
+
+    /// Fails by: a `#[test]` that calls the mutant's function directly left
+    /// out of its hand-back's cases. A test function carries no probe, so
+    /// only its own text says it observes the function (CLOUD-2789); a test
+    /// naming only a longer identifier sharing the prefix does not.
+    #[test]
+    fn a_test_naming_the_function_observes_its_hand_back() {
+        let root = crate::scratch::scratch("schema-handback-direct");
+        std::fs::create_dir_all(root.join("src")).expect("the source dir");
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "fn seed() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn direct() { super::seed(); }\n    #[test]\n    fn aside() { let seedling = 1; }\n}\n",
+        )
+        .expect("the source");
+        let schema = Schema {
+            probes: vec![String::from("f-other")],
+            names: vec![BTreeSet::new()],
+            probed: [String::from("src/lib.rs")].into(),
+            ..Schema::default()
+        };
+        let (other, direct, aside) = (
+            case("other"),
+            (String::from("tests::direct"), String::from("lib")),
+            (String::from("tests::aside"), String::from("lib")),
+        );
+        let reach = Reach {
+            executed: [
+                (other, BTreeSet::from([0])),
+                (direct.clone(), BTreeSet::new()),
+                (aside, BTreeSet::new()),
+            ]
+            .into(),
+            ..Reach::default()
+        };
+        let mut mutant = listed("FnValue", "0", (1, 1), (1, 2));
+        mutant.function = Some(Function {
+            function_name: String::from("seed"),
+            return_type: String::new(),
+            span: Some(mutant.span),
+        });
+        assert_eq!(
+            handback_cases(&root, 0, &mutant, &schema, &reach),
+            Some(BTreeSet::from([direct])),
         );
     }
 

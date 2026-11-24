@@ -15349,6 +15349,30 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         assert!(refusal(row.validate_policy_source()).contains("requires one of `module`"));
     }
 
+    /// `environments` and `install_env` each qualify `preset`, so either one
+    /// alone on a row naming no preset is a dead column.
+    ///
+    /// Fails by: the two read as one conjunction (`&&`), which refuses only a
+    /// row declaring both and loads one declaring either alone (CLOUD-2789).
+    #[test]
+    fn either_install_column_without_a_preset_is_refused() {
+        for row in [
+            Rule {
+                environments: Some(vec!["agent".to_owned()]),
+                ..blank("p", RuleKind::Policy)
+            },
+            Rule {
+                install_env: vec!["MISE_ENV=agent".to_owned()],
+                ..blank("p", RuleKind::Policy)
+            },
+        ] {
+            assert!(
+                refusal(row.validate_policy_source()).contains("names no preset"),
+                "{row:?}"
+            );
+        }
+    }
+
     /// A declared format must agree with the glob's extension.
     ///
     /// Fails by: passing every row, or the agreement test inverted.
