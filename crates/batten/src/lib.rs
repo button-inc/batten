@@ -358,6 +358,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // pre-parse refusal's (CLOUD-2061). The `engine` verbs are the update's own
     // surface, and the guard bounds a session to one hop per invocation.
     let hook_path = matches!(command, Some(Command::Hook { .. }));
+    // THE HOOK CALL'S OPENS ARE ONE SCOPE FROM HERE (CLOUD-2840's perf-gate):
+    // the pin follow below resolves the same repository `run_hook` then opens,
+    // and outside a scope each was a fresh walk and open. `run_hook`'s own scope
+    // nests in this one and shares it.
+    let _hook_opens = hook_path.then(git::open_scope);
     let own_surface = matches!(command, Some(Command::Engine { .. }));
     let may_follow = !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
     // ON THE HOOK PATH A FOLLOW THAT ERRS IS NOTHING TO FOLLOW (CLOUD-2376), and
