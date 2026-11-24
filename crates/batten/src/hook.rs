@@ -9095,7 +9095,7 @@ fn policy_refusal(
         // own findings are ordered by its own declaration and share its row's
         // severity, so there is nothing to rank between them. Ranking happens
         // ACROSS bundles, below, where the severities can actually differ.
-        if let Some(violation) = denials.first() {
+        if let Some(violation) = speaking(&denials) {
             // THE POINTER IS THE PREDICATE, NOT THE BUNDLE (CLOUD-832).
             // `Module::attribute` resolves a `violation`'s own `rule` id when it
             // named one and falls back to the registering row's id otherwise —
@@ -9154,6 +9154,21 @@ fn policy_refusal(
 ///
 /// A blocking violation empties the result: it is the call's decision, and
 /// saying it twice would put one finding on two channels.
+/// The violation a bundle speaks with: its first STRUCTURED one — a `violation`
+/// entry, which carries the module's `rule` and `subjects` — and only where it
+/// raised none, its first bare `deny` token.
+///
+/// `policy::denials` lists the bare tokens first, and every module derives its
+/// `deny` set from its `violation` set, so `first()` always took the token and
+/// dropped the pointers the module named (CLOUD-1636): measured, a module's
+/// refusal and advisory both printed no ` at ` clause at all.
+fn speaking(denials: &[crate::policy::Violation]) -> Option<&crate::policy::Violation> {
+    denials
+        .iter()
+        .find(|violation| violation.rule.is_some())
+        .or_else(|| denials.first())
+}
+
 fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
     if policy.bundles.is_empty() {
         return Vec::new();
@@ -9166,7 +9181,7 @@ fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
         let crate::facts::Look::Is(denials) = crate::policy::deny(bundle, &input) else {
             continue;
         };
-        let Some(violation) = denials.first() else {
+        let Some(violation) = speaking(&denials) else {
             continue;
         };
         let severity = bundle.severity_for(violation.rule.as_deref());
@@ -25054,5 +25069,67 @@ deny contains "refused by themodule" if {
         let passed = mise_task_arguments(&["tasks", "run", "t", "--", "x"]);
         assert_eq!(passed.get("t"), Some(&vec!["x".to_owned()]));
         assert!(mise_task_arguments(&["tasks", "ls", "t", "x"]).is_empty());
+    }
+
+    /// What a shell call writes by name (CLOUD-1636), one shape per arm.
+    ///
+    /// Fails by: a destination read as an operand (`-t`), an option's value
+    /// read as a source (`-m 644`), a lone `ln` operand dropped, or a `tee`
+    /// operand missed — each a write the harness-surface gate would not see.
+    #[test]
+    fn a_shell_call_names_what_it_writes() {
+        use serde_json::Value;
+        let targets = |command: &str| -> Vec<Value> {
+            let envelope = super::decode_value(
+                crate::config_model::Harness::ClaudeCode,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": command},
+                }),
+            )
+            .expect("the envelope decodes");
+            super::write_targets(&envelope).expect("a shell command is read")
+        };
+        let only = |command: &str| -> (String, Vec<String>, bool) {
+            let found = targets(command);
+            assert_eq!(found.len(), 1, "{command}: {found:?}");
+            let entry = &found[0];
+            (
+                entry["path"].as_str().unwrap().to_owned(),
+                entry["sources"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|source| source.as_str().unwrap().to_owned())
+                    .collect(),
+                entry["symbolic"].as_bool().unwrap(),
+            )
+        };
+        assert_eq!(
+            only("ln -sfn a/x.json 'b/y.json'"),
+            ("b/y.json".to_owned(), vec!["a/x.json".to_owned()], true)
+        );
+        assert_eq!(
+            only("cp -t dir a b"),
+            (
+                "dir".to_owned(),
+                vec!["a".to_owned(), "b".to_owned()],
+                false
+            )
+        );
+        assert_eq!(
+            only("install -m 644 a dest"),
+            ("dest".to_owned(), vec!["a".to_owned()], false)
+        );
+        assert_eq!(
+            only("ln -s a/x.json"),
+            (".".to_owned(), vec!["a/x.json".to_owned()], true)
+        );
+        assert_eq!(only("echo x > out.json").0, "out.json");
+        let teed: Vec<Value> = targets("tee -a one two < in");
+        assert_eq!(teed.len(), 2, "{teed:?}");
+        assert!(targets("cp lonely").is_empty());
+        assert!(targets("git status").is_empty());
     }
 }

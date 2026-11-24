@@ -26,16 +26,17 @@ decision recorded per change rather than a location.
 ## The mechanism
 
 `[[pattern]]` rows `harness-config-<harness>` in `batten.toml` declare each
-harness's configuration surface. `config_check::harness` refuses the family at
+harness's configuration surface. `config_check::handler::validate_harness_surfaces` refuses the family at
 load when it leaves out a harness that keeps its registration in a file, so a new
-harness cannot rot behind it. Two mediated-call modules read the family:
+harness cannot rot behind it. Four mediated-call modules read the family, one
+class each, because the boundary speaks a module's first violation only:
 
-| class               | module                                 | severity | says                                                                        |
-| ------------------- | -------------------------------------- | -------- | --------------------------------------------------------------------------- |
-| `hook wire wrong`   | `policy/harness-config-route.rego`     | deny     | a linked, copied or hand-written hook registration: run the verb below      |
-| `hook edit early`   | `policy/harness-config-advisory.rego`  | warn     | a Claude Code settings write: the host's `update-config` skill first        |
-| `grant edit early`  | `policy/harness-config-advisory.rego`  | warn     | a permission list changed: `mem:serena-setup` owns the forms that bind      |
-| `hook edit partial` | `policy/harness-config-advisory.rego`  | warn     | the harnesses whose declared surface the call did not reach, as subjects    |
+| class               | module                                | severity | says                                                                     |
+| ------------------- | ------------------------------------- | -------- | ------------------------------------------------------------------------ |
+| `hook wire wrong`   | `policy/harness-config-route.rego`    | deny     | a linked, copied or hand-written hook registration: run the verb below   |
+| `hook edit early`   | `policy/harness-config-advisory.rego` | warn     | a Claude Code settings write: the host's `update-config` skill first     |
+| `grant edit early`  | `policy/harness-grant-advisory.rego`  | warn     | a permission list changed: `mem:serena-setup` owns the forms that bind   |
+| `hook edit partial` | `policy/harness-config-neutral.rego`  | warn     | the harnesses whose declared surface the call did not reach, as subjects |
 
 ## A hook registration is batten's to write
 

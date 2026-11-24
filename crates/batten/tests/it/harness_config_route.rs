@@ -28,7 +28,14 @@ const VERDICTS: &[&str] = &[
     "hook edit partial",
 ];
 
-const RULES: &[&str] = &["hook wire wrong", "hook edit early"];
+const RULES: &[&str] = VERDICTS;
+
+const MODULES: &[&str] = &[
+    "policy/harness-config-route.rego",
+    "policy/harness-config-advisory.rego",
+    "policy/harness-grant-advisory.rego",
+    "policy/harness-config-neutral.rego",
+];
 
 /// The committed rows this suite judges, as one config document.
 fn committed_rows(skip_pattern: Option<&str>) -> String {
@@ -54,25 +61,26 @@ fn committed_rows(skip_pattern: Option<&str>) -> String {
                     || id == "harness-permission-rule")
         }),
     );
-    document.insert("verdict".to_owned(), pick("verdict", &|id: &str| VERDICTS.contains(&id)));
-    document.insert("rule".to_owned(), pick("rule", &|id: &str| RULES.contains(&id)));
+    document.insert(
+        "verdict".to_owned(),
+        pick("verdict", &|id: &str| VERDICTS.contains(&id)),
+    );
+    document.insert(
+        "rule".to_owned(),
+        pick("rule", &|id: &str| RULES.contains(&id)),
+    );
     toml::to_string(&document).expect("the rows serialise")
 }
 
-/// A bench registering ONLY this row's two modules, so no other gate's deny
+/// A bench registering ONLY this row's modules, so no other gate's deny
 /// pre-empts or explains what these cases assert.
 fn bench(name: &str, skip_pattern: Option<&str>) -> PathBuf {
-    let module = |path: &str| std::fs::read_to_string(common::at_root(path)).expect("module reads");
-    Fixture::new(name)
-        .config(&committed_rows(skip_pattern))
-        .file(
-            "policy/harness-config-route.rego",
-            &module("policy/harness-config-route.rego"),
-        )
-        .file(
-            "policy/harness-config-advisory.rego",
-            &module("policy/harness-config-advisory.rego"),
-        )
+    let mut fixture = Fixture::new(name).config(&committed_rows(skip_pattern));
+    for path in MODULES {
+        let text = std::fs::read_to_string(common::at_root(path)).expect("module reads");
+        fixture = fixture.file(path, &text);
+    }
+    fixture
         .file("rules/harness-config.md", "the consumer's doctrine\n")
         .file(".serena/memories/serena-setup.md", "the measured forms\n")
         .file("notes.md", "unrelated\n")
@@ -109,11 +117,15 @@ fn adjudicate(dir: &Path, payload: &str) -> (Option<i32>, String) {
     )
 }
 
-/// The checkout's settings and a session root outside it, as the measured
+/// The checkout's settings and a session root's, both absolute as the measured
 /// instance spelled them.
+///
+/// The root lies INSIDE the bench: a write tool is judged by the repository
+/// its target lands in, and a sibling of the bench resolves to whichever
+/// checkout encloses the suite, whose own gates then answer instead.
 fn spellings(dir: &Path) -> (String, String) {
     let checkout = dir.canonicalize().expect("the bench resolves");
-    let root = checkout.with_file_name("cloud-1636-session-root");
+    let root = checkout.join("session-root");
     (
         checkout.join(".claude/settings.json").display().to_string(),
         root.join(".claude/settings.json").display().to_string(),
@@ -123,9 +135,19 @@ fn spellings(dir: &Path) -> (String, String) {
 const REGISTRATION: &str = r#"{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "batten adjudicate --harness claude-code"}]}]}}"#;
 
 /// Refused, naming batten's verb and never the vendor skill.
+///
+/// The decision is read off the body, not the exit code: Claude Code carries a
+/// deny's reason IN BAND (`Capabilities::reason_travels_in_band`), so the call
+/// is refused by `permissionDecision` at exit 0.
 fn assert_routed_to_the_verb(code: Option<i32>, said: &str) {
-    assert_eq!(code, Some(2), "a registration is refused: {said}");
-    assert!(said.contains("hook wire wrong"), "{said}");
+    assert_eq!(code, Some(0), "{said}");
+    assert!(
+        said.contains(r#""permissionDecision":"deny""#),
+        "a registration is refused: {said}"
+    );
+    // The pointer rides the line: the module's own subject, not a bare token.
+    assert!(said.contains("hook wire wrong at "), "{said}");
+    assert!(said.contains("session-root"), "the registered path: {said}");
     assert!(said.contains("batten startup --repair"), "{said}");
     assert!(!said.contains("/update-config"), "{said}");
 }
@@ -152,10 +174,7 @@ fn a_copy_into_the_surface_directory_is_refused_naming_the_verb() {
     let dir = bench("hcr-copy-dir", None);
     let (checkout, root) = spellings(&dir);
     let directory = root.trim_end_matches("settings.json");
-    let (code, said) = adjudicate(
-        &dir,
-        &bash(&format!("mkdir -p {directory} && cp {checkout} {directory}")),
-    );
+    let (code, said) = adjudicate(&dir, &bash(&format!("cp {checkout} {directory}")));
     assert_routed_to_the_verb(code, &said);
 }
 
@@ -173,7 +192,12 @@ fn a_written_registration_is_refused_naming_the_verb() {
 fn an_unrelated_link_is_not_refused() {
     let dir = bench("hcr-unrelated-link", None);
     let (_, root) = spellings(&dir);
-    let notes = dir.canonicalize().unwrap().join("notes.md").display().to_string();
+    let notes = dir
+        .canonicalize()
+        .unwrap()
+        .join("notes.md")
+        .display()
+        .to_string();
     let (code, said) = adjudicate(&dir, &bash(&format!("ln -s {notes} {root}")));
     assert_eq!(code, Some(0), "{said}");
     assert!(!said.contains("hook wire wrong"), "{said}");
@@ -213,7 +237,10 @@ fn a_settings_write_is_told_the_vendor_route() {
     assert_eq!(code, Some(0), "{said}");
     assert!(said.contains("hook edit early"), "{said}");
     assert!(said.contains("/update-config"), "{said}");
-    assert!(!said.contains("grant edit early"), "no permission list moved: {said}");
+    assert!(
+        !said.contains("grant edit early"),
+        "no permission list moved: {said}"
+    );
 }
 
 /// The neutrality half: the harnesses whose declared surface the write did not
@@ -222,14 +249,20 @@ fn a_settings_write_is_told_the_vendor_route() {
 fn a_settings_write_names_the_harnesses_left_behind() {
     let dir = bench("hcr-neutral", None);
     let (_, said) = adjudicate(&dir, &write(".claude/settings.json", "{}"));
-    let line = said
-        .lines()
-        .find(|line| line.contains("hook edit partial"))
+    // The class's own pointer span — its token up to the route — since several
+    // advisories can share one body.
+    let at = said
+        .find("hook edit partial")
         .unwrap_or_else(|| panic!("no neutrality line: {said}"));
+    let line = &said[at..];
+    let line = &line[..line.find(';').unwrap_or(line.len())];
     for left in ["cursor", "copilot-cli", "gemini-cli", "codex-cli"] {
-        assert!(line.contains(left), "{left}: {line}");
+        assert!(line.contains(left), "{left}: {said}");
     }
-    assert!(!line.contains("claude-code"), "the reached harness is not left behind: {line}");
+    assert!(
+        !line.contains("claude-code"),
+        "the reached harness is not left behind: {line}"
+    );
 }
 
 #[test]

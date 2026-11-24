@@ -12,7 +12,7 @@
 #
 # THE SURFACE IS THE CONSUMER'S, THE HARNESS SET IS THE CORE'S. Which paths are
 # harness configuration is the `harness-config-<harness>` `[[pattern]]` family in
-# `batten.toml` (rule 1); `config_check::harness` refuses a family that leaves a
+# `batten.toml` (rule 1); `validate_harness_surfaces` refuses a family that leaves a
 # harness out. The patterns match a path at any directory, so a surface in the
 # tree and one under `$HOME` or a session root are one reading.
 #
@@ -29,10 +29,10 @@
 # line names `batten startup --repair` alone.
 
 #MUTANT-SUITE crates/batten/tests/it/harness_config_route.rs
-#MUTANT registration-link-admitted|s@^\ttarget.program in \{"ln", "cp", "mv", "install"\}$@\ttarget.program in {"cp", "mv", "install"}@|a_symlinked_registration_is_refused_naming_the_verb
-#MUTANT registration-copy-admitted|s@^\ttarget.program in \{"ln", "cp", "mv", "install"\}$@\ttarget.program in {"ln", "mv", "install"}@|a_copied_registration_is_refused_naming_the_verb
-#MUTANT registration-write-routes-to-vendor|s@^\tregex.match\(data.batten.patterns\["harness-hook-registration"\], text\)$@\tfalse@|a_written_registration_is_refused_naming_the_verb
-#MUTANT registration-predicate-too-wide|s@^\tsurface\(source\)$@\ttrue@|an_unrelated_link_is_not_refused
+#MUTANT registration-link-admitted|s@^\ttarget.program in {"ln", "cp", "mv", "install"}$@\ttarget.program in {"cp", "mv", "install"}@|a_symlinked_registration_is_refused_naming_the_verb
+#MUTANT registration-copy-admitted|s@^\ttarget.program in {"ln", "cp", "mv", "install"}$@\ttarget.program in {"ln", "mv", "install"}@|a_copied_registration_is_refused_naming_the_verb
+#MUTANT registration-write-routes-to-vendor|s@^\tregex.match(data.batten.patterns\["harness-hook-registration"\], text)$@\tfalse@|a_written_registration_is_refused_naming_the_verb
+#MUTANT registration-predicate-too-wide|s@^\tsurface(source)$@\ttrue@|an_unrelated_link_is_not_refused
 
 # METADATA
 # description: |
@@ -62,9 +62,17 @@ lands_on_surface(target, source) if {
 	surface(concat("/", [trim_right(target, "/"), parts[count(parts) - 1]]))
 }
 
+# The shell write targets and an edit list, BEHIND A TYPE GUARD: `some x in null`
+# raises an evaluation error rather than abstaining, and `write-targets` is
+# `null` on every write-tool call, so an unguarded iteration faults the whole
+# module on exactly the calls the other arms judge.
+write_targets := input.call["write-targets"] if is_array(input.call["write-targets"])
+
+edits := input.call.arguments.edits if is_array(input.call.arguments.edits)
+
 # A link or a copy of one harness surface onto another.
 registration contains target.path if {
-	some target in input.call["write-targets"]
+	some target in write_targets
 	target.program in {"ln", "cp", "mv", "install"}
 	some source in target.sources
 	surface(source)
@@ -83,7 +91,7 @@ written_text contains text if {
 }
 
 written_text contains text if {
-	some edit in input.call.arguments.edits
+	some edit in edits
 	text := edit.new_string
 	is_string(text)
 }
@@ -103,7 +111,7 @@ registration contains path if {
 
 # A shell write to a harness surface whose command carries the registration.
 registration contains target.path if {
-	some target in input.call["write-targets"]
+	some target in write_targets
 	surface(target.path)
 	registers(input.call.command)
 }
@@ -163,10 +171,13 @@ test_a_copy_into_a_surface_directory_is_refused if {
 	v.subjects == [{"path": "/root/.claude/"}]
 }
 
+# `write-targets` SPELLED `null`, as the engine sends it on a write tool: a case
+# omitting the key reads undefined and hid the fault the type guard closes.
 test_a_written_registration_is_refused if {
 	some v in violation with input as {"call": {
 		"operation": "write",
 		"writes": "/root/.claude/settings.json",
+		"write-targets": null,
 		"arguments": {"content": `{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "batten adjudicate --harness claude-code"}]}]}}`},
 	}}
 		with data.batten.patterns as surfaces

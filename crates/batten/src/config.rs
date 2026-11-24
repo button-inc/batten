@@ -1485,7 +1485,7 @@ fn validate_module_vocabulary(config: &Config) -> Result<()> {
     // names every harness with wiring, so a new harness cannot rot behind it.
     under(
         Native::PatternTableRefused,
-        crate::config_check::harness::validate(&config.patterns),
+        crate::config_check::handler::validate_harness_surfaces(&config.patterns),
     )?;
     under(
         Native::TraversalTableRefused,

@@ -224,3 +224,108 @@ pub(crate) fn event_of(token: &str) -> Option<Event> {
         .copied()
         .find(|event| event.as_str() == token)
 }
+
+/// The id prefix of the harness-surface `[[pattern]]` family (CLOUD-1636).
+pub const HARNESS_SURFACES: &str = "harness-config-";
+
+/// The harness-surface census (CLOUD-1636): refuse a `harness-config-<harness>`
+/// family that omits a harness with wiring, or names a harness this engine
+/// does not adapt. A table declaring no family is not judged — a consumer that
+/// has not adopted the declaration owes nothing.
+///
+/// Which paths are a harness's configuration is the consumer's (rule 1); which
+/// harnesses exist is the core's, so the census is too. A variant with no row
+/// would read to every module over the family as "keeps no configuration",
+/// which is a confident wrong answer where the honest one is "nobody declared
+/// it", so a new harness is refused rather than defaulted. A harness with no
+/// wiring file (the neutral exit-code contract) keeps none, and owes no row.
+///
+/// Beside the handler checks because both judge the harness hook surface, and
+/// this module already reaches [`crate::hook`] for the harness set.
+///
+/// # Errors
+///
+/// A [`UsageError`] naming the harness left out, or the row naming no harness.
+pub fn validate_harness_surfaces(patterns: &[crate::pattern::NamedPattern]) -> anyhow::Result<()> {
+    use crate::hook::HarnessExt as _;
+    let harnesses = crate::config_model::Harness::ALL;
+    let declared: BTreeSet<&str> = patterns
+        .iter()
+        .filter_map(|pattern| pattern.id.strip_prefix(HARNESS_SURFACES))
+        .collect();
+    if declared.is_empty() {
+        return Ok(());
+    }
+    if let Some(unknown) = declared
+        .iter()
+        .find(|name| !harnesses.iter().any(|harness| harness.as_str() == **name))
+    {
+        return Err(UsageError::raise(format!(
+            "[[pattern]] {HARNESS_SURFACES}{unknown}: names no harness this engine adapts, \
+             so no write can be attributed to it"
+        )));
+    }
+    if let Some(missing) = harnesses
+        .iter()
+        .find(|harness| harness.wiring().is_some() && !declared.contains(harness.as_str()))
+    {
+        return Err(UsageError::raise(format!(
+            "[[pattern]] {HARNESS_SURFACES}{}: missing — the family declares harness \
+             configuration surfaces, and this harness keeps its hook registration in a file \
+             the family does not name",
+            missing.as_str()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod harness_surface_tests {
+    use super::*;
+    use crate::hook::HarnessExt as _;
+
+    fn row(id: &str) -> crate::pattern::NamedPattern {
+        crate::pattern::NamedPattern {
+            id: id.to_owned(),
+            regex: String::from("x"),
+        }
+    }
+
+    fn family(skip: Option<&str>) -> Vec<crate::pattern::NamedPattern> {
+        crate::config_model::Harness::ALL
+            .iter()
+            .filter(|harness| harness.wiring().is_some())
+            .map(|harness| harness.as_str())
+            .filter(|name| Some(*name) != skip)
+            .map(|name| row(&format!("{HARNESS_SURFACES}{name}")))
+            .collect()
+    }
+
+    #[test]
+    fn a_whole_family_loads() {
+        assert!(validate_harness_surfaces(&family(None)).is_ok());
+    }
+
+    #[test]
+    fn no_family_is_not_judged() {
+        assert!(validate_harness_surfaces(&[row("unrelated")]).is_ok());
+    }
+
+    #[test]
+    fn a_harness_left_out_is_refused_by_name() {
+        let error =
+            validate_harness_surfaces(&family(Some("cursor"))).expect_err("cursor is missing");
+        assert!(
+            error.to_string().contains("harness-config-cursor"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_row_naming_no_harness_is_refused() {
+        let mut rows = family(None);
+        rows.push(row("harness-config-nonesuch"));
+        let error = validate_harness_surfaces(&rows).expect_err("nonesuch is no harness");
+        assert!(error.to_string().contains("nonesuch"), "{error}");
+    }
+}

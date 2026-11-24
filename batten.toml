@@ -9551,7 +9551,7 @@ reason = "The classifier never reads `autoMode` from `.claude/settings.json`. De
 # `Harness` variant that keeps its hook registration in a file, each matching
 # the committed surface and its `$HOME` form at any directory, so a session
 # root outside the checkout is the same reading. Which spellings are harness
-# configuration HERE is this consumer's (rule 1); `config_check::harness`
+# configuration HERE is this consumer's (rule 1); `validate_harness_surfaces`
 # refuses the family at load when it leaves a harness out, so a seventh harness
 # cannot rot behind it. The neutral exit-code contract keeps no file and owes no
 # row. The paths are the ones `Harness::wiring` and `Harness::merge_surfaces`
@@ -9609,6 +9609,25 @@ no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused be
 kind = "policy"
 scope = "mediated_call"
 module = "policy/harness-config-advisory.rego"
+severity = "warn"
+
+# One class per module: the boundary speaks a bundle's first violation only, so
+# the memory and the neutrality line each need a module of their own to reach
+# the writer beside the vendor route.
+[[rule]]
+id = "grant edit early"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/harness-grant-advisory.rego"
+severity = "warn"
+
+[[rule]]
+id = "hook edit partial"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/harness-config-neutral.rego"
 severity = "warn"
 
 # Closing the raw path, as a gate rather than as a convention (CLOUD-1260).
@@ -12035,7 +12054,11 @@ gates = [
   "fixture-forks",
   "forge-verdict-required",
   "glob-containment",
+  "harness-config-advisory",
+  "harness-config-neutral",
+  "harness-config-route",
   "harness-grant",
+  "harness-grant-advisory",
   "harness-wiring",
   "hk-fix-selection",
   "hk-plan-required",
