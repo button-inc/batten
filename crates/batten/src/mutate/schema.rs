@@ -5547,7 +5547,7 @@ fn judge_handbacks(
             // even synced.
             let ran = handback_room(handback, tree).and_then(|()| {
                 synced_run(live, tree, || {
-                    run_from_own_line((handback.runner, state), mutant, filter.as_deref(), bound)
+                    run_from_own_line((handback, state), mutant, filter.as_deref(), bound)
                 })
             });
             let outcome = match ran {
@@ -5588,8 +5588,9 @@ fn judge_handbacks(
     Ok((verdicts, unviable))
 }
 
-/// Run `runner` in place over hand-back `mutant` in `state`'s mirror, its
-/// tests narrowed to `filter` within `bound`, listed from the mutant's own
+/// Run `handback`'s runner in place over `mutant` in `state`'s mirror, its
+/// tests narrowed to `filter` within `bound`, in the listing's package scope
+/// (`--workspace` for a whole-tree listing) and listed from the mutant's own
 /// line as the synced mirror holds it ([`super::target_diff`]), so no other
 /// field deletion is judged beside it (CLOUD-2911). Outcome files under
 /// `classic-out`, as [`judge_handbacks`] reads them.
@@ -5599,7 +5600,7 @@ fn judge_handbacks(
 /// The mirror's copy of its file cannot be read or holds no such line, the
 /// diff cannot be written, or `runner` cannot be spawned.
 fn run_from_own_line(
-    (runner, state): (&std::path::Path, &std::path::Path),
+    (handback, state): (&Handback<'_>, &std::path::Path),
     mutant: &Listed,
     filter: Option<&str>,
     bound: std::time::Duration,
@@ -5611,11 +5612,11 @@ fn run_from_own_line(
         .ok_or_else(|| anyhow::anyhow!("{} has no line {line} for {}", mutant.file, mutant.name))?;
     crate::durable::replace(&target, diff)?;
     super::cargo_mutant_in_place(
-        (&tree, runner, &target),
+        (&tree, handback.runner),
+        (handback.diff, &target),
         &mutant.name,
         filter,
-        bound,
-        &state.join("classic-out"),
+        (bound, &state.join("classic-out")),
     )
 }
 
