@@ -669,7 +669,14 @@ fn quoted_arg(text: &str) -> Option<(String, &str)> {
                     }
                     b'0'..=b'7' => {
                         let start = at - 1;
-                        while at < start + 3 && octal(at) {
+                        // UP TO TWO DIGITS MORE, three in all, as a pass
+                        // count rather than a cursor test (CLOUD-2789): a
+                        // change that stops `at` advancing reads a shorter
+                        // escape instead of spinning on the same digit.
+                        for _ in 0..2 {
+                            if !octal(at) {
+                                break;
+                            }
                             at += 1;
                         }
                         out.push(u8::from_str_radix(text.get(start..at)?, 8).ok()?);
