@@ -4883,6 +4883,7 @@ fn run_mcp(
             result: &result,
             mints: &resolved.mints,
             patterns: &resolved.patterns,
+            checkout: &mint_root(Path::new(".")),
         },
         out,
         err,
@@ -5167,6 +5168,20 @@ struct McpAnswer<'a> {
     mints: &'a [crate::config_model::MintDeclared],
     /// The named-regex table, for a body's `{authority:…}` piece.
     patterns: &'a [crate::pattern::NamedPattern],
+    /// The checkout whose receipt store the mint writes: [`mint_root`] of where
+    /// the call stands, never the repository root the capture store keys on.
+    checkout: &'a Path,
+}
+
+/// Where a dispatched call's receipts are minted: the checkout the call stands
+/// in, as the hook path roots its own mint (`anchor`), so a linked worktree's
+/// receipt lands in ITS git dir where its gates read it (CLOUD-2789).
+///
+/// NOT `git::repo_root`, which is the capture store's key: from a linked
+/// worktree that is the MAIN checkout, and a receipt minted there answers about
+/// a different checkout than the one being judged.
+fn mint_root(start: &Path) -> PathBuf {
+    config::anchor_at(start)
 }
 
 /// The receipts a dispatched call mints: [`mint_receipts`] over the method, the
@@ -5196,28 +5211,29 @@ fn mint_dispatched(
     );
 }
 
-/// [`mint_dispatched`] under `repo`'s own resolved config, as `mcp call` reaches
-/// it once its exchange has completed: a case drives the verb's mint without a
-/// listener to dispatch to.
+/// [`mint_dispatched`] for a call standing in `start`, under its resolved
+/// config and at its [`mint_root`], as `mcp call` reaches it once its exchange
+/// has completed: a case drives the verb's mint without a listener to dispatch
+/// to.
 ///
 /// # Errors
 ///
-/// When `repo`'s config does not resolve.
+/// When `start`'s config does not resolve.
 #[doc(hidden)]
 pub fn mint_dispatched_for_test(
-    repo: &Path,
+    start: &Path,
     method: &str,
     params: &serde_json::Value,
     payload: &serde_json::Value,
 ) -> Result<()> {
-    let resolved = resolve::resolve(repo, &Overrides::default())?;
+    let resolved = resolve::resolve(start, &Overrides::default())?;
     mint_dispatched(
         &resolved.mints,
         &resolved.patterns,
         method,
         params,
         payload,
-        repo,
+        &mint_root(start),
     );
     Ok(())
 }
@@ -5243,6 +5259,7 @@ fn file_and_report(
         result,
         mints,
         patterns,
+        checkout,
     } = *answer;
     // THE UNFRAMED PAYLOAD IS WHAT THE STORE HOLDS, and that is a fidelity
     // requirement rather than a preference. `capture::find` resolves a stored
@@ -5317,7 +5334,7 @@ fn file_and_report(
     // AFTER THE CAPTURE AND THE CALL LOG, mirroring `record_post_tool`: the
     // record of the exchange is written first and the derived receipt second, so
     // a mint can never be the reason a capture is missing.
-    mint_dispatched(mints, patterns, method, params, &payload.value, repo);
+    mint_dispatched(mints, patterns, method, params, &payload.value, checkout);
 
     // THE TRANSPARENCY DEFAULT (CLOUD-418's mirror). A method no row declares is
     // returned WHOLE, and so is one whose row could not reach its payload: a

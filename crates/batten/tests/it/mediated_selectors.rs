@@ -254,3 +254,37 @@ fn a_selecting_mint_mints_for_the_mediated_call_as_for_the_direct_one() {
     .expect("the fixture config resolves");
     assert!(receipts(&unselected).is_empty());
 }
+
+/// The mediated call's receipt lands in the LINKED WORKTREE the call stands in,
+/// where that checkout's gates read it, as the direct call's does — never in
+/// the main checkout's git dir.
+///
+/// Fails by: the verb minting at `git::repo_root`, which from a linked worktree
+/// is the main checkout, so the worktree's gate denied over a call that minted.
+#[test]
+fn a_mediated_mint_from_a_linked_worktree_lands_in_that_worktree() {
+    let answer = serde_json::json!({"url": "https://github.com/o/r/pull/7"});
+    let closing = serde_json::json!({"pullNumber": 7, "state": "closed"});
+    let main = repo("mediated-mint-worktree", MINT_ROW);
+    let linked = common::scratch("mediated-mint-worktree-linked");
+    let _ = std::fs::remove_dir_all(&linked);
+    git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked-work",
+            linked.to_str().unwrap_or_default(),
+        ],
+    );
+    assert!(
+        linked.join("batten.toml").is_file(),
+        "the linked worktree carries the committed authority"
+    );
+    batten::mint_dispatched_for_test(&linked, "update_pull_request", &closing, &answer)
+        .expect("the worktree's config resolves");
+    assert_eq!(receipts(&linked).len(), 1, "{:?}", receipts(&linked));
+    assert!(receipts(&main).is_empty(), "{:?}", receipts(&main));
+}
