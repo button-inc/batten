@@ -79,6 +79,15 @@ Binaries are never committed to this repository; they come from a release, and
 `mise run install-check` is the gate that keeps every reader of an asset name
 agreeing with the one that writes it.
 
+### Cloud environment Setup field
+
+A cloud environment's Setup field holds this one line, and it is the whole
+field: the install line above, then the committed `[[startup]]` rows.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/button-inc/batten/main/install.sh | sh && batten startup --repair
+```
+
 ## Why
 
 Repo-config-driven **conformance gates** that can judge an agent's tool call
