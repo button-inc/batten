@@ -23974,10 +23974,63 @@ deny contains "refused by themodule" if {
         assert!(policy.budget_sets_for(&after).is_empty());
     }
 
+    /// Fails by: a non-git program's own directory option ignored, so the call
+    /// reads as acting in the shell's directory, or moved to an empty path.
+    #[test]
+    fn a_directory_option_names_where_its_program_acts() {
+        let start = Path::new("/r");
+        for command in [
+            "make -C sub",
+            "make --directory=sub",
+            "cargo build --manifest-path sub/Cargo.toml",
+            "mise --cd sub run x",
+        ] {
+            assert_eq!(
+                acting_dirs(&envelope(command), start),
+                Some(vec![std::path::PathBuf::from("/r/sub")]),
+                "{command}"
+            );
+        }
+        assert_eq!(
+            acting_dirs(&envelope("ls sub"), start),
+            Some(vec![std::path::PathBuf::from("/r")]),
+            "a program with no directory option acts where it runs"
+        );
+    }
+
+    /// Fails by: a notebook write read as a file's text unless it carries both
+    /// a notebook path and a cell, when either alone makes it a notebook's.
+    #[test]
+    fn a_notebook_write_could_not_look_for_a_shebang() {
+        let root = crate::scratch::scratch("hook-shell-introduced-notebook");
+        let with = |input: Value| {
+            let mut write = write_envelope("Write", "n.ipynb");
+            write.input = input;
+            shell_introduced(&root, &write)
+        };
+        assert!(
+            matches!(
+                with(serde_json::json!({"content": "#!/bin/sh\necho\n"})),
+                crate::facts::Look::Is(_)
+            ),
+            "THE PREMISE: the same content written as a file introduces a shebang"
+        );
+        for notebook in [
+            serde_json::json!({"notebook_path": "n.ipynb", "content": "#!/bin/sh\necho\n"}),
+            serde_json::json!({"new_source": "#!/bin/sh\necho\n", "content": "#!/bin/sh\necho\n"}),
+        ] {
+            assert!(
+                matches!(with(notebook.clone()), crate::facts::Look::CouldNotLook),
+                "{notebook}"
+            );
+        }
+    }
+
     /// Fails by: `env`'s options or assignments read as its program (an
     /// `-S` after them missed), or an `-S` after the program read as `env`'s.
     #[test]
     fn only_envs_own_split_string_is_its_command() {
+        assert_eq!(split_strings(&["env", "-Sgit push"]), ["git push"]);
         assert_eq!(
             split_strings(&["env", "-i", "-S", "git push"]),
             ["git push"]

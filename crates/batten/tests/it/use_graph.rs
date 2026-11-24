@@ -275,6 +275,21 @@ fn a_qualified_path_in_code_is_an_edge() {
     assert!(used.iter().all(|edge| !edge.qualified));
 }
 
+/// A grouped `use crate::{a::B}` steps into `a` and names `B`, exactly as the
+/// ungrouped spelling does. Fails by: the group's first segment read past the
+/// path's end, so the edge names the module where it should name the item.
+#[test]
+fn a_grouped_crate_import_names_its_leaf() {
+    let Look::Is(edges) = use_edges("use crate::{a::B};") else {
+        panic!("the fixture parses");
+    };
+    let shape: Vec<(&str, &str, Origin)> = edges
+        .iter()
+        .map(|edge| (edge.to.as_str(), edge.item.as_str(), edge.origin))
+        .collect();
+    assert_eq!(shape, [("a", "B", Origin::Internal)]);
+}
+
 /// Module identity is stable across two runs over identical bytes, so a
 /// consumer's set lookup is deterministic (§7c).
 #[test]

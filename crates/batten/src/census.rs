@@ -1602,6 +1602,45 @@ mod tests {
         assert_eq!(sites, [(4, Some(String::from("run")))]);
     }
 
+    /// Fails by: a macro's body re-read from before its opening delimiter,
+    /// which no longer parses, so a spawn argv inside `vec![…]` is no site.
+    #[test]
+    fn a_spawn_argv_inside_a_vec_macro_is_a_site() {
+        let sites = spawn_sites(
+            "src/a.rs",
+            "fn f() {\n    let v = vec![\"sh\", \"-c\", \"x\"];\n}\n",
+        );
+        assert_eq!(
+            sites
+                .iter()
+                .map(|site| (site.line, site.function.as_deref()))
+                .collect::<Vec<_>>(),
+            [(2, Some("f"))]
+        );
+    }
+
+    /// Fails by: the tracked engine sources not read off disk, so the census
+    /// reports no spawn where a file holds one.
+    #[test]
+    fn a_tracked_engine_source_on_disk_is_read_for_spawns() {
+        let root = crate::scratch::scratch("census-spawns-on-disk");
+        std::fs::create_dir_all(root.join("src")).expect("mkdir");
+        std::fs::write(
+            root.join("src/a.rs"),
+            "fn f() {\n    let v = vec![\"sh\", \"-c\", \"x\"];\n}\n",
+        )
+        .expect("write");
+        let tracked = BTreeSet::from([String::from("src/a.rs"), String::from("tests/t.rs")]);
+        let sites = spawns_on_disk(&root, &tracked);
+        assert_eq!(
+            sites
+                .iter()
+                .map(|site| site.path.as_str())
+                .collect::<Vec<_>>(),
+            ["src/a.rs"]
+        );
+    }
+
     #[test]
     fn a_body_counts_its_code_lines_and_skips_comments_and_blanks() {
         let lines = [
