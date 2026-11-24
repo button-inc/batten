@@ -1952,8 +1952,14 @@ fn token_paths(tree: &SyntaxNode, module: &[String]) -> Vec<String> {
         .collect();
     let mut found = Vec::new();
     let mut at = 0;
-    while at < tokens.len() {
-        let (kind, text) = &tokens[at];
+    // BOUNDED BY THE TOKEN COUNT (CLOUD-2789): every pass moves `at` forward
+    // by at least one token, so `tokens.len()` passes reach the end. A change
+    // that stops it advancing then ends the scan with a wrong answer a case
+    // can see, rather than spinning until the suite's timeout.
+    for _ in 0..tokens.len() {
+        let Some((kind, text)) = tokens.get(at) else {
+            break;
+        };
         if !matches!(kind, SyntaxKind::CRATE_KW | SyntaxKind::SUPER_KW) {
             at += 1;
             continue;
@@ -2073,6 +2079,21 @@ fn parse(source: &str) -> Result<SourceFile, CouldNotLook> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: opening a node recording nothing (`Tarjan::open` read as
+    /// `()`), so no node is ever indexed and a cycle is walked forever.
+    /// Asserted on what `open` records, so the case never has to walk one.
+    #[test]
+    fn opening_a_node_indexes_it_and_stacks_it() {
+        let mut tarjan = Tarjan::new(3);
+        tarjan.open(1);
+        tarjan.open(2);
+        assert_eq!(tarjan.index, [None, Some(0), Some(1)]);
+        assert_eq!(tarjan.low, [0, 0, 1]);
+        assert_eq!(tarjan.next, 2);
+        assert_eq!(tarjan.stack, [1, 2]);
+        assert_eq!(tarjan.on_stack, [false, true, true]);
+    }
 
     /// Fails by: a file's module path answered as anything but its own
     /// segments, a `mod.rs` dropping out of the path it names.
