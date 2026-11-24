@@ -1931,6 +1931,95 @@ mod tests {
         assert_eq!(report.totals.total, 0, "exempt lines are never totalled");
     }
 
+    /// Fails by: a contract that names a format but cites no URL admitted —
+    /// each half of the contract test refuses alone.
+    #[test]
+    fn a_spawn_contract_without_a_citation_url_is_refused() {
+        let spawn = |contract: &str| ShellCensus {
+            spawns: vec![crate::config_model::Spawn {
+                path: "src/x.rs".to_owned(),
+                function: Some("f".to_owned()),
+                contract: Some(contract.to_owned()),
+            }],
+            ..ShellCensus::default()
+        };
+        assert!(spawn("an external format, uncited").validate().is_err());
+        assert!(spawn("   ").validate().is_err());
+        assert!(
+            spawn("a format, https://example.test/spec")
+                .validate()
+                .is_ok()
+        );
+    }
+
+    /// Fails by: the generated entries dropped before the report, or a check
+    /// file read from anywhere but under the root.
+    #[test]
+    fn a_generated_entry_is_measured_on_the_tree() {
+        let root = crate::scratch::scratch("census-generated");
+        std::fs::create_dir_all(root.join("gen")).unwrap();
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(root.join("gen/a.sh"), "echo a\n").unwrap();
+        std::fs::write(root.join("tests/g.rs"), "fn holds() {}\n").unwrap();
+        let declared = ShellCensus {
+            generated: vec![crate::config_model::Generated {
+                path: "gen/*.sh".to_owned(),
+                generator: Some("gen".to_owned()),
+                check: Some("tests/g.rs::holds".to_owned()),
+            }],
+            ..ShellCensus::default()
+        };
+        let tracked: BTreeSet<String> = ["gen/a.sh", "tests/g.rs"].map(str::to_owned).into();
+        assert_eq!(
+            generated_on_disk(&root, &declared, &tracked),
+            [GeneratedEntry {
+                path: "gen/*.sh".to_owned(),
+                matches: 1,
+                check_found: true,
+            }]
+        );
+    }
+
+    /// Fails by: any argv shape the walk reads dropped — a `.arg` chain, a
+    /// parenthesized program, a `vec!` list (its offset mapped back from the
+    /// re-read body), a bare array — or a constructor that is not
+    /// `Command::new` read as one.
+    #[test]
+    fn every_argv_shape_the_spawn_walk_reads_is_found_at_its_line() {
+        let source = "fn chained(script: &str) {\n\
+                      \x20   std::process::Command::new(\"python3\").arg(\"-c\").arg(script);\n\
+                      }\n\
+                      fn parenthesized() {\n\
+                      \x20   Command::new((\"sh\"));\n\
+                      }\n\
+                      fn listed() {\n\
+                      \x20   let argv = vec![\n\
+                      \x20       \"sh\",\n\
+                      \x20       \"-c\",\n\
+                      \x20   ];\n\
+                      }\n\
+                      fn bound() {\n\
+                      \x20   let argv = [\"sh\", \"-c\"];\n\
+                      }\n\
+                      fn other() {\n\
+                      \x20   Builder::new(\"sh\");\n\
+                      }\n";
+        let found: Vec<(usize, Option<String>)> = spawn_sites("src/x.rs", source)
+            .into_iter()
+            .map(|entry| (entry.line, entry.function))
+            .collect();
+        let at = |line: usize, function: &str| (line, Some(function.to_owned()));
+        assert_eq!(
+            found,
+            [
+                at(2, "chained"),
+                at(5, "parenthesized"),
+                at(9, "listed"),
+                at(14, "bound"),
+            ]
+        );
+    }
+
     #[test]
     fn the_source_bakes_in_no_consumer_path() {
         // Non-negotiable rule 1: which manifest, which workflow directory and
