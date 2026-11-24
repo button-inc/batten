@@ -9904,6 +9904,17 @@ mod tests {
         assert_eq!(position_free("a::b:7"), "a::b:7", "a lone number stays");
     }
 
+    /// Fails by: the head segment read as a position (`at > 0` as `>=`), so
+    /// a name opening on two numbers sheds its own path (CLOUD-2789).
+    #[test]
+    fn a_names_head_is_never_shed_as_a_position() {
+        assert_eq!(
+            position_free("5:7: x"),
+            "5:7: x",
+            "the head is the path, never a position, however it reads"
+        );
+    }
+
     /// Fails by: a listing's keys not each mutant's own [`shard_key`] in
     /// listing order, so `slice` reads another mutant's shard (CLOUD-2789).
     #[test]
