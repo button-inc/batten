@@ -100,4 +100,10 @@ exclude_re = [
   # so a head the guard would let through (`""` then the alias) names no
   # module, and the arms after it answer `None` alike (CLOUD-2789).
   'item_index\.rs:\d+:\d+: replace match guard !reader\.krate\.is_empty\(\) with true in Index::absolute_in$',
+  # Two adjacent nonempty `:` tokens give start < end == next_start < next_end, so `<` and `<=` agree (CLOUD-2789).
+  'item_index\.rs:\d+:\d+: replace < with <= in token_paths$',
+  # `mediated` only fills `bare_only_modules`, and `policy::case` reads only the suite's passed and failed (CLOUD-2789).
+  'policy\.rs:\d+:\d+: replace == with != in case$',
+  # regorus 0.15 refuses an entry point only when undefined (recursion, conflicts, `with` all compile), so the guard never holds (CLOUD-2789).
+  'policy\.rs:\d+:\d+: replace match guard !undefined_entry_point\(&err\) with false in Compiled::compile_guarded$',
 ]
