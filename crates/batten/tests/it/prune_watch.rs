@@ -812,6 +812,7 @@ fn the_arm_watches_past_the_gate() {
             )
         }),
         kept: Vec::new(),
+        copies: own_copies(&repo),
         record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
@@ -859,6 +860,25 @@ fn banded(name: &str) -> (PathBuf, PathBuf, Prune) {
     (repo, profile, config)
 }
 
+/// A temp directory of the case's own for a spawned engine, whose unbounded
+/// pass reads cargo-mutants copies from `TMPDIR`: a lap or a sweep under the
+/// suite's shared one frees a copy another suite's sweep staged there
+/// (CLOUD-2789).
+fn own_temp(dir: &Path) -> PathBuf {
+    let name = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("case");
+    common::scratch(&format!("{name}-tmp"))
+}
+
+/// The directory a case's watcher reads cargo-mutants copies from: its own
+/// and never created, so the unbounded pass frees no copy another suite's
+/// sweep staged in the shared temp directory (CLOUD-2789).
+fn own_copies(repo: &Path) -> PathBuf {
+    repo.join("no-mutant-copies")
+}
+
 /// Watch `repo` under `config` with `free_mb` answering each sample by its
 /// count, until `done` holds over the samples taken and what is present.
 fn watched(
@@ -878,6 +898,7 @@ fn watched(
             ))
         }),
         kept: Vec::new(),
+        copies: own_copies(repo),
         record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
@@ -986,6 +1007,7 @@ fn an_undeclared_band_watches_at_the_default() {
                 Ok(free)
             }),
             kept: Vec::new(),
+            copies: own_copies(&repo),
             record: None,
         };
         let ((), lines) = batten::disk_watch::around(Some(watch), || {
@@ -1137,6 +1159,7 @@ fn a_step_run_build_is_watched() {
                  sleep 0.05; done; exit 1";
     let ran = common::batten()
         .current_dir(&dir)
+        .env("TMPDIR", own_temp(&dir))
         .args(["step", "run", "probe", "--", "sh", "-c", waits])
         .env("TARGET_PRUNE_FREE_MB", "50")
         .stdin(std::process::Stdio::null())
@@ -1169,6 +1192,7 @@ fn a_traced_watch_writes_its_samples_to_stderr() {
     let dir = hooked("step-run-traced", true);
     let ran = common::batten()
         .current_dir(&dir)
+        .env("TMPDIR", own_temp(&dir))
         .args(["step", "run", "probe", "--", "sh", "-c", "sleep 0.5"])
         .env("TARGET_PRUNE_FREE_MB", "50")
         .env("BATTEN_DISK_TRACE", "1")
@@ -1387,6 +1411,7 @@ fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
     let sweep = |free: &str| {
         common::batten()
             .current_dir(&dir)
+            .env("TMPDIR", own_temp(&dir))
             .args(["mutate", "sweep"])
             .env("MUTANT_GATES", "engine-fixture")
             .env("TARGET_PRUNE_FREE_MB", free)
@@ -1423,6 +1448,7 @@ fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
     let verify = |free: &str| {
         common::batten()
             .current_dir(&dir)
+            .env("TMPDIR", own_temp(&dir))
             .args(["land", "verify"])
             .env("LAND_VERIFY", "git tag gate-ran")
             .env("TARGET_PRUNE_FREE_MB", free)
@@ -1463,6 +1489,7 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
         let mut command = common::batten();
         command
             .current_dir(&dir)
+            .env("TMPDIR", own_temp(&dir))
             .args(["land", "verify"])
             .env("LAND_VERIFY", "git tag gate-ran")
             // The first pass reads 5 twice; the pass after the wait reads 500.
