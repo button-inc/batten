@@ -136,7 +136,6 @@
 use crate::common;
 use batten::capture::StreamedChild as _;
 
-#[cfg(unix)]
 use std::fmt::Write as _;
 
 use std::fs;
