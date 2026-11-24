@@ -1004,13 +1004,7 @@ fn a_server_that_accepts_and_never_answers_times_out_rather_than_hanging() {
     // shipped minute. `BATTEN_FETCH_TIMEOUT_MS` moves how long a wait waits and
     // nothing else — the shortest value is the strictest, so it cannot admit
     // anything, which is what separates it from a bypass.
-    let output = batten()
-        .state_home(&env.home)
-        .args(["provision", "apply"])
-        .current_dir(&env.repo)
-        .env("BATTEN_FETCH_TIMEOUT_MS", "750")
-        .streamed_output()
-        .expect("run batten");
+    let output = apply_within_its_bound(&env, "750");
 
     assert_eq!(
         output.status.code(),
@@ -1029,6 +1023,60 @@ fn a_server_that_accepts_and_never_answers_times_out_rather_than_hanging() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// What the case's own deadline allows a `provision apply` under a shrunk
+/// fetch bound: many times the largest override a case sets, and far short of
+/// the shipped minute.
+const OVERRIDE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// `provision apply` in `env` with the fetch bound shrunk to `millis`, killed
+/// by a watchdog past [`OVERRIDE_DEADLINE`], and red if the watchdog had to
+/// (CLOUD-2789). Without one, an override the fetch IGNORED waited out the
+/// shipped minute and still ended `timed out`, so this case passed late and
+/// the mutant read as a hang rather than a kill.
+fn apply_within_its_bound(env: &Env, millis: &str) -> Output {
+    use std::process::Stdio;
+    let child = batten()
+        .state_home(&env.home)
+        .args(["provision", "apply"])
+        .current_dir(&env.repo)
+        .env("BATTEN_FETCH_TIMEOUT_MS", millis)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run batten");
+    let pid = child.id();
+    let (done, finished) = std::sync::mpsc::channel::<()>();
+    let watchdog = std::thread::spawn(move || {
+        let late = finished.recv_timeout(OVERRIDE_DEADLINE).is_err();
+        if late {
+            kill_late(pid);
+        }
+        late
+    });
+    let output = child.streamed_wait().expect("wait for batten");
+    let _ = done.send(());
+    assert!(
+        !watchdog.join().expect("the watchdog"),
+        "`BATTEN_FETCH_TIMEOUT_MS={millis}` did not end the fetch inside the case's deadline"
+    );
+    output
+}
+
+/// Kill the child the watchdog found still running, best effort: it may have
+/// exited since. Off unix the case only reports it late.
+#[cfg(unix)]
+fn kill_late(pid: u32) {
+    if let Some(pid) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_late(_pid: u32) {}
 
 /// The same listener, judged the other way round.
 ///
@@ -1058,13 +1106,7 @@ fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
         &digest(BINARY),
     ));
 
-    let output = batten()
-        .state_home(&env.home)
-        .args(["provision", "apply"])
-        .current_dir(&env.repo)
-        .env("BATTEN_FETCH_TIMEOUT_MS", "1500")
-        .streamed_output()
-        .expect("run batten");
+    let output = apply_within_its_bound(&env, "1500");
 
     assert_eq!(output.status.code(), Some(3));
     let said = String::from_utf8_lossy(&output.stderr);

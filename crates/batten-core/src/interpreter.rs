@@ -479,4 +479,23 @@ mod tests {
             assert_eq!(carried("fish", arguments), Carried::Inline, "{arguments:?}");
         }
     }
+
+    /// Fails by: awk's `-f` read as no option, so the program file it names
+    /// is taken for the program text (`Operand`) rather than a file the
+    /// program is read from (CLOUD-2789).
+    #[test]
+    fn awk_reads_its_program_from_the_file_dash_f_names() {
+        for program in ["awk", "mawk"] {
+            assert_eq!(
+                carried(program, &["-f", "prog.awk", "data"]),
+                Carried::File,
+                "{program}"
+            );
+            assert_eq!(
+                carried(program, &["{ print }", "data"]),
+                Carried::Operand,
+                "{program}"
+            );
+        }
+    }
 }
