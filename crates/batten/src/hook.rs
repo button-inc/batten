@@ -6827,6 +6827,24 @@ fn receipt_nonblocking(policy: &Policy, envelope: &Envelope, facts: &ReceiptFact
 /// they refuse is the finding, carried back at the row's own grade. Receipt
 /// rows have [`receipt_nonblocking`] (their facts are resolved per row) and
 /// native rows [`native_nonblocking`].
+/// The policy [`gate_nonblocking`] runs: `graded` alone, each promoted to
+/// `deny`, and NO compiled module. None of the five gates it runs (content,
+/// tool, ceiling, pipeline, shape) reads `bundles`, so a bundle carried here is
+/// a clone of every compiled module paid on every call for no verdict (#1276).
+fn promoted_policy(policy: &Policy, graded: &[&Rule]) -> Policy {
+    Policy {
+        shapes: graded
+            .iter()
+            .map(|rule| Rule {
+                severity: Some(RuleSeverity::Deny),
+                ..(*rule).clone()
+            })
+            .collect(),
+        bundles: Vec::new(),
+        ..policy.clone()
+    }
+}
+
 fn gate_nonblocking(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
     let graded: Vec<&Rule> = policy
         .shapes
@@ -6839,17 +6857,7 @@ fn gate_nonblocking(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> 
     if graded.is_empty() {
         return Vec::new();
     }
-    let promoted = Policy {
-        shapes: graded
-            .iter()
-            .map(|rule| Rule {
-                severity: Some(RuleSeverity::Deny),
-                ..(*rule).clone()
-            })
-            .collect(),
-        bundles: Vec::new(),
-        ..policy.clone()
-    };
+    let promoted = promoted_policy(policy, &graded);
     let mut measured = 0;
     let shape_gated = !envelope.command.is_empty() || call_event(envelope).is_some();
     let mut decided = vec![
@@ -10037,6 +10045,30 @@ pub(crate) fn task_programs(command: &str, bodies: &crate::taskset::TaskBodies) 
     Value::Array(found)
 }
 
+/// Whether a task-body line may run `batten step run`: [`step_programs`]'s
+/// prefilter, A NECESSARY CONDITION, NOT THE DECISION. The line is parsed only
+/// when this holds, so a line it refuses is a stage nobody counts (the
+/// under-read is the unsafe direction here).
+///
+/// It therefore admits every spelling [`inner_argv`] reads as `step run`: a
+/// word `step` whose next non-option word is `run`, each word read with its
+/// shell quotes and escapes dropped. A substring test on `"step run"` missed
+/// `step  run` and `step\trun`; an adjacent-pair test on the raw words missed
+/// `batten 'step' run` and `batten step -q run` (CLOUD-2880).
+fn names_step_run(line: &str) -> bool {
+    let words: Vec<String> = line
+        .split_whitespace()
+        .map(|word| word.replace(['\'', '"', '\\'], ""))
+        .collect();
+    words.iter().enumerate().any(|(at, word)| {
+        word == "step"
+            && words[at + 1..]
+                .iter()
+                .find(|next| !next.starts_with('-'))
+                .is_some_and(|next| next == "run")
+    })
+}
+
 /// Every program a task body runs under `batten step run`: what a `[[step]]`
 /// receipts, which is what a land stage IS (step 21). `null` where the task
 /// receipt could not be read.
@@ -10052,16 +10084,7 @@ pub(crate) fn step_programs(bodies: &crate::taskset::TaskBodies) -> Value {
     let found = bodies
         .iter()
         .flat_map(|(task, lines)| lines.iter().map(move |line| (task, line)))
-        // A NECESSARY CONDITION, NOT THE DECISION: the words `step` then `run`,
-        // whitespace-separated, before the line is parsed. A substring test on
-        // `"step run"` missed `step  run` and `step\trun`, and a missed line is a
-        // stage nobody counts (the under-read is the unsafe direction here).
-        .filter(|(_, line)| {
-            line.split_whitespace()
-                .collect::<Vec<_>>()
-                .windows(2)
-                .any(|pair| pair == ["step", "run"])
-        })
+        .filter(|(_, line)| names_step_run(line))
         .flat_map(|(task, line)| {
             reach_into(line, true, Some("task"), REACH_DEPTH, Stage::call())
                 .into_iter()
@@ -22581,6 +22604,28 @@ deny contains "refused by themodule" if {
         assert_eq!(found[0].1.rule(), "push-warned");
     }
 
+    /// The record pass's policy carries its rows promoted and no compiled
+    /// module, however many the caller's policy holds.
+    ///
+    /// Fails by: `bundles` dropped from the promoted policy's fields, so the
+    /// caller's modules are cloned onto every call, or a row left ungraded.
+    #[test]
+    fn the_record_pass_policy_carries_no_module() {
+        let warned = Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..shape("push-warned", "git push", None)
+        };
+        let mut policy = ceiling_policy(vec![warned.clone()]);
+        policy.bundles = Policy::mode_default(Harness::ClaudeCode)
+            .expect("compiles")
+            .bundles;
+        assert!(!policy.bundles.is_empty());
+        let promoted = promoted_policy(&policy, &[&warned]);
+        assert!(promoted.bundles.is_empty());
+        assert_eq!(promoted.shapes.len(), 1);
+        assert_eq!(promoted.shapes[0].severity, Some(RuleSeverity::Deny));
+    }
+
     /// The tool receipt gate denies a selecting receipt row whose receipt is
     /// missing, and nothing else.
     ///
@@ -22903,6 +22948,58 @@ deny contains "refused by themodule" if {
             ]
         );
         assert!(step_programs(&crate::facts::Look::CouldNotLook).is_null());
+    }
+
+    /// The prefilter admits every spelling the parse reads as `step run`, and
+    /// refuses a line naming neither word in that place (CLOUD-2880).
+    ///
+    /// Fails by: a quoted or escaped `step` missed, an option between `step`
+    /// and `run` missed, either word's test inverted, the option skip inverted,
+    /// or the search starting anywhere but after `step`.
+    #[test]
+    fn the_step_run_prefilter_reads_the_shell_words() {
+        for admitted in [
+            "batten step run deny -- cargo deny check",
+            "batten 'step' run deny -- cargo deny check",
+            "batten \"step\" \\run deny -- cargo deny check",
+            "batten step -q run deny -- cargo deny check",
+            "step  run",
+        ] {
+            assert!(names_step_run(admitted), "{admitted}");
+        }
+        for refused in [
+            "cargo clippy --fix",
+            "x run",
+            "step x",
+            "echo step",
+            "step",
+            "run step",
+        ] {
+            assert!(!names_step_run(refused), "{refused}");
+        }
+    }
+
+    /// A quoted `step` is still a receipted stage: the shell reads
+    /// `batten 'step' run` as `batten step run` (CLOUD-2880).
+    ///
+    /// Fails by: the prefilter matching the raw words, so the line is never
+    /// parsed and its stage is not counted.
+    #[test]
+    fn a_quoted_step_run_is_a_stage() {
+        let bodies: crate::taskset::TaskBodies = crate::facts::Look::Is(
+            [(
+                "deny".to_owned(),
+                vec!["batten 'step' run deny -- cargo deny check".to_owned()],
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let steps = step_programs(&bodies);
+        let steps = steps.as_array().unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0]["task"], "deny");
+        assert_eq!(steps[0]["name"], "cargo");
+        assert_eq!(steps[0]["subcommand"], "deny");
     }
 
     /// `batten`'s verb and its nested verb are projected; a `mise` entry
