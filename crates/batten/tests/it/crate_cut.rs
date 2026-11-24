@@ -210,3 +210,76 @@ fn a_body_is_respelled_as_the_cut_respells_a_file() {
         None
     );
 }
+
+/// Fails by: an empty use group `crate::{}` read as a reach whose every child
+/// moves, and spliced; a later segment `x::big::…` (parsed, or inside a
+/// macro's token tree) read as a path's root; or a single `:` (a type
+/// ascription in a token tree) read as a `::` separator.
+#[test]
+fn a_body_respells_only_a_roots_own_reach() {
+    let modules = ["a"].into_iter().collect();
+    let same = |body: &str, root: &str| {
+        assert_eq!(
+            respell_body(body, root, &modules, "two").as_deref(),
+            Some(body),
+            "{body}"
+        );
+    };
+    same("{ use crate::{}; }", "crate");
+    same("{ x::big::a::f(); }", "big");
+    same("{ m!(x::big::a::f); }", "big");
+    same("{ m!(big: x a); }", "big");
+    // The real reaches still respell, so the cases above are not vacuous.
+    assert_eq!(
+        respell_body("{ big::a::f(); m!(big::a::f); }", "big", &modules, "two").as_deref(),
+        Some("{ two::a::f(); m!(two::a::f); }")
+    );
+}
+
+/// Fails by: a moved file's plain identifier, or a binding typed `name: T`,
+/// read as a path root, so the new manifest keeps a dependency the moved
+/// file never names as a crate.
+#[test]
+fn a_bare_identifier_in_a_moved_file_keeps_no_dependency() {
+    let (mut files, manifests) = tree();
+    files.insert(
+        "crates/big/src/a.rs".to_owned(),
+        "pub fn x() -> anyhow::Result<u8> {\n    let serde: u8 = 1;\n    Ok(serde)\n}\n".to_owned(),
+    );
+    let plan = cut_crate(&CUT, &files, &manifests);
+    assert!(plan.refused.is_empty(), "{:?}", plan.refused);
+    let small = &plan.writes["crates/small/Cargo.toml"];
+    assert!(small.contains("anyhow"), "{small}");
+    assert!(!small.contains("serde"), "{small}");
+}
+
+/// Fails by: the walk skipping every ordinary directory, or descending into
+/// a hidden directory or a `fixtures` tree, whose sources a cut must never
+/// respell.
+#[test]
+fn run_cut_reads_the_workspace_but_not_hidden_or_fixture_trees() {
+    let (mut files, manifests) = tree();
+    let stray = "fn f() { let _ = big::a::x(); }\n";
+    files.insert(
+        "crates/big/tests/fixtures/f.rs".to_owned(),
+        stray.to_owned(),
+    );
+    files.insert("crates/big/.cache/g.rs".to_owned(), stray.to_owned());
+    let root = crate::common::scratch("crate-cut-run");
+    for (path, text) in files.iter().chain(&manifests) {
+        let target = root.join(path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, text).unwrap();
+    }
+    let mut out = Vec::new();
+    let code = batten::crate_cut::run_cut(&root, &CUT, true, &mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert_eq!(code, batten::exit::ExitCode::Success, "{out}");
+    assert!(out.contains("write crates/small/src/a.rs\n"), "{out}");
+    assert!(out.contains("write crates/big/tests/t.rs\n"), "{out}");
+    assert!(out.contains("remove crates/big/src/a.rs\n"), "{out}");
+    assert!(
+        !out.contains("fixtures") && !out.contains(".cache"),
+        "{out}"
+    );
+}

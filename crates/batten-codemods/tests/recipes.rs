@@ -223,3 +223,53 @@ fn run() {
         "idempotent"
     );
 }
+
+/// `(path, text)` rows as the tree recipes take them.
+fn tree(rows: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+    rows.iter()
+        .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+        .collect()
+}
+
+/// Fails by: the tree recipe returning nothing, or a file it never split.
+#[test]
+fn the_split_recipe_writes_each_inline_module_to_its_own_file() {
+    let recipe = batten_codemods::named_tree("split-inline-modules").expect("saved");
+    let files = tree(&[(
+        "src/check.rs",
+        "pub mod a {\n    pub fn f() {}\n}\npub mod b {\n    pub fn g() {}\n}\n",
+    )]);
+    assert_eq!(
+        (recipe.apply)(&files, &tree(&[])),
+        tree(&[
+            ("src/check.rs", "pub mod a;\npub mod b;\n"),
+            ("src/check/a.rs", "pub fn f() {}\n"),
+            ("src/check/b.rs", "pub fn g() {}\n"),
+        ])
+    );
+}
+
+/// Fails by: the trait not made in the package's own file, or a path out
+/// that is no file of the tree it was given.
+#[test]
+fn the_extension_trait_recipe_changes_only_files_of_the_package() {
+    let recipe = batten_codemods::named_tree("impl-to-extension-trait").expect("saved");
+    let files = tree(&[
+        ("crates/app/src/lib.rs", "mod model;\nmod rules;\n"),
+        ("crates/app/src/model.rs", "pub struct Rule { pub x: u8 }\n"),
+        (
+            "crates/app/src/rules.rs",
+            "use crate::model::Rule;\nimpl Rule {\n    pub fn twice(&self) -> u8 { self.x * 2 }\n}\n",
+        ),
+    ]);
+    let manifests = tree(&[("crates/app/Cargo.toml", "[package]\nname = \"app\"\n")]);
+    let changed = (recipe.apply)(&files, &manifests);
+    assert!(
+        changed["crates/app/src/rules.rs"].contains("pub trait RuleExt"),
+        "{changed:?}"
+    );
+    for (path, text) in &changed {
+        assert!(files.contains_key(path), "{path} is no file of the tree");
+        assert_ne!(Some(text), files.get(path), "{path} unchanged");
+    }
+}
