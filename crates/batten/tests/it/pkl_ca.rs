@@ -84,34 +84,39 @@ fn the_ca_selection_matches_vars_pkl_ca() {
 /// the flag, so a helper that dropped it would spawn bare `pkl eval` for every
 /// case `every_pkl_spawn_carries_the_ca_selection` routes through it.
 ///
-/// Driven with explicit candidates, never the environment: CI sets neither
-/// variable, so an argv read off `pkl_command()` there is `eval` either way
-/// (CLOUD-2917).
+/// The argv is driven with explicit candidates, never the environment: CI sets
+/// neither variable, so an argv read off `pkl_command()` there is `eval` either
+/// way (CLOUD-2917). The spawn is then held to that argv over the environment
+/// it does read, so it cannot drop what the argv carries.
 #[test]
 fn the_pkl_spawn_carries_the_selection_after_eval() {
     let dir = common::scratch("pkl-ca-spawn");
     common::write(&dir, "ssl.pem", "ssl\n");
     let ssl = dir.join("ssl.pem");
-    let selected = common::pkl_command_with(None, Some(ssl.as_os_str().to_owned()));
-    let bare = common::pkl_command_with(None, None);
     assert_eq!(
-        selected
-            .get_args()
-            .map(ToOwned::to_owned)
-            .collect::<Vec<OsString>>(),
+        common::pkl_argv(None, Some(ssl.as_os_str().to_owned())),
         vec![
             OsString::from("eval"),
             OsString::from("--ca-certificates"),
             ssl.as_os_str().to_owned(),
         ],
-        "the pkl spawn is `pkl eval` with the CA selection appended"
+        "the pkl argv is `eval` with the CA selection appended"
     );
     assert_eq!(
-        bare.get_args()
+        common::pkl_argv(None, None),
+        vec![OsString::from("eval")],
+        "with nothing selected the argv is plain `eval`"
+    );
+    assert_eq!(
+        common::pkl_command()
+            .get_args()
             .map(ToOwned::to_owned)
             .collect::<Vec<OsString>>(),
-        vec![OsString::from("eval")],
-        "with nothing selected the spawn is plain `pkl eval`"
+        common::pkl_argv(
+            std::env::var_os("BATTEN_CA_BUNDLE"),
+            std::env::var_os("SSL_CERT_FILE"),
+        ),
+        "the one pkl spawn runs that argv over the environment"
     );
 }
 
