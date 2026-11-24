@@ -420,6 +420,24 @@ mod tests {
         assert!(validate(&spent).is_err());
     }
 
+    /// Two `spend` rows on one tool with selectors at DIFFERENT paths can both
+    /// select one call, so they still race for the record; at the same path
+    /// with different values they never can. Fails by: rows read as disjoint
+    /// because their values differ, whatever path each reads.
+    #[test]
+    fn spend_rows_selecting_at_different_paths_still_race() {
+        let mut elsewhere = bridged("b", "Skill", "y", None);
+        elsewhere.selects_at = Some("args".to_owned());
+        let racing = [gates(), bridged("a", "Skill", "x", None), elsewhere];
+        assert!(validate(&racing).is_err());
+        let disjoint = [
+            gates(),
+            bridged("a", "Skill", "x", None),
+            bridged("b", "Skill", "y", None),
+        ];
+        assert!(validate(&disjoint).is_ok(), "{:?}", validate(&disjoint));
+    }
+
     /// One prerequisite has one mode, on one tool or across two.
     #[test]
     fn mixed_after_modes_on_one_prerequisite_refuse() {
