@@ -336,6 +336,24 @@ mod tests {
         assert_eq!(tree.syntax().to_string(), "// ordinary\nfn f() {}\n");
     }
 
+    /// Fails by: the memo answering a repeat of the same text asked under
+    /// another edition with the tree parsed under the first (CLOUD-2830's
+    /// one-entry memo is keyed on text and edition alike).
+    #[test]
+    fn the_memo_answers_a_repeat_only_under_the_edition_it_parsed() {
+        // `async` is an identifier in 2015 and a keyword from 2018, so the one
+        // text parses clean under the first and refuses under the second.
+        let source = "fn f() { let async = 1; }\n";
+        assert!(matches!(
+            rust_tree(source, ra_ap_syntax::Edition::Edition2015),
+            crate::facts::Look::Is(_)
+        ));
+        assert!(matches!(
+            rust_tree(source, ra_ap_syntax::Edition::Edition2018),
+            crate::facts::Look::CouldNotLook
+        ));
+    }
+
     #[test]
     fn an_ordinary_comment_is_not_in_the_tree_and_a_doc_comment_is() {
         // THE MEASUREMENT BEHIND THE UNBUILT HALF (CLOUD-1008 §2), pinned here
