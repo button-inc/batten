@@ -72,7 +72,7 @@
 # A CAPTURE IS A VERSION ONLY WHEN IT IS SEMVER (CLOUD-2906). The captures read
 # the whole field, so a pre-release agrees; the guard is what keeps a field that
 # is not a version (a leading zero, `latest`) from being compared as one.
-#MUTANT hk-capture-validity-dropped|s@^\tsemver.is_valid(match[1])$@\ttrue@|a_non_semver_hk_capture_names_none_through_the_engine
+#MUTANT hk-capture-validity-dropped|s@^\tsemver.is_valid(match\[1\])$@\ttrue@|a_non_semver_hk_capture_names_none_through_the_engine
 #
 #MUTANT-SUITE crates/batten/tests/it/tracked_absent.rs
 
