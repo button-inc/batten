@@ -7818,7 +7818,8 @@ mod tests {
     }
 
     /// Fails by: a bracket's leading `^` read as a literal caret, a leading `]`
-    /// read as the close, or a regex-crate class operator left live inside one.
+    /// read as the close, a class's own `]` read as the bracket's close, or a
+    /// regex-crate class operator left live inside one.
     #[test]
     fn a_bracket_expression_negates_on_its_leading_caret() {
         assert_eq!(
@@ -7831,6 +7832,13 @@ mod tests {
         assert_eq!(
             basic_to_rust(r"[[:digit:]]x^", '@').as_deref(),
             Some(r"[[:digit:]]x\^")
+        );
+        // A member after a class is still inside the bracket, so it is
+        // escaped there; closing the bracket at the class's own `]` would
+        // leave the `.` bare.
+        assert_eq!(
+            basic_to_rust(r"[[:digit:].]", '@').as_deref(),
+            Some(r"[[:digit:]\.]")
         );
         assert_eq!(
             substitute("k = \"v\", j\n", r#"s@= "[^"]*"@= ""@"#).as_deref(),
@@ -8030,6 +8038,35 @@ mod tests {
         );
         let owed = said(&Registry::default(), &none);
         assert!(owed.contains("building the cargo suites"), "{owed}");
+    }
+
+    /// Fails by: a row's caught key answered as a constant (`row_key` read as
+    /// a fixed string), so a row whose script or whose gate's source changed
+    /// keeps the catch recorded against what it was (CLOUD-2789).
+    #[test]
+    fn a_row_is_keyed_by_its_script_and_its_gate_source() {
+        let root = fixture("row-key");
+        let rego = format!("#{ROW}one|s/x/y/|case_a\n#{ROW}two|s/a/b/|case_b\n");
+        put(&root, "policy/probe.rego", &rego);
+        let keys = |root: &Path| -> Vec<String> {
+            let Some(gate) = resolve(root, "probe") else {
+                panic!("the module resolves to a gate");
+            };
+            gate.rows
+                .iter()
+                .map(|row| row_key(root, &gate, row))
+                .collect()
+        };
+        let before = keys(&root);
+        assert_eq!(before.len(), 2, "premise: two rows");
+        assert_ne!(before[0], before[1], "two scripts, two keys");
+        put(
+            &root,
+            "policy/probe.rego",
+            &format!("{rego}package edited\n"),
+        );
+        let after = keys(&root);
+        assert_ne!(before[0], after[0], "the gate's source is keyed");
     }
 
     /// CLOUD-2533: one gate's rows are judged across the shards, each by one,

@@ -4345,6 +4345,21 @@ mod tests {
         );
     }
 
+    /// Fails by: a nonempty array written whole as one leaf rather than
+    /// walked member by member (the array arm's `!items.is_empty()` guard
+    /// read as `false`), so a content array's text sits under its parent's
+    /// pointer as one escaped line (CLOUD-2284, CLOUD-2789).
+    #[test]
+    fn a_result_view_walks_each_member_of_a_nonempty_array() {
+        let repo = contained_repo("capture-result-view-array");
+        let result = serde_json::json!({"c": ["one", {"y": "two"}]});
+        let (path, _) = result_view_spilled(&repo, &pointer("r1"), &result, &[]).unwrap();
+        assert_eq!(
+            crate::fsio::read_to_string(path).unwrap(),
+            "## /c/0\none\n## /c/1/y\ntwo\n"
+        );
+    }
+
     /// Fails by: a leaf of exactly the cap refused as over it.
     #[test]
     fn a_json_leaf_exactly_at_the_cap_is_pretty_printed() {
