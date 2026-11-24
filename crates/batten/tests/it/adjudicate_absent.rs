@@ -163,20 +163,34 @@ fn a_loadable_config_still_allows_an_ordinary_call() {
 
 #[test]
 fn a_tool_name_off_the_pre_tool_event_loads_no_config() {
-    // `is_adjudicable` admits a tool name only on `PreTool` (CLOUD-2789): the
-    // tool name and the event are one clause, joined by `&&`. A `PostToolUse`
-    // naming `Grep` carries no command and no write, so it never reaches the
-    // config load, and an unparseable config cannot refuse it. Joined by `||`
-    // instead, the tool name alone admits it, the load fails, and an
-    // unclassified tool is refused at `2`.
+    // `is_adjudicable` admits a tool name only on `PreTool` or a permission
+    // event (CLOUD-2789): each is one clause, the event and the tool name
+    // joined by `&&`. An event off both, naming an MCP tool, carries no
+    // command and no write, so it never reaches the config load; nor does a
+    // pre-tool or permission event naming no tool. An unparseable config
+    // cannot refuse either. Joined by `||` instead, the tool name or the event
+    // alone admits the call, the load fails, and it is refused at `2` (an MCP
+    // call is no exempt read).
     let dir = fixture("adjudicate-post-tool-name", WILL_NOT_PARSE);
-    let post = "{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Grep\",\
-                \"tool_input\":{\"pattern\":\"ordinary\"}}";
-    assert_eq!(
-        code_for(&dir, post),
-        Some(0),
-        "a tool name off the pre-tool event must not make the call adjudicable"
-    );
+    for event in ["PostToolUse", "Notification", "UserPromptSubmit"] {
+        let named = format!(
+            "{{\"hook_event_name\":\"{event}\",\"tool_name\":\"mcp__fixture__call\",\
+             \"tool_input\":{{}}}}"
+        );
+        assert_eq!(
+            code_for(&dir, &named),
+            Some(0),
+            "a tool name on {event} must not make the call adjudicable"
+        );
+    }
+    for event in ["PreToolUse", "PermissionRequest"] {
+        let bare = format!("{{\"hook_event_name\":\"{event}\",\"tool_input\":{{}}}}");
+        assert_eq!(
+            code_for(&dir, &bare),
+            Some(0),
+            "{event} naming no tool must not make the call adjudicable"
+        );
+    }
 }
 
 /// A write-tool call targeting `file` inside `dir`, by absolute path the way
