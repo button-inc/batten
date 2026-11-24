@@ -6147,18 +6147,44 @@ pub const fn judging_jobs(machine: Machine) -> usize {
 /// NOT HALF THE CORES: a mutant's build is the incremental rebuild of the one
 /// crate it mutates, which is mostly serial (a lap measured 4.1 h of build to
 /// 1.0 h of test), so one job leaves cores idle; the memory term is what keeps
-/// parallel builds from oversubscribing. Never below one: one job is
-/// cargo-mutants' own default, and the disk collector keeps it inside the floor.
+/// parallel builds from oversubscribing.
+///
+/// `None` WHEN NOT EVEN ONE FITS (CLOUD-2882), never a forced one: a build
+/// with no room for its target can only fail, and on #1276 a full disk failed
+/// hand-back builds that were then recorded unviable. Refused, the caller says
+/// so and judges nothing, which is could-not-look rather than a verdict.
 #[must_use]
-pub fn job_count(machine: Machine, cost: JobCost) -> usize {
+pub fn job_count(machine: Machine, cost: JobCost) -> Option<usize> {
     let fit = |have: u64, need: u64| {
         usize::try_from(have.checked_div(need).unwrap_or(u64::MAX)).unwrap_or(usize::MAX)
     };
-    machine
+    let jobs = machine
         .cores
-        .min(fit(machine.disk_headroom_mb, cost.disk_mb))
-        .min(fit(machine.memory_mb, cost.memory_mb))
         .max(1)
+        .min(fit(machine.disk_headroom_mb, cost.disk_mb))
+        .min(fit(machine.memory_mb, cost.memory_mb));
+    (jobs > 0).then_some(jobs)
+}
+
+/// The headroom above `floor_mb` on the volume holding `at`, when it is too
+/// small for one job of `disk_mb`; `None` when the job fits.
+///
+/// # Errors
+///
+/// The volume's free space cannot be read.
+pub fn disk_short(at: &Path, disk_mb: u64, floor_mb: u64) -> Result<Option<u64>> {
+    let free_mb = crate::prune::sampler(at.to_path_buf())?()?;
+    let headroom = free_mb.saturating_sub(floor_mb);
+    let one = Machine {
+        cores: 1,
+        disk_headroom_mb: headroom,
+        memory_mb: u64::MAX,
+    };
+    let cost = JobCost {
+        disk_mb,
+        memory_mb: 0,
+    };
+    Ok(job_count(one, cost).is_none().then_some(headroom))
 }
 
 #[cfg(test)]
@@ -6226,20 +6252,39 @@ mod tests {
     /// Fails by: the cores divided, or any term ignored.
     #[test]
     fn the_scarcest_resource_sizes_the_jobs() {
-        assert_eq!(job_count(machine(8, 100_000, 100_000), COST), 8);
-        assert_eq!(job_count(machine(8, 6_000, 100_000), COST), 3);
-        assert_eq!(job_count(machine(8, 100_000, 6_000), COST), 2);
+        assert_eq!(job_count(machine(8, 100_000, 100_000), COST), Some(8));
+        assert_eq!(job_count(machine(8, 6_000, 100_000), COST), Some(3));
+        assert_eq!(job_count(machine(8, 100_000, 6_000), COST), Some(2));
+        assert_eq!(job_count(machine(8, 2_000, 3_000), COST), Some(1));
     }
 
-    /// Fails by: zero jobs on a full disk, or a zero cost dividing by zero.
+    /// A machine without room for one job is refused, never forced one
+    /// (CLOUD-2882): on #1276 a forced build on a full disk recorded mutants
+    /// unviable.
+    ///
+    /// Fails by: a forced job on a disk or memory one megabyte short, zero
+    /// cores read as zero jobs, or a zero cost dividing by zero.
     #[test]
-    fn a_starved_machine_still_runs_one_job() {
-        assert_eq!(job_count(machine(1, 0, 0), COST), 1);
+    fn a_starved_machine_is_refused_a_job() {
+        assert_eq!(job_count(machine(1, 0, 0), COST), None);
+        assert_eq!(job_count(machine(4, 1_999, 100_000), COST), None);
+        assert_eq!(job_count(machine(4, 100_000, 2_999), COST), None);
+        assert_eq!(job_count(machine(0, 100_000, 100_000), COST), Some(1));
         let free = JobCost {
             disk_mb: 0,
             memory_mb: 0,
         };
-        assert_eq!(job_count(machine(6, 0, 0), free), 6);
+        assert_eq!(job_count(machine(6, 0, 0), free), Some(6));
+    }
+
+    /// Fails by: a volume with room read as short, or one without room read
+    /// as fitting, or the floor not taken from the headroom.
+    #[test]
+    fn a_disk_too_small_for_one_job_is_short() {
+        let here = std::env::temp_dir();
+        assert_eq!(disk_short(&here, 0, 0).unwrap(), None);
+        assert!(disk_short(&here, u64::MAX, 0).unwrap().is_some());
+        assert_eq!(disk_short(&here, 1, u64::MAX).unwrap(), Some(0));
     }
 
     /// Fails by: a source outside the root, or the root itself, given an overlay
