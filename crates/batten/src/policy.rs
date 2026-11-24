@@ -3267,6 +3267,14 @@ const ANSWERED_RULES: [&str; 5] = [
     REWRITE_RULE,
 ];
 
+/// Whether the bytecode compiler's `err` refused an entry point for not being
+/// defined, rather than a construct the bundle uses.
+fn undefined_entry_point(err: &str) -> bool {
+    ["not found", "undefined", "not a valid rule path"]
+        .iter()
+        .any(|words| err.contains(words))
+}
+
 /// The entry point a `(package, rule)` pair compiles to.
 fn entry_point(package: &[String], rule: &str) -> String {
     let mut path = String::from(PACKAGE_QUERY);
@@ -3365,9 +3373,9 @@ impl Compiled {
             return Err(match last {
                 // Every candidate refused for being undefined is a bundle with
                 // nothing to answer; anything else is the compiler's refusal.
-                Some(err) if !err.contains("not found") && !err.contains("undefined") => {
-                    (Fallback::CompileRefused, err)
-                }
+                // regorus 0.15 words an undefined entry point "not a valid rule
+                // path", which neither older spelling matched.
+                Some(err) if !undefined_entry_point(&err) => (Fallback::CompileRefused, err),
                 other => (
                     Fallback::NoAnsweredRule,
                     other.unwrap_or_else(|| String::from("no package")),
@@ -7965,6 +7973,270 @@ violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects
             &on,
         );
         assert_eq!(verdicts(&edited, "{}"), Some(vec!["edited".to_owned()]));
+    }
+
+    /// Fails by: a suite program written to the cache never read back, so
+    /// every run recompiles and none decides on cached bytecode.
+    #[test]
+    fn a_warm_suite_decides_on_its_cached_program() {
+        let dir = crate::scratch::scratch("policy-suite-cache");
+        crate::testing::contain_state(&dir.join("state"));
+        let root = dir.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let bundle = bundle_of("suite-cached", &[("policy/a.rego", MODULE)]);
+        for _ in 0..2 {
+            test(&bundle, "{}", false, Some(&root)).unwrap();
+        }
+        assert!(
+            execution_census()
+                .iter()
+                .any(|(id, how, _)| id == "suite-cached"
+                    && *how == Execution::Bytecode { cached: true }),
+            "{:?}",
+            execution_census()
+        );
+    }
+
+    /// Fails by: an evaluator rendered as nothing in the `-vv` census.
+    #[test]
+    fn an_execution_names_its_evaluator() {
+        assert_eq!(
+            Execution::Bytecode { cached: true }.to_string(),
+            "bytecode cached"
+        );
+        assert_eq!(
+            Execution::Bytecode { cached: false }.to_string(),
+            "bytecode compiled"
+        );
+        assert_eq!(
+            Execution::Interpreted(Fallback::TestWith).to_string(),
+            format!("interpreter {}", Fallback::TestWith.as_str())
+        );
+    }
+
+    /// Fails by: a rule both evaluators agree on reported as a split (the
+    /// comparison inverted), so the parity gate reads every bundle as split.
+    #[test]
+    fn rules_the_evaluators_agree_on_are_no_split() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        assert_eq!(
+            rule_splits(&bundle, &serde_json::json!({}), "{}"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            rule_splits(
+                &bundle,
+                &serde_json::json!({}),
+                r#"{"call": {"operation": "write"}}"#
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Fails by: the input paths the parity gate hollows answered as a fixed
+    /// path rather than those the non-test rules read.
+    #[test]
+    fn a_bundles_input_paths_are_what_its_rules_read() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        assert_eq!(input_paths(&bundle), ["call.operation"]);
+    }
+
+    /// Fails by: the interpreter kept on a bytecode bundle that was asked to
+    /// drop it, so its AST readers run on the engine bytecode replaced.
+    #[test]
+    fn a_bytecode_bundle_keeps_its_interpreter_only_when_asked() {
+        let dropped = bytecode(bundle_of("row", &[("policy/a.rego", MODULE)]));
+        assert!(dropped.evaluator.engine().is_none());
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let kept = Compiled::from_bundle(&bundle, &serde_json::json!({}))
+            .expect("the fixture compiles to bytecode")
+            .into_bundle(bundle, true);
+        assert!(kept.evaluator.engine().is_some());
+    }
+
+    /// Fails by: a bundle that only defines helpers read as a compile
+    /// refusal (regorus words its undefined entry point "not a valid rule
+    /// path"), or a construct the bytecode compiler refuses read as a bundle
+    /// with nothing to answer.
+    #[test]
+    fn a_bundle_answering_nothing_is_told_from_one_the_compiler_refuses() {
+        let helpers = bundle_of(
+            "row",
+            &[(
+                "policy/a.rego",
+                "package batten.h\nimport rego.v1\n\nhelper(x) := x\n",
+            )],
+        );
+        let reason = Compiled::compile_unchecked(&helpers, &serde_json::json!({}))
+            .err()
+            .map(|(reason, _)| reason);
+        assert_eq!(reason, Some(Fallback::NoAnsweredRule));
+        let with = bundle_of(
+            "row",
+            &[(
+                "policy/a.rego",
+                "package batten.w\nimport rego.v1\n\ndeny contains \"t\" if {\n\tinput.a with input as {\"a\": true}\n}\n",
+            )],
+        );
+        let reason = Compiled::compile_unchecked(&with, &serde_json::json!({}))
+            .err()
+            .map(|(reason, _)| reason);
+        assert_eq!(reason, Some(Fallback::CompileRefused));
+        assert!(undefined_entry_point("not a valid rule path"));
+        assert!(!undefined_entry_point("with is not supported"));
+    }
+
+    /// Fails by: a string literal's opening delimiter missed (the bound read
+    /// as `>=`, which underflows at offset 0, or the step back as `/`).
+    #[test]
+    fn a_span_widens_over_its_string_delimiters() {
+        let text = "x \"ab\" y";
+        assert_eq!(spanned(text, 3, 5), Some("\"ab\""));
+        assert_eq!(spanned(text, 0, 1), Some("x"));
+        assert_eq!(spanned("\"ab\"", 1, 3), Some("\"ab\""));
+    }
+
+    /// Fails by: a key held only by a nested value missed when the outer
+    /// object does not also hold it, or one held at the top missed.
+    #[test]
+    fn a_key_is_held_at_any_depth() {
+        assert!(holds_key(&serde_json::json!({"a": {"b": 1}}), "a"));
+        assert!(holds_key(&serde_json::json!({"x": [{"b": 1}]}), "b"));
+        assert!(!holds_key(&serde_json::json!({"x": 1}), "b"));
+    }
+
+    /// Fails by: a `with` statement cut from the byte before its start when
+    /// no delimiter is there (`||` for `&&`, which also underflows at 0) or
+    /// from after a delimiter (`+` for `-`); or an edit whose start falls
+    /// inside a character applied (`&&` for `||`), which panics.
+    #[test]
+    fn a_with_statement_is_cut_at_its_own_start() {
+        let facts: BTreeMap<String, RuleFacts> = [(
+            String::from("v"),
+            RuleFacts {
+                reads: true,
+                ..RuleFacts::default()
+            },
+        )]
+        .into();
+        let locals = BTreeSet::new();
+        let case = |text| CaseText {
+            text,
+            package: "p",
+            facts: &facts,
+            locals: &locals,
+        };
+        let cut_at = |at: usize| [serde_json::json!({"span": {"start": at, "end": at + 4}})];
+        let bare = case("ab cd WITH");
+        assert_eq!(
+            redirected_statement(&bare, 3, &cut_at(6), &[], "k"),
+            Ok((String::from("cd"), BTreeSet::new()))
+        );
+        let quoted = case("a\"b\" WITH");
+        assert_eq!(
+            redirected_statement(&quoted, 2, &cut_at(5), &[], "k"),
+            Ok((String::from("\"b\""), BTreeSet::new()))
+        );
+        let wide = case("\u{e9}x WITH");
+        let inside = [(String::from("v"), 1, 2, false)];
+        assert_eq!(
+            redirected_statement(&wide, 0, &cut_at(3), &inside, "k"),
+            Err(String::from("a span off its text"))
+        );
+    }
+
+    /// Fails by: a `with` over one key of the pattern table refused as a
+    /// `with` on an unsupported path.
+    #[test]
+    fn a_with_over_one_pattern_key_is_a_pattern_override() {
+        let facts = BTreeMap::new();
+        let locals = BTreeSet::new();
+        let case = CaseText {
+            text: "x with data.batten.patterns.k as 1",
+            package: "p",
+            facts: &facts,
+            locals: &locals,
+        };
+        let modifier = |path: &str| {
+            serde_json::json!({
+                "refr": {"Var": {"value": path}},
+                "as": {"Number": {"span": {"start": 33, "end": 34}}},
+            })
+        };
+        let mut context = PlannedContext {
+            key: String::from("k"),
+            input: None,
+            patterns: Vec::new(),
+            rules: Vec::new(),
+        };
+        let mut prelude = String::new();
+        with_terms(
+            &case,
+            &[modifier("data.batten.patterns.k")],
+            (0, 0),
+            None,
+            &mut context,
+            &mut prelude,
+        )
+        .unwrap();
+        assert_eq!(
+            context.patterns,
+            [(
+                Some(String::from("k")),
+                String::from("data.p.__batten_in_0_0_0")
+            )]
+        );
+        assert!(
+            with_terms(
+                &case,
+                &[modifier("data.batten.patterns.k.deeper")],
+                (0, 0),
+                None,
+                &mut context,
+                &mut prelude,
+            )
+            .is_err()
+        );
+    }
+
+    /// Fails by: the no-case early answer inverted, so a bundle WITH cases
+    /// is never compared and its case that cannot go on bytecode is unsaid.
+    #[test]
+    fn a_case_that_cannot_go_on_bytecode_is_a_suite_split() {
+        let module = "package batten.w\nimport rego.v1\n\nrules contains \"w\"\n\n\
+            violation contains {\"rule\": \"w\", \"verdict\": \"w\"} if {\n\tdata.other.on\n}\n\n\
+            test_w if {\n\tcount(violation) == 1 with data.other as {\"on\": true}\n}\n";
+        let bundle = bundle_of("with-other", &[("policy/w.rego", module)]);
+        let splits = suite_splits(&bundle, "{}");
+        assert_eq!(
+            splits,
+            ["with-other: test-with: no case the suite program can express"]
+        );
+    }
+
+    /// Fails by: the coverage sweep's batch grown by addition rather than
+    /// doubled, or its case count read as zero: a predicate first entered by
+    /// the fourth of seven cases is answered after a sweep of all seven
+    /// (batches of 1, 2 and 4), where `+= 2` stops at four.
+    #[test]
+    fn the_coverage_sweep_doubles_its_batch_and_counts_each_case() {
+        let trivial = |name: &str| format!("test_{name} if {{\n\ttrue\n}}\n\n");
+        let module = format!(
+            "package batten.v\nimport rego.v1\n\nrules contains \"v\"\n\n\
+             violation contains {{\"rule\": \"v\", \"verdict\": \"v\"}} if {{\n\tinput.go\n}}\n\n\
+             {}{}{}test_d if {{\n\tcount(violation) == 1 with input as {{\"go\": true}}\n}}\n\n{}{}{}",
+            trivial("a"),
+            trivial("b"),
+            trivial("c"),
+            trivial("e"),
+            trivial("f"),
+            trivial("g"),
+        );
+        let bundle = bundle_of("swept", &[("policy/v.rego", module.as_str())]);
+        let before = coverage_cases();
+        let suite = suite_of(&bundle, false);
+        assert!(suite.unexercised.is_empty(), "{:?}", suite.unexercised);
+        assert_eq!(coverage_cases() - before, 7);
     }
 
     #[test]

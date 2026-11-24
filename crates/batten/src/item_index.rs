@@ -2662,8 +2662,12 @@ mod tests {
         );
         assert_eq!(module_of(&roots, "src/main.rs"), None);
         let parsed = batten_facts::source::rust_parse("type A = u8;\n", Edition::Edition2024);
-        let item = parsed.tree().items().next().expect("one item");
-        assert_eq!(declared_name(&item).as_deref(), Some("A"));
+        let named = parsed
+            .tree()
+            .items()
+            .next()
+            .and_then(|item| declared_name(&item));
+        assert_eq!(named.as_deref(), Some("A"));
         assert_eq!(
             Index::anchored("app", &[], &["crate".to_owned(), "a".to_owned()]),
             Some(vec!["app".to_owned(), "a".to_owned()])

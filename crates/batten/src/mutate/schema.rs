@@ -7491,6 +7491,225 @@ mod tests {
         assert!(said.contains("changed during the sweep"), "{said}");
     }
 
+    /// A listed mutant of `fn f` in `src/lib.rs` whose function span is known,
+    /// so it has a [`verdict_key`].
+    fn keyed(replacement: &str) -> Listed {
+        let mut mutant = listed("BinaryOperator", replacement, (2, 7), (2, 9));
+        if let Some(function) = mutant.function.as_mut() {
+            function.span = Some(Span {
+                start: Position { line: 1, column: 1 },
+                end: Position { line: 3, column: 2 },
+            });
+        }
+        mutant
+    }
+
+    const KEYED_SOURCE: &str = "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n";
+
+    /// Fails by: a reused hand-back verdict counted down (`-=` for `+=`), or
+    /// a reused `unviable` counted by multiplication from zero (`*=` for
+    /// `+=`), so the tally reports none.
+    #[test]
+    fn reused_handback_verdicts_are_counted_and_unviable_ones_tallied() {
+        let base = crate::scratch::scratch("schema-handback-reused");
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        std::fs::write(base.join("src/lib.rs"), KEYED_SOURCE).unwrap();
+        let mutants = [keyed("!="), keyed("<"), keyed(">")];
+        let digests = std::collections::BTreeMap::new();
+        let key = |mutant: &Listed| verdict_key(&base, mutant, &BTreeSet::new(), &digests).unwrap();
+        let cache: std::collections::BTreeMap<String, String> = [
+            (key(&mutants[0]), String::from("caught")),
+            (key(&mutants[1]), String::from("unviable")),
+            (key(&mutants[2]), String::from("unviable")),
+        ]
+        .into();
+        assert_eq!(cache.len(), 3, "the premise: one key per mutant");
+        let (reach, seconds) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let store = base.join("verdicts");
+        let red = Red::new();
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &store,
+            red: &red,
+            reuse: None,
+        };
+        let nowhere = base.join("nowhere");
+        let handback = Handback {
+            runner: &nowhere,
+            diff: Some(&nowhere),
+        };
+        let mut out = Vec::new();
+        let (verdicts, unviable) = judge_handbacks(
+            &judging,
+            (&handback, &base, "not-this-tree", &base),
+            &BTreeSet::from([0, 1, 2]),
+            (&Schema::default(), &Reach::default()),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(verdicts, [(0, Verdict::Caught)]);
+        assert_eq!(unviable, 2);
+        let said = String::from_utf8(out).unwrap();
+        assert!(
+            said.contains("3 handed-back mutant(s) judged in place, 3 reused"),
+            "{said}"
+        );
+    }
+
+    /// Fails by: a hand-back whose only observing case is red run anyway (the
+    /// unjudged test joined with `&&`), where its green cases are none and no
+    /// run could say anything about it.
+    #[test]
+    fn a_handback_only_red_cases_observe_is_unjudged_without_a_run() {
+        let base = crate::scratch::scratch("schema-handback-red");
+        let live = base.join("live");
+        std::fs::create_dir_all(live.join("src")).unwrap();
+        std::fs::write(live.join("src/lib.rs"), KEYED_SOURCE).unwrap();
+        crate::gitwrite::init_on_main(&live).unwrap();
+        crate::gitwrite::commit_paths(&live, &[String::from("src/lib.rs")], "lib").unwrap();
+        let listed_over = crate::mutate::cover::source_digest(&live).unwrap();
+        let mutants = [keyed("!=")];
+        let reddened: Case = (String::from("tests::red"), String::from("p"));
+        let (reach_by_id, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let red: Red = [(reddened.clone(), String::from("failed"))].into();
+        let store = base.join("verdicts");
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &live,
+            mutants: &mutants,
+            reach: &reach_by_id,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &store,
+            red: &red,
+            reuse: None,
+        };
+        let schema = Schema {
+            names: vec![BTreeSet::from([String::from("f")])],
+            ..Schema::default()
+        };
+        let reach = Reach {
+            executed: [(reddened, BTreeSet::from([0]))].into(),
+            ..Reach::default()
+        };
+        let nowhere = base.join("nowhere");
+        let handback = Handback {
+            runner: &nowhere,
+            diff: Some(&nowhere),
+        };
+        let state = base.join("state");
+        let mut out = Vec::new();
+        let (verdicts, _) = judge_handbacks(
+            &judging,
+            (&handback, &live, &listed_over, &state),
+            &BTreeSet::from([0]),
+            (&schema, &reach),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(verdicts, [(0, Verdict::Unjudged)]);
+    }
+
+    /// Fails by: a journaled `caught` or `unjudged` read as a name no verdict
+    /// carries, and so reported as an `error`.
+    #[test]
+    fn a_handbacks_journaled_name_is_its_verdict() {
+        assert_eq!(handback_tally("caught"), Some(Verdict::Caught));
+        assert_eq!(handback_tally("missed"), Some(Verdict::Missed));
+        assert_eq!(handback_tally("timeout"), Some(Verdict::Timeout));
+        assert_eq!(handback_tally("uncovered"), Some(Verdict::Uncovered));
+        assert_eq!(handback_tally("unjudged"), Some(Verdict::Unjudged));
+        assert_eq!(handback_tally("unviable"), None);
+        assert_eq!(handback_tally("bogus"), Some(Verdict::Error));
+    }
+
+    /// The include macro call in `source`, read as `file`'s.
+    fn included(source: &str, file: &str) -> Included {
+        let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
+        let call = parse
+            .tree()
+            .syntax()
+            .descendants()
+            .find_map(ast::MacroCall::cast)
+            .expect("an include call");
+        include_target(&call, file)
+    }
+
+    /// Fails by: a build-output include (`concat!(env!("OUT_DIR"), …)`) read
+    /// as unknown, through the identifier tokens refused, the `concat`/`env`
+    /// shape unmatched, or `OUT_DIR` unnamed; or a manifest-relative include
+    /// resolved without its package directory.
+    #[test]
+    fn an_include_through_an_environment_path_is_resolved() {
+        assert_eq!(
+            included(
+                "const X: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/x.txt\"));\n",
+                "crates/p/src/lib.rs"
+            ),
+            Included::Built
+        );
+        assert_eq!(
+            included(
+                "const X: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/data/x.txt\"));\n",
+                "crates/p/src/lib.rs"
+            ),
+            Included::File(String::from("crates/p/data/x.txt"))
+        );
+        assert_eq!(
+            included(
+                "const X: &str = include_str!(concat!(env!(\"HOME\"), \"/x\"));\n",
+                "src/lib.rs"
+            ),
+            Included::Unknown
+        );
+    }
+
+    /// Fails by: a source's package directory read as none, or as anything
+    /// but what precedes its `src/`, `tests/`, `benches/` or `examples/`.
+    #[test]
+    fn a_sources_package_directory_precedes_its_source_dir() {
+        assert_eq!(package_dir_of("crates/p/src/lib.rs"), Some("crates/p"));
+        assert_eq!(package_dir_of("crates/p/tests/it.rs"), Some("crates/p"));
+        assert_eq!(package_dir_of("src/lib.rs"), Some(""));
+        assert_eq!(package_dir_of("build.rs"), None);
+    }
+
+    /// Fails by: an enum answering to every identifier in it rather than its
+    /// own name, so a change to one variant's name reads as the enum's.
+    #[test]
+    fn an_enum_answers_to_its_own_name() {
+        let parse = batten_facts::source::rust_parse(
+            "enum Shape { Round, Square }\n",
+            ra_ap_syntax::Edition::Edition2024,
+        );
+        let item = parse
+            .tree()
+            .syntax()
+            .descendants()
+            .find_map(ast::Item::cast)
+            .expect("an item");
+        assert_eq!(item_names(&item), [String::from("Shape")]);
+    }
+
     fn listed(genre: &str, replacement: &str, from: (usize, usize), to: (usize, usize)) -> Listed {
         Listed {
             name: String::new(),

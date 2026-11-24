@@ -652,6 +652,18 @@ mod tests {
         assert_eq!(render("a {{env.HOME_X}} b", &vars), "a {{env.HOME_X}} b");
     }
 
+    /// Fails by: a double-quoted argument refused as unquoted, so a
+    /// `get_env(name="N", default="D")` call renders nothing.
+    #[test]
+    fn a_get_env_call_reads_either_quote() {
+        for call in [
+            "get_env(name='BATTEN_NO_SUCH_VAR_FOR_TEST', default='d')",
+            "get_env(name=\"BATTEN_NO_SUCH_VAR_FOR_TEST\", default=\"d\")",
+        ] {
+            assert_eq!(get_env(call).as_deref(), Some("d"), "{call}");
+        }
+    }
+
     #[test]
     fn a_task_body_yields_every_line_it_runs() {
         let bodies = lines(&table(

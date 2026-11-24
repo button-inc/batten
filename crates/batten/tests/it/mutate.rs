@@ -1396,6 +1396,8 @@ fn the_defect_a_mutation_the_suite_does_not_catch_fails() {
         err.contains("1 of 1 declared mutation(s) across 1 gate(s) survived"),
         "a survivor is counted over the rows judged: {err}"
     );
+    // A survivor is no row defect: the row applied, and named one case.
+    assert!(!err.contains("prove nothing as written"), "{err}");
 }
 
 #[cfg(unix)]
@@ -3509,6 +3511,16 @@ fn an_errored_conftest_run_is_could_not_look() {
 #[test]
 fn a_pytest_mutant_its_case_fails_on_is_caught() {
     assert_caught(&PYTEST);
+    // A suite of ONE case: its filter selects every case there is, and that
+    // is still the case the row names. Fails by: a lone case's filter read as
+    // `filter-names-every-case`, which only a suite of two or more can be.
+    let alone = Native {
+        suite_body: "from limit import LIMIT\n\n\ndef test_limit_is_ten():\n    assert LIMIT == 10\n",
+        ..PYTEST
+    };
+    let (code, out, err) = native_sweep(&alone, Mutant::Kill, "alone");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
 }
 
 #[cfg(unix)]
