@@ -53,6 +53,13 @@ hk = "1.56.1"                                                # git-hook runner (
 # every hook handler, before anything ran. `http:` names each asset's url and
 # checksum here, so no API call is made. Measured: installs and runs with no token.
 "http:samply" = { version = "0.13.1", platforms = { linux-x64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-unknown-linux-gnu.tar.xz", checksum = "sha256:61875daad67888798690dea3cb2748279df6ac299c5c6a857d67eed7642473d9" }, linux-arm64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-aarch64-unknown-linux-gnu.tar.xz", checksum = "sha256:aa465162b62830168775b7ff4804bc35049436dcbc29bb3d1ea9f580380ea06a" }, macos-arm64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-aarch64-apple-darwin.tar.xz", checksum = "sha256:7597239aa3769e75058be5ed359dbfe067f5e7714a5f052c45dd81d509aec17f" }, macos-x64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-apple-darwin.tar.xz", checksum = "sha256:a57f05f9162d06c36df6d51425d976ac774a8cd6dbd84050e6303fa8bf813998" }, windows-x64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-pc-windows-msvc.zip", checksum = "sha256:8fed74dac18197bbb2520125b0199255e09709bed7903a7672a06225a5d7e976" } } }
+# The per-container compiler cache (CLOUD-2907), reached only through
+# `BATTEN_RUSTC_NEXT` below: the disk collector stays `RUSTC_WRAPPER` and hands
+# it registry units alone. `http:` for samply's reason (the proxy refuses the
+# release listing); checksums are the release's own `.sha256` files. Not in
+# ci.yml's install lists on purpose: CI restores `target/` through rust-cache,
+# and where sccache is absent the chain compiles directly.
+"http:sccache" = { version = "0.20.0", platforms = { linux-x64 = { url = "https://github.com/mozilla/sccache/releases/download/v0.20.0/sccache-v0.20.0-x86_64-unknown-linux-musl.tar.gz", checksum = "sha256:c3c5db9cd7e3be12b7bab350d8fe8ae7dcfb7269d5432b269e0dffa1a87c6ed2" }, linux-arm64 = { url = "https://github.com/mozilla/sccache/releases/download/v0.20.0/sccache-v0.20.0-aarch64-unknown-linux-musl.tar.gz", checksum = "sha256:1bd78037804baeb9655f6baf8791f99c43388fae6d6b16944d3d93542fa5711a" }, macos-arm64 = { url = "https://github.com/mozilla/sccache/releases/download/v0.20.0/sccache-v0.20.0-aarch64-apple-darwin.tar.gz", checksum = "sha256:da98c2072d7b62598ef575dde53f6c16ca2aa4c3fce486943ff965350c179b7b" }, macos-x64 = { url = "https://github.com/mozilla/sccache/releases/download/v0.20.0/sccache-v0.20.0-x86_64-apple-darwin.tar.gz", checksum = "sha256:52b7a9f6b3d3c0534aa8eff6bcd5032aa825ad8ad3e649c58b6786bdc552eac2" }, windows-x64 = { url = "https://github.com/mozilla/sccache/releases/download/v0.20.0/sccache-v0.20.0-x86_64-pc-windows-msvc.zip", checksum = "sha256:d823b42411742992d8bf3d366dbeeb2f294626deb6cefbcd3d6e6f4f3007c289" } } }
 # NOTE: no cargo-msrv pin, and since CLOUD-593 no MSRV gate needs one. It was
 # already unpinnable — upstream ships no aarch64-unknown-linux binary in ANY
 # release, so a release-asset backend locks no `linux-arm64` entry and `mise run
@@ -437,6 +444,20 @@ _.path = ["target/release"]
 # `darwin-link`'s, `lint:clippy`'s and `cross-check`'s records
 # (`tests/it/rustc_wrapper_engine.rs`).
 RUSTC_WRAPPER = "{% if os() != 'windows' %}{{ exec(command='{ ' ~ env.BATTEN_BIN | default(value='false') ~ ' rustc --batten-wrapper-probe || ' ~ config_root ~ '/target/release/batten rustc --batten-wrapper-probe || batten rustc --batten-wrapper-probe; } 2>/dev/null || true') | trim }}{% endif %}"
+# THE COMPILER CACHE IS WIRED AND OFF (CLOUD-2907). `batten` execs
+# `BATTEN_RUSTC_NEXT` in front of rustc for a unit under `CARGO_HOME` only,
+# after its disk guard; set it to `sccache` to turn the chain on. It is NOT set
+# here because the measurement refused it: a suite build into a second target dir
+# with a warm cache hit 99.6% of registry units and still took 426 s against
+# 418-449 s without the chain, because the critical path is workspace units,
+# proc-macros and build scripts, none of which a cache serves; and in 2 of 3
+# runs the sccache server died mid-build and the build took 834-911 s. Turn it
+# on where a build's registry closure IS its critical path, after measuring.
+# Inside `[prune] root`, so `cargo clean` drops it, and capped: above 2 GiB
+# sccache evicts its own least recently used entries. Local disk only; a cache
+# shared across containers is deferred (CLOUD-2907).
+SCCACHE_DIR = "{{ config_root }}/target/sccache"
+SCCACHE_CACHE_SIZE = "2G"
 # The checks that carry a verdict about THIS repository, named exactly as GitHub
 # names their check-runs (the matrix leg's suffix included). Shared by `ci-wait`
 # ("is this SHA green?") and `land`'s `graded_runs` ("does this SHA carry an

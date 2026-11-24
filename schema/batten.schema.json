@@ -4214,6 +4214,14 @@
       "description": "The `[prune]` table: the build tree, what to keep, and the collector's band.\n\nCONSUMER CONFIG, NOT A CONST (non-negotiable rule 1): which directory a\nproject builds into and how much free space its builds need are facts about\nTHAT project.",
       "type": "object",
       "properties": {
+        "caches": {
+          "description": "Compiler-cache directories, relative to the repository root, that a\npass empties before it touches any cargo unit (CLOUD-2907): oldest file\nfirst, until the pass has freed what it needs or the caches are empty.\nA cache is an accelerator, never the authority, so a reclaimed entry is\na miss the next build refills by compiling. No default: the core names\nno cache tool.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "cold": {
           "description": "RETIRED (CLOUD-2198): the cold floor. Read and ignored, as `warm`.",
           "writeOnly": true
