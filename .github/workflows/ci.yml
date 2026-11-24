@@ -1139,9 +1139,14 @@ jobs:
     name: mutants (reach)
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-24.04-arm
-    # Unmeasured: one schema build and one reach run, the part of a shard's
-    # budget below that every shard used to repeat.
-    timeout-minutes: 45 # budget: grandfathered measured=2026-11-23
+    # MEASURED COLD (CLOUD-2882): under CI no journal names what the build
+    # refuses (CLOUD-2850), so the schema build rediscovers it round by round.
+    # On #1276's 13,805 mutants, with `CI=true MUTANT_PHASE=reach` on a 4-core
+    # box: 11 rounds and 1,058s with no cargo cache (12 rounds and 488s warm,
+    # the round cap being 12), then the reach run's 1,590s over 11,335 sites,
+    # 107s of listing and engine, and 38s of job setup. The 45 minutes this
+    # replaced would have cut the cold run off inside its reach.
+    timeout-minutes: 140 # budget: p95=2793s x3 measured=2026-11-24
     # BEHIND `ci`, FOR THE `mutants` JOB'S REASON: no lease step of its own.
     needs: [ci]
     permissions:
