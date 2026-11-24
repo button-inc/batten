@@ -6055,10 +6055,11 @@ pub fn exactly(name: &str) -> String {
     pattern
 }
 
-/// Run cargo-mutants IN PLACE in `tree` over the one mutant of `diff` named
-/// `name`: no copy and no baseline, since the schema's reach run proved the
-/// unmutated suite on this source; its tests narrowed to the nextest
-/// filterset `filter` when one is given; its outcome files under `output`.
+/// Run cargo-mutants IN PLACE in `tree` over the one mutant named `name`,
+/// listed from `diff`, which is [`target_diff`]'s for it: no copy and no
+/// baseline, since the schema's reach run proved the unmutated suite on this
+/// source; its tests narrowed to the nextest filterset `filter` when one is
+/// given; its outcome files under `output`.
 /// AN ARGV, NEVER A HARNESS, like [`cargo_mutants`]: the verdict is read back
 /// by the caller.
 ///
@@ -6066,13 +6067,13 @@ pub fn exactly(name: &str) -> String {
 ///
 /// A `runner` that cannot be spawned.
 pub fn cargo_mutant_in_place(
-    (tree, runner, diff): (&Path, &Path, Option<&Path>),
+    (tree, runner, diff): (&Path, &Path, &Path),
     name: &str,
     filter: Option<&str>,
     timeout: std::time::Duration,
     output: &Path,
 ) -> Result<Outcome> {
-    let args = cargo_mutants_argv(diff, in_place_rest(name, filter, timeout, output));
+    let args = cargo_mutants_argv(Some(diff), in_place_rest(name, filter, timeout, output));
     let runner = runner.to_string_lossy();
     let ran = spawn_as(
         tree,
@@ -6085,15 +6086,35 @@ pub fn cargo_mutant_in_place(
     Ok(ran.outcome)
 }
 
-/// The arguments after `cargo_mutants_argv`'s own for one in-place run over
-/// `name`, its tests narrowed to `filter` when one is given.
+/// A unified diff of `file` that changes nothing and spans only its line
+/// `line` (1-based) of `source`: as a hand-back's `--in-diff`, it lists the
+/// mutants that touch that one line, and `--re` keeps the target among them.
+/// `None` where `source` has no such line.
 ///
-/// `--file` AS WELL AS `--re`: cargo-mutants 27.1.0 applies neither `--re` nor
-/// `--exclude-re` to field-deletion mutants, so `--re` alone judged every
-/// `delete field` mutant of the diff in every run (lap 27: twelve extras per
-/// handback, about 28 minutes each). `--file` does reach them, so the extras
-/// shrink to the field mutants of the target's own file. A name with no
-/// `path:` prefix adds no `--file`.
+/// THE TARGET'S OWN LINE, NEVER ITS FILE OR THE BRANCH'S DIFF (CLOUD-2911):
+/// cargo-mutants 27.1.0 applies neither `--re` nor `--exclude-re` to
+/// field-deletion mutants, so a run over the branch's diff judged every
+/// `delete field` mutant of it (lap 27: twelve extras a hand-back), and one
+/// narrowed by `--file` still judged every one of the target's file. Measured
+/// on `lease.rs` at bae4f5ddf: `--file` with the target's `--re` listed 19
+/// field deletions, and this diff listed the target alone. Each extra was
+/// built and run under the target's narrow filter, printed MISSED, and could
+/// spend the target's bound. `--in-diff` keeps a mutant whose span touches a
+/// changed line, so the line a mutant starts on is enough to keep a mutant
+/// that spans several lines.
+#[must_use]
+pub fn target_diff(file: &str, source: &str, line: usize) -> Option<String> {
+    let text = source.lines().nth(line.checked_sub(1)?)?;
+    Some(format!(
+        "diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n\
+         @@ -{line},1 +{line},1 @@\n-{text}\n+{text}\n"
+    ))
+}
+
+/// The arguments after `cargo_mutants_argv`'s own for one in-place run over
+/// `name`, its tests narrowed to `filter` when one is given. The run's
+/// `--in-diff` is [`target_diff`]'s, which already scopes it to the target's
+/// file and line.
 fn in_place_rest(
     name: &str,
     filter: Option<&str>,
@@ -6117,9 +6138,6 @@ fn in_place_rest(
         String::from("--re"),
         exactly(name),
     ]);
-    if let Some((file, _)) = name.split_once(':').filter(|(file, _)| !file.is_empty()) {
-        rest.extend([String::from("--file"), file.to_owned()]);
-    }
     if let Some(filter) = filter {
         rest.extend([
             String::from("--"),
@@ -6416,20 +6434,20 @@ mod tests {
         assert_eq!(exactly("a|b(c)"), "^a\\|b\\(c\\)$");
     }
 
-    /// An in-place run names its target's file as well as its name, and its
-    /// filter only when there is one.
+    /// An in-place run names its target, its bound and its filter, the filter
+    /// only when there is one, and no `--file`: its `--in-diff` is the
+    /// target's own line ([`target_diff`]).
     ///
-    /// Fails by: the `--file` dropped (every field mutant of the diff judged in
-    /// every run again), the path cut anywhere but at the first `:`, a `--file`
-    /// with an empty path, or the filter passed without its `--`.
+    /// Fails by: a `--file` added back (which widens the run to every field
+    /// deletion of the file), the filter passed without its `--`, or the
+    /// target's name or bound misplaced.
     #[test]
-    fn an_in_place_run_is_narrowed_to_its_targets_file() {
+    fn an_in_place_run_names_its_target_and_no_file() {
         let output = Path::new("/o");
         let bound = std::time::Duration::from_secs(9);
         let name = "crates/a/src/b.rs:3:5: delete field x from struct C expression in d";
         let rest = in_place_rest(name, Some("test(=t)"), bound, output);
-        let at = rest.iter().position(|arg| arg == "--file").unwrap();
-        assert_eq!(rest[at + 1], "crates/a/src/b.rs");
+        assert!(!rest.iter().any(|arg| arg == "--file"), "{rest:?}");
         assert_eq!(
             rest[rest.len() - 4..],
             ["--", "-E", "test(=t)", "--no-tests=pass"]
@@ -6439,8 +6457,31 @@ mod tests {
         let at = rest.iter().position(|arg| arg == "--timeout").unwrap();
         assert_eq!(rest[at + 1], "9");
         let bare = in_place_rest(": no path", None, bound, output);
-        assert!(!bare.iter().any(|arg| arg == "--file"), "{bare:?}");
         assert!(!bare.iter().any(|arg| arg == "--"), "{bare:?}");
+    }
+
+    /// A target's diff changes nothing and spans its one line, under the
+    /// file's own path; a line the source does not hold has none.
+    ///
+    /// Fails by: the hunk off by one (a 0-based `nth`), spanning more than
+    /// the line, naming another line's text, or a line 0 or past the end
+    /// answered with a diff cargo-mutants would refuse or misread.
+    #[test]
+    fn a_targets_diff_spans_its_own_line_alone() {
+        let source = "fn f() {\n    let c = C { x: 1, y: 2 };\n    let d = C { x: 3, y: 4 };\n}\n";
+        assert_eq!(
+            target_diff("crates/a/src/b.rs", source, 2).as_deref(),
+            Some(
+                "diff --git a/crates/a/src/b.rs b/crates/a/src/b.rs\n\
+                 --- a/crates/a/src/b.rs\n+++ b/crates/a/src/b.rs\n\
+                 @@ -2,1 +2,1 @@\n\
+                 -    let c = C { x: 1, y: 2 };\n\
+                 +    let c = C { x: 1, y: 2 };\n"
+            )
+        );
+        assert_eq!(target_diff("b.rs", source, 0), None);
+        assert_eq!(target_diff("b.rs", source, 5), None);
+        assert!(target_diff("b.rs", source, 4).is_some_and(|diff| diff.ends_with("-}\n+}\n")));
     }
 
     /// Fails by: the first field read, kilobytes reported as megabytes.
