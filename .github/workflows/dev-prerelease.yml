@@ -1,6 +1,7 @@
 name: dev-prerelease
 #MUTANT-SUITE crates/batten/tests/it/dist.rs
 #MUTANT dev-prerelease-unnamespaced|s@^          tag="dev/v.*$@          tag="v${version}"@|a_dev_prerelease_is_published_under_the_dev_namespace
+#MUTANT dev-prerelease-draft-stranded|s@^              gh release upload "$tag" --clobber batten-v\*.tar.gz SHA256SUMS$@              exit 0@|a_cancelled_runs_draft_is_published_not_stranded
 
 # workflow-shell: CLOUD-2903 naming the archive by the build's own identity and
 # publishing it are two bodies no verb owns yet; each reads `batten --version`
@@ -139,12 +140,23 @@ jobs:
           tag="dev/v${version}"
           sha256sum batten-v*.tar.gz >SHA256SUMS
           # One identity is one commit, so a release already under this tag is
-          # this head's, published by an earlier run: nothing to do.
-          if gh release view "$tag" >/dev/null 2>&1; then
-            exit 0
-          fi
-          gh release create "$tag" --draft --prerelease --target "$SHA" \
-            --title "batten v${identity} (dev)" \
-            --notes "Pin: engine = { release = \"v${identity}\" }" \
-            batten-v*.tar.gz SHA256SUMS
+          # this head's. PUBLISHED, it is done. A DRAFT is an earlier run that
+          # `cancel-in-progress` stopped between create and publish: its assets
+          # are re-uploaded over and it is published here, so a cancelled run
+          # never strands the tag as a draft `releases/download/dev/…` 404s on.
+          state=$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null || echo absent)
+          case "$state" in
+            false)
+              exit 0
+              ;;
+            true)
+              gh release upload "$tag" --clobber batten-v*.tar.gz SHA256SUMS
+              ;;
+            *)
+              gh release create "$tag" --draft --prerelease --target "$SHA" \
+                --title "batten v${identity} (dev)" \
+                --notes "Pin: engine = { release = \"v${identity}\" }" \
+                batten-v*.tar.gz SHA256SUMS
+              ;;
+          esac
           gh release edit "$tag" --draft=false --prerelease --latest=false

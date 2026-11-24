@@ -668,3 +668,42 @@ fn a_dev_prerelease_is_published_under_the_dev_namespace() {
     );
     assert_eq!(batten::engine::forge_tag(&format!("v{identity}")), shell);
 }
+
+/// `#MUTANT dev-prerelease-draft-stranded` reddens here. A run cancelled
+/// between `gh release create --draft` and the publish leaves a DRAFT under the
+/// tag (CLOUD-2903, review of #1291 LOW 6); the next run on the same head must
+/// complete it, never read it as done, or `releases/download/dev/…` 404s for a
+/// pin that names it.
+#[test]
+fn a_cancelled_runs_draft_is_published_not_stranded() {
+    let dev = workflow("dev-prerelease.yml");
+    let publish = dev["jobs"]["publish"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["run"].as_str())
+        .find(|run| run.contains("gh release create"))
+        .expect("a step publishes");
+    let lines: Vec<&str> = publish.lines().map(str::trim).collect();
+    let at = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| line.starts_with(needle))
+            .unwrap_or_else(|| panic!("{needle}: {publish}"))
+    };
+    assert!(publish.contains("--json isDraft"), "{publish}");
+    let (done, draft, absent, edit) = (at("false)"), at("true)"), at("*)"), at("gh release edit"));
+    assert_eq!(
+        lines[done + 1],
+        "exit 0",
+        "only a PUBLISHED release is done"
+    );
+    assert!(
+        lines[draft + 1].starts_with("gh release upload \"$tag\" --clobber"),
+        "a draft is completed: {publish}"
+    );
+    assert!(
+        draft < absent && absent < edit,
+        "every arm but `false` reaches the publish"
+    );
+}
