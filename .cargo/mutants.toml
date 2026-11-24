@@ -192,12 +192,6 @@ exclude_re = [
   # `<= end` agree (CLOUD-2789). Column 65 is that `< end`, the function's only
   # `<`, so one added there later is judged rather than excluded unread.
   'hook\.rs:\d+:65: replace < with <= in git_dir_operands$',
-  # `arm_sequence`'s early return is taken only when `introduced` is empty, and
-  # `judge_arm_sequencing`, the one reader of its sequences, reads `label` only
-  # inside its loop over `introduced`: an empty map runs no pass, so a default
-  # label is never read. Column 13 is the early return's `label`; the final
-  # literal's, at column 9, is read and stays judged (CLOUD-2789).
-  'lib\.rs:\d+:13: delete field label from struct commit::ArmSequence expression in arm_sequence$',
   # A fork whose result is not a positive pid (`-1` on failure, `?`) becomes a
   # `parent` key that no traced line carries: every line's pid, and the root's,
   # is the positive pid strace prints, so `walk_back` never looks one up, and a
