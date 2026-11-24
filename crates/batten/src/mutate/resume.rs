@@ -1058,16 +1058,21 @@ fn report_path(root: &Path) -> Option<PathBuf> {
         .and_then(|store| store.get("dir"))
         .and_then(toml_edit::Item::as_str)
         .map_or_else(
-            || {
-                let target = std::env::var_os("CARGO_TARGET_DIR")
-                    .filter(|dir| !dir.is_empty())
-                    .unwrap_or_else(|| "target".into());
-                root.join(target).join("nextest")
-            },
+            || default_store(root, std::env::var_os("CARGO_TARGET_DIR")),
             |dir| root.join(dir),
         );
     let name = report_name(&doc).unwrap_or_else(|| REPORT.to_owned());
     Some(store.join(journal_profile()).join(name))
+}
+
+/// Nextest's store where the config names none: `<target>/nextest`, where
+/// `<target>` is the caller's `target` (`$CARGO_TARGET_DIR`) when set and
+/// non-empty, else `target`.
+fn default_store(root: &Path, target: Option<std::ffi::OsString>) -> PathBuf {
+    let target = target
+        .filter(|dir| !dir.is_empty())
+        .unwrap_or_else(|| "target".into());
+    root.join(target).join("nextest")
 }
 
 /// Remove the last journaled run's report, so a run that writes none (a build
@@ -1800,6 +1805,41 @@ mod tests {
         );
         assert_eq!(declared_env(std::slice::from_ref(&version)), None);
         assert_eq!(declared_env(&[version, line(&["--", "lower"])]), None);
+    }
+
+    /// Fails by: the journal keyed on a row that is not the journaled one
+    /// (the first other row's declaration read in its place).
+    #[test]
+    fn the_journal_reads_only_the_journaled_rows_declaration() {
+        let root = crate::scratch::scratch("test-run-journal-env");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(
+            root.join(crate::config_model::CONFIG_FILE),
+            "version = 1\n\n\
+             [[step]]\nid = \"plain\"\ninputs = [\".\"]\n\
+             tools = [[\"batten\", \"step\", \"env\", \"--\", \"PLAIN_X\"]]\n\n\
+             [[step]]\nid = \"journaled\"\ninputs = [\".\"]\n\
+             tools = [[\"batten\", \"step\", \"env\", \"--\", \"JOURNAL_Y\"]]\n\
+             journal = \"nextest\"\n",
+        )
+        .unwrap();
+        assert_eq!(journal_env(&root).env, [String::from("JOURNAL_Y")]);
+    }
+
+    /// Fails by: a set `$CARGO_TARGET_DIR` ignored, or an empty one taken as
+    /// the target.
+    #[test]
+    fn the_default_store_is_under_a_non_empty_target_dir() {
+        let root = Path::new("/r");
+        assert_eq!(
+            default_store(root, Some("elsewhere".into())),
+            Path::new("/r/elsewhere/nextest")
+        );
+        assert_eq!(
+            default_store(root, Some(std::ffi::OsString::new())),
+            Path::new("/r/target/nextest")
+        );
+        assert_eq!(default_store(root, None), Path::new("/r/target/nextest"));
     }
 
     /// Fails by: an edit to a package the sweep never probed left out of the

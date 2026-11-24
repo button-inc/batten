@@ -431,4 +431,38 @@ mod tests {
         assert_eq!(surface(&git_dir).len(), 1);
         assert!(surface(&git_dir).is_empty(), "said once");
     }
+
+    /// Fails by: a passing `[[startup]]` row reported as a finding, or the
+    /// rows read as failed when every one passed.
+    #[test]
+    fn a_passing_startup_row_is_no_finding() {
+        let root = crate::scratch::scratch("session-setup-health");
+        let row = |id: &str, check: &str| crate::config_model::Startup {
+            id: id.to_owned(),
+            gloss: "a fixture row".to_owned(),
+            check: vec![check.to_owned()],
+            decided_by: crate::config_model::Decided::ExitStatus,
+            repair: None,
+            preset: None,
+        };
+        let named = |findings: &[Finding], id: &str| {
+            findings
+                .iter()
+                .any(|f| matches!(f, Finding::Workspace { name, .. } if name == id))
+        };
+        let mut findings = Vec::new();
+        assert!(health_findings(
+            &root,
+            &[row("passes", "true")],
+            &mut findings
+        ));
+        assert!(!named(&findings, "passes"));
+        let mut findings = Vec::new();
+        assert!(!health_findings(
+            &root,
+            &[row("fails", "false")],
+            &mut findings
+        ));
+        assert!(named(&findings, "fails"));
+    }
 }

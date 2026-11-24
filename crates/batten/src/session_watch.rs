@@ -842,4 +842,35 @@ mod tests {
         let page = toolbox.sessions(None).expect("a page");
         assert_eq!(page.items.len(), 1);
     }
+
+    /// Fails by: a session id spelled with `-` or `_` refused a cache file, or
+    /// a kept reduction not read back.
+    #[test]
+    fn a_kept_reduction_is_read_back() {
+        let cache = Cache::new(crate::scratch::scratch("session-watch-cache"));
+        let mut inventory = Inventory {
+            cursor: Some(String::from("e9")),
+            ..Inventory::default()
+        };
+        inventory.launched.insert(String::from("t1"));
+        cache.store("session_01-ab", &inventory);
+        assert_eq!(cache.load("session_01-ab"), Some(inventory));
+        assert_eq!(cache.load("../escape"), None);
+    }
+
+    /// Fails by: the capture's inventory emptied of its reports.
+    #[test]
+    fn the_inventory_document_carries_each_report() {
+        let mut inventory = Inventory::default();
+        inventory.launched.insert(String::from("t1"));
+        let report = Report {
+            session: String::from("session_a"),
+            state: State::Done,
+            inventory,
+        };
+        let document = inventory_document(&[report]);
+        assert_eq!(document[0]["session"], "session_a");
+        assert_eq!(document[0]["state"], State::Done.as_str());
+        assert_eq!(document[0]["open"], serde_json::json!(["t1"]));
+    }
 }
