@@ -420,7 +420,7 @@ fn body_of(
 
 /// The entries of a tree body, as `(name, id, is_tree)`.
 fn entries(body: &[u8]) -> Result<Vec<(String, String, bool)>> {
-    let tree = gix::objs::TreeRef::from_bytes(body)
+    let tree = gix::objs::TreeRef::from_bytes(body, gix::hash::Kind::Sha1)
         .map_err(|err| anyhow::anyhow!("receipt: a tree will not parse: {err}"))?;
     Ok(tree
         .entries
@@ -452,7 +452,7 @@ fn held(remote: &str, repo: &Path, name: &str) -> Result<Held> {
         .map(|object| (object.id.clone(), object))
         .collect();
     let commit = body_of(&objects, repo, &fetched.head, gix::object::Kind::Commit)?;
-    let root = gix::objs::CommitRef::from_bytes(&commit)
+    let root = gix::objs::CommitRef::from_bytes(&commit, gix::hash::Kind::Sha1)
         .map_err(|err| anyhow::anyhow!("receipt: the published commit will not parse: {err}"))?
         .tree()
         .to_string();
