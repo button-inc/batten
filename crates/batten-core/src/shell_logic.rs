@@ -1993,6 +1993,18 @@ mod tests {
         );
     }
 
+    /// Fails by: the `--` that ends the options kept as the utility's first
+    /// word rather than stepped past (`at += 1` read as `at *= 1` on the `--`
+    /// arm of `after_options`).
+    #[test]
+    fn the_option_walk_advances_past_each_option() {
+        assert_eq!(
+            after_options(&["-n", "1", "--", "sh", "x.sh"], XARGS_VALUED),
+            ["sh", "x.sh"]
+        );
+        assert_eq!(after_options(&["-t", "--", "-sh"], XARGS_VALUED), ["-sh"]);
+    }
+
     /// Fails by: a closing quote never closing, so a glob after a quoted
     /// span reads as quoted.
     #[test]
