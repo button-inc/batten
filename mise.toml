@@ -5041,7 +5041,13 @@ run = [
   # workflow on every pull request, and `ci-parity` now follows the call, so its
   # build, the binary's inventory and the inventory's check run here too. In
   # its order, each step reading the last one's output.
-  "mise run dist {{vars.dist_host}} --build-tool cargo-dist",
+  #
+  # AT THE LAP'S COST, NOT THE RELEASE'S: the `dist` profile's fat LTO and one
+  # codegen unit cost 878 s cold here, every lap. What this leg proves (cargo-dist
+  # builds through `cargo auditable`, the archive stages, the inventory reads
+  # the binary) holds at `opt-level = 0`, so the profile is overridden for this
+  # entry alone: 145 s cold, and the same 318 packages inventoried.
+  "CARGO_PROFILE_DIST_LTO=false CARGO_PROFILE_DIST_CODEGEN_UNITS=256 CARGO_PROFILE_DIST_OPT_LEVEL=0 CARGO_PROFILE_DIST_INCREMENTAL=true mise run dist {{vars.dist_host}} --build-tool cargo-dist",
   "mise run sbom-binary target/{{vars.dist_host}}/dist/batten {{vars.dist_host}}",
   "mise run sbom-binary-check",
   "mise run --continue-on-error --jobs 1 verify:ci-suite ::: verify:ci-slow-needed",
