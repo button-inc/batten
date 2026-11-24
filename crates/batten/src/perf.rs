@@ -4823,6 +4823,23 @@ mod tests {
         Ok(())
     }
 
+    /// Two candidates of one size: the first in index order is kept, so the
+    /// fixture names the same file however the tie arises.
+    ///
+    /// Fails by: a later candidate of equal size displacing the one chosen.
+    #[test]
+    fn a_tie_in_size_keeps_the_first_candidate() -> Result<()> {
+        let repo = perf_scratch("commit-toml-tie");
+        crate::gitwrite::init_on_main(&repo)?;
+        for path in ["a.toml", "b.toml"] {
+            std::fs::write(repo.join(path), "a = 1\n")?;
+        }
+        let tracked = ["a.toml", "b.toml"].map(str::to_owned);
+        crate::gitwrite::commit_paths(&repo, &tracked, "base\n")?;
+        assert_eq!(commit_toml(&repo)?, "a.toml");
+        Ok(())
+    }
+
     /// With no candidate the fixture is refused, naming what it needed.
     ///
     /// Fails by: an empty name returned, which stages nothing and prices a
