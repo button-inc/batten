@@ -442,7 +442,8 @@ fn a_red_baseline_case_poisons_only_the_mutants_it_reaches() {
 }
 
 /// A library with one case red only under the judge's own environment, and
-/// one that needs its temp directory inside the tree it was built from.
+/// one that needs its fixture directory inside the tree it was built from and
+/// its temp directory outside it, as a plain run has them (CLOUD-2789).
 const JUDGE_LIB: &str = "pub fn add(a: u8, b: u8) -> u8 {\n    a + b\n}\n\
 pub fn sneak() -> u8 {\n    1\n}\n\
 pub fn three() -> u8 {\n    3\n}\n\
@@ -451,9 +452,12 @@ pub fn three() -> u8 {\n    3\n}\n\
         assert!(std::env::var_os(\"BATTEN_MUTANT\").is_none(), \"red under the judge\");\n    }\n\
     #[test]\n    fn intree() {\n        assert_eq!(super::three(), 3);\n\
         if std::env::var_os(\"BATTEN_MUTANT\").is_some() {\n\
-            let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();\n\
             let tree = std::fs::canonicalize(env!(\"CARGO_MANIFEST_DIR\")).unwrap();\n\
-            assert!(tmp.starts_with(&tree), \"{} outside {}\", tmp.display(), tree.display());\n\
+            let fixtures = std::env::var_os(\"BATTEN_TEST_TMPDIR\").expect(\"a fixture root\");\n\
+            let fixtures = std::fs::canonicalize(fixtures).unwrap();\n\
+            assert!(fixtures.starts_with(&tree), \"{} outside {}\", fixtures.display(), tree.display());\n\
+            let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();\n\
+            assert!(!tmp.starts_with(&tree), \"{} inside {}\", tmp.display(), tree.display());\n\
         }\n    }\n}\n";
 
 /// A JUDGING RUN'S OWN ENVIRONMENT GETS A CONTROL (W2): a case green under
@@ -461,11 +465,13 @@ pub fn three() -> u8 {\n    3\n}\n\
 /// read as the kill of every mutant it reaches. One null-mutant run per sweep
 /// finds it, and it is excluded exactly as a baseline-red case is; and the
 /// judge's fixtures sit inside the mirror, so a case that needs its tree
-/// around them kills its mutant there.
+/// around them kills its mutant there, while its temp directory stays outside
+/// it, where a case that needs no checkout around its scratch finds none.
 ///
 /// Fails by: the judge-only red case read as a kill (no control), it missing
-/// from the report, or the in-tree case red under the judge (its temp
-/// directory outside the mirror), which would leave `inner` unjudged.
+/// from the report, or the in-tree case red under the judge (its fixtures
+/// outside the mirror, or its temp directory inside it, CLOUD-2789), which
+/// would leave `inner` unjudged.
 #[test]
 fn a_null_mutant_control_excludes_a_case_red_only_under_the_judge() {
     let _ = common::require_bin("nextest", "cargo-nextest");
