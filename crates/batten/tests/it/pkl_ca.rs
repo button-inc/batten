@@ -92,29 +92,26 @@ fn the_pkl_spawn_carries_the_selection_after_eval() {
     let dir = common::scratch("pkl-ca-spawn");
     common::write(&dir, "ssl.pem", "ssl\n");
     let ssl = dir.join("ssl.pem");
+    let selected = common::pkl_command_with(None, Some(ssl.as_os_str().to_owned()));
+    let bare = common::pkl_command_with(None, None);
     assert_eq!(
-        common::pkl_eval_args(None, Some(ssl.as_os_str().to_owned())),
+        selected
+            .get_args()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<OsString>>(),
         vec![
             OsString::from("eval"),
             OsString::from("--ca-certificates"),
             ssl.as_os_str().to_owned(),
         ],
-        "pkl_command spawns `pkl eval` with the CA selection appended"
+        "the pkl spawn is `pkl eval` with the CA selection appended"
     );
     assert_eq!(
-        common::pkl_eval_args(None, None),
+        bare.get_args()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<OsString>>(),
         vec![OsString::from("eval")],
         "with nothing selected the spawn is plain `pkl eval`"
-    );
-    let live = common::pkl_command();
-    let args: Vec<OsString> = live.get_args().map(ToOwned::to_owned).collect();
-    assert_eq!(
-        args,
-        common::pkl_eval_args(
-            std::env::var_os("BATTEN_CA_BUNDLE"),
-            std::env::var_os("SSL_CERT_FILE"),
-        ),
-        "pkl_command spawns exactly the argv pkl_eval_args builds from the environment"
     );
 }
 
