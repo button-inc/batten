@@ -77,7 +77,7 @@ local gate = new Mapping<String, Step> {
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
     profiles = List("slow")
     glob = List(".claude/settings.json", "policy/mcp-timeout-budget.rego")
-    check = "cargo run --quiet -p batten -- check --rule 'bound guard missing'"
+    check = "${BATTEN_BIN:-cargo run --quiet -p batten --} check --rule 'bound guard missing'"
   }
   ["no-docs-tree"] {
     // `slow` tier since CLOUD-1991: the task is `batten check` over a module
@@ -108,7 +108,7 @@ local gate = new Mapping<String, Step> {
     profiles = List("slow")
     glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
     // The rule acquires hk's two plans itself (CLOUD-843); nothing is recorded.
-    check = "cargo run --quiet -p batten -- check --rule 'hook declare other'"
+    check = "${BATTEN_BIN:-cargo run --quiet -p batten --} check --rule 'hook declare other'"
   }
   // The adopted runner's own surface contract (CLOUD-947). BOTH ENDS ARE IN THE
   // GLOB, the same shape the surface-derivation gates carry: the projection is a
@@ -293,7 +293,7 @@ local gate = new Mapping<String, Step> {
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
     profiles = List("slow")
     glob = List("renovate.json5")
-    check = "cargo run --quiet -p batten -- record validate renovate-config"
+    check = "${BATTEN_BIN:-cargo run --quiet -p batten --} record validate renovate-config"
   }
   // Every module the derived schemas are reachable from, or the step does not
   // fire on the commit that moved them. `provision.rs` and `waiver.rs` were
@@ -377,7 +377,7 @@ local gate = new Mapping<String, Step> {
     // `slow` tier: two whole-tree `syft scan dir:.` passes.
     profiles = List("slow")
     glob = List("Cargo.lock", ".github/workflows/*")
-    check = "cargo run --quiet -p batten -- sbom --record"
+    check = "${BATTEN_BIN:-cargo run --quiet -p batten --} sbom --record"
   }
   // The install path resolves a release asset BY NAME from a machine that has
   // never seen this repository, so a rename in `dist` that forgets one of its
@@ -599,7 +599,7 @@ local gate = new Mapping<String, Step> {
     // EVALUATES it — a module that will not evaluate fails that row. A third
     // that nothing evaluates would owe a `[[rule.tools]]` row rather than an
     // argument here.
-    check = "cargo run --quiet -p batten -- record validate config-validator"
+    check = "${BATTEN_BIN:-cargo run --quiet -p batten --} record validate config-validator"
   }
   ["pkl-format"] = (Builtins.pkl_format) {
     depends = List("pkl")
