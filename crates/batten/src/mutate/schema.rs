@@ -9668,6 +9668,16 @@ mod tests {
         assert_eq!((filter, ran), (None, &few));
     }
 
+    /// Each listed mutant's [`shard_key`], taken one at a time: what
+    /// [`shard_keys`] must answer over the whole listing (CLOUD-2789).
+    fn shard_key_each(listing: &[Listed], site_keys: &[Option<String>]) -> Vec<String> {
+        listing
+            .iter()
+            .zip(site_keys)
+            .map(|(m, s)| shard_key(m, s.as_deref()))
+            .collect()
+    }
+
     /// T4 (CLOUD-2904): a mutant keeps its shard when another is listed
     /// before it, whether it has a site key or is sharded by its
     /// position-free name, and the shards still partition the listing.
@@ -9738,7 +9748,10 @@ mod tests {
             let site_keys: Vec<Option<String>> =
                 listing.iter().map(|m| site_key(&root, m)).collect();
             let keys = shard_keys(listing, &site_keys);
-            assert_eq!(keys.len(), listing.len(), "one key per listed mutant");
+            // EACH MUTANT ITS OWN KEY (CLOUD-2789): one shared key repeated
+            // keeps every mutant in one shard through an insert, so neither
+            // the count nor the slices tell it from the real keys.
+            assert_eq!(keys, shard_key_each(listing, &site_keys), "each its own");
             let ids: Vec<u32> = (0..u32::try_from(listing.len()).unwrap()).collect();
             let mut shard_of: std::collections::BTreeMap<String, usize> =
                 std::collections::BTreeMap::new();

@@ -33629,6 +33629,30 @@ mod tests {
         );
     }
 
+    /// Pathspec status is read only where a policy reads it: a checkout's
+    /// pre-call under a policy reading no pinned path could not look.
+    ///
+    /// Fails by: the event-or-reads guard joined with `&&`, so every pre-call
+    /// checkout reads the index and the status for no gate (CLOUD-2789).
+    #[test]
+    fn a_policy_reading_no_pin_reads_no_pathspec_status() {
+        let harness = crate::config_model::Harness::ClaudeCode;
+        let envelope = super::hook::decode(
+            harness,
+            r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git checkout -- Cargo.toml"}}"#,
+        )
+        .unwrap();
+        let policy = super::hook::Policy::declaring_nothing(harness);
+        assert!(
+            !policy.reads_pinned(&envelope),
+            "premise: nothing reads a pin"
+        );
+        assert_eq!(
+            super::pathspec_status_for(&policy, &envelope),
+            crate::facts::Look::CouldNotLook
+        );
+    }
+
     /// Fails by: any adjacent word pair read as `capture show`.
     #[test]
     fn only_a_windowed_capture_show_shows_a_capture() {

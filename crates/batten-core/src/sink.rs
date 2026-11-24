@@ -381,6 +381,14 @@ fn write_record(at: &Path, text: &str, append: bool) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Fails by: a set declaring no sink answered as declaring one, which
+    /// makes every run locate the git dir and read HEAD for a store no rule
+    /// asked for (CLOUD-851, CLOUD-2789).
+    #[test]
+    fn no_sink_is_none_declared() {
+        assert!(!super::any_declared(std::iter::empty()));
+    }
+
     /// Fails by: a branch-keyed sink not answering, so a branch-keyed record is
     /// read and written under no branch; or a rule-keyed one paying the read.
     #[test]
