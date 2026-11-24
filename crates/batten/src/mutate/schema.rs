@@ -4914,10 +4914,10 @@ fn judge_handbacks(
                 }
             };
             let unobserved = observing.as_ref().is_some_and(BTreeSet::is_empty);
-            let mut name = handback_verdict(outcome, output, &mutant.name, unobserved);
-            if poisoner.is_some() && !matches!(name, "caught" | "timeout" | "error" | "unviable") {
-                name = Verdict::Unjudged.name();
-            }
+            let name = unpoisoned(
+                handback_verdict(outcome, output, &mutant.name, unobserved),
+                poisoner.is_some(),
+            );
             journal_or_say(
                 judging.store,
                 &journal_line(key.as_deref(), name, &mutant.name),
@@ -4936,6 +4936,16 @@ fn judge_handbacks(
         classic.len()
     )?;
     Ok((verdicts, unviable))
+}
+
+/// A hand-back's verdict `name` where a red case `poisoned` its run: a kill,
+/// hang, error or unviable stands, anything else is unjudged.
+fn unpoisoned(name: &'static str, poisoned: bool) -> &'static str {
+    if poisoned && !matches!(name, "caught" | "timeout" | "error" | "unviable") {
+        Verdict::Unjudged.name()
+    } else {
+        name
+    }
 }
 
 /// The [`Verdict`] a hand-back's journaled verdict `name` reports as; `None`
@@ -9400,6 +9410,15 @@ mod tests {
             common_reached(&common("1", "1", "let _ = 0;"), &test),
             "a reached type's method moves it"
         );
+        // A helper reached only through an item AFTER it in the file, so the
+        // first pass skips it and only a second takes it.
+        let ordered = |body: &str| format!("fn a() -> u8 {{ {body} }}\nfn b() -> u8 {{ a() }}\n");
+        let through = [String::from("fn t() { b(); }")];
+        assert_ne!(
+            common_reached(&ordered("1"), &through),
+            common_reached(&ordered("2"), &through),
+            "a helper reached on a later pass moves it"
+        );
     }
 
     /// A handed-back verdict is read from the outcome file that names the
@@ -10361,11 +10380,12 @@ mod tests {
     #[test]
     fn a_named_item_answers_to_its_own_name_alone() {
         let source = "struct S { f: u8 }\ntrait T { fn m(); }\n\
-            macro_rules! mac { () => { other }; }\nmod md { fn inner() {} }\n";
+            macro_rules! mac { () => { other }; }\nmod md { fn inner() {} }\n\
+            static G: u8 = 0;\n";
         let names: Vec<Vec<String>> = items_of(source).iter().map(item_names).collect();
         assert_eq!(
             names,
-            [["S"], ["T"], ["mac"], ["md"]].map(|n| vec![n[0].to_owned()])
+            [["S"], ["T"], ["mac"], ["md"], ["G"]].map(|n| vec![n[0].to_owned()])
         );
     }
 
@@ -10583,5 +10603,105 @@ mod tests {
         assert_eq!(format.probed, schema.probed);
         assert_eq!(format.unprobed, [String::from("u.rs")].into());
         assert_eq!(format.flags, build_flags());
+    }
+
+    /// A still checkout judges its hand-backs: one whose only cases are red
+    /// and that no filter can scope is unjudged, never an error.
+    ///
+    /// Fails by: a checkout that did not move read as one that did, which
+    /// errs every hand-back not already journaled.
+    #[test]
+    fn a_still_checkout_judges_a_poisoned_handback_unjudged() {
+        let base = crate::scratch::scratch("schema-handback-still");
+        crate::gitwrite::init_on_main(&base).unwrap();
+        let over = super::super::cover::source_digest(&base).unwrap();
+        let mutants = [Listed {
+            function: None,
+            ..listed("BinaryOperator", "!=", (2, 7), (2, 9))
+        }];
+        let (reach, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let store = base.join("verdicts");
+        let mut red = Red::new();
+        red.insert(
+            (String::from("t::red"), String::from("p")),
+            String::from("failed"),
+        );
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &store,
+            red: &red,
+            reuse: None,
+        };
+        let nowhere = base.join("nowhere");
+        let handback = Handback {
+            runner: &nowhere,
+            diff: Some(&nowhere),
+        };
+        let mut out = Vec::new();
+        let (verdicts, unviable) = judge_handbacks(
+            &judging,
+            (&handback, &base, &over, &base),
+            &BTreeSet::from([0]),
+            (&Schema::default(), &Reach::default()),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(verdicts, [(0, Verdict::Unjudged)]);
+        assert_eq!(unviable, 0);
+        let said = String::from_utf8(out).unwrap();
+        assert!(!said.contains("changed during the sweep"), "{said}");
+    }
+
+    /// Fails by: a red case's run reporting a survivor rather than unjudged,
+    /// a kill, hang, error or unviable under one rewritten, or an unpoisoned
+    /// verdict touched; or a journaled `timeout` tallied as an error.
+    #[test]
+    fn a_poisoned_survivor_is_unjudged_and_a_timeout_tallies_as_one() {
+        assert_eq!(unpoisoned("missed", true), "unjudged");
+        assert_eq!(unpoisoned("uncovered", true), "unjudged");
+        for kept in ["caught", "timeout", "error", "unviable"] {
+            assert_eq!(unpoisoned(kept, true), kept);
+        }
+        assert_eq!(unpoisoned("missed", false), "missed");
+        assert_eq!(handback_tally("timeout"), Some(Verdict::Timeout));
+        assert_eq!(handback_tally("unviable"), None);
+    }
+
+    /// Fails by: `concat!(env!("CARGO_MANIFEST_DIR"), …)` not read as a path
+    /// under the source's package, or the package read wrongly.
+    #[test]
+    fn a_manifest_relative_include_resolves_under_its_package() {
+        let target = |source: &str, file: &str| {
+            let call = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+                .syntax_node()
+                .descendants()
+                .find_map(ast::MacroCall::cast)
+                .expect("a macro call");
+            include_target(&call, file)
+        };
+        let source = "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/data/x.txt\"));\n";
+        assert_eq!(
+            target(source, "pkg/src/lib.rs"),
+            Included::File(String::from("pkg/data/x.txt"))
+        );
+        assert_eq!(
+            target(source, "src/lib.rs"),
+            Included::File(String::from("data/x.txt"))
+        );
+        assert_eq!(package_dir_of("pkg/tests/it/main.rs"), Some("pkg"));
+        assert_eq!(package_dir_of("README.md"), None);
     }
 }

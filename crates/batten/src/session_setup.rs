@@ -413,4 +413,64 @@ mod tests {
         }
         Ok(())
     }
+
+    /// A git dir whose setup task is `GONE` and left `phase`, with the task's
+    /// own directory present and holding neither an outcome nor its marker.
+    fn task_left(name: &str, phase: &str) -> PathBuf {
+        let git_dir = crate::scratch::scratch(&format!("session-setup-{name}"));
+        std::fs::create_dir_all(dir(&git_dir)).unwrap();
+        task::register(&git_dir, TASK, GONE, phase, 0);
+        git_dir
+    }
+
+    /// Fails by: a crashed task not said, or said on every call after the
+    /// first.
+    #[test]
+    fn a_crash_is_said_once() {
+        let git_dir = task_left("crashed", "start");
+        assert_eq!(surface(&git_dir).len(), 1, "the crash is said");
+        assert!(surface(&git_dir).is_empty(), "and only once");
+    }
+
+    /// Fails by: a task that finished `ok` with no outcome recorded said as a
+    /// crash.
+    #[test]
+    fn a_finished_task_with_no_outcome_says_nothing() {
+        let git_dir = task_left("ok-no-outcome", task::OK);
+        assert!(surface(&git_dir).is_empty());
+    }
+
+    /// Fails by: a passing `[[startup]]` row reported as a finding, or the
+    /// rows read as failed when every one passed.
+    #[test]
+    fn a_passing_startup_row_is_no_finding() {
+        let root = crate::scratch::scratch("session-setup-health");
+        let row = |id: &str, check: &str| crate::config_model::Startup {
+            id: id.to_owned(),
+            gloss: "a fixture row".to_owned(),
+            check: vec![check.to_owned()],
+            decided_by: crate::config_model::Decided::ExitStatus,
+            repair: None,
+            preset: None,
+        };
+        let named = |findings: &[Finding], id: &str| {
+            findings
+                .iter()
+                .any(|f| matches!(f, Finding::Workspace { name, .. } if name == id))
+        };
+        let mut findings = Vec::new();
+        assert!(health_findings(
+            &root,
+            &[row("passes", "true")],
+            &mut findings
+        ));
+        assert!(!named(&findings, "passes"));
+        let mut findings = Vec::new();
+        assert!(!health_findings(
+            &root,
+            &[row("fails", "false")],
+            &mut findings
+        ));
+        assert!(named(&findings, "fails"));
+    }
 }

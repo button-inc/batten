@@ -3523,6 +3523,22 @@ fn a_pytest_mutant_its_case_fails_on_is_caught() {
     assert!(out.contains("every one caught"), "{out}");
 }
 
+/// A PYTEST FILTER SELECTING THE ONE CASE ITS SUITE HAS IS NOT TOO WIDE: with
+/// one case, selecting it is all a filter can do. Fails by: a one-case suite's
+/// whole selection read as `filter-names-every-case`.
+#[cfg(unix)]
+#[test]
+fn a_pytest_filter_selecting_its_suites_only_case_is_not_too_wide() {
+    let single = Native {
+        suite_body: "from limit import LIMIT\n\n\ndef test_limit_is_ten():\n    assert LIMIT == 10\n",
+        ..PYTEST
+    };
+    let (code, out, err) = native_sweep(&single, Mutant::Kill, "single-case");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+    assert!(!out.contains("filter-names-every-case"), "{out}");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_pytest_mutant_its_case_cannot_see_survives() {

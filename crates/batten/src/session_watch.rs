@@ -767,4 +767,86 @@ mod tests {
         let document = document(&payload).expect("the envelope unwraps");
         assert_eq!(document["ccr"]["data"], serde_json::json!([]));
     }
+
+    /// Fails by: a `user` event before any handoff read as the prompt arriving.
+    #[test]
+    fn a_user_event_prompts_only_after_a_handoff() {
+        let user = serde_json::json!({"id": "1", "user": {}});
+        let handoff = serde_json::json!({"id": "2", "system": {"subtype": HANDOFF}});
+        let mut inventory = Inventory::default();
+        inventory.fold(std::slice::from_ref(&user));
+        assert!(!inventory.prompted, "no handoff yet");
+        inventory.fold(&[handoff, user]);
+        assert!(inventory.prompted);
+    }
+
+    /// Fails by: a session id spelled with `-` or `_` refused a cache file, or
+    /// a kept reduction not read back.
+    #[test]
+    fn a_kept_reduction_is_read_back() {
+        let cache = Cache::new(crate::scratch::scratch("session-watch-cache"));
+        let mut inventory = Inventory {
+            cursor: Some(String::from("e9")),
+            ..Inventory::default()
+        };
+        inventory.launched.insert(String::from("t1"));
+        cache.store("session_01-ab", &inventory);
+        assert_eq!(cache.load("session_01-ab"), Some(inventory));
+        assert_eq!(cache.load("../escape"), None);
+    }
+
+    /// Fails by: the toolbox's answer to a sessions call dropped as
+    /// could-not-look.
+    #[test]
+    fn the_toolbox_lists_the_children() {
+        crate::fetch::stand_in(Box::new(|calls: &[crate::fetch::Call<'_>]| {
+            Ok(calls
+                .iter()
+                .map(|call| {
+                    let request: Value =
+                        serde_json::from_slice(call.body.unwrap_or_default()).unwrap_or_default();
+                    let (body, headers) = match request.get("method").and_then(Value::as_str) {
+                        Some("initialize") => (
+                            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+                            vec![(String::from("mcp-session-id"), String::from("s"))],
+                        ),
+                        Some("notifications/initialized") => ("", Vec::new()),
+                        _ => (
+                            r#"{"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"ccr":{"data":[{"id":"session_a"}],"has_more":false}}}}"#,
+                            Vec::new(),
+                        ),
+                    };
+                    crate::fetch::Response {
+                        status: 200,
+                        body: body.as_bytes().to_vec(),
+                        headers,
+                    }
+                })
+                .collect())
+        }));
+        let mut mcp = Mcp::new(crate::mcp::Wiring {
+            source: String::from("s"),
+            endpoint: String::from("https://mcp.invalid/mcp"),
+            headers: Vec::new(),
+            credential: None,
+        });
+        let page = mcp.sessions(None).expect("the toolbox answered");
+        assert_eq!(page.items, [serde_json::json!({"id": "session_a"})]);
+    }
+
+    /// Fails by: the capture's inventory emptied of its reports.
+    #[test]
+    fn the_inventory_document_carries_each_report() {
+        let mut inventory = Inventory::default();
+        inventory.launched.insert(String::from("t1"));
+        let report = Report {
+            session: String::from("session_a"),
+            state: State::Done,
+            inventory,
+        };
+        let document = inventory_document(&[report]);
+        assert_eq!(document[0]["session"], "session_a");
+        assert_eq!(document[0]["state"], State::Done.as_str());
+        assert_eq!(document[0]["open"], serde_json::json!(["t1"]));
+    }
 }
