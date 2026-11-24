@@ -7356,6 +7356,20 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
         Vec<(String, std::result::Result<String, String>)>,
     );
 
+    /// Fails by: a rule's function head folded into its facts with `&=`, so
+    /// no rule is ever recorded as a function.
+    #[test]
+    fn a_function_rule_is_recorded_as_one_and_a_plain_rule_is_not() {
+        const MODULE: &str = "package batten.p\nimport rego.v1\n\nf(x) := input.a\n\nr := 1\n";
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let engine = bundle.evaluator.engine().expect("an interpreter");
+        let ast = Ast::of(engine).expect("the AST serialises");
+        let packages = package_facts(&ast.0);
+        let rules = packages.values().next().expect("the package's facts");
+        assert!(rules["f"].function, "{:?}", rules.keys().collect::<Vec<_>>());
+        assert!(!rules["r"].function);
+    }
+
     /// Each case of one module by name with how it is decided, and the
     /// desugared sources the suite program compiles.
     fn planned(source: &str) -> Plans {

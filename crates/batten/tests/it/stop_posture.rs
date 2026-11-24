@@ -941,6 +941,24 @@ fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
     );
 }
 
+/// A stop row that REFUSES (exit 2) is demoted to the nudge, never dropped.
+/// Fails by: the deny arm read as saying nothing, so a refusing stop row's
+/// reason and its row id never reach the reader.
+// UNIX-ONLY, per CLOUD-113: the stub is a `#!/bin/sh` script, as above.
+#[cfg(unix)]
+#[test]
+fn a_refusing_stop_row_still_speaks() {
+    let dir = repo("stop-handler-deny");
+    stub(&dir, 2, "refused for turn 14");
+    let output = hook(&dir, &stop_with_transcript(&dir, "Landed and pushed."));
+    let stdout = stdout_of(&output);
+    assert!(stdout.contains("refused for turn 14"), "the reason travels: {stdout}");
+    assert!(
+        stdout.contains("hook.handler.finding-sink"),
+        "and so does the row that said it: {stdout}"
+    );
+}
+
 /// EVERY APPLICABLE RUNG SPEAKS, IN RANK ORDER (CLOUD-2078).
 ///
 /// The ladder used to stop at its first rung, so a module finding hid every
