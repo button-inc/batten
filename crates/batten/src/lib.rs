@@ -33662,6 +33662,28 @@ mod tests {
         assert_eq!(stall.beats, 240);
     }
 
+    /// Fails by: a lap whose engine sources stood still rebuilding them (the
+    /// digest test inverted), or its engine withheld from the gate though
+    /// nothing fell back (CLOUD-2789). The fixture's manifest names no
+    /// `batten`, so a build asked for refuses at once and reads as a fallback.
+    #[test]
+    fn an_unmoved_engine_is_reused_and_handed_to_the_gate() {
+        let repo = crate::scratch::scratch("lib-lap-engine-reused");
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        std::fs::write(
+            repo.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        crate::gitwrite::commit_paths(&repo, &["Cargo.toml".to_owned()], "fixture").unwrap();
+        let now = crate::engine::digest(&repo).expect("the manifest is an engine input");
+        let exe = repo.join("engine");
+        *super::LAP_ENGINE.lock().unwrap() = Some((exe.clone(), now));
+        let (engine, used) = super::lap_engine(&repo).expect("a lap engine is set");
+        assert_eq!(used, super::EngineUse::Reused);
+        assert_eq!(engine.as_deref(), exe.to_str());
+    }
+
     /// Fails by: the comparison inverted, so a lap whose `HEAD` stood still says
     /// it moved, and one that moved says nothing.
     #[test]
