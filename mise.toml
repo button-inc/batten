@@ -817,6 +817,11 @@ no_proxy = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=g
 # by walking up, which is not the engine being tested (CLOUD-843).
 [vars]
 batten = "{{ get_env(name='BATTEN_BIN', default='cargo run --quiet -p batten --') }}"
+# THE DIST LEG THIS HOST BUILDS (CLOUD-2789): `dist.yml`'s matrix names each
+# triple, and `verify` builds the one whose host it runs on, so a contributor's
+# Linux or macOS machine runs a leg CI runs. Not Windows, where `verify` runs no
+# wrapped build either.
+dist_host = "{% if arch() == 'arm64' %}aarch64{% else %}x86_64{% endif %}-{% if os() == 'macos' %}apple-darwin{% else %}unknown-linux-gnu{% endif %}"
 # The duplicate-close window, in characters of an ISO-8601 stamp: 19 is the
 # second, and `DUPLICATE_CLOSE_WINDOW` widens it, as the retired body let it.
 duplicate_close_window = "{{ get_env(name='DUPLICATE_CLOSE_WINDOW', default='19') }}"
@@ -4203,14 +4208,22 @@ description = "Gate: the macOS targets actually LINK from Linux, which is what p
 # receipt for one triple never answers for the other (CLOUD-1916). A hit now
 # skips the link and not the target install, which `target-ensure` makes
 # idempotent behind its lock.
+#
+# NO ARGUMENT LINKS BOTH TRIPLES (CLOUD-2789). `verify` runs this bare, and the
+# bare form linked only `aarch64-apple-darwin` while CI links both as matrix
+# legs, so the Intel leg could go red in CI where no local gate looked. A CI leg
+# still passes its one triple; with none, each entry falls back to the two
+# `choices`, which `ci-parity`'s leg clause reads from this body. One zigbuild
+# with two `--target`s, so the bare form is one step and one receipt.
 usage = '''
-arg "[target]" default="aarch64-apple-darwin" help="the Darwin triple to link" {
+arg "[target]" help="the Darwin triple to link; with none, both" {
   choices "aarch64-apple-darwin" "x86_64-apple-darwin"
 }
 '''
 run = [
-  "mise run target-ensure {{usage.target}}",
-  "{{vars.batten}} step run darwin-link --arg {{usage.target}} -- cargo zigbuild --workspace --profile darwin-link --target {{usage.target}}",
+  "mise run target-ensure {% if usage.target %}{{usage.target}}{% else %}aarch64-apple-darwin{% endif %}",
+  "mise run target-ensure {% if usage.target %}{{usage.target}}{% else %}x86_64-apple-darwin{% endif %}",
+  "{{vars.batten}} step run darwin-link --arg {% if usage.target %}{{usage.target}}{% else %}both{% endif %} -- cargo zigbuild --workspace --profile darwin-link {% if usage.target %}--target {{usage.target}}{% else %}--target aarch64-apple-darwin --target x86_64-apple-darwin{% endif %}",
 ]
 
 [tasks.cross-check]
@@ -5020,6 +5033,13 @@ run = [
   "{{vars.batten}} record validate config-validator",
   "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: ci:quick ::: verify:test-replay-structural ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny ::: policy-budget ::: policy-test ::: batten-check ::: modules-ratchet:check",
   "mise run --continue-on-error --jobs 2 semver ::: verify:test-replay ::: ci:checks ::: cross-check ::: darwin-link ::: lint:clippy",
+  # THE DIST LEG, AS `dist.yml` RUNS IT (CLOUD-2789): `rust.yml` calls that
+  # workflow on every pull request, and `ci-parity` now follows the call, so its
+  # build, the binary's inventory and the inventory's check run here too. In
+  # its order, each step reading the last one's output.
+  "mise run dist {{vars.dist_host}} --build-tool cargo-dist",
+  "mise run sbom-binary target/{{vars.dist_host}}/dist/batten {{vars.dist_host}}",
+  "mise run sbom-binary-check",
   "mise run --continue-on-error --jobs 1 verify:ci-suite ::: verify:ci-slow-needed",
   "mise run perf-gate",
   "{{vars.batten}} step cover",
