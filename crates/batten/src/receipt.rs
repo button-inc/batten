@@ -1459,16 +1459,9 @@ pub fn head_receipt_valid(check: &str) -> bool {
     let Ok(facts) = repo_facts() else {
         return false;
     };
-    let Ok(path) = receipt_path(&facts.repo_root, check) else {
-        return false;
-    };
-    validity(
-        load_statement(&path).as_ref(),
-        check,
-        &facts.head,
-        &facts.main,
-        &facts.git_dir,
-    ) == Validity::Valid
+    // Through the published fallback (CLOUD-1544): a lifecycle reader, never
+    // the mediated path, so the epoch it may compute is off the hot path.
+    head_validity(&facts, check).is_ok_and(|verdict| verdict == Validity::Valid)
 }
 
 fn load_statement(path: &Path) -> Option<Statement> {
@@ -2228,14 +2221,9 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
     let required = verified_by(&authority)?;
     let mut unverified = Vec::new();
     for check in &required {
-        let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
-        let verdict = validity(
-            statement.as_ref(),
-            check,
-            &facts.head,
-            &facts.main,
-            &facts.git_dir,
-        );
+        // The published fallback too (CLOUD-1544), so a head a sibling container
+        // verified and published reads verified here.
+        let verdict = head_validity(&facts, check)?;
         if verdict != Validity::Valid {
             unverified.push((check.clone(), verdict));
         }
