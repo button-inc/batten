@@ -16019,6 +16019,23 @@ mod tests {
         assert_eq!(envelope.raw_tool, "Bash");
     }
 
+    /// A decoded call keeps the host's call id and names the connector call
+    /// its command mediates (CLOUD-2789).
+    ///
+    /// Fails by: either field dropped from `decode_value`'s envelope, which
+    /// leaves the field list's `None` in its place.
+    #[test]
+    fn decode_keeps_the_call_id_and_the_mediated_call() {
+        let raw = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"toolu_1",
+                      "tool_input":{"command":"batten mcp call linear get_issue"}}"#;
+        let envelope = decode(Harness::ClaudeCode, raw).expect("decodes");
+        assert_eq!(envelope.call_id.as_deref(), Some("toolu_1"));
+        assert_eq!(
+            envelope.mediated,
+            Some(("mcp__linear__get_issue".to_owned(), serde_json::json!({})))
+        );
+    }
+
     #[test]
     fn decode_carries_cwd_session_and_the_whole_input() {
         let raw = r#"{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/w/r",
