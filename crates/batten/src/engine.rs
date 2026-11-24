@@ -407,20 +407,28 @@ pub const REPAIR: &str = "batten engine install";
 /// composition.
 pub const REPAIR_PINNED: &str = "mise exec -- batten engine install";
 
-/// [`REPAIR_PINNED`] with mise held to its lockfile (CLOUD-2881).
+/// [`REPAIR_PINNED`] with the build's toolchain installed from the lockfile
+/// first, and nothing else installed (CLOUD-2881).
 ///
-/// `mise exec` installs every missing tool before it runs the command, and a
-/// project whose `[settings]` leave the lockfile off resolves those installs
-/// through the forges' release APIs. Measured in a cold container: the pinned
-/// spelling's install failed on 25 tools, each refused 403 by the proxy, and
-/// never reached the build; under these settings the install reads the lock's
-/// own URLs. The four assignments are mise's settings, not a consumer's: the
-/// lockfile read and enforced, and attestation lookups — API calls the lock's
-/// URLs do not cover — off, since the lock already pins each artifact's
-/// checksum. One whole string, as [`REPAIR_PINNED`] is, so no composition
-/// rides it.
-pub const REPAIR_LOCKED: &str = "env MISE_LOCKFILE=true MISE_LOCKED=true \
-     MISE_AQUA_GITHUB_ATTESTATIONS=false MISE_GITHUB_GITHUB_ATTESTATIONS=false \
+/// `mise exec` installs EVERY missing tool before it runs the command, and one
+/// failure stops it before the command starts. Measured cold on mise 2026.9.1:
+/// unlocked, 25 tools were refused 403 by the proxy; locked, `mise exec` still
+/// fetched `aqua:ossf/scorecard`'s SLSA provenance through
+/// `api.github.com/…/releases/tags`, refused, while a locked `mise install` of
+/// the same tool verified it from the lock's own URL and exited 0. The
+/// attestation settings changed neither result, and `MISE_AQUA_SLSA=false`
+/// made mise refuse the lock as a downgrade. So the install is `mise install`,
+/// held to the lock (its URLs and checksums), and of `rust` alone — the
+/// toolchain `install_source`'s `cargo` comes from — and the `exec` after it
+/// installs nothing. Naming the tool to `exec` instead does not work: with auto-install off,
+/// `mise exec rust --` ran the ambient `cargo` (1.97 where 1.98 was pinned).
+///
+/// One whole string, as [`REPAIR_PINNED`] is: the `&&` inside it is this
+/// engine's, and equality means no other composition rides it.
+/// `engine_install.rs`'s `the_locked_repair_runs_cold_to_an_installed_engine`
+/// executes it against a cold mise.
+pub const REPAIR_LOCKED: &str = "env MISE_LOCKFILE=true MISE_LOCKED=true mise install rust \
+     && env MISE_LOCKFILE=true MISE_LOCKED=true MISE_EXEC_AUTO_INSTALL=false \
      mise exec -- batten engine install";
 
 /// The repair's whole spellings: the floor admits exactly these, bare or
@@ -2147,6 +2155,15 @@ mod tests {
             assert!(before.starts_with("env "), "{REPAIR_LOCKED}");
         }
         assert!(REPAIR_LOCKED.ends_with(REPAIR_PINNED), "{REPAIR_LOCKED}");
+        // The exec installs nothing: the toolchain was installed, locked, first.
+        let (install, exec) = REPAIR_LOCKED
+            .split_once(" && ")
+            .expect("an install, then the exec");
+        assert!(install.ends_with("mise install rust"), "{REPAIR_LOCKED}");
+        assert!(
+            exec.contains(" MISE_EXEC_AUTO_INSTALL=false mise exec "),
+            "{REPAIR_LOCKED}"
+        );
         assert!(is_repair(REPAIR_LOCKED));
         assert!(is_repair_at(&repair_at(root, REPAIR_LOCKED), root));
         assert!(!is_repair(&format!("{REPAIR_LOCKED} && git push")));

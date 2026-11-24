@@ -2023,4 +2023,256 @@ mod repair {
             text(&output)
         );
     }
+
+    /// The `cargo` the project's toolchain ships: [`stub_cargo`]'s body, as the
+    /// one file of a `.tar.gz` the fixture's lock serves.
+    fn toolchain_tarball() -> Vec<u8> {
+        let script = b"#!/bin/sh\n: > \"$STUB_RAN\"\nmkdir -p \"$CARGO_TARGET_DIR/release\"\nprintf 'the built engine\\n' > \"$CARGO_TARGET_DIR/release/batten\"\n";
+        let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.set_size(script.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "bin/cargo", &script[..])
+            .expect("archive the stub cargo");
+        archive
+            .into_inner()
+            .expect("close the archive")
+            .finish()
+            .expect("compress the archive")
+    }
+
+    /// A loopback HTTP host answering every request with `body`, on a thread
+    /// that ends with the test process. The lock's one reachable URL.
+    fn serve(body: Vec<u8>) -> u16 {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("the bound port").port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut request = Vec::new();
+                let mut chunk = [0_u8; 4096];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => request.extend_from_slice(&chunk[..read]),
+                    }
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                if !request.starts_with(b"HEAD") {
+                    let _ = stream.write_all(&body);
+                }
+            }
+        });
+        port
+    }
+
+    /// The `mise` this test process was started under, which the case links
+    /// into its own `bin`: the directory it came from may also hold a `batten`
+    /// the repair would install over.
+    fn host_mise() -> PathBuf {
+        std::env::var_os("PATH")
+            .iter()
+            .flat_map(std::env::split_paths)
+            .map(|dir| dir.join("mise"))
+            .find(|candidate| candidate.is_file())
+            .expect("the suite runs under mise, so `mise` is on PATH")
+    }
+
+    /// The fixture's mise manifest and lock: `rust` aliased to a tool the
+    /// loopback host serves, plus a tool whose locked URL nothing answers —
+    /// the stand-in for a tool `mise exec` cannot install in a cold container
+    /// (`aqua:ossf/scorecard`'s SLSA lookup, measured for CLOUD-2881).
+    fn mise_project(dir: &Path, port: u16, checksum: &str) {
+        use std::fmt::Write as _;
+        let toolchain = format!("http://127.0.0.1:{port}/rust.tar.gz");
+        let dead = "http://127.0.0.1:9/unreachable.tar.gz";
+        common::write(
+            dir,
+            "mise.toml",
+            &format!(
+                "[tool_alias]\nrust = \"http:rust\"\n\n[tools]\n\
+                 rust = {{ version = \"1.0.0\", url = \"{toolchain}\" }}\n\
+                 \"http:unreachable\" = {{ version = \"1.0.0\", url = \"{dead}\" }}\n"
+            ),
+        );
+        let mut lock = String::new();
+        for (tool, backend, url, sum) in [
+            ("rust", "http:rust", toolchain.as_str(), checksum),
+            (
+                "\"http:unreachable\"",
+                "http:unreachable",
+                dead,
+                &"0".repeat(64)[..],
+            ),
+        ] {
+            write!(
+                lock,
+                "[[tools.{tool}]]\nversion = \"1.0.0\"\nbackend = \"{backend}\"\n\n"
+            )
+            .unwrap();
+            for platform in ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64"] {
+                write!(
+                    lock,
+                    "[tools.{tool}.\"platforms.{platform}\"]\nchecksum = \"sha256:{sum}\"\nurl = \"{url}\"\n\n"
+                )
+                .unwrap();
+            }
+        }
+        common::write(dir, "mise.lock", &lock);
+    }
+
+    /// `repair` run by a shell standing in `dir`, as the floor admits it, under
+    /// a mise whose data, cache and state are `cold`'s and empty. Every ambient
+    /// `MISE_*` is dropped, so the auto-install defaults are a cold
+    /// container's and not the suite's.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the subject is the shell line the floor admits, run whole by `sh -c`, under a real mise"
+    )]
+    fn run_repair(dir: &Path, cold: &Path, repair: &str) -> Output {
+        let path = std::env::join_paths([
+            dir.join("bin"),
+            hook_bin(dir),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+        let mut command = std::process::Command::new("sh");
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("MISE_") {
+                command.env_remove(name);
+            }
+        }
+        common::state_dir(&mut command, &dir.join("state"));
+        command
+            .args(["-c", repair])
+            .current_dir(dir)
+            .env("PATH", path)
+            .env("HOME", dir)
+            .env("MISE_DATA_DIR", cold.join("data"))
+            .env("MISE_CACHE_DIR", cold.join("cache"))
+            .env("MISE_STATE_DIR", cold.join("state"))
+            .env("MISE_CONFIG_DIR", cold.join("config"))
+            .env("MISE_CEILING_PATHS", dir.parent().unwrap())
+            .env("MISE_TRUSTED_CONFIG_PATHS", dir)
+            .env("NO_PROXY", "127.0.0.1")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("https_proxy")
+            .env_remove("HTTP_PROXY")
+            .env_remove("http_proxy")
+            .env("CARGO_TARGET_DIR", dir.join("target"))
+            .env("STUB_RAN", dir.join("cargo-ran"))
+            .env("BATTEN_INSTALL_DIR", dir.join("install-dir"))
+            .env_remove("BATTEN_VERSION_FROM_REF")
+            .env_remove("BATTEN_VERSION")
+            .env_remove("BATTEN_RELEASES")
+            .env_remove("BATTEN_ENGINE_UPDATED")
+            .env_remove(batten::engine::LOCAL_ENV)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        common::spawn_copy(&mut command)
+            .streamed_wait()
+            .expect("wait for the repair")
+    }
+
+    /// CLOUD-2881: THE FLOOR'S LOCKED REPAIR, EXECUTED. Over a source pin the
+    /// installed engine cannot load, the floor admits [`REPAIR_LOCKED`] and
+    /// refuses the rest; run whole against a cold mise, it installs the
+    /// project's toolchain from the lock's URL alone, builds on that
+    /// toolchain's `cargo` (no other is on `PATH`), and installs and stamps the
+    /// engine — while a tool whose locked URL nothing answers sits in the
+    /// manifest. The pinned spelling, under the same cold mise, dies on that
+    /// tool before `batten` starts: the measured failure, kept as the contrast.
+    ///
+    /// [`REPAIR_LOCKED`]: batten::engine::REPAIR_LOCKED
+    #[test]
+    fn the_locked_repair_runs_cold_to_an_installed_engine() {
+        let dir = repo("engine-repair-locked-cold");
+        let tarball = toolchain_tarball();
+        let checksum = batten::digest::sha256_hex(&tarball);
+        let port = serve(tarball);
+        mise_project(&dir, port, &checksum);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::os::unix::fs::symlink(host_mise(), dir.join("bin").join("mise")).unwrap();
+        // The installed engine: outside the checkout, on `PATH`, unstamped.
+        let binary = private_binary(&dir);
+        let on_path = hook_bin(&dir).join("batten");
+        std::fs::create_dir_all(hook_bin(&dir)).unwrap();
+        std::fs::copy(&binary, &on_path).unwrap();
+        let digest = text(&run(&binary, &dir, &["engine", "digest"], ""))
+            .trim()
+            .to_owned();
+        pin_source(&dir, &digest);
+        let lock_before = std::fs::read(dir.join("mise.lock")).unwrap();
+
+        // THE FLOOR: the config is one this engine cannot adjudicate, and of
+        // the two spellings only the whole locked repair is admitted.
+        let adjudicate = |command: &str| {
+            let envelope = format!(
+                "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":{}}}}}",
+                serde_json::to_string(command).unwrap()
+            );
+            run(
+                &on_path,
+                &dir,
+                &["adjudicate", "--harness", "exit-code"],
+                &envelope,
+            )
+            .status
+            .code()
+        };
+        let locked = batten::engine::REPAIR_LOCKED;
+        assert_eq!(adjudicate("git push"), Some(2), "the floor is up");
+        assert_eq!(adjudicate(locked), Some(0), "the floor admits {locked}");
+
+        // THE CONTRAST: `mise exec` installs every missing tool first, and one
+        // it cannot reach stops it before the command runs.
+        let pinned = run_repair(
+            &dir,
+            &dir.join("cold-pinned"),
+            batten::engine::REPAIR_PINNED,
+        );
+        assert!(!pinned.status.success(), "{}", text(&pinned));
+        assert!(
+            text(&pinned).contains("http:unreachable"),
+            "the pinned spelling dies on the unreachable tool: {}",
+            text(&pinned)
+        );
+        assert!(!dir.join("cargo-ran").exists(), "and builds nothing");
+
+        let output = run_repair(&dir, &dir.join("cold-locked"), locked);
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            dir.join("cargo-ran").exists(),
+            "the build ran on the toolchain the lock served: {}",
+            text(&output)
+        );
+        assert!(
+            !dir.join("cold-locked/data/installs/http-unreachable")
+                .exists(),
+            "and nothing but the toolchain was installed"
+        );
+        assert!(
+            std::fs::read(&on_path).unwrap() == b"the built engine\n",
+            "the installed engine was replaced: {}",
+            text(&output)
+        );
+        let stamp = std::fs::read_to_string(engine_stamp(&on_path)).unwrap_or_default();
+        assert_eq!(stamp.trim(), digest, "and stamped with the pin");
+        assert!(
+            std::fs::read(dir.join("mise.lock")).unwrap() == lock_before,
+            "the lock is read, never written"
+        );
+    }
 }
