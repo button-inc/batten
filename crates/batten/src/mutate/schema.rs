@@ -5211,6 +5211,9 @@ pub struct Handback<'a> {
     /// The change the listing was made of; `None` for a whole-workspace
     /// listing ([`super::WHOLE_TREE`]).
     pub diff: Option<&'a std::path::Path>,
+    /// The megabytes one hand-back's build reaches (`MUTANT_JOB_DISK_MB`) and
+    /// the collector's floor it may not spend; `None` checks no room.
+    pub disk: Option<(u64, u64)>,
 }
 
 /// The bare identifier a cargo-mutants function name ends in: `bar` of
@@ -5336,6 +5339,29 @@ fn handback_verdict(
     }
 }
 
+/// Whether a hand-back's declared build fits the disk holding the mirror at
+/// `tree`, above the collector's floor. `Ok` when no cost is declared.
+///
+/// # Errors
+///
+/// It does not fit, or the disk's free space cannot be read: either way the
+/// build could only fail, so it is not run.
+fn handback_room(handback: &Handback<'_>, tree: &std::path::Path) -> anyhow::Result<()> {
+    let Some((need_mb, floor_mb)) = handback.disk else {
+        return Ok(());
+    };
+    // THE MIRROR'S OWN VOLUME, its nearest existing ancestor before its
+    // first sync creates it.
+    let at = tree.ancestors().find(|dir| dir.exists()).unwrap_or(tree);
+    if let Some(headroom) = super::disk_short(at, need_mb, floor_mb)? {
+        anyhow::bail!(
+            "no room: its build needs {need_mb} MB and {} has {headroom} MB above the collector's floor",
+            at.display()
+        );
+    }
+    Ok(())
+}
+
 /// Sync the mirror at `tree` to `live`, then `run` in it.
 ///
 /// BEFORE EVERY RUN, NEVER ONLY THE FIRST: a run that was stopped, or a
@@ -5445,7 +5471,13 @@ fn judge_handbacks(
             // SYNCED BEFORE EVERY RUN (W4), AND A FAULT IS THIS MUTANT'S
             // `error`, never the sweep's: a mirror that cannot be synced or a
             // run that cannot be spawned throws away no other verdict.
+            // NO ROOM IS A REFUSAL, NEVER A RUN (CLOUD-2882): a build with no
+            // room for its target can only fail, and that failure read as
+            // `unviable` and was journaled. Measured before every run, since
+            // each one's build grows the mirror's target; refused, it is this
+            // mutant's `error` below, journaled nowhere.
             let outcome = match synced_run(live, tree, || {
+                handback_room(handback, tree)?;
                 super::cargo_mutant_in_place(
                     (tree, handback.runner, handback.diff),
                     &mutant.name,
@@ -8210,6 +8242,7 @@ mod tests {
         let handback = Handback {
             runner: &missing,
             diff: Some(&diff),
+            disk: None,
         };
         let refused = sweep(
             &root,
@@ -8302,6 +8335,7 @@ mod tests {
         let handback = Handback {
             runner: &nowhere,
             diff: Some(&nowhere),
+            disk: None,
         };
         let mut out = Vec::new();
         let (verdicts, unviable) = judge_handbacks(
@@ -8316,6 +8350,72 @@ mod tests {
         assert_eq!(unviable, 0);
         let said = String::from_utf8(out).unwrap();
         assert!(said.contains("changed during the sweep"), "{said}");
+    }
+
+    /// A hand-back whose build the disk cannot hold is refused, said, and
+    /// judged nothing (CLOUD-2882): no run, no journal line, an `error`.
+    ///
+    /// Fails by: the build forced onto a full disk, which on #1276 failed and
+    /// was recorded `unviable`; the refusal journaled, so a later sweep reused
+    /// it; or the refusal left unsaid.
+    #[test]
+    fn a_handback_the_disk_cannot_hold_is_refused_unjudged() {
+        let base = crate::scratch::scratch("schema-handback-no-room");
+        crate::gitwrite::init_on_main(&base).expect("a repository");
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        std::fs::write(base.join("src/lib.rs"), KEYED_SOURCE).unwrap();
+        crate::gitwrite::commit_paths(&base, &[String::from("src/lib.rs")], "base")
+            .expect("commit");
+        let mutants = [listed("BinaryOperator", "!=", (2, 7), (2, 9))];
+        let (reach, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let store = base.join("verdicts");
+        let red = Red::new();
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &store,
+            red: &red,
+            reuse: None,
+        };
+        let nowhere = base.join("nowhere");
+        let handback = Handback {
+            runner: &nowhere,
+            diff: Some(&nowhere),
+            disk: Some((u64::MAX, 0)),
+        };
+        let still = super::super::cover::source_digest(&base).unwrap();
+        let mut out = Vec::new();
+        let (verdicts, unviable) = judge_handbacks(
+            &judging,
+            // ITS OWN STATE, so the mirror is not inside the tree it copies.
+            (
+                &handback,
+                &base,
+                &still,
+                &crate::scratch::scratch("schema-handback-no-room-state"),
+            ),
+            &BTreeSet::from([0]),
+            (&Schema::default(), &Reach::default()),
+            &mut out,
+        )
+        .expect("no room degrades, it does not fail the call");
+        assert_eq!(verdicts, [(0, Verdict::Error)]);
+        assert_eq!(unviable, 0);
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.contains("no room: its build needs"), "{said}");
+        assert!(!store.exists(), "a refusal is journaled nowhere");
     }
 
     /// A listed mutant of `fn f` in `src/lib.rs` whose function span is known,
@@ -8375,6 +8475,7 @@ mod tests {
         let handback = Handback {
             runner: &nowhere,
             diff: Some(&nowhere),
+            disk: None,
         };
         let mut out = Vec::new();
         let (verdicts, unviable) = judge_handbacks(
@@ -8442,6 +8543,7 @@ mod tests {
         let handback = Handback {
             runner: &nowhere,
             diff: Some(&nowhere),
+            disk: None,
         };
         let state = base.join("state");
         let mut out = Vec::new();
@@ -8505,6 +8607,7 @@ mod tests {
         let handback = Handback {
             runner: &nowhere,
             diff: Some(&nowhere),
+            disk: None,
         };
         let state = base.join("state");
         let mut out = Vec::new();
@@ -12355,6 +12458,7 @@ pub fn repo() -> u8 {{ scratch() }}
         let handback = Handback {
             runner: &nowhere,
             diff: Some(&nowhere),
+            disk: None,
         };
         let mut out = Vec::new();
         let (verdicts, unviable) = judge_handbacks(
