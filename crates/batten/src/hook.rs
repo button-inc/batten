@@ -24420,9 +24420,23 @@ deny contains "refused by themodule" if {
         );
     }
 
+    /// [`git_pathspecs`] over `tokens` in `/r`, on a thread the case owns and
+    /// abandons at a deadline: a scan that stops advancing (`index *= 1`) is
+    /// this case's failure, never the runner's timeout (CLOUD-2789).
+    fn bounded_pathspecs(tokens: &'static [&'static str]) -> Pathspecs {
+        let (done, answer) = std::sync::mpsc::channel();
+        drop(std::thread::spawn(move || {
+            let _ = done.send(git_pathspecs(tokens, Path::new("/r")));
+        }));
+        answer
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the pathspec scan advances past every word and returns")
+    }
+
     /// Fails by: `restore`'s `-s <tree>` skip multiplied rather than added
     /// (`index *= 2`), so after another option it lands on the tree and reads
-    /// it as a pathspec.
+    /// it as a pathspec; or the one-word step multiplied (`index *= 1`), so the
+    /// scan never leaves its first word.
     #[test]
     fn a_restore_source_after_another_option_is_no_pathspec() {
         // And leading the options, where the pass-count bound ends a stalled
@@ -24435,10 +24449,7 @@ deny contains "refused by themodule" if {
             }])
         );
         assert_eq!(
-            git_pathspecs(
-                &["git", "restore", "-q", "-s", "HEAD", "f"],
-                Path::new("/r")
-            ),
+            bounded_pathspecs(&["git", "restore", "-q", "-s", "HEAD", "f"]),
             Pathspecs::Placed(vec![PathspecCall {
                 dir: PathBuf::from("/r"),
                 pathspecs: vec![String::from("f")],

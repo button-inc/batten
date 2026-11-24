@@ -1460,6 +1460,18 @@ record = "other"
         serde_json::from_slice(&bytes).unwrap()
     }
 
+    /// Fails by: a module reading a key built from every row (`forge`)
+    /// narrowed to its own row, which drops the rows that build what it reads
+    /// (CLOUD-2789).
+    #[test]
+    fn a_module_reading_every_row_keeps_every_row_whole() {
+        let forge = projected(&["tree.forge"]);
+        let rows = forge["rule"].as_array().expect("the rule table stays");
+        assert_eq!(rows.len(), 2, "{forge}");
+        assert_eq!(rows[1]["id"], "other", "{forge}");
+        assert_eq!(rows[1]["delta_sources"][0], "x", "kept whole: {forge}");
+    }
+
     /// Fails by: another row's delta pair kept for a module that reads no
     /// `base-delta`, a recorder kept whose store the module never reads, or
     /// `[census]` dropped for a module reading `shell`.
