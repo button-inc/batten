@@ -1,7 +1,7 @@
 name: dev-prerelease
 #MUTANT-SUITE crates/batten/tests/it/dist.rs
 #MUTANT dev-prerelease-unnamespaced|s@^          tag="dev/v.*$@          tag="v${version}"@|a_dev_prerelease_is_published_under_the_dev_namespace
-#MUTANT dev-prerelease-draft-stranded|s@^              gh release upload "$tag" --clobber batten-v\*.tar.gz SHA256SUMS$@              exit 0@|a_cancelled_runs_draft_is_published_not_stranded
+#MUTANT dev-prerelease-draft-unchecked|s@^              if \[ "$have" != "$want" \]; then$@              if false; then@|a_cancelled_runs_draft_is_published_not_stranded
 
 # workflow-shell: CLOUD-2903 naming the archive by the build's own identity and
 # publishing it are two bodies no verb owns yet; each reads `batten --version`
@@ -52,7 +52,7 @@ jobs:
     # code is not this repository's to ship.
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45 # budget: measured=2026-11-24 dist's linux legs
+    timeout-minutes: 53 # budget: p95=1045s x3 measured=2026-11-24
     permissions:
       contents: read
     strategy:
@@ -114,7 +114,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # budget: measured=2026-11-24 two uploads
+    timeout-minutes: 2 # budget: p95=21s x3 measured=2026-11-24
     permissions:
       contents: write
     steps:
@@ -141,16 +141,25 @@ jobs:
           sha256sum batten-v*.tar.gz >SHA256SUMS
           # One identity is one commit, so a release already under this tag is
           # this head's. PUBLISHED, it is done. A DRAFT is an earlier run that
-          # `cancel-in-progress` stopped between create and publish: its assets
-          # are re-uploaded over and it is published here, so a cancelled run
-          # never strands the tag as a draft `releases/download/dev/…` 404s on.
+          # `cancel-in-progress` stopped between create and publish: `gh release
+          # create` uploads every asset before it returns, so a draft carrying
+          # this run's asset names is complete and is published here, and a
+          # cancelled run never strands the tag as a draft
+          # `releases/download/dev/…` 404s on. One missing an asset is refused
+          # by name, never overwritten (`release ship other`: no `--clobber`
+          # outside the release guard).
           state=$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null || echo absent)
           case "$state" in
             false)
               exit 0
               ;;
             true)
-              gh release upload "$tag" --clobber batten-v*.tar.gz SHA256SUMS
+              have=$(gh release view "$tag" --json assets --jq '[.assets[].name] | sort | join(" ")')
+              want=$(printf '%s\n' batten-v*.tar.gz SHA256SUMS | sort | paste -sd ' ')
+              if [ "$have" != "$want" ]; then
+                echo "::error:: the draft $tag is incomplete ($have); discard it with \`batten release discard --tag $tag\` and re-run" >&2
+                exit 1
+              fi
               ;;
             *)
               gh release create "$tag" --draft --prerelease --target "$SHA" \
