@@ -6990,7 +6990,13 @@ fn run_receipt_transfer(publish: bool, out: &mut dyn Write) -> Result<ExitCode> 
     let compat_dir = git_dir.join("batten-receipts");
     let moved = if publish {
         let local = land::receipts::local_set(&receipts_dir, &compat_dir);
-        land::receipts::publish(&remote, &git_dir, &name, &local, i64::try_from(now_unix()).unwrap_or(i64::MAX))?
+        land::receipts::publish(
+            &remote,
+            &git_dir,
+            &name,
+            &local,
+            i64::try_from(now_unix()).unwrap_or(i64::MAX),
+        )?
     } else {
         let head = git::head_commit(here)?;
         land::receipts::pull(&remote, &git_dir, &name, &receipts_dir, &compat_dir, &head)?

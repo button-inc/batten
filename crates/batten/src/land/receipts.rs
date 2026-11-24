@@ -406,9 +406,9 @@ fn body_of(
     }
     let opened = crate::git::open_fresh(repo)?;
     let oid = gix::hash::ObjectId::from_hex(id.as_bytes())?;
-    let found = opened
-        .find_object(oid)
-        .map_err(|err| anyhow::anyhow!("receipt: {id} is in neither the answer nor the odb: {err}"))?;
+    let found = opened.find_object(oid).map_err(|err| {
+        anyhow::anyhow!("receipt: {id} is in neither the answer nor the odb: {err}")
+    })?;
     if found.kind != kind {
         return Err(anyhow::anyhow!(
             "receipt: {id} is a {} where a {kind} was expected",
@@ -461,7 +461,9 @@ fn held(remote: &str, repo: &Path, name: &str) -> Result<Held> {
         if !is_tree {
             continue;
         }
-        for (name, blob, nested) in entries(&body_of(&objects, repo, &id, gix::object::Kind::Tree)?)? {
+        for (name, blob, nested) in
+            entries(&body_of(&objects, repo, &id, gix::object::Kind::Tree)?)?
+        {
             if nested {
                 continue;
             }
@@ -514,7 +516,11 @@ pub fn publish(
         // Local wins a name both hold: every name is content-keyed but a
         // claim's and a compatibility receipt's, and for those this checkout's
         // reading is the newer one.
-        union.extend(local.iter().map(|(path, bytes)| (path.clone(), bytes.clone())));
+        union.extend(
+            local
+                .iter()
+                .map(|(path, bytes)| (path.clone(), bytes.clone())),
+        );
         let mut objects = tree_objects(&union)?;
         let root = objects
             .last()
@@ -583,9 +589,7 @@ fn destination(
         OVERRIDE => {
             let target = receipts_dir.join("overrides").join(name);
             let local = std::fs::read(&target).ok();
-            local
-                .is_none_or(|bytes| !spent(&bytes))
-                .then_some(target)
+            local.is_none_or(|bytes| !spent(&bytes)).then_some(target)
         }
         _ => None,
     }

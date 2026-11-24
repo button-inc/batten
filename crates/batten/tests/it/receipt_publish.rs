@@ -98,7 +98,7 @@ fn stand_up(bare: PathBuf, before: impl Fn(&batten::fetch::Call<'_>) + 'static) 
 
 /// An empty bare repository standing in for the state repository.
 fn state_repo(case: &str) -> PathBuf {
-    let bare = scratch(case).join("state.git");
+    let bare = scratch(&format!("{case}-state-git")).join("state.git");
     std::fs::create_dir_all(&bare).unwrap();
     git_in(&bare, &["init", "--bare", "-q"]);
     bare
@@ -106,7 +106,7 @@ fn state_repo(case: &str) -> PathBuf {
 
 /// The first clone: a committed config, one commit, `origin/main` at it.
 fn first_clone(case: &str) -> PathBuf {
-    let dir = Fixture::at(scratch(case).join("one"))
+    let dir = Fixture::at(scratch(&format!("{case}-one")).join("one"))
         .config("version = 1\n\n[receipt]\nverified_by = [\"verify\"]\n")
         .file("src.rs", "fn main() {}\n")
         .git()
@@ -118,10 +118,15 @@ fn first_clone(case: &str) -> PathBuf {
 
 /// A second clone of `first` at the same HEAD, with its own `origin/main`.
 fn second_clone(case: &str, first: &Path) -> PathBuf {
-    let dir = scratch(case).join("two");
+    let dir = scratch(&format!("{case}-two")).join("two");
     git_in(
         first,
-        &["clone", "-q", first.to_str().unwrap(), dir.to_str().unwrap()],
+        &[
+            "clone",
+            "-q",
+            first.to_str().unwrap(),
+            dir.to_str().unwrap(),
+        ],
     );
     dir
 }
@@ -187,7 +192,10 @@ fn a_published_receipt_pulled_into_a_second_clone_is_valid() {
     stand_up(bare.clone(), |_| {});
     let one = first_clone(case);
     let two = second_clone(case, &one);
-    let (state_one, state_two) = (scratch(case).join("state-1"), scratch(case).join("state-2"));
+    let (state_one, state_two) = (
+        scratch(&format!("{case}-state-1")).join("state-1"),
+        scratch(&format!("{case}-state-2")).join("state-2"),
+    );
     let name = receipts::reference("work").unwrap();
 
     record(&one, &state_one, "verify");
@@ -197,7 +205,10 @@ fn a_published_receipt_pulled_into_a_second_clone_is_valid() {
     assert!(line.ends_with(" missing\n"), "{line}");
 
     let published = publish(&one, &state_one, &name, 1_700_000_000);
-    assert!(published.count >= 2, "the statement and its compat file: {published:?}");
+    assert!(
+        published.count >= 2,
+        "the statement and its compat file: {published:?}"
+    );
     let pulled = pull(&two, &state_two, &name);
     assert_eq!(pulled.commit, published.commit);
     assert!(pulled.count >= 1, "{pulled:?}");
@@ -223,7 +234,7 @@ fn every_publish_mints_a_parentless_commit() {
     let bare = state_repo(case);
     stand_up(bare.clone(), |_| {});
     let one = first_clone(case);
-    let state = scratch(case).join("state");
+    let state = scratch(&format!("{case}-state")).join("state");
     let name = receipts::reference("work").unwrap();
 
     record(&one, &state, "verify");
@@ -263,7 +274,10 @@ fn a_published_receipt_under_another_epoch_is_missing() {
     stand_up(bare.clone(), |_| {});
     let one = first_clone(case);
     let two = second_clone(case, &one);
-    let (state_one, state_two) = (scratch(case).join("state-1"), scratch(case).join("state-2"));
+    let (state_one, state_two) = (
+        scratch(&format!("{case}-state-1")).join("state-1"),
+        scratch(&format!("{case}-state-2")).join("state-2"),
+    );
     let name = receipts::reference("work").unwrap();
 
     record(&one, &state_one, "verify");
@@ -297,7 +311,11 @@ fn a_lost_swap_retries_and_keeps_the_rivals_receipts() {
     stand_up(bare.clone(), move |call| {
         if call.url.ends_with("/git-receive-pack") && !rival.replace(true) {
             // Another session's set, swapped in by git itself.
-            let blob = git_with(&bare_for_rival, &["hash-object", "-w", "--stdin"], b"base x\n");
+            let blob = git_with(
+                &bare_for_rival,
+                &["hash-object", "-w", "--stdin"],
+                b"base x\n",
+            );
             let blob = String::from_utf8(blob).unwrap();
             let kind = git_with(
                 &bare_for_rival,
@@ -326,17 +344,26 @@ fn a_lost_swap_retries_and_keeps_the_rivals_receipts() {
                 b"",
             );
             let commit = String::from_utf8(commit).unwrap();
-            git_in(&bare_for_rival, &["update-ref", &name_for_rival, commit.trim()]);
+            git_in(
+                &bare_for_rival,
+                &["update-ref", &name_for_rival, commit.trim()],
+            );
         }
     });
     let one = first_clone(case);
-    let state = scratch(case).join("state");
+    let state = scratch(&format!("{case}-state")).join("state");
     record(&one, &state, "verify");
 
     let published = publish(&one, &state, &name, 1_700_000_000);
-    assert_eq!(git_in(&bare, &["rev-parse", &name]).trim(), published.commit);
+    assert_eq!(
+        git_in(&bare, &["rev-parse", &name]).trim(),
+        published.commit
+    );
     let listed = git_in(&bare, &["ls-tree", "-r", "--name-only", &name]);
-    assert!(listed.contains("compat/claim.rival"), "the rival's receipt: {listed}");
+    assert!(
+        listed.contains("compat/claim.rival"),
+        "the rival's receipt: {listed}"
+    );
     assert!(
         listed.lines().any(|path| path.starts_with("statement/")),
         "this clone's receipt: {listed}"
@@ -348,7 +375,7 @@ fn a_lost_swap_retries_and_keeps_the_rivals_receipts() {
 fn unset_is_off_and_writes_nothing() {
     let case = "receipt-publish-unset";
     let one = first_clone(case);
-    let state = scratch(case).join("state");
+    let state = scratch(&format!("{case}-state")).join("state");
     for verb in ["publish", "pull"] {
         let output = batten()
             .args(["receipt", verb])
@@ -372,7 +399,7 @@ fn a_local_path_origin_is_refused_never_a_verdict() {
         .args(["receipt", "publish"])
         .current_dir(&one)
         .env(batten::session::STATE_REPO_ENV, "owner/state")
-        .state_dir(&scratch(case).join("state"))
+        .state_dir(&scratch(&format!("{case}-state")).join("state"))
         .streamed_output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
