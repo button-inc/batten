@@ -1017,7 +1017,7 @@ fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Sit
 /// digest holds it: whitespace, a plain comment and an inner doc comment
 /// (`//!`), which `ra_ap_syntax` lexes as `INNER_DOC_COMMENT`, not `COMMENT`.
 /// An outer doc comment (`///`) is KEYED: derives compile it into run-time
-/// text, schemars' `JsonSchema` into the schema's descriptions and clap's
+/// text, schemars' schema derive into the schema's descriptions and clap's
 /// `ValueEnum` into help text (CLOUD-2904).
 #[expect(
     clippy::match_like_matches_macro,
