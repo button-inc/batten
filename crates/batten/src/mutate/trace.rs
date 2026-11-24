@@ -331,7 +331,10 @@ fn url_lookup(argument: &str, line: &str, outcome: &str) -> bool {
         && result_of(outcome).is_some_and(|result| result.starts_with("-1 ENOENT"));
     missed
         && argument.split_once("://").is_some_and(|(scheme, _)| {
-            scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
                 && scheme
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
