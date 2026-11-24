@@ -5735,6 +5735,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Fails by: a line handed to the record's public door never written, so
+    /// the branch's lap record reads back without it.
+    #[test]
+    fn a_recorded_line_reads_back_from_the_branchs_lap_record() {
+        let root = crate::scratch::scratch("land-record-line");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
+        assert!(super::branch_lap_lines(&root, "work").is_empty());
+        super::record_line(&root, "work", "engine used x").unwrap();
+        assert_eq!(
+            super::branch_lap_lines(&root, "work"),
+            [String::from("engine used x")]
+        );
+    }
+
     /// A remote this clone never saw is refused; one it pushed, or one a
     /// recorded replay of this head rewrote, is admitted. Only a well-formed
     /// line of the right kind admits.

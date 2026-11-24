@@ -680,6 +680,21 @@ mod tests {
         );
     }
 
+    // The walk back through relative moves is bounded (CLOUD-2789): a chain
+    // deeper than the bound answers the directory as unknown, so a bare path
+    // after it cannot resolve and the trace is unreadable. Fails by: the depth
+    // never growing along the chain (`+` for `*`), so no bound is ever met.
+    #[test]
+    fn a_relative_move_chain_past_the_bound_is_unknown() {
+        let chain = |moves: usize| {
+            let mut lines = vec!["7     chdir(\"d\") = 0"; moves];
+            lines.push("7     stat(\"c\", 0x1) = -1 ENOENT (No such file or directory)");
+            super::touched(&whole(&lines), Some(Path::new("/repo")))
+        };
+        assert!(chain(200).is_some(), "a chain under the bound resolves");
+        assert_eq!(chain(300), None);
+    }
+
     // THE CARGO SHAPE (CLOUD-2789): the root forks a child that `chdir`s to its
     // package before exec, and that child probes a bare name. Read as
     // one `chdir` anywhere disabling every pid's start directory, this trace

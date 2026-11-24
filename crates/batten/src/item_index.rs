@@ -3229,4 +3229,13 @@ mod tests {
         assert_eq!(comment_spans("// x"), [(0, 4)]);
         assert_eq!(comment_spans("a // x"), [(2, 6)]);
     }
+
+    /// Fails by: a comment that runs past the body into the macro wrapper's
+    /// closing kept (`&&` for `||`), so an unterminated block comment spans
+    /// bytes the body does not have.
+    #[test]
+    fn a_comment_running_past_the_body_is_not_the_bodys() {
+        assert_eq!(comment_spans("a /* x"), []);
+        assert_eq!(comment_spans("a /* x */"), [(2, 9)], "a closed one is");
+    }
 }

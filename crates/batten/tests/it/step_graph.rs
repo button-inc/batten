@@ -407,6 +407,20 @@ fn a_schedule_only_row_runs_and_records_nothing() {
     );
 }
 
+/// Fails by: a pass recorded for the node that exited non-zero rather than for
+/// the two that exited 0 (`==` for `!=`), which `step cover` would then read.
+#[test]
+fn a_pass_is_recorded_only_for_a_node_that_exited_zero() {
+    let rows = [node("a", 0, &[]), node("b", 0, &[]), node("c", 2, &[])].concat();
+    let graph = Graph::new("passes", &rows);
+    let out = graph.run(&["g"]);
+    assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
+    let passes = std::fs::read_dir(graph.dir.join(".git/batten-records/step-passes"))
+        .map(|entries| entries.count())
+        .unwrap_or_default();
+    assert_eq!(passes, 2, "one pass per node that exited 0");
+}
+
 #[test]
 fn an_unknown_group_or_jobs_value_is_a_usage_error() {
     let graph = Graph::new("usage", &node("a", 0, &[]));
