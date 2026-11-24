@@ -1673,6 +1673,21 @@ mod tests {
         );
     }
 
+    /// Fails by: a bare key spelled with a hyphen or an underscore not read as
+    /// a key ahead of the pin, so a pin buried under one passes as in order.
+    #[test]
+    fn a_pin_under_a_hyphenated_or_underscored_key_is_out_of_order() {
+        let engine = "engine = { release = \"v0.0.9\" }\n";
+        assert_eq!(
+            pin_out_of_order(&format!("version = 1\nkey-name = 2\n{engine}")),
+            Some(3)
+        );
+        assert_eq!(
+            pin_out_of_order(&format!("version = 1\nkey_name = 2\n{engine}")),
+            Some(3)
+        );
+    }
+
     #[test]
     fn a_pin_out_of_order_is_still_the_pin_and_is_named_by_its_line() {
         let buried = "version = 1\n# a note\nmin = 2\nengine = { release = \"v0.0.9\" }\n";
