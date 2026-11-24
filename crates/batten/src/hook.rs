@@ -24903,6 +24903,16 @@ deny contains "refused by themodule" if {
         );
     }
 
+    /// An option word names no written path, and a lone `-` is an operand.
+    ///
+    /// Fails by: the lone-dash test flipped (shard 4/16's `==` survivor), so
+    /// every option reads as a path the stage writes and `-` reads as none.
+    #[test]
+    fn an_option_writes_nothing_and_a_lone_dash_is_an_operand() {
+        assert_eq!(program_writes(&["tee", "-a", "out.log"]), vec!["out.log"]);
+        assert_eq!(program_writes(&["tee", "-"]), vec!["-"]);
+    }
+
     /// A Perl or Ruby spawn with no arguments spawns nothing a reader can name.
     ///
     /// Fails by: the empty arm dropped, so it reads as an empty argv.

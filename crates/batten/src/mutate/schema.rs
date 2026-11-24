@@ -10504,6 +10504,20 @@ mod tests {
         );
     }
 
+    /// An item keyword whose next token is not a name names nothing: the
+    /// token between ends the wait, so a later identifier is not the item's.
+    ///
+    /// Fails by: the trivia-or-keyword guard read as always true (shard
+    /// 4/16's survivor), so `y` of `type = y` reads as a name the macro binds.
+    #[test]
+    fn an_item_keyword_not_followed_by_a_name_names_nothing() {
+        let names: Vec<Vec<String>> = items_of("m! { static X: u8 = 0; type = y; }\n")
+            .iter()
+            .map(item_names)
+            .collect();
+        assert_eq!(names, [vec![String::from("X")]]);
+    }
+
     /// A traced case keys on the files it touched, an absent one and a
     /// directory's listing included, and on nothing else; an untraced case
     /// keys on every non-Rust file.
