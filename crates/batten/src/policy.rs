@@ -8174,6 +8174,20 @@ violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects
         );
     }
 
+    /// Fails by: a bundle that dropped its interpreter keeping the reading or
+    /// the AST its interpreter had already rendered, so an AST reader judges
+    /// a bundle that no longer has one.
+    #[test]
+    fn a_bundle_that_drops_its_interpreter_drops_what_it_had_read() {
+        let bundle = bundle_of("row", &[("policy/d.rego", GATED)]);
+        assert!(bundle.ast().is_some(), "the interpreter renders its AST");
+        assert!(bundle.described().is_some(), "and describes it");
+        let compiled = bytecode(bundle);
+        assert!(compiled.is_bytecode());
+        assert!(compiled.ast().is_none(), "no interpreter, no AST");
+        assert!(compiled.described().is_none(), "no AST, no reading");
+    }
+
     #[test]
     fn bytecode_answers_with_or_without_a_scope_and_once_per_input_within_one() {
         let bundle = bytecode(bundle_of("row", &[("policy/d.rego", GATED)]));
