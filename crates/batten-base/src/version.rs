@@ -204,6 +204,13 @@ mod tests {
 
     #[test]
     fn the_old_integer_header_reads_as_zero_zero_n() {
-        assert_eq!(from_integer(7).to_string(), "0.0.7");
+        // An increment below 1.0.0 and below every minor, never a major: the
+        // integer counter promised no stable major. `preset::ejected_from`'s
+        // header case (`preset.rs`, `version 2` → 0.0.2) drives the reader.
+        let seven = from_integer(7);
+        assert_eq!(seven, Version::new(0, 0, 7));
+        assert!(is_release(&seven));
+        assert_eq!(precedence(&seven, &Version::new(0, 1, 0)), Ordering::Less);
+        assert_eq!(precedence(&seven, &from_integer(8)), Ordering::Less);
     }
 }
