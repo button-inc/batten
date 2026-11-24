@@ -551,10 +551,12 @@ jobs:
       # reaches through the same task `verify:gated` names, so `ci-local-parity`
       # property 3 holds. Gated on the same verdict as the step above: the quick
       # tier runs no suite that could write.
-      # THE TRACED BRANCH (CLOUD-2789): `mise run ci` runs the suite under
-      # `step run`'s tracer, so its cases take the untraced fallback. This runs
-      # the traced-selection cases outside it, with the `strace` installed
-      # above, and fails rather than fall back where it cannot trace.
+      # THE TRACED BRANCH (CLOUD-2789): under `CI=true` `mise run ci` runs the
+      # suite OUTSIDE `step run` (bypassed here), so with the `strace` installed
+      # above its cases already take their traced branches; `verify`'s suite
+      # runs under `step run`'s tracer and takes only the fallback. This task
+      # is the lane `verify` runs those branches in, run here too for parity,
+      # and it fails rather than fall back where it cannot trace.
       - run: mise run test:traced
         if: steps.slow.outputs.needed == 'true'
       - run: mise run tree-clean
