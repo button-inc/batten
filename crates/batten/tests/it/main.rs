@@ -221,6 +221,7 @@ mod glob_containment;
 mod glob_exclusion;
 mod guardrail_bypass;
 mod handler_dispatch;
+mod harness_config_route;
 mod harness_grant;
 mod harness_isolation;
 mod harness_wiring;

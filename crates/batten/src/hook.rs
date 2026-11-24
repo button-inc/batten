@@ -7741,6 +7741,100 @@ pub fn write_sites(envelope: &Envelope, start: &Path) -> Option<Vec<(Value, std:
     Some(sites)
 }
 
+/// The files a shell call writes BY NAME (CLOUD-1636), one entry per target:
+/// `{"path", "program", "sources", "symbolic"}`. An output redirection's target
+/// (`program` null), every `tee` operand, and the destination of `ln`, `cp`,
+/// `mv` and `install` with the operands it is made from as `sources`;
+/// `symbolic` is whether an `ln` makes a symbolic link. Paths are as written,
+/// unquoted. `None` for a call that is not a shell command, whose target is
+/// `writes`, and for a command that does not parse.
+///
+/// AS WRITTEN, NOT RESOLVED: a module matching a declared surface matches the
+/// spelling at any directory, in the tree or outside it, so the reading needs
+/// no `cd` placement and cannot fail on one.
+#[must_use]
+pub fn write_targets(envelope: &Envelope) -> Option<Vec<Value>> {
+    if envelope.command.is_empty() {
+        return None;
+    }
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let mut targets = Vec::new();
+    for (_, _, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+        let redirects: Vec<&str> = line.redirects.iter().map(String::as_str).collect();
+        for target in redirect_writes(&redirects) {
+            targets.push(serde_json::json!({
+                "path": crate::shell::unquote(target),
+                "program": null,
+                "sources": [],
+                "symbolic": false,
+            }));
+        }
+        if let Some(at) = effective_program(handed) {
+            let name = program_name(program_token(handed[at]));
+            targets.extend(named_writes(name, &handed[at + 1..]));
+        }
+    }
+    Some(targets)
+}
+
+/// The targets one program writes by name, for [`write_targets`]: a `tee`'s
+/// operands, and the destination a `ln`, `cp`, `mv` or `install` makes, with
+/// the operands it is made from. A `-t`/`--target-directory` names the
+/// destination outright; otherwise it is the last operand, and a lone `ln`
+/// operand links into the current directory.
+fn named_writes(name: &str, arguments: &[&str]) -> Vec<Value> {
+    let copying = matches!(name, "ln" | "cp" | "mv" | "install");
+    if !copying && name != "tee" {
+        return Vec::new();
+    }
+    let mut operands: Vec<String> = Vec::new();
+    let mut directory: Option<String> = None;
+    let mut symbolic = false;
+    let mut words = arguments.iter().map(|word| crate::shell::unquote(word));
+    let mut ended = false;
+    while let Some(word) = words.next() {
+        if ended || word == "-" || !word.starts_with('-') {
+            operands.push(word);
+            continue;
+        }
+        if word == "--" {
+            ended = true;
+        } else if let Some(dir) = word.strip_prefix("--target-directory=") {
+            directory = Some(dir.to_owned());
+        } else if word == "--target-directory" || (copying && word == "-t") {
+            directory = words.next();
+        } else if word == "--symbolic" {
+            symbolic = true;
+        } else if copying && matches!(word.as_str(), "-S" | "-m" | "-o" | "-g" | "--suffix") {
+            // A value-taking option's value is not an operand.
+            words.next();
+        } else if !word.starts_with("--") && word.contains('s') {
+            symbolic = true;
+        }
+    }
+    let entry = |path: &str, sources: &[String]| {
+        serde_json::json!({
+            "path": path,
+            "program": name,
+            "sources": sources,
+            "symbolic": name == "ln" && symbolic,
+        })
+    };
+    if !copying {
+        return operands.iter().map(|path| entry(path, &[])).collect();
+    }
+    match (directory, operands.split_last()) {
+        (Some(dir), _) => vec![entry(&dir, &operands)],
+        (None, Some((last, rest))) if !rest.is_empty() => vec![entry(last, rest)],
+        (None, Some((only, _))) if name == "ln" => vec![entry(".", std::slice::from_ref(only))],
+        _ => Vec::new(),
+    }
+}
+
 /// The directory a written path lands in: its parent.
 fn containing_dir(path: std::path::PathBuf) -> std::path::PathBuf {
     match path.parent() {
@@ -9724,6 +9818,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             "arguments": arguments,
             "command": envelope.command,
             "writes": envelope.writes,
+            // WHAT A SHELL CALL WRITES BY NAME (CLOUD-1636): redirections,
+            // `tee`, and the destination of `ln`/`cp`/`mv`/`install` with its
+            // sources. `null` for a write tool, whose target is `writes`.
+            "write-targets": write_targets(envelope),
             // WHICH WRITES LAND IN THE LIVE LAP'S CHECKOUT (CLOUD-2832): each
             // as `{"path": …}` or `{"git": <subcommand>}`, judged by the
             // checkout it lands in rather than its path prefix. `null` while no

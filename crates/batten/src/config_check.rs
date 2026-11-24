@@ -19,6 +19,8 @@ pub mod githook;
 
 pub mod handler;
 
+pub mod harness;
+
 pub mod hookcost;
 
 pub mod markers;

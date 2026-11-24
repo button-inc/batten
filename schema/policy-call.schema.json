@@ -493,6 +493,37 @@
           "type": "string"
         },
         "transcript": {},
+        "write-targets": {
+          "description": "What a shell call writes BY NAME, as written and unquoted: an output redirection's target (`program` null), each `tee` operand, and the destination of `ln`, `cp`, `mv` or `install` with the operands it is made from as `sources`. `symbolic` is whether an `ln` makes a symbolic link. NULL for a call that is not a shell command, whose target is `writes`, and for a command that does not parse.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "program": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sources": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "symbolic": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "writes": {}
       },
       "type": "object"

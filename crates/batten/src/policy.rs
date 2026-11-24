@@ -5191,6 +5191,25 @@ fn lap_held_schema() -> serde_json::Value {
     })
 }
 
+/// The call's `write-targets` key (CLOUD-1636): what a shell call writes by
+/// name, from `hook::write_targets`.
+fn write_targets_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": ["array", "null"],
+        "description": "What a shell call writes BY NAME, as written and unquoted: an output redirection's target (`program` null), each `tee` operand, and the destination of `ln`, `cp`, `mv` or `install` with the operands it is made from as `sources`. `symbolic` is whether an `ln` makes a symbolic link. NULL for a call that is not a shell command, whose target is `writes`, and for a command that does not parse.",
+        "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "path": {"type": "string"},
+                "program": {"type": ["string", "null"]},
+                "sources": {"type": "array", "items": {"type": "string"}},
+                "symbolic": {"type": "boolean"}
+            }
+        }
+    })
+}
+
 /// The keys `call_input_schema` adds after its `json!` document is built: one
 /// more key inline exceeds the macro's recursion limit.
 ///
@@ -5221,6 +5240,7 @@ fn extend_call_schema(document: &mut serde_json::Value) {
     {
         call.insert("forge".to_owned(), forge);
         call.insert("lap-held".to_owned(), lap_held_schema());
+        call.insert("write-targets".to_owned(), write_targets_schema());
         // CLOUD-2709: the kind of machine, as the environment declared it —
         // `disposable` where `BATTEN_ENVIRONMENT` says so, `machine` otherwise.
         call.insert(
