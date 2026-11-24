@@ -2109,7 +2109,8 @@ fn run_cases(
 const NULL_MUTANT: &str = "none";
 
 /// One judging run of `cases` with `BATTEN_MUTANT=active`, under its own
-/// scratch inside the mirror, and its `JUnit` report, if it wrote one. The
+/// fixture scratch inside the mirror and its own temp beside it
+/// ([`judge_temp`]), and its `JUnit` report, if it wrote one. The
 /// one argv and environment every judging run and the control share.
 fn judge_run(
     judging: &Judging<'_>,
@@ -2122,7 +2123,8 @@ fn judge_run(
     // fixture needs a checkout around it passed under reach and failed here,
     // which read as a kill.
     let own = judging.scratch.join(active);
-    let _ = std::fs::create_dir_all(own.join("tmp"));
+    let temp = judge_temp(judging.work, active);
+    let _ = std::fs::create_dir_all(&temp);
     let _ = std::fs::create_dir_all(own.join("fixtures"));
     // THE VERDICT IS READ FROM THE RUN'S OWN JUNIT REPORT, written under this
     // run's scratch so no two workers share one (#1276).
@@ -2138,14 +2140,11 @@ fn judge_run(
         config.to_string_lossy().into_owned(),
     ]);
     let env = [
-        // EACH RUN ITS OWN TEMP AND FIXTURE ROOTS, under the sweep's scratch:
-        // a fixture at a fixed path is then never shared by two workers
-        // running one case, so no run waits on another's cases, and what a
-        // run leaves is the sweep's to collect at its barrier.
-        (
-            String::from("TMPDIR"),
-            own.join("tmp").to_string_lossy().into_owned(),
-        ),
+        // EACH RUN ITS OWN TEMP AND FIXTURE ROOTS: a fixture at a fixed path
+        // is then never shared by two workers running one case, so no run
+        // waits on another's cases. The temp root is BESIDE the mirror, never
+        // in it ([`judge_temp`]).
+        (String::from("TMPDIR"), temp.to_string_lossy().into_owned()),
         (
             String::from(TEST_TMPDIR),
             own.join("fixtures").to_string_lossy().into_owned(),
@@ -2165,7 +2164,25 @@ fn judge_run(
     let xml = crate::fsio::read_to_string(store.join(JUDGE_PROFILE).join(JUDGE_REPORT)).ok();
     // THE RUN'S OWN SCRATCH GOES WITH IT: nothing else ever reads it.
     let _ = std::fs::remove_dir_all(&own);
+    let _ = std::fs::remove_dir_all(&temp);
     (ran, xml)
+}
+
+/// The directory beside the mirror that holds each judging run's `TMPDIR`.
+const JUDGE_TEMP: &str = "judge-tmp";
+
+/// One judging run's `TMPDIR`: under [`JUDGE_TEMP`] BESIDE the mirror at
+/// `work`, never inside it (CLOUD-2789).
+///
+/// A plain run's temp directory is outside every checkout and every Cargo
+/// workspace, and the suite's out-of-tree scratch (`scratch::root`) is built
+/// on that: a parent that must be no repository, a directory with no manifest
+/// above it. Inside the mirror, a copy of the checkout with its `.git` and
+/// `Cargo.toml`, each of those premises was false, so the control run found
+/// 14 cases red only under the judge and every mutant they reached went
+/// unjudged.
+fn judge_temp(work: &std::path::Path, active: &str) -> std::path::PathBuf {
+    work.with_file_name(JUDGE_TEMP).join(active)
 }
 
 /// Every baseline-red case, and every case that reaches a site and is red
@@ -5188,6 +5205,8 @@ pub fn sweep(
     // AN ERROR LOG IS THIS SWEEP'S OR NOTHING: one left by a killed sweep
     // would read as a run of this one erring.
     let _ = std::fs::remove_dir_all(state.join("errors"));
+    // A KILLED SWEEP'S TEMP ROOTS: beside the mirror, so `sync` never clears them.
+    let _ = std::fs::remove_dir_all(state.join(JUDGE_TEMP));
     let cache_path = state.join("verdicts");
     // NOT UNDER CI (CLOUD-2850), for `step`'s "Local only" reason: CI's job is
     // to confirm independently, so a journal a runner came by answers nothing.
@@ -7455,6 +7474,37 @@ mod tests {
         std::fs::write(work.join("src/lib.rs"), "fn b() {}").unwrap();
         assert_ne!(tree_digest(&work).unwrap(), before);
         let _ = std::fs::remove_dir_all(&work);
+    }
+
+    /// A judging run's `TMPDIR` is outside the mirror, as a plain run's is
+    /// outside the checkout: no manifest and no `.git` above it, and its own
+    /// per run (CLOUD-2789).
+    ///
+    /// Fails by: the temp root put inside the mirror again (14 cases red only
+    /// under the judge), or shared between two runs.
+    #[test]
+    fn a_judging_runs_temp_is_beside_the_mirror_and_its_own() {
+        let state = crate::scratch::scratch("schema-judge-temp");
+        let work = state.join("tree");
+        std::fs::create_dir_all(work.join(".git")).unwrap();
+        std::fs::write(work.join("Cargo.toml"), "[workspace]\n").unwrap();
+        let temp = judge_temp(&work, "7");
+        assert!(
+            !state
+                .ancestors()
+                .any(|at| at.join("Cargo.toml").exists() || at.join(".git").exists()),
+            "the premise: nothing above {} is a workspace or a checkout",
+            state.display()
+        );
+        assert!(
+            !temp
+                .ancestors()
+                .any(|at| at.join("Cargo.toml").exists() || at.join(".git").exists()),
+            "{} is inside the mirror",
+            temp.display()
+        );
+        assert_eq!(temp, state.join(JUDGE_TEMP).join("7"));
+        assert_ne!(temp, judge_temp(&work, NULL_MUTANT));
     }
 
     /// A sweep holds the mirror alone: while another sweep holds it, a second
