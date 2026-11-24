@@ -1387,6 +1387,62 @@ fn a_wrapped_compile_above_the_floor_reads_no_config() {
     );
 }
 
+/// A workspace wrapper between this one and the compiler, as cargo runs
+/// `RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER rustc …` for `cargo auditable`
+/// (CLOUD-2789): the wrapper runs, with the compiler and its argv after it,
+/// and the compile's own exit code comes back.
+///
+/// Fails by: the wrapper's path parsed as a verb and refused, which failed
+/// every local `mise run dist`; or the wrapper skipped and the compiler run
+/// directly, dropping what it adds (the dependency list an SBOM reads).
+#[test]
+fn a_workspace_wrapper_between_is_run_with_the_compiler() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = common::scratch_repo("rustc-workspace-wrapped");
+    let bin = dir.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let wrapper = bin.join("cargo-auditable");
+    let rustc = bin.join("rustc");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\necho wrapped > \"$(dirname \"$0\")/wrapped\"\nexec \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &rustc,
+        "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/ran\"\nexit 7\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    for program in [&wrapper, &rustc] {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let ran = common::batten()
+        .current_dir(&dir)
+        .arg(&wrapper)
+        .arg(&rustc)
+        .args(["-vV"])
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_eq!(
+        ran.status.code(),
+        Some(7),
+        "the compiler's own code: {}",
+        common::stderr(&ran)
+    );
+    assert!(bin.join("wrapped").is_file(), "the workspace wrapper ran");
+    let seen = std::fs::read_to_string(bin.join("ran")).unwrap_or_default();
+    assert_eq!(seen.trim(), "-vV", "the compiler's own argv");
+}
+
 /// The probe `mise.toml` sets `RUSTC_WRAPPER` from: this binary answers with
 /// its own path; one without the wrapper answers nothing, leaving it unset.
 #[test]
