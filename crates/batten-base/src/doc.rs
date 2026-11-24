@@ -859,6 +859,17 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["retry the write inside plan mode"],
     },
     VendoredDoc {
+        id: "dispatch brief refused",
+        why: Some(
+            "A dispatched message is all the other session knows, so a brief missing a section sends it out blind",
+        ),
+        act: &[
+            "add each section the refusal names, with a fenced command under `check`",
+            "confirm with `batten lint brief` before dispatching again",
+        ],
+        dont: &["pad a section with prose to pass the lint"],
+    },
+    VendoredDoc {
         id: "plan check first",
         why: Some(
             "A first plan is built from reports nobody re-read, and only a pass that re-reads with tools corrects it",

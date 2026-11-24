@@ -9018,7 +9018,8 @@ mod tests {
             None,
             "no directory to resolve against"
         );
-        let escaped = "100 openat(AT_FDCWD</w>, \"a\\x01\", O_RDONLY) = 3</w/a>\n";
+        // `\x01` decodes since CLOUD-2835; `\q` is an escape strace never writes.
+        let escaped = "100 openat(AT_FDCWD</w>, \"a\\q\", O_RDONLY) = 3</w/a>\n";
         assert_eq!(
             read_trace(&whole(escaped), &tree),
             None,

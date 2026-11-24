@@ -7490,19 +7490,35 @@ rules contains not_quoted\n";
     #[test]
     fn a_preset_row_compiles_its_scope_s_modules_less_what_it_excepts() {
         let manifest = crate::preset_catalog::find("git").expect("git ships");
-        let module = manifest.modules[0].name();
+        let names: Vec<_> = manifest
+            .modules
+            .iter()
+            .map(crate::preset_catalog::PresetModule::name)
+            .collect();
         let sources = preset_sources(&git_row(""), manifest, "git").unwrap();
-        assert_eq!(sources.len(), 1);
+        assert_eq!(sources.len(), names.len());
+        assert!(names.len() > 1, "the fixture needs a module to keep");
         assert!(
             preset_sources(&git_row("except = [\"no-such-module\"]\n"), manifest, "git").is_err()
         );
+        let one = preset_sources(
+            &git_row(&format!("except = [\"{}\"]\n", names[0])),
+            manifest,
+            "git",
+        )
+        .unwrap();
+        assert_eq!(
+            one.len(),
+            names.len() - 1,
+            "an excepted module is not compiled"
+        );
+        let every = names
+            .iter()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
         assert!(
-            preset_sources(
-                &git_row(&format!("except = [\"{module}\"]\n")),
-                manifest,
-                "git"
-            )
-            .is_err(),
+            preset_sources(&git_row(&format!("except = [{every}]\n")), manifest, "git").is_err(),
             "excepting every module decides nothing"
         );
         let mut tree = git_row("");
