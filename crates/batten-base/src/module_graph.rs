@@ -3306,6 +3306,17 @@ mod tests {
         );
     }
 
+    /// Fails by: a use group below a root module read as if it stood at the
+    /// root (`||` as `&&` in the group's depth guard), so its members, which
+    /// are items of `review` and not modules, are named as roots (CLOUD-2789).
+    #[test]
+    fn a_use_group_below_a_root_module_names_only_that_module() {
+        assert_eq!(
+            names("use crate::review::{body, Head};\n", &["ready"]),
+            ["review"]
+        );
+    }
+
     /// Fails by: an impl at its type's home listed, or one outside it left
     /// off; a binary's `main.rs` read as a module; `self::T` or a `super::`
     /// that climbs to the root left unresolved, or that `super::` read as a
