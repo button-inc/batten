@@ -24118,6 +24118,30 @@ deny contains "refused by themodule" if {
         );
     }
 
+    /// Fails by: a backtick part read as a string literal in a language where
+    /// it is a shell command (Perl, Ruby) or not a string at all (Python).
+    #[test]
+    fn a_backtick_is_a_literal_only_in_node() {
+        for language in [Language::Python, Language::Perl, Language::Ruby] {
+            assert_eq!(string_literal(language, "`ls`"), None, "{language:?}");
+        }
+        assert_eq!(
+            string_literal(Language::Node, "`ls`").as_deref(),
+            Some("ls")
+        );
+    }
+
+    /// Fails by: `--work-tree` folded into the git dir, so a later
+    /// `--git-dir` decides where the program writes instead of the work tree.
+    #[test]
+    fn a_work_tree_outranks_a_git_dir_named_after_it() {
+        let acting = git_acting_dir(
+            &["git", "--work-tree=/wt", "--git-dir=/repo/.git", "status"],
+            Path::new("/start"),
+        );
+        assert_eq!(acting, Some(std::path::PathBuf::from("/wt")));
+    }
+
     /// Fails by: a `batten step` verb other than `run` reached as a step run.
     #[test]
     fn only_step_run_reaches_what_follows_its_separator() {

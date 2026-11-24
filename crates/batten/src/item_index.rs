@@ -2814,4 +2814,32 @@ mod tests {
         });
         assert_eq!(*asked.borrow(), [12]);
     }
+
+    /// The segments of each path [`token_paths`] reads in `body`.
+    fn path_segments(body: &str) -> Vec<Vec<String>> {
+        token_paths(body)
+            .into_iter()
+            .map(|(_, segments, _)| segments)
+            .collect()
+    }
+
+    /// Fails by: a token that starts with a digit read as an identifier, so a
+    /// number literal opens a path.
+    #[test]
+    fn a_number_never_opens_a_path() {
+        assert!(path_segments("let n = 1::x;").is_empty());
+        // ANTI-VACUITY: the same shape from an identifier is a path.
+        assert_eq!(path_segments("let n = a::x;"), vec![vec!["a", "x"]]);
+    }
+
+    /// Fails by: a segment glued onto a leading `::` read as a path's start,
+    /// which reads an absolute path's tail as a crate-relative one.
+    #[test]
+    fn a_segment_glued_to_a_leading_colon_pair_opens_no_path() {
+        assert!(path_segments("::std::fs::read();").is_empty());
+        assert_eq!(
+            path_segments("std::fs::read();"),
+            vec![vec!["std", "fs", "read"]]
+        );
+    }
 }

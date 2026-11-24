@@ -8791,4 +8791,107 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
         assert_eq!(at(1, 5), Err(String::from("a span off its text")));
         assert_eq!(at(5, 6).map(|(_, read)| read.len()), Ok(1));
     }
+
+    /// Fails by: a span starting at byte 0 widened backwards, which underflows.
+    #[test]
+    fn a_span_at_the_start_of_the_text_is_not_widened_backwards() {
+        assert_eq!(spanned("ab", 0, 2), Some("ab"));
+        assert_eq!(spanned("\"ab\"", 1, 3), Some("\"ab\""));
+    }
+
+    /// Fails by: a key held by the node itself missed unless a value under it
+    /// holds the key too.
+    #[test]
+    fn a_key_the_node_itself_holds_is_held() {
+        assert!(holds_key(&serde_json::json!({"Var": 1}), "Var"));
+        assert!(holds_key(&serde_json::json!([{"x": {"Var": 1}}]), "Var"));
+        assert!(!holds_key(&serde_json::json!({"x": 1}), "Var"));
+    }
+
+    /// Fails by: the parity gate nulling a path no rule reads, and none it does.
+    #[test]
+    fn the_input_paths_are_the_ones_a_rule_reads() {
+        let paths = input_paths(&bundle_of("row", &[("policy/a.rego", MODULE)]));
+        assert!(
+            paths.iter().any(|path| path.contains("operation")),
+            "{paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|path| path.contains("xyzzy")),
+            "{paths:?}"
+        );
+    }
+
+    /// A module whose case binds its pattern row with a single-segment `with`.
+    const PATTERNED: &str = "package batten.p\nimport rego.v1\n\nrules contains \"p\"\n\n\
+violation contains {\"rule\": \"p\", \"verdict\": \"p\"} if {\n\tsome word in data.batten.patterns.p\n\tinput.call.command == word\n}\n\n\
+test_p_matches if {\n\tcount(violation) == 1 with input as {\"call\": {\"command\": \"x\"}} with data.batten.patterns.p as [\"x\"]\n}\n";
+
+    /// A `with` on one pattern row is planned: the plan refuses only a deeper
+    /// path. What the planned case then decides is the run's, not the plan's.
+    ///
+    /// Fails by: `with data.batten.patterns.p` refused at planning, as though
+    /// it named a path inside a row.
+    #[test]
+    fn a_with_on_one_pattern_row_is_planned() {
+        let bundle = bundle_of("row", &[("policy/p.rego", PATTERNED)]);
+        let splits = suite_splits(&bundle, "{}");
+        assert!(
+            !splits.iter().any(|line| line.contains("a `with` on")),
+            "{splits:?}"
+        );
+    }
+
+    /// Fails by: a suite carrying cases skipped as though it had none, so an
+    /// input the program cannot read is never reported.
+    #[test]
+    fn a_suite_with_cases_reports_an_input_it_cannot_read() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let splits = suite_splits(&bundle, "not json");
+        assert!(
+            splits
+                .iter()
+                .any(|line| line.contains("the input will not parse")),
+            "{splits:?}"
+        );
+    }
+
+    /// Fails by: a rule the bytecode and the interpreter answer alike reported
+    /// as a split.
+    #[test]
+    fn a_rule_both_evaluators_answer_alike_is_no_split() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let input = r#"{"call": {"operation": "write"}}"#;
+        assert_eq!(
+            rule_splits(&bundle, &serde_json::json!({}), input),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Eight cases, only `test_5` entering the predicate: the sweep doubles its
+    /// batches (1, 2, 4), so it stops after seven cases, where batches growing
+    /// by one (1, 2, 3) stop after six. Each nextest case is its own process,
+    /// so the counter's delta is this sweep's alone.
+    ///
+    /// Fails by: the batches growing by addition, which pays a sweep per case
+    /// on a suite that covers its predicates late.
+    #[test]
+    fn the_coverage_sweep_doubles_its_batches() {
+        let mut module = String::from(
+            "package batten.d\nimport rego.v1\n\nrules contains \"d\"\n\n\
+violation contains {\"rule\": \"d\", \"verdict\": \"d\"} if {\n\tinput.call.operation == \"write\"\n}\n",
+        );
+        for case in 1..=8 {
+            if case == 5 {
+                module.push_str("\ntest_5 if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n");
+            } else {
+                module.push_str(&format!("\ntest_{case} if {{\n\ttrue\n}}\n"));
+            }
+        }
+        let bundle = bundle_of("row", &[("policy/d.rego", &module)]);
+        let before = coverage_cases();
+        let suite = suite_of(&bundle, false);
+        assert!(suite.unexercised.is_empty(), "{:?}", suite.unexercised);
+        assert_eq!(coverage_cases() - before, 7);
+    }
 }
