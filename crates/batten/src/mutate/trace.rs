@@ -743,7 +743,19 @@ mod tests {
         } else {
             None
         };
+        traceable_where_required(expected.is_some());
         assert_eq!(super::tracer(), expected);
+    }
+
+    /// `test:traced` (mise.toml) sets `BATTEN_TEST_TRACED_REQUIRED` on the one
+    /// lane that runs these cases untraced with `strace` present, so each takes
+    /// the arm that expects a tracer there; a host that cannot is a
+    /// misprovisioned lane, never a pass on the `None` arm (CLOUD-2789).
+    fn traceable_where_required(traceable: bool) {
+        assert!(
+            traceable || std::env::var_os("BATTEN_TEST_TRACED_REQUIRED").is_none(),
+            "this lane must trace: Linux, `strace` on PATH, no tracer attached"
+        );
     }
 
     // Fails by: a zero `TracerPid` read as a tracer, a set one read as none,
@@ -772,6 +784,7 @@ mod tests {
         } else {
             None
         };
+        traceable_where_required(expected.is_some());
         assert_eq!(super::tracer(), expected);
     }
 
