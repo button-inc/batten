@@ -137,8 +137,18 @@ pub fn judge(
         ));
         return Verdict::Failure(failures);
     };
-    if *pin != format!("v{version}") {
+    // PARSED IDENTITY, AND A RELEASE (CLOUD-2906): the pin is one `v` and the
+    // head's own version, build metadata included, and a pre-release is never a
+    // release path's pin.
+    let pinned = crate::version::Tag::parse(pin);
+    if pinned.as_ref().map(|tag| &tag.version) != crate::version::parse(version).as_ref() {
         failures.push(format!("the pin {pin} is not v{version}"));
+        return Verdict::Failure(failures);
+    }
+    if !pinned.is_some_and(|tag| tag.is_release()) {
+        failures.push(format!(
+            "the pin {pin} is a pre-release, which is never shipped"
+        ));
         return Verdict::Failure(failures);
     }
     match verify(pin) {
@@ -213,7 +223,40 @@ pub fn version_of(manifest: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Verdict, config_changed_beyond_engine, is_release_path, pin_of, version_of};
+    use super::{
+        Published, Side, Verdict, config_changed_beyond_engine, is_release_path, judge, pin_of,
+        version_of,
+    };
+
+    /// G2 over a head pinning `pin` at `version`, every published read green.
+    fn judged(pin: &str, version: &str) -> Verdict {
+        let side = |pin: &str, version: &str| Side {
+            pin: Some(pin.to_owned()),
+            version: Some(version.to_owned()),
+        };
+        judge(
+            &side("v0.0.1", "0.0.1"),
+            &side(pin, version),
+            &std::collections::BTreeSet::new(),
+            false,
+            &mut |_| Ok(Published::Verified("c".to_owned())),
+            &mut |_| Ok(Some(true)),
+        )
+    }
+
+    /// The pin is the head's own version under one `v`, parsed, and a
+    /// pre-release is never a release path's pin (CLOUD-2906).
+    #[test]
+    fn a_release_path_pins_its_own_version_and_never_a_pre_release() {
+        assert!(matches!(judged("v0.0.2", "0.0.2"), Verdict::Success(_)));
+        assert!(matches!(judged("vv0.0.2", "0.0.2"), Verdict::Failure(_)));
+        assert!(matches!(judged("v0.0.2+a", "0.0.2+b"), Verdict::Failure(_)));
+        let dev = "0.0.2-dev.pr1.20261124T050057Z+3f9c2a1b7d04";
+        assert!(matches!(
+            judged(&format!("v{dev}"), dev),
+            Verdict::Failure(_)
+        ));
+    }
 
     /// The pin is the `engine` table's `release`, and nothing else names one.
     #[test]

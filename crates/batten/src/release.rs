@@ -619,42 +619,25 @@ pub fn run_sums(
 
 // --- release backfill -----------------------------------------------------------
 
-/// `sort -V`'s order over two tag names: digit runs compare as numbers, every
-/// other run as bytes.
+/// The RELEASE tags among `tags` under the glob `pattern`, oldest first by
+/// semver precedence (CLOUD-2906).
 ///
-/// `v0.0.110` sorts after `v0.0.78` — which byte order gets backwards, and the
+/// `v0.0.110` sorts after `v0.0.78`, which byte order gets backwards, and the
 /// action a backfill drives derives each release's issues from the tag's commit
-/// range, so a wrong order records the wrong ranges.
+/// range, so a wrong order records the wrong ranges. A pre-release is never a
+/// release, so it is never backfilled; a tag that is not semver under the glob's
+/// prefix is not one either.
 #[must_use]
-pub fn version_order(left: &str, right: &str) -> std::cmp::Ordering {
-    let runs = |text: &str| -> Vec<(bool, String)> {
-        let mut found: Vec<(bool, String)> = Vec::new();
-        for character in text.chars() {
-            let digit = character.is_ascii_digit();
-            match found.last_mut() {
-                Some((kind, run)) if *kind == digit => run.push(character),
-                _ => found.push((digit, character.to_string())),
-            }
-        }
-        found
-    };
-    let (left_runs, right_runs) = (runs(left), runs(right));
-    for (one, other) in left_runs.iter().zip(right_runs.iter()) {
-        let order = match (one, other) {
-            ((true, a), (true, b)) => {
-                let (a, b) = (a.trim_start_matches('0'), b.trim_start_matches('0'));
-                a.len().cmp(&b.len()).then_with(|| a.cmp(b))
-            }
-            ((_, a), (_, b)) => a.cmp(b),
-        };
-        if order != std::cmp::Ordering::Equal {
-            return order;
-        }
-    }
-    left_runs
-        .len()
-        .cmp(&right_runs.len())
-        .then_with(|| left.cmp(right))
+pub fn releases_in_order(tags: Vec<String>, pattern: &str) -> Vec<String> {
+    let mut releases: Vec<(crate::version::Version, String)> = tags
+        .into_iter()
+        .filter_map(|tag| {
+            let version = crate::version::under_glob(&tag, pattern)?;
+            crate::version::is_release(&version).then_some((version, tag))
+        })
+        .collect();
+    releases.sort_by(|(left, _), (right, _)| crate::version::precedence(left, right));
+    releases.into_iter().map(|(_, tag)| tag).collect()
 }
 
 /// What a backfill is asked to do, every consumer fact an argument.
@@ -709,7 +692,7 @@ pub fn plan(request: &Backfill, root: &Path) -> Result<Vec<String>> {
             .get(&request.pattern)
             .map(|facts| facts.iter().map(|fact| fact.tag.clone()).collect())
             .unwrap_or_default();
-        tags.sort_by(|left, right| version_order(left, right));
+        tags = releases_in_order(tags, &request.pattern);
     }
     if tags.is_empty() {
         return Err(UsageError::raise(format!(
@@ -719,7 +702,10 @@ pub fn plan(request: &Backfill, root: &Path) -> Result<Vec<String>> {
     }
     let bad: Vec<&str> = tags
         .iter()
-        .filter(|tag| !crate::git::tag_glob_matches(&request.pattern, tag))
+        .filter(|tag| {
+            !crate::git::tag_glob_matches(&request.pattern, tag)
+                || !crate::version::is_release_under(tag, &request.pattern)
+        })
         .map(String::as_str)
         .collect();
     if !bad.is_empty() {
@@ -1173,9 +1159,23 @@ mod tests {
 
     #[test]
     fn version_order_is_numeric_per_run() {
-        let mut tags = vec!["v0.0.110", "v0.0.78", "v0.0.9", "v0.1.0"];
-        tags.sort_by(|a, b| version_order(a, b));
-        assert_eq!(tags, ["v0.0.9", "v0.0.78", "v0.0.110", "v0.1.0"]);
+        let tags = ["v0.0.110", "v0.0.78", "v0.0.9", "v0.1.0"].map(String::from);
+        assert_eq!(
+            releases_in_order(tags.to_vec(), "v[0-9]*"),
+            ["v0.0.9", "v0.0.78", "v0.0.110", "v0.1.0"]
+        );
+    }
+
+    #[test]
+    fn backfill_orders_by_precedence_and_drops_pre_releases() {
+        let tags = ["v0.1.0", "v0.1.0-rc.1", "v0.0.110", "v0.0.9", "v1.0.0+b"].map(String::from);
+        assert_eq!(
+            releases_in_order(tags.to_vec(), "v[0-9]*"),
+            ["v0.0.9", "v0.0.110", "v0.1.0", "v1.0.0+b"]
+        );
+        assert!(
+            releases_in_order(vec!["vv1.0.0".to_owned(), "v0.99".to_owned()], "v[0-9]*").is_empty()
+        );
     }
 
     fn request() -> Backfill {
