@@ -8899,4 +8899,204 @@ violation contains {\"rule\": \"d\", \"verdict\": \"d\"} if {\n\tinput.call.oper
         assert!(suite.unexercised.is_empty(), "{:?}", suite.unexercised);
         assert_eq!(coverage_cases() - before, 7);
     }
+
+    /// Fails by: a fallback reason with no token, or two sharing one, so a
+    /// `-vv` count cannot say which refusal kept a bundle off bytecode.
+    #[test]
+    fn every_fallback_names_its_own_stable_token() {
+        let all = [
+            Fallback::NotOffered,
+            Fallback::GuardUnavailable,
+            Fallback::GuardedSourceRefused,
+            Fallback::NoAnsweredRule,
+            Fallback::CompileRefused,
+            Fallback::KeyedPartialSet,
+            Fallback::RuleElse,
+            Fallback::TestWith,
+        ];
+        let tokens: BTreeSet<&str> = all.iter().map(|why| why.as_str()).collect();
+        assert_eq!(tokens.len(), all.len(), "{tokens:?}");
+        assert!(!tokens.contains(""), "{tokens:?}");
+        assert_eq!(Fallback::RuleElse.as_str(), "rule-else");
+    }
+
+    /// Fails by: a detail invented for a bundle the compiler never refused, or
+    /// the compiler's own words replaced.
+    #[test]
+    fn a_fallback_detail_is_the_refusal_said_and_nothing_else() {
+        let module = [("policy/d.rego", GATED)];
+        assert_eq!(bundle_of("row", &module).fallback_detail(), None);
+        assert_eq!(bytecode(bundle_of("row", &module)).fallback_detail(), None);
+        let refused = interpreted_because(bundle_of("row", &module), Fallback::RuleElse, &"why");
+        assert_eq!(refused.fallback_detail(), Some("why"));
+    }
+
+    /// Fails by: a statement whose previous line merely ENDS in `if` (a
+    /// reference like `input.motif`) read as a braceless body, so the binding
+    /// and its guard are wrapped in braces the body never had.
+    #[test]
+    fn a_line_ending_in_if_inside_a_braced_body_is_not_a_braceless_head() {
+        const MOTIF: &str = "package batten.m\nimport rego.v1\n\n\
+            deny contains p if {\n\tinput.motif\n\tp := 1\n}\n";
+        let guarded = guarded_sources(
+            bundle_of("row", &[("policy/m.rego", MOTIF)])
+                .evaluator
+                .engine()
+                .expect("interpreted"),
+        )
+        .expect("the guard splices");
+        assert!(
+            guarded[0].1.contains("\tp := 1; p == p\n"),
+            "{}",
+            guarded[0].1
+        );
+        assert!(!guarded[0].1.contains("{ p :="), "{}", guarded[0].1);
+    }
+
+    /// Fails by: the parity gate handed no input path to null, so a fact the
+    /// rules read is never tried absent.
+    #[test]
+    fn input_paths_name_what_the_rules_read() {
+        let paths = input_paths(&bundle_of("row", &[("policy/a.rego", MODULE)]));
+        assert!(paths.contains(&"call.operation".to_owned()), "{paths:?}");
+    }
+
+    /// Fails by: a bundle that answers no rule the boundary reads reported as
+    /// the compiler refusing it.
+    #[test]
+    fn a_bundle_answering_no_rule_is_said_so_not_refused() {
+        const NONE: &str = "package batten.none\nimport rego.v1\n\nhelper := 1\n";
+        let refused = Compiled::from_bundle(
+            &bundle_of("row", &[("policy/none.rego", NONE)]),
+            &serde_json::json!({}),
+        )
+        .err()
+        .expect("nothing to answer");
+        assert_eq!(refused.0, Fallback::NoAnsweredRule, "{refused:?}");
+    }
+
+    /// Fails by: a string literal's opening delimiter, which regorus's span
+    /// excludes, left off the desugared text.
+    #[test]
+    fn a_span_is_widened_over_both_string_delimiters() {
+        assert_eq!(spanned("a \"x\" b", 3, 4), Some("\"x\""));
+        assert_eq!(spanned("a `y` b", 3, 4), Some("`y`"));
+        assert_eq!(spanned("x == 1", 0, 6), Some("x == 1"));
+    }
+
+    /// Fails by: two array answers that differ reported as their whole
+    /// renderings rather than as what each holds alone. Over the keyed set
+    /// regorus 0.15's bytecode flattens, `a` is `[]` on bytecode and `["y"]`
+    /// interpreted.
+    #[test]
+    fn an_array_split_names_the_members_each_side_holds_alone() {
+        const ARRAYED: &str = "package batten.k\nimport rego.v1\n\n\
+            f[k] contains v if {\n\tsome k, vs in {\"a\": {\"x\"}, \"b\": {\"y\"}}\n\tsome v in vs\n}\n\n\
+            a := [v | some v in f.b]\n\n\
+            deny contains \"keyed\" if f.b == {\"y\"}\n";
+        let bundle = bundle_of("row", &[("policy/k.rego", ARRAYED)]);
+        let found = rule_splits(&bundle, &serde_json::json!({}), "{}");
+        assert!(
+            found
+                .iter()
+                .any(|line| line.ends_with(".a: only bytecode [] only interpreter [\"y\"]")),
+            "{found:?}"
+        );
+    }
+
+    fn splits(source: &str) -> Vec<String> {
+        suite_splits(&bundle_of("row", &[("policy/s.rego", source)]), "{}")
+    }
+
+    /// Fails by: a bundle whose cases all decide alike reported as split.
+    #[test]
+    fn a_suite_deciding_alike_has_no_splits() {
+        assert_eq!(splits(MODULE), Vec::<String>::new());
+    }
+
+    /// Fails by: a statement that starts with a string literal desugared
+    /// without its opening quote, plain or under `with`, so the suite program
+    /// will not compile and no case decides on bytecode.
+    #[test]
+    fn a_statement_opening_on_a_string_desugars_whole() {
+        const STRINGS: &str = "package batten.s\nimport rego.v1\n\n\
+            names := input.n\n\n\
+            test_plain if {\n\t\"a\" in [\"a\"]\n}\n\n\
+            test_with if {\n\t\"a\" in names with input as {\"n\": [\"a\"]}\n}\n";
+        assert_eq!(splits(STRINGS), Vec::<String>::new());
+    }
+
+    /// Fails by: a `with` term reading a case's own binding not hoisted under
+    /// the statements that bind it, so the term names an unbound variable.
+    #[test]
+    fn a_with_term_reading_a_case_binding_is_hoisted() {
+        const HOISTED: &str = "package batten.h\nimport rego.v1\n\n\
+            p if input.v == 1\n\n\
+            test_x if {\n\tx := {\"v\": 1}\n\tp with input as x\n}\n";
+        assert_eq!(splits(HOISTED), Vec::<String>::new());
+    }
+
+    /// Fails by: a read of `input` under `with` desugared rather than refused.
+    #[test]
+    fn a_read_of_input_under_with_stays_on_the_interpreter() {
+        const READ: &str = "package batten.i\nimport rego.v1\n\n\
+            test_i if {\n\tinput.x == 1 with input as {\"x\": 1}\n}\n";
+        let found = splits(READ);
+        assert!(
+            found
+                .iter()
+                .any(|line| line.contains("a read of `input` or `data` under `with`")),
+            "{found:?}"
+        );
+    }
+
+    /// Fails by: a helper that writes its own `with` not recorded as one, so a
+    /// case calling it is desugared as if the helper were plain.
+    #[test]
+    fn a_case_calling_a_helper_that_writes_with_stays_on_the_interpreter() {
+        const HELPER: &str = "package batten.w\nimport rego.v1\n\n\
+            h if {\n\tinput.x == 1 with input as {\"x\": 1}\n}\n\n\
+            test_h if {\n\th\n}\n";
+        let found = splits(HELPER);
+        assert!(
+            found
+                .iter()
+                .any(|line| line.contains("a helper that writes its own `with`")),
+            "{found:?}"
+        );
+    }
+
+    /// Fails by: a cached suite program not read back as one, so every run
+    /// recompiles it.
+    #[test]
+    fn a_written_suite_program_reads_back_as_cached() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let engine = bundle.evaluator.engine().expect("interpreted");
+        let program = SuiteProgram::compile(engine)
+            .ok()
+            .expect("the suite compiles");
+        assert!(!program.cached);
+        let path = crate::scratch::scratch("suite-program-cache").join("row.rvm");
+        program.write(&path, "key");
+        let read = SuiteProgram::read(&path, "key", engine).expect("read back");
+        assert!(read.cached);
+        assert_eq!(read.tests.len(), program.tests.len());
+    }
+
+    /// Fails by: the coverage census counting a batch by more than the cases
+    /// it ran. Three cases that never enter the predicate are swept in two
+    /// batches, one case then two.
+    #[test]
+    fn the_coverage_census_counts_each_swept_case_once() {
+        const UNENTERED: &str = "package batten.n\nimport rego.v1\n\nrules contains \"n\"\n\n\
+violation contains {\"rule\": \"n\", \"verdict\": \"n\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
+test_a if {\n\t\"n\" in rules\n}\n\n\
+test_b if {\n\t\"n\" in rules\n}\n\n\
+test_c if {\n\t\"n\" in rules\n}\n";
+        let bundle = bundle_of("row", &[("policy/n.rego", UNENTERED)]);
+        let before = coverage_cases();
+        let suite = suite_of(&bundle, false);
+        assert_eq!(suite.unexercised, vec!["n".to_owned()]);
+        assert_eq!(coverage_cases() - before, 3);
+    }
 }

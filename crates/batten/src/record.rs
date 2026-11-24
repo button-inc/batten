@@ -2847,4 +2847,39 @@ mod tests {
         assert_eq!(keyed_group_read(&git_dir, "fam", "g", "k1"), None);
         assert_eq!(keyed_group_entries(&git_dir, "fam", "g").len(), 1);
     }
+
+    /// Fails by: a `--config-in` authority ignored because the working
+    /// directory holds no `batten.toml` of its own, so the reading abstains
+    /// where the named authority should be read. With no inputs, reading it
+    /// stops at the first one the family requires.
+    #[test]
+    fn a_named_authority_is_read_where_the_directory_holds_none() {
+        let authority = crate::scratch::scratch("decide-config-in-authority").join("repo");
+        std::fs::create_dir_all(&authority).unwrap();
+        std::fs::write(
+            authority.join(crate::config_model::CONFIG_FILE),
+            "version = 1\n",
+        )
+        .unwrap();
+        crate::gitwrite::commit_paths(
+            &authority,
+            &[crate::config_model::CONFIG_FILE.to_owned()],
+            "authority",
+        )
+        .unwrap();
+        let repo = enter_repo("decide-config-in", &[("README.md", "x\n")]);
+        assert!(
+            !repo.join(crate::config_model::CONFIG_FILE).exists(),
+            "the premise: no authority here"
+        );
+        let overrides = Overrides {
+            config_in: Some(authority.display().to_string()),
+            ..Overrides::default()
+        };
+        let said = decide_record(TURN_FAMILY, &[], &overrides)
+            .map(|decision| format!("{decision:?}"))
+            .unwrap_err()
+            .to_string();
+        assert!(said.contains("--input citation="), "{said}");
+    }
 }
