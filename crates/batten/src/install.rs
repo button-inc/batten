@@ -602,7 +602,12 @@ pub fn destination(
     if let Some(named) = named {
         return named;
     }
-    if on_path.contains(&user) {
+    // BY FILE, NOT BY SPELLING: a PATH entry naming the same directory another
+    // way (a symlinked HOME, a `..`) still reaches it, so it is never off PATH.
+    if on_path
+        .iter()
+        .any(|entry| *entry == user || crate::wiring::same_file(entry, &user))
+    {
         return user;
     }
     for dir in SYSTEM_BIN_DIRS.iter().map(Path::new) {
@@ -760,6 +765,21 @@ mod tests {
             named
         );
         assert_eq!(destination(None, user.clone(), &on_path, |_| true), user);
+    }
+
+    /// A PATH entry spelling the per-user directory another way still reaches
+    /// it, so the fallback never moves a link away from a directory on PATH.
+    ///
+    /// Fails by: the on-PATH test comparing spellings, which sends the link to
+    /// `/usr/local/bin` past a usable per-user directory.
+    #[test]
+    fn a_user_directory_spelled_differently_on_path_is_on_path() {
+        let user = std::env::temp_dir().join(format!("batten-dest-{}", std::process::id()));
+        std::fs::create_dir_all(&user).unwrap();
+        let respelled = user.join("..").join(user.file_name().unwrap());
+        let on_path = vec![respelled, std::path::PathBuf::from("/usr/local/bin")];
+        assert_eq!(destination(None, user.clone(), &on_path, |_| true), user);
+        std::fs::remove_dir_all(&user).unwrap();
     }
 
     #[test]

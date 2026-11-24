@@ -793,41 +793,59 @@ fn link_of(entry: &Provision, host: Host<'_>) -> Result<Option<Link>> {
 /// cost two whole binaries per status and broke on upgrade (the new version's
 /// cache is empty until `install`); a path alone would trust whatever replaced
 /// the file later. The record is per entry NAME, so it survives a version bump.
-//MUTANT fallback-claims-a-foreign-name|s@^    !linked.exists() @    true @|a_fallback_never_takes_a_name_another_tool_owns
+///
+/// FREE MEANS NOTHING AT THE NAME, not even a dangling symlink: `exists`
+/// follows the link, and a package manager's symlink into a keg it is midway
+/// through upgrading is still that package manager's name.
+//MUTANT fallback-claims-a-foreign-name|s@^    fs::symlink_metadata(\&linked).is_err()$@    true@|a_fallback_never_takes_a_name_another_tool_owns
 fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
     let linked = dir.join(&entry.binary);
-    !linked.exists() || is_launcher(&linked) || recorded_as_ours(&linked, entry, cache_root)
+    fs::symlink_metadata(&linked).is_err()
+        || is_launcher(&linked)
+        || recorded_as_ours(&linked, entry, cache_root)
 }
 
-/// Whether the link record names `linked` and, once completed, `linked`'s
-/// present stamp.
+/// Whether the link record names `linked` and either `linked`'s present stamp
+/// or, as an intent, this entry's own cached bytes.
 ///
-/// An INTENT — a record naming the path with no stamp yet — is what a run
-/// killed between [`record_intent`] and [`record_written`] leaves. It admits
-/// the file only if it holds this entry's own cached bytes, which is all that
-/// half-finished run could have put there. Admitting whatever sits at the path
-/// would let a crash vouch for a binary another tool installed afterwards. A
-/// launcher needs no record, so this byte read is reached only after an install
-/// that failed or was killed midway, and a refused apply ([`forget_link`])
-/// clears an intent that no longer vouches for anything.
+/// The record is three lines: the path, the stamp of the file batten last
+/// wrote there (empty if none), and [`INTENT`] while a write is under way.
+///
+/// AN INTENT is what an install that failed or was killed between
+/// [`record_intent`] and [`record_written`] leaves. Whichever side of the
+/// rename it stopped on, the file is batten's: the earlier copy still carries
+/// the stamp the intent kept, or the new one holds the cached bytes, which is
+/// all that half-finished run could have put there. Admitting whatever sits at
+/// the path would let a crash vouch for a binary another tool installed
+/// afterwards. A launcher needs no record, so the byte read is reached only
+/// after such an install, and a refused apply ([`forget_link`]) clears an
+/// intent that no longer vouches for anything.
+///
+/// The path is compared as the record wrote it, lossily, so a link path that is
+/// not UTF-8 still matches its own record.
 fn recorded_as_ours(linked: &Path, entry: &Provision, cache_root: &Path) -> bool {
     let Ok(record) = fs::read_to_string(link_record(cache_root, entry)) else {
         return false;
     };
     let mut lines = record.lines();
-    if lines.next().map(Path::new) != Some(linked) {
+    if lines.next() != Some(&*linked.to_string_lossy()) {
         return false;
     }
-    match lines.next() {
-        Some(recorded) => written_stamp(linked).as_deref() == Some(recorded),
-        None => crate::wiring::same_bytes(
+    let stamp = lines.next().filter(|stamp| !stamp.is_empty());
+    if stamp.is_some() && written_stamp(linked).as_deref() == stamp {
+        return true;
+    }
+    lines.next() == Some(INTENT)
+        && crate::wiring::same_bytes(
             linked,
             &entry_dir(cache_root, entry)
                 .join(BIN_DIR)
                 .join(&entry.binary),
-        ),
-    }
+        )
 }
+
+/// The link record's third line while a write is under way.
+const INTENT: &str = "intent";
 
 /// Where `entry`'s last written link is recorded: beside its versioned cache
 /// directories, so a version bump still finds it.
@@ -835,15 +853,23 @@ fn link_record(cache_root: &Path, entry: &Provision) -> PathBuf {
     cache_root.join(CACHE_DIR).join(&entry.name).join("linked")
 }
 
-/// Record that batten is ABOUT to write `entry`'s link at `linked`: the path
-/// alone, before the file exists, so a crash before [`record_written`] leaves
-/// batten's own half-written link claimable.
+/// Record that batten is ABOUT to write `entry`'s link at `linked`, so an
+/// install that fails or is killed before [`record_written`] leaves batten's
+/// link claimable on either side of its rename.
 ///
-/// Never the present file's stamp: an older batten file at the path would get
-/// its stamp recorded, and a crash then makes the link batten is writing read
-/// as foreign.
+/// KEEPS THE STAMP THE RECORD ALREADY VOUCHES FOR, and only that: batten's
+/// earlier copy must stay batten's if this write never lands, and a stamp read
+/// fresh off whatever file is there now could vouch for one batten never wrote.
 fn record_intent(cache_root: &Path, entry: &Provision, linked: &Path) -> Result<()> {
-    write_link_record(cache_root, entry, &linked.to_string_lossy())
+    let kept = recorded_as_ours(linked, entry, cache_root)
+        .then(|| written_stamp(linked))
+        .flatten()
+        .unwrap_or_default();
+    write_link_record(
+        cache_root,
+        entry,
+        &format!("{}\n{kept}\n{INTENT}", linked.to_string_lossy()),
+    )
 }
 
 /// Record that batten WROTE `entry`'s link at `linked`: the path and the
@@ -1055,7 +1081,10 @@ fn apply_with(
     match (freshness_of(entry, cache_root, link)?, link) {
         (Freshness::Fresh, _) => return Ok(Applied::AlreadyFresh),
         (Freshness::Foreign, Some(link)) => {
-            forget_link(cache_root, entry);
+            // A preview reports the refusal and changes nothing.
+            if !dry_run {
+                forget_link(cache_root, entry);
+            }
             return Err(link.refusal(entry));
         }
         _ => {}
@@ -2623,6 +2652,13 @@ mod tests {
             claimable(&shared, &entry, &cache),
             "the link batten recorded writing, whatever version wrote it"
         );
+        // A RELINK THAT NEVER LANDS: the next version's intent, then a failure
+        // before its rename. The earlier copy keeps the stamp the intent kept.
+        record_intent(&cache, &entry, &linked).unwrap();
+        assert!(
+            claimable(&shared, &entry, &cache),
+            "batten's earlier copy, under a relink that failed"
+        );
 
         // `shared` IS THE FALLBACK'S, NOT EVERY LINK'S: an absolute link names
         // its own directory, which is never judged for another tool's name.
@@ -2651,6 +2687,11 @@ mod tests {
             dir: shared.clone(),
             shared: true,
         };
+        assert!(apply_with(&entry, &cache, true, Some(&link)).is_err());
+        assert!(
+            link_record(&cache, &entry).exists(),
+            "a preview refuses and changes nothing"
+        );
         assert!(apply_with(&entry, &cache, false, Some(&link)).is_err());
         assert_eq!(
             fs::read(&linked).unwrap(),
@@ -2679,7 +2720,7 @@ mod tests {
     /// The per-user link the fallback case resolves.
     const LINK_PER_USER: &str = "~/.local/bin";
 
-    /// The fallback's five readings, for a host where `~/` expands to `declared`.
+    /// The fallback's six readings, for a host where `~/` expands to `declared`.
     fn assert_the_fallback(declared: &Path) {
         let declared = declared.to_path_buf();
         let system = PathBuf::from(crate::install::SYSTEM_BIN_DIRS[0]);

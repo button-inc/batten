@@ -565,9 +565,13 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
 /// case placing it inside a checkout needs, and nothing writes THROUGH it. A
 /// symlink would not do, because the exe path resolves to its target. A
 /// cross-device link falls back to the copy.
+///
+/// ANY FILE ALREADY AT `at` GOES FIRST: if it were a hard link to the build, the
+/// copy fallback would open it truncating and empty the test binary itself.
 pub(crate) fn place_build(at: &Path) -> PathBuf {
     fs::create_dir_all(at.parent().expect("a parent directory")).expect("create the parent");
     let built = Path::new(env!("CARGO_BIN_EXE_batten"));
+    let _ = fs::remove_file(at);
     fs::hard_link(built, at)
         .or_else(|_| fs::copy(built, at).map(|_| ()))
         .expect("place the compiled binary");
