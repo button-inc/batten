@@ -22,15 +22,20 @@ use crate::common;
 
 /// The bare calls each engine file carried when this ratchet was set. A file
 /// absent here may carry none.
+///
+/// `batten-fsio`'s two are `wiring`'s two, MOVED with `same_file` (CLOUD-2789):
+/// the split put the comparison in the leaf, which reaches no `git::canonical`,
+/// and both sides canonicalize the same way and meet only each other. The row
+/// left `wiring` with them, so neither file can grow a call the other gave up.
 const CEILINGS: &[(&str, usize)] = &[
     ("crates/batten/src/admission.rs", 1),
+    ("crates/batten-fsio/src/lib.rs", 2),
     ("crates/batten-core/src/git.rs", 3),
     ("crates/batten/src/hook.rs", 3),
     ("crates/batten/src/lib.rs", 5),
     ("crates/batten/src/perf.rs", 5),
     ("crates/batten/src/secrets.rs", 2),
     ("crates/batten/src/semver.rs", 2),
-    ("crates/batten/src/wiring.rs", 2),
 ];
 
 /// The call this ratchet counts, as a reader spells it.
