@@ -5865,18 +5865,33 @@ impl JobCost {
     /// Either variable absent or not a whole number of megabytes: a job count
     /// sized against a guessed cost is the hardcoding this replaces.
     pub fn declared() -> Result<Self> {
-        let read = |name: &str| -> Result<u64> {
-            let raw =
-                std::env::var(name).map_err(|_| anyhow::anyhow!("`{name}` is not declared"))?;
-            raw.trim()
-                .parse()
-                .map_err(|_| anyhow::anyhow!("`{name}` is not a whole number of megabytes"))
-        };
         Ok(Self {
-            disk_mb: read("MUTANT_JOB_DISK_MB")?,
-            memory_mb: read("MUTANT_JOB_MEMORY_MB")?,
+            disk_mb: Self::declared_disk_mb()?,
+            memory_mb: declared_mb("MUTANT_JOB_MEMORY_MB")?,
         })
     }
+
+    /// The declared disk cost alone, which is all a hand-back's room check
+    /// reads: requiring the memory half too refused a run for a variable it
+    /// never used.
+    ///
+    /// # Errors
+    ///
+    /// `MUTANT_JOB_DISK_MB` absent or not a whole number: a usage error.
+    pub fn declared_disk_mb() -> Result<u64> {
+        declared_mb("MUTANT_JOB_DISK_MB")
+    }
+}
+
+/// A declared megabyte count from the environment variable `name`, refused as
+/// a usage error when absent or not a whole number, as the sibling variables
+/// of `mutate cargo` are.
+fn declared_mb(name: &str) -> Result<u64> {
+    let raw = std::env::var(name)
+        .map_err(|_| crate::error::UsageError::raise(format!("`{name}` is not declared")))?;
+    raw.trim().parse().map_err(|_| {
+        crate::error::UsageError::raise(format!("`{name}` is not a whole number of megabytes"))
+    })
 }
 
 /// What this machine has left for jobs, measured where they will run.
