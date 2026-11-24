@@ -19777,7 +19777,21 @@ tools = [
 [[step]]
 id = "test:reference-coverage"
 # `.cargo`: cargo probes `.cargo/config{,.toml}` on every run (CLOUD-2835).
-inputs = ["crates", "Cargo.toml", "Cargo.lock", ".config/nextest.toml", ".cargo"]
+# `policy`, `fuzz/properties.rs` and `bench/rust-suites/RESULTS.md`: the `it`
+# binary compiles them in with `include_str!`, so every `--test it` build reads
+# them, and the trace refused them as undeclared. `batten.toml`: its cases read
+# the committed authority.
+inputs = [
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  ".config/nextest.toml",
+  ".cargo",
+  "batten.toml",
+  "policy",
+  "fuzz/properties.rs",
+  "bench/rust-suites/RESULTS.md",
+]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -19796,6 +19810,18 @@ inputs = [
   "skills",
   # cargo probes `.cargo/config{,.toml}` on every run (CLOUD-2835).
   ".cargo",
+  # `test:reference-coverage`'s reason: the `it` binary compiles these in, and
+  # its cases walk them, so the trace refused each as undeclared.
+  "policy",
+  "fuzz",
+  "bench",
+  # The skills the harness loads and the agents file they answer to, both read
+  # by the contract's cases.
+  ".claude",
+  "AGENTS.md",
+  # The loader's probe for the unwinder: an empty search-path entry makes it
+  # look in the working directory first. Absent, and keyed as absent.
+  "libgcc_s.so.1",
 ]
 tools = [
   ["rustc", "--version"],
@@ -19816,6 +19842,13 @@ inputs = [
   "schema",
   # cargo probes `.cargo/config{,.toml}` on every run (CLOUD-2835).
   ".cargo",
+  # `test:reference-coverage`'s reason: the `it` binary compiles these in.
+  "policy",
+  "fuzz/properties.rs",
+  "bench/rust-suites/RESULTS.md",
+  # The tree walk its cases make honours both ignore files.
+  ".gitignore",
+  ".ignore",
 ]
 tools = [
   ["rustc", "--version"],
