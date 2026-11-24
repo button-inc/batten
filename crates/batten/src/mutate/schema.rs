@@ -4768,19 +4768,49 @@ fn report(
     Ok(if failed { 2 } else { 0 })
 }
 
-/// This shard's mutants of `listed`: each `k`th of every `n` by listing order,
-/// so the shards of one listing partition it. All of them with no shard.
-#[must_use]
-pub fn shard_of(listed: Vec<Listed>, shard: Option<(usize, usize)>) -> Vec<Listed> {
-    let Some((k, n)) = shard else {
-        return listed;
-    };
-    listed
-        .into_iter()
-        .enumerate()
-        .filter(|(index, _)| index % n == k)
-        .map(|(_, mutant)| mutant)
+/// The key a mutant is sharded by: its site key ([`site_key`]), or its
+/// listing name with every `:line:col` removed when it has none. NEVER ITS
+/// LISTING POSITION (CLOUD-2904): one mutant listed earlier moved every later
+/// one to another shard, each shard imports only its own journal, and a
+/// 32-shard census rerun found 2 of ~290 judged mutants in their old shard.
+fn shard_key(mutant: &Listed, site_key: Option<&str>) -> String {
+    site_key.map_or_else(|| position_free(&mutant.name), str::to_owned)
+}
+
+/// Each listed mutant's [`shard_key`], by id, beside its `site_keys`.
+fn shard_keys(mutants: &[Listed], site_keys: &[Option<String>]) -> Vec<String> {
+    mutants
+        .iter()
+        .zip(site_keys)
+        .map(|(mutant, key)| shard_key(mutant, key.as_deref()))
         .collect()
+}
+
+/// `name` without its `:line:col` positions, which move whenever a line is
+/// added above it.
+fn position_free(name: &str) -> String {
+    let numeric = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    let parts: Vec<&str> = name.split(':').collect();
+    let mut kept: Vec<&str> = Vec::with_capacity(parts.len());
+    let mut at = 0;
+    while let Some(part) = parts.get(at) {
+        if at > 0 && numeric(part) && parts.get(at + 1).is_some_and(|next| numeric(next)) {
+            at += 2;
+            continue;
+        }
+        kept.push(part);
+        at += 1;
+    }
+    kept.join(":")
+}
+
+/// The shard of `n` a [`shard_key`] falls in: `blake3(key) mod n`.
+fn shard_index(key: &str, n: usize) -> usize {
+    let hash = blake3::hash(key.as_bytes());
+    let mut head = [0u8; 8];
+    head.copy_from_slice(&hash.as_bytes()[..8]);
+    let n = u64::try_from(n).unwrap_or(u64::MAX).max(1);
+    usize::try_from(u64::from_le_bytes(head) % n).unwrap_or(0)
 }
 
 /// The variable naming how far a sweep goes ([`Phase`]).
@@ -4822,37 +4852,40 @@ pub fn phase_parsed(value: Option<&str>) -> Result<Phase, String> {
 /// shard builds the same tree, which one job builds and reaches for all.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Scope {
-    /// This run's `k` of `n` ([`shard_of`]'s partition); none judges all.
+    /// This run's `k` of `n` ([`shard_index`]'s partition); none judges all.
     pub shard: Option<(usize, usize)>,
     /// How far it goes.
     pub phase: Phase,
 }
 
 impl Scope {
-    /// Whether mutant `id` is this shard's: [`shard_of`]'s rule on the id,
-    /// which is the mutant's position in the listing.
-    fn holds(self, id: u32) -> bool {
-        self.shard
-            .is_none_or(|(k, n)| usize::try_from(id).is_ok_and(|id| id % n == k))
+    /// Whether the mutant whose [`shard_key`] is `key` is this shard's.
+    fn holds(self, key: &str) -> bool {
+        self.shard.is_none_or(|(k, n)| shard_index(key, n) == k)
     }
 
     /// This shard's part of what the whole listing's build left to judge: its
     /// switched ids of `todo`, its hand-backs of `classic`, and how many of
-    /// `unviable` are its own.
+    /// `unviable` are its own, each id's shard read from its key in `keys`.
     fn slice(
         self,
+        keys: &[String],
         todo: Vec<u32>,
         classic: &BTreeSet<u32>,
         unviable: &BTreeSet<u32>,
     ) -> (Vec<u32>, BTreeSet<u32>, usize) {
+        let held = |id: u32| {
+            self.holds(
+                usize::try_from(id)
+                    .ok()
+                    .and_then(|id| keys.get(id))
+                    .map_or("", String::as_str),
+            )
+        };
         (
-            todo.into_iter().filter(|id| self.holds(*id)).collect(),
-            classic
-                .iter()
-                .copied()
-                .filter(|id| self.holds(*id))
-                .collect(),
-            unviable.iter().filter(|id| self.holds(**id)).count(),
+            todo.into_iter().filter(|id| held(*id)).collect(),
+            classic.iter().copied().filter(|id| held(*id)).collect(),
+            unviable.iter().filter(|id| held(**id)).count(),
         )
     }
 }
@@ -5446,6 +5479,7 @@ pub fn sweep(
         return reach_sealed(out, &reach);
     }
     let (todo, classic, unviable) = scope.slice(
+        &shard_keys(mutants, &site_keys),
         judged_by_switch(mutants.len(), &unviable, &classic)?,
         &classic,
         &unviable,
@@ -9045,23 +9079,111 @@ mod tests {
         assert_eq!((filter, ran), (None, &few));
     }
 
-    /// Fails by: a mutant in two shards or none, or the order not kept.
+    /// T4 (CLOUD-2904): a mutant keeps its shard when another is listed
+    /// before it, whether it has a site key or is sharded by its
+    /// position-free name, and the shards still partition the listing.
+    ///
+    /// Fails by: a shard cut by listing position (every later mutant moves,
+    /// and a census rerun importing its own shard's journal reuses nothing),
+    /// a name keyed with its `:line:col`, or a mutant in two shards or none.
     #[test]
-    fn the_shards_of_a_listing_partition_it() {
-        let named = |names: &[&str]| -> Vec<Listed> {
-            names
-                .iter()
-                .map(|name| Listed {
-                    name: (*name).to_owned(),
-                    ..listed("FnValue", "true", (1, 1), (1, 2))
-                })
-                .collect()
+    fn a_mutant_keeps_its_shard_when_another_is_listed_before_it() {
+        let root = crate::scratch::scratch("schema-shard-keys");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\nfn g(a: u8) -> u8 {\n    a + 1\n}\n",
+        )
+        .unwrap();
+        let mutant = |name: &str, genre: &str, with: &str, at: ((usize, usize), (usize, usize))| {
+            let (from, to) = at;
+            let site = Listed {
+                name: name.to_owned(),
+                ..listed(genre, with, from, to)
+            };
+            if from.0 <= 3 {
+                in_function(site, (1, 1), (3, 2))
+            } else {
+                in_function(site, (4, 1), (6, 2))
+            }
         };
-        let picked = |shard: Vec<Listed>| shard.into_iter().map(|m| m.name).collect::<Vec<_>>();
-        let all = named(&["a", "b", "c", "d", "e"]);
-        assert_eq!(picked(shard_of(all.clone(), Some((0, 2)))), ["a", "c", "e"]);
-        assert_eq!(picked(shard_of(all.clone(), Some((1, 2)))), ["b", "d"]);
-        assert_eq!(picked(shard_of(all, None)).len(), 5);
+        let listing = vec![
+            mutant(
+                "src/lib.rs:2:7: == with !=",
+                "BinaryOperator",
+                "!=",
+                ((2, 7), (2, 9)),
+            ),
+            mutant(
+                "src/lib.rs:2:7: == with <",
+                "BinaryOperator",
+                "<",
+                ((2, 7), (2, 9)),
+            ),
+            mutant(
+                "src/lib.rs:2:7: == with >",
+                "BinaryOperator",
+                ">",
+                ((2, 7), (2, 9)),
+            ),
+            mutant(
+                "src/lib.rs:5:7: + with -",
+                "BinaryOperator",
+                "-",
+                ((5, 7), (5, 8)),
+            ),
+            mutant(
+                "src/lib.rs:5:7: + with *",
+                "BinaryOperator",
+                "*",
+                ((5, 7), (5, 8)),
+            ),
+            Listed {
+                name: String::from("src/lib.rs:5:7: no site"),
+                ..listed("FnValue", "0", (5, 5), (5, 10))
+            },
+        ];
+        let shards = |listing: &[Listed]| {
+            let keys: Vec<String> = listing
+                .iter()
+                .map(|m| shard_key(m, site_key(&root, m).as_deref()))
+                .collect();
+            let ids: Vec<u32> = (0..u32::try_from(listing.len()).unwrap()).collect();
+            let mut shard_of: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
+            for k in 0..4 {
+                let scope = Scope {
+                    shard: Some((k, 4)),
+                    phase: Phase::Judge,
+                };
+                let (mine, _, _) =
+                    scope.slice(&keys, ids.clone(), &BTreeSet::new(), &BTreeSet::new());
+                for id in mine {
+                    let name = listing[id as usize].name.clone();
+                    assert!(shard_of.insert(name, k).is_none(), "in one shard only");
+                }
+            }
+            assert_eq!(shard_of.len(), listing.len(), "every mutant in a shard");
+            shard_of
+        };
+        let held = shards(&listing);
+        let mut inserted = vec![mutant(
+            "src/lib.rs:5:7: + with /",
+            "BinaryOperator",
+            "/",
+            ((5, 7), (5, 8)),
+        )];
+        inserted.extend(listing.iter().cloned());
+        let moved = shards(&inserted);
+        for (name, k) in &held {
+            assert_eq!(moved[name], *k, "{name} kept its shard");
+        }
+        assert_eq!(
+            position_free("src/lib.rs:5:7: no site"),
+            position_free("src/lib.rs:9:3: no site"),
+            "a name sheds its position"
+        );
+        assert_eq!(position_free("a::b:7"), "a::b:7", "a lone number stays");
     }
 
     #[test]
@@ -10549,19 +10671,25 @@ pub fn repo() -> u8 {{ scratch() }}
         let todo = vec![0, 2, 3, 4, 5, 8];
         let classic = BTreeSet::from([7, 10]);
         let unviable = BTreeSet::from([1, 6, 9]);
+        let keys: Vec<String> = (0..11).map(|id| format!("site {id}")).collect();
         let scope = |shard| Scope {
             shard,
             phase: Phase::Judge,
         };
-        let (mine, handed, dead) = scope(Some((1, 3))).slice(todo.clone(), &classic, &unviable);
-        assert_eq!(mine, [4]);
-        assert_eq!(handed, BTreeSet::from([7, 10]));
-        assert_eq!(dead, 1, "only id 1 of the unviable is shard 1's");
+        // Each expectation from the key rule: shard 1 of 3 holds the ids whose
+        // key's blake3 falls there.
+        let ours = |id: &u32| shard_index(&keys[*id as usize], 3) == 1;
+        let (mine, handed, dead) =
+            scope(Some((1, 3))).slice(&keys, todo.clone(), &classic, &unviable);
+        assert_eq!(mine, todo.iter().copied().filter(ours).collect::<Vec<_>>());
+        assert_eq!(handed, classic.iter().copied().filter(ours).collect());
+        assert_eq!(dead, unviable.iter().filter(|id| ours(id)).count());
         let mut every: Vec<u32> = Vec::new();
         let mut every_handed = BTreeSet::new();
         let mut every_dead = 0;
         for k in 0..3 {
-            let (mine, handed, dead) = scope(Some((k, 3))).slice(todo.clone(), &classic, &unviable);
+            let (mine, handed, dead) =
+                scope(Some((k, 3))).slice(&keys, todo.clone(), &classic, &unviable);
             every.extend(mine);
             every_handed.extend(handed);
             every_dead += dead;
@@ -10570,7 +10698,8 @@ pub fn repo() -> u8 {{ scratch() }}
         assert_eq!(every, todo, "the shards partition the judged ids");
         assert_eq!(every_handed, classic);
         assert_eq!(every_dead, unviable.len());
-        let (all, all_handed, all_dead) = scope(None).slice(todo.clone(), &classic, &unviable);
+        let (all, all_handed, all_dead) =
+            scope(None).slice(&keys, todo.clone(), &classic, &unviable);
         assert_eq!((all, all_handed, all_dead), (todo, classic, unviable.len()));
     }
 
