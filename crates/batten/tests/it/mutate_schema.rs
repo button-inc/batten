@@ -258,9 +258,20 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
 /// It runs `five` first, so the edit that moves `adds` moves it too and it is
 /// recorded again rather than carried; `five` holds no mutant, so no verdict
 /// changes. Unset, it passes having done only that.
+///
+/// IT KILLS ONLY BEHIND FINISHED SIBLINGS: a sibling case's record without its
+/// `done` means a case still runs beside the stopper, so the kill would land
+/// at no exact point. The stopper then panics, saying so, instead of killing.
 const STOPPER: &str = "    #[test]\n    fn zz_stop() {\n\
         assert_eq!(super::five(), 5);\n\
         if std::env::var_os(\"BATTEN_FIXTURE_STOP\").is_none() {\n            return;\n        }\n\
+        let mine = std::path::PathBuf::from(std::env::var_os(\"BATTEN_MUTANT_RECORD\").unwrap());\n\
+        for entry in std::fs::read_dir(mine.parent().unwrap()).unwrap() {\n\
+            let dir = entry.unwrap().path();\n\
+            if dir != mine && dir.join(\"case\").is_file() {\n\
+                assert!(dir.join(\"done\").is_file(), \"a case still running beside the stopper: {}\", dir.display());\n\
+            }\n\
+        }\n\
         let (mut pid, mut chain) = (std::process::id(), Vec::new());\n\
         loop {\n\
             let status = std::fs::read_to_string(format!(\"/proc/{pid}/status\")).unwrap();\n\
@@ -510,15 +521,26 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
         format!("{}\n{STOPPER}}}\n", &LIB[..end])
     };
     let repo = seeded_with("mutate-schema-killed", &lib);
-    let file = listing("mutate-schema-killed-listing");
     // ONE CASE AT A TIME, IN NAME ORDER: `adds`, `compares`, `triples`, then
-    // the stopper — so the kill lands at the same case on every run.
+    // the stopper — so the kill lands at the same case on every run. PINNED IN
+    // THE FIXTURE'S COMMITTED NEXTEST CONFIG, which the reach run's own config
+    // is built on (`cover::wrapped_config`), and never by `NEXTEST_TEST_THREADS`:
+    // a suite run inherits no `NEXTEST_*` (`mutate::SUITE_SCRUBBED`), so that pin
+    // never reached the cases, they ran side by side, and under load the stopper
+    // killed `adds` while it still sealed its record (CLOUD-2789).
+    let config = std::fs::read_to_string(repo.join(".config/nextest.toml")).expect("the config");
+    common::write(
+        &repo,
+        ".config/nextest.toml",
+        &format!("[profile.default]\ntest-threads = 1\n\n{config}"),
+    );
+    common::git_in(&repo, &["commit", "-qam", "one case at a time"]);
+    let file = listing("mutate-schema-killed-listing");
     let sweep = |stop: bool| {
         let mut command = common::batten();
         command
             .args(["__mutate-schema", &file, "2"])
-            .current_dir(&repo)
-            .env("NEXTEST_TEST_THREADS", "1");
+            .current_dir(&repo);
         if stop {
             command.env("BATTEN_FIXTURE_STOP", "1");
         }
@@ -534,6 +556,10 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
     let edited = lib.replace("    5\n}", "    4 + 1\n}");
     common::write(&repo, "src/lib.rs", &edited);
     let (code, killed, err) = sweep(true);
+    assert!(
+        !format!("{killed}{err}").contains("a case still running beside the stopper"),
+        "the cases ran side by side: {killed}\n{err}"
+    );
     assert_ne!(code, Some(0), "{killed}\n{err}");
     assert_ne!(code, Some(3), "the sweep never reported: {killed}\n{err}");
     assert!(
