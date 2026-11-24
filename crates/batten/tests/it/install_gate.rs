@@ -85,10 +85,11 @@ fn call(dir: &Path, command: &str) -> String {
     format!("{}{}", common::stdout(&answer), common::stderr(&answer))
 }
 
-/// The same Bash call reported AFTER it ran (`PostToolUse`): what the door said.
-fn after(dir: &Path, command: &str) -> String {
+/// The policy input `adjudicate --show-input` stored for this Bash call at
+/// `event`: the view its pointer names, one `## /path` heading per field.
+fn input_at(dir: &Path, event: &str, command: &str) -> String {
     let payload = serde_json::json!({
-        "hook_event_name": "PostToolUse",
+        "hook_event_name": event,
         "cwd": dir,
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -98,10 +99,16 @@ fn after(dir: &Path, command: &str) -> String {
     let answer = common::stdin_run(
         &mut common::batten(),
         dir,
-        &["adjudicate", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code", "--show-input"],
         &payload,
     );
-    format!("{}{}", common::stdout(&answer), common::stderr(&answer))
+    let said = common::stderr(&answer);
+    let view = said
+        .split("; read ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no pointer: {said}"));
+    std::fs::read_to_string(view).expect("the view reads")
 }
 
 fn held(said: &str) -> bool {
@@ -127,20 +134,29 @@ fn a_pending_program_is_held_while_the_setup_task_runs() {
     );
 }
 
-/// Only a call about to run can be held: one reported after it ran has
-/// nothing left to wait for, so the fact is never resolved for it.
+/// Only a call about to run can be held, so only one is asked about the
+/// install: a call reported after it ran (`PostToolUse`) carries no
+/// `install-pending` fact, which is what `--show-input` stores for it.
 ///
 /// Fails by: `install_pending_for`'s event guard joined with `&&`, so a
-/// post-tool call whose row reads pinned facts resolves the install state
-/// and is held after the program already ran (CLOUD-2789).
+/// post-tool call whose row reads pinned facts resolves the setup task's
+/// state and every program on `PATH` for nothing (CLOUD-2789).
 #[test]
-fn a_call_reported_after_it_ran_is_never_held() {
+fn a_call_reported_after_it_ran_is_never_asked_about_the_install() {
     let dir = bench("install-gate-post-tool");
     setup(&dir, &std::process::id().to_string(), "repair");
-    // ANTI-VACUITY: the same program, about to run, is held.
-    assert!(held(&call(&dir, &format!("{ABSENT} --version"))));
-    let said = after(&dir, &format!("{ABSENT} --version"));
-    assert!(!held(&said), "a post-tool call is past the gate: {said}");
+    let command = format!("{ABSENT} --version");
+    // ANTI-VACUITY: the same call, about to run, carries the running task.
+    let before = input_at(&dir, "PreToolUse", &command);
+    assert!(
+        before.contains("## /facts/install-pending/state\nrunning"),
+        "{before}"
+    );
+    let after = input_at(&dir, "PostToolUse", &command);
+    assert!(
+        !after.contains("## /facts/install-pending/"),
+        "a post-tool call resolves no install state: {after}"
+    );
 }
 
 /// Fails by: a program that resolves outside every install root held as
