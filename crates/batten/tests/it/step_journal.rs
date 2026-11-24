@@ -629,6 +629,17 @@ fn seeding_step(repo: &std::path::Path, log: &std::path::Path, ci: bool) -> (boo
         .env("FIXTURE_LOG", log)
         .env_remove("FIXTURE_FAIL")
         .env_remove("BATTEN_STEP_RECEIPT_BYPASS");
+    // A STEP RUN BY HAND, NEVER ONE NESTED IN A SWEEP (CLOUD-2789): each of
+    // these says this process runs inside a reach or judging run, which owes
+    // no seed, and this case runs under exactly those.
+    for nested in [
+        batten::mutate::resume::SEED_ENV,
+        batten::mutate::schema::REACH,
+        batten::mutate::schema::RECORD,
+        batten::mutate::schema::ACTIVE,
+    ] {
+        command.env_remove(nested);
+    }
     if ci {
         command.env("CI", "1");
     } else {
