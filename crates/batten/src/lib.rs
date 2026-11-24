@@ -19671,9 +19671,15 @@ fn arm_sequence(
     if introduced.is_empty() {
         // No arm arrived, so no line can spend one. Returning early keeps the
         // ledger's blobs unread on every commit that merely edited the config.
+        //
+        // Every field spelled, no `..default()` base: `judge_arm_sequencing`
+        // reads `label` only inside its loop over `introduced`, empty here, so a
+        // deleted `label` was an equivalent mutant, and cargo-mutants 27.1.0
+        // applies no `exclude_re` to field deletions (CLOUD-2789).
         return commit::ArmSequence {
             label,
-            ..commit::ArmSequence::default()
+            introduced,
+            added_lines: Vec::new(),
         };
     }
     let mut added_lines = Vec::new();
