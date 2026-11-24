@@ -7132,6 +7132,26 @@ mod tests {
         );
     }
 
+    /// Fails by: the leading pair dropped when only HALF of it matches
+    /// (`&&` read as `||` in `discovery_args`), which loses an argument the
+    /// caller gave — `--release` after a bare `test`, or `-p a` after a
+    /// `--no-run` that no `test` verb led.
+    #[test]
+    fn the_discovery_build_drops_the_leading_pair_only_when_both_match() {
+        let respelled = |given: &[&str]| {
+            discovery_args(&given.iter().copied().map(String::from).collect::<Vec<_>>())
+        };
+        let keep = ["build", "--tests", "--keep-going"];
+        assert_eq!(
+            respelled(&["test", "--release", "-p", "a"]),
+            [&keep[..], &["test", "--release", "-p", "a"]].concat()
+        );
+        assert_eq!(
+            respelled(&["check", "--no-run", "-p", "a"]),
+            [&keep[..], &["check", "--no-run", "-p", "a"]].concat()
+        );
+    }
+
     /// Fails by: an `unviable` hand-back reported as an `error` verdict rather
     /// than counted apart, or a name no verdict carries read as one.
     #[test]
