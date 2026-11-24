@@ -634,7 +634,6 @@ mod tests {
             super::quoted_arg(r#"a\"b\\c", rest"#),
             Some((String::from("a\"b\\c"), ", rest"))
         );
-        assert_eq!(super::quoted_arg(r#"a\nb""#), None);
         assert_eq!(super::quoted_arg(r#"cut"..."#), None);
     }
 

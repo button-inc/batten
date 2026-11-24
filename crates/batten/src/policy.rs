@@ -9040,7 +9040,8 @@ violation contains {\"rule\": \"d\", \"verdict\": \"d\"} if {\n\tinput.call.oper
     #[test]
     fn a_read_of_input_under_with_stays_on_the_interpreter() {
         const READ: &str = "package batten.i\nimport rego.v1\n\n\
-            test_i if {\n\tinput.x == 1 with input as {\"x\": 1}\n}\n";
+            test_i if {\n\tinput.x == 1 with input as {\"x\": 1}\n}\n\n\
+            test_plain if {\n\t1 == 1\n}\n";
         let found = splits(READ);
         assert!(
             found
@@ -9056,7 +9057,8 @@ violation contains {\"rule\": \"d\", \"verdict\": \"d\"} if {\n\tinput.call.oper
     fn a_case_calling_a_helper_that_writes_with_stays_on_the_interpreter() {
         const HELPER: &str = "package batten.w\nimport rego.v1\n\n\
             h if {\n\tinput.x == 1 with input as {\"x\": 1}\n}\n\n\
-            test_h if {\n\th\n}\n";
+            test_h if {\n\th\n}\n\n\
+            test_plain if {\n\t1 == 1\n}\n";
         let found = splits(HELPER);
         assert!(
             found
@@ -9072,9 +9074,9 @@ violation contains {\"rule\": \"d\", \"verdict\": \"d\"} if {\n\tinput.call.oper
     fn a_written_suite_program_reads_back_as_cached() {
         let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
         let engine = bundle.evaluator.engine().expect("interpreted");
-        let program = SuiteProgram::compile(engine)
-            .ok()
-            .expect("the suite compiles");
+        let Ok(program) = SuiteProgram::compile(engine) else {
+            panic!("the suite compiles");
+        };
         assert!(!program.cached);
         let path = crate::scratch::scratch("suite-program-cache").join("row.rvm");
         program.write(&path, "key");
