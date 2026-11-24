@@ -8888,7 +8888,9 @@ violation contains {\"rule\": \"d\", \"verdict\": \"d\"} if {\n\tinput.call.oper
             if case == 5 {
                 module.push_str("\ntest_5 if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n");
             } else {
-                module.push_str(&format!("\ntest_{case} if {{\n\ttrue\n}}\n"));
+                for piece in ["\ntest_", &case.to_string(), " if {\n\ttrue\n}\n"] {
+                    module.push_str(piece);
+                }
             }
         }
         let bundle = bundle_of("row", &[("policy/d.rego", &module)]);
