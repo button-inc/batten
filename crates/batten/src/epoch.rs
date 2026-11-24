@@ -1121,6 +1121,37 @@ mod rule_surface_tests {
         );
     }
 
+    /// Fails by: a `[[recorder]]` row whose store the module never reads kept
+    /// in its epoch, or one whose store it does read dropped from it.
+    #[test]
+    fn only_a_recorder_row_for_a_store_it_reads_moves_the_epoch() {
+        let recorder = |name: &str, record: &str| {
+            format!(
+                "\n[[recorder]]\nname = \"{name}\"\nrecord = \"{record}\"\ntool = \"save_issue\"\n\
+                 key = \"branch\"\nrequires = [\"id\"]\n\n[[recorder.columns]]\nname = \"id\"\n\
+                 value = {{ result = \"id\" }}\n"
+            )
+        };
+        let with = |unread: &str, read: &str| {
+            format!(
+                "{}{}{}",
+                config("", "restore it"),
+                recorder(unread, "other-writes"),
+                recorder(read, "board-writes")
+            )
+        };
+        let dir = repo("epoch-rule-recorder", &with("unread", "read"));
+        let before = epoch(&dir);
+        fs::write(dir.join("batten.toml"), with("unread-renamed", "read")).unwrap();
+        assert_eq!(epoch(&dir), before, "the module reads no `other-writes`");
+        fs::write(
+            dir.join("batten.toml"),
+            with("unread-renamed", "read-renamed"),
+        )
+        .unwrap();
+        assert_ne!(epoch(&dir), before, "the module reads `board-writes`");
+    }
+
     /// Fails by: the narrowing reaching past the unrelated, so the rule's own
     /// row or its module changing leaves an admission bound.
     #[test]

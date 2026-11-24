@@ -214,6 +214,15 @@ pub const DRAIN_GRACE: Duration = Duration::from_secs(10);
 mod tests {
     use super::*;
 
+    /// Fails by: a write through the share reporting no byte taken, so a
+    /// caller's `write_all` loops or gives up on bytes the sink holds.
+    #[test]
+    fn a_write_through_the_share_reports_what_it_took() {
+        let mut shared = Shared::new(Vec::new());
+        assert_eq!(shared.write(b"abc").unwrap(), 3);
+        assert_eq!(shared.bytes(), b"abc");
+    }
+
     /// A pipe that yields `chunks` one per read, and on each read records what
     /// both sinks already held: the pump's ordering, observed.
     struct Pipe {

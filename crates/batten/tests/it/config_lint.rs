@@ -1907,3 +1907,77 @@ fn the_armed_comparison_still_reports_a_single_tree_smell() {
     assert!(seen.contains("empty-protected-set"), "got: {seen}");
     assert!(seen.contains("severity-lowered"), "got: {seen}");
 }
+
+/// A glob widened only to follow a file the branch moved is no weakening, and
+/// a branch with that move and that glob reports nothing for it
+/// (CLOUD-2789).
+///
+/// Fails by: the move-explained finding kept and every other one dropped.
+#[test]
+fn a_glob_that_only_follows_a_moved_file_is_not_reported() {
+    let rule = |glob: &str| {
+        format!(
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"{glob}\"\n\
+             pattern = \"x\"\nseverity = \"deny\"\nscope = \"tree\"\n"
+        )
+    };
+    let dir = Fixture::new("config-lint-moved-glob")
+        .config(&rule("crates/a/src/**/*.rs"))
+        .files(&[
+            ("crates/a/src/x.rs", "pub fn x() {}\n"),
+            ("crates/a/src/kept.rs", "pub fn kept() {}\n"),
+        ])
+        .git()
+        .base_commit()
+        .build();
+    fs::create_dir_all(dir.join("crates/b/src")).unwrap();
+    common::git_in(&dir, &["mv", "crates/a/src/x.rs", "crates/b/src/x.rs"]);
+    let base = fs::read_to_string(dir.join("batten.toml")).unwrap();
+    fs::write(
+        dir.join("batten.toml"),
+        base.replace("crates/a/src/**/*.rs", "crates/{a,b}/src/**/*.rs"),
+    )
+    .unwrap();
+    common::git_in(&dir, &["commit", "-q", "-am", "move x into b"]);
+    let today = batten::waiver::Date::parse("2026-08-10").unwrap();
+    let found: Vec<String> = batten::lint::run(&dir, Some("origin/main"), today)
+        .unwrap()
+        .iter()
+        .map(batten::lint::Smell::line_text)
+        .collect();
+    assert!(
+        !found
+            .iter()
+            .any(|line| line.contains("rule-predicate-changed")),
+        "{found:?}"
+    );
+    // THE PREMISE: the same glob change with no move IS reported.
+    let unmoved = Fixture::new("config-lint-unmoved-glob")
+        .config(&rule("crates/a/src/**/*.rs"))
+        .files(&[("crates/a/src/kept.rs", "pub fn kept() {}\n")])
+        .git()
+        .base_commit()
+        .build();
+    let base = fs::read_to_string(unmoved.join("batten.toml")).unwrap();
+    fs::write(
+        unmoved.join("batten.toml"),
+        base.replace("crates/a/src/**/*.rs", "crates/{a,b}/src/**/*.rs"),
+    )
+    .unwrap();
+    fs::write(unmoved.join("crates/a/src/x.rs"), "pub fn x() {}\n").unwrap();
+    fs::create_dir_all(unmoved.join("crates/b/src")).unwrap();
+    fs::write(unmoved.join("crates/b/src/y.rs"), "pub fn y() {}\n").unwrap();
+    common::git_in(&unmoved, &["add", "-A"]);
+    common::git_in(&unmoved, &["commit", "-q", "-m", "add y in b"]);
+    let found: Vec<String> = batten::lint::run(&unmoved, Some("origin/main"), today)
+        .unwrap()
+        .iter()
+        .map(batten::lint::Smell::line_text)
+        .collect();
+    assert!(
+        found
+            .iter()
+            .any(|line| line.contains("rule-predicate-changed")),
+        "{found:?}"
+    );
+}

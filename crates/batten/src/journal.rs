@@ -1912,6 +1912,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: a shard shorter than its mark (truncated or replaced) read
+    /// past that mark as if it had only grown, so what it now holds is never
+    /// folded; only the full replay reads it.
+    #[test]
+    fn a_shard_shorter_than_its_mark_is_replayed() {
+        let dir = store("merge-shorter");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        for _ in 0..2 {
+            append(&dir, "shard", &entry_for("TODO", Disposition::Acted)).unwrap();
+        }
+        assert!(matches!(
+            merge(&dir).unwrap(),
+            Merge::Merged { applied: 2, .. }
+        ));
+        let shard = shards_dir(&dir).join("shard.jsonl");
+        let text = std::fs::read_to_string(&shard).unwrap();
+        let first = text.lines().next().unwrap();
+        std::fs::write(&shard, format!("{first}\n")).unwrap();
+        assert!(
+            matches!(merge(&dir).unwrap(), Merge::Merged { applied: 1, .. }),
+            "the replay folds the one entry the shorter shard holds"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Fails by: a record's line carrying anything but its pointers.
     #[test]
     fn a_disposition_line_is_the_records_pointers() {

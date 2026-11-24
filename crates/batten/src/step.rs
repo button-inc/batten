@@ -2240,6 +2240,18 @@ pub fn tree_inputs_digest(root: &Path) -> Result<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: a cleared red left standing, so a gate started under the
+    /// same task reads the last one's failure as its own.
+    #[test]
+    fn a_cleared_red_is_no_longer_read() {
+        let git_dir = crate::scratch::scratch("step-red-clear");
+        crate::record::keyed_write(&git_dir, RED, "42", "lint:clippy\n").unwrap();
+        assert_eq!(red_under(&git_dir, 42).as_deref(), Some("lint:clippy"));
+        clear_red(&git_dir, 42);
+        assert_eq!(red_under(&git_dir, 42), None);
+    }
+
     #[cfg(test)]
     #[test]
     fn a_held_step_lock_excludes_its_own_step_and_no_other() {

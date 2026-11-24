@@ -4889,6 +4889,32 @@ impl MintedQuery {
     }
 }
 
+#[cfg(test)]
+mod minted_query_tests {
+    use super::MintedQuery;
+
+    fn query(id: &str, mint: &str) -> MintedQuery {
+        MintedQuery {
+            id: id.to_owned(),
+            mint: mint.to_owned(),
+            field: 1,
+            recency: 2,
+            max_age_days: 7,
+        }
+    }
+
+    /// Fails by: an empty id admitted beside a well-formed mint, or any one
+    /// malformation needing another beside it to be refused.
+    #[test]
+    fn each_malformation_is_refused_on_its_own() {
+        assert!(!query("m", "issue-read").malformed());
+        assert!(query("", "issue-read").malformed());
+        assert!(query("m", "").malformed());
+        assert!(query("m", "a/b").malformed());
+        assert!(query("m", "a\\b").malformed());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Agent-sourced facts (CLOUD-776)
 // ---------------------------------------------------------------------------
