@@ -22894,6 +22894,33 @@ deny contains "refused by themodule" if {
         assert_eq!(file[1]["trusted"], false, "{file:?}");
     }
 
+    /// A `cd` placed across `;` moves where a later stage's script file is
+    /// read; one piped or backgrounded runs in a subshell and moves nothing
+    /// (CLOUD-2789).
+    ///
+    /// Fails by: the last line of a piped or backgrounded segment handing its
+    /// `cd` on, which reads the script under `sub/`.
+    #[test]
+    fn a_piped_or_backgrounded_cd_does_not_move_a_later_script() {
+        let source = |command: &str| {
+            program_reach(command)
+                .into_iter()
+                .find(|entry| entry["opaque"] == true)
+                .map(|entry| entry["source"].clone())
+        };
+        assert_eq!(
+            source("cd sub; bash script.sh"),
+            Some(serde_json::json!("sub/script.sh"))
+        );
+        for command in ["cd sub | true; bash script.sh", "cd sub & bash script.sh"] {
+            assert_eq!(
+                source(command),
+                Some(serde_json::json!("script.sh")),
+                "{command}"
+            );
+        }
+    }
+
     /// `cargo run` reaches the binary it starts, named by `--bin`, `--example`
     /// or `-p`, handed what follows `--`; `batten step run` reaches the argv
     /// after its `--` (step 14).
