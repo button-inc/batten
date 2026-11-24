@@ -529,7 +529,14 @@ fn env_utility<'a>(arguments: &[&'a str]) -> Option<Vec<&'a str>> {
 /// in `valued` given as a separate word.
 fn after_options<'a>(arguments: &[&'a str], valued: &[&str]) -> Vec<&'a str> {
     let mut at = 0;
-    while let Some(word) = arguments.get(at) {
+    // BOUNDED BY THE WORD COUNT (CLOUD-2789): every pass moves `at` forward by
+    // at least one word, so `arguments.len()` passes reach the end. A change
+    // that stops it advancing ends the scan with a wrong answer a case can
+    // see, rather than spinning until the suite's timeout.
+    for _ in 0..arguments.len() {
+        let Some(word) = arguments.get(at) else {
+            break;
+        };
         if *word == "--" {
             at += 1;
             break;
