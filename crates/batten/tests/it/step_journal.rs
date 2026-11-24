@@ -752,6 +752,11 @@ fn seed_between_laps(repo: &std::path::Path, log: &std::path::Path) {
 ///
 /// Fails by: no seed owed, a seed that records nothing selectable, or the
 /// next head rerunning cases the edit could not reach (passes not keyed).
+///
+/// TRACED OR NOT, BY THE HOST ([`common::traced`]): a suite run under `step
+/// run`'s tracer seeds every case untraced, each keyed on the whole tree, so
+/// the edit to `beta` reruns all four there — the sound fallback, asserted as
+/// itself rather than as the traced selection it cannot be (CLOUD-2789).
 #[test]
 fn a_step_run_with_no_sweep_seeds_the_next_heads_selection() {
     let _ = common::require_bin("nextest", "cargo-nextest");
@@ -770,11 +775,19 @@ fn a_step_run_with_no_sweep_seeds_the_next_heads_selection() {
     );
     let (passed, err) = seeding_step(&repo, &log, false);
     assert!(passed, "{err}");
-    assert_eq!(
-        counts(&log),
-        [1, 2, 1, 1],
-        "the edit to `beta` reruns the case that reached it alone\n{err}"
-    );
+    if common::traced() {
+        assert_eq!(
+            counts(&log),
+            [1, 2, 1, 1],
+            "the edit to `beta` reruns the case that reached it alone\n{err}"
+        );
+    } else {
+        assert_eq!(
+            counts(&log),
+            [2, 2, 2, 2],
+            "untraced, every case keys on the whole tree, so any edit reruns it\n{err}"
+        );
+    }
 }
 
 /// [`SELECTED`] with a case that lists the package's `fixtures/` directory.
@@ -796,6 +809,10 @@ fn globbing_source() -> String {
 ///
 /// Fails by: the listing case rerun over an unrelated edit (nothing recorded
 /// for it), or skipped when its directory gained a file (the listing unkeyed).
+///
+/// TRACED OR NOT, BY THE HOST ([`common::traced`]): untraced, the case keys on
+/// the whole tree, so the unrelated edit reruns it too — and the added file
+/// still does (CLOUD-2789).
 #[test]
 fn a_globbing_case_reruns_only_when_its_directory_listing_moves() {
     let _ = common::require_bin("nextest", "cargo-nextest");
@@ -812,19 +829,21 @@ fn a_globbing_case_reruns_only_when_its_directory_listing_moves() {
         "src/lib.rs",
         &source.replace("pub fn beta() -> u8 { 2 }", "pub fn beta() -> u8 { 1 + 1 }"),
     );
+    let traced = common::traced();
     let (passed, err) = seeding_step(&repo, &log, false);
     assert!(passed, "{err}");
+    let (unrelated, added) = if traced { (1, 2) } else { (2, 3) };
     assert_eq!(
         runs(&log, "lists_fixtures"),
-        1,
-        "an edit it never reached leaves it held\n{err}"
+        unrelated,
+        "traced, an edit it never reached leaves it held; untraced, it reruns (traced: {traced})\n{err}"
     );
     common::write(&repo, "fixtures/new.txt", "an added fixture\n");
     let (passed, err) = seeding_step(&repo, &log, false);
     assert!(passed, "{err}");
     assert_eq!(
         runs(&log, "lists_fixtures"),
-        2,
-        "a file added to its directory reruns it\n{err}"
+        added,
+        "a file added to its directory reruns it (traced: {traced})\n{err}"
     );
 }
