@@ -111,6 +111,57 @@ fn a_rule_selected_into_the_wrong_half_is_refused() {
     assert_eq!(code(&right), Some(2), "{}", stderr(&right));
 }
 
+/// One `ratchet` over tree facts, against `HEAD`.
+const RATCHET: &str = "version = 1\n\
+                       scope = [\"**\"]\n\
+                       \n[[rule]]\n\
+                       id = \"todo-grew\"\n\
+                       kind = \"ratchet\"\n\
+                       glob = \"*.txt\"\n\
+                       pattern = \"TODO\"\n\
+                       direction = \"non_increasing\"\n\
+                       base = \"HEAD\"\n\
+                       severity = \"deny\"\n\
+                       scope = \"tree\"\n";
+
+/// A ratchet is a tree row only when its `base` is one the caller keys the
+/// receipt on (`--keyed-base`): unkeyed, its base can move under a receipt, so
+/// `--rule` into the tree half is refused (CLOUD-2789).
+///
+/// Fails by: the keyed bases dropped on the way into the run, which leaves a
+/// keyed ratchet in the live half and refuses it here.
+#[test]
+fn a_ratchet_on_a_keyed_base_is_judged_by_the_tree_half() {
+    let dir = repo("keyed-ratchet", RATCHET, &[("a.txt", "TODO\n")]);
+
+    let keyed = batten(
+        &dir,
+        &[
+            "enforce",
+            "--half",
+            "tree",
+            "--keyed-base",
+            "HEAD",
+            "--rule",
+            "todo-grew",
+        ],
+    );
+    assert_eq!(code(&keyed), Some(0), "{}", stderr(&keyed));
+
+    let unkeyed = batten(&dir, &["enforce", "--half", "tree", "--rule", "todo-grew"]);
+    assert_eq!(
+        code(&unkeyed),
+        Some(1),
+        "an unkeyed ratchet is the live half's: {}",
+        stderr(&unkeyed)
+    );
+    assert!(
+        stderr(&unkeyed).contains("todo-grew"),
+        "{}",
+        stderr(&unkeyed)
+    );
+}
+
 /// A module deciding over the family `runs`, which no tree key covers.
 const READS_THE_RUNS: &str = r#"# METADATA
 # description: reads a record family.
