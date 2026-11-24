@@ -84,4 +84,20 @@ exclude_re = [
   # once more, which is the text the blocking wait returns too. Only wall time
   # and CPU differ, and time is never what a case asserts.
   'replace \|\| with && in await_trace',
+  # COMPILED OUT, not equivalent: the off-Linux `fanotify` stub is
+  # `#[cfg(not(target_os = "linux"))]`, and mutants run on Linux, so no case is
+  # built against it; its `Group` is uninhabited, so off Linux too the mutant
+  # would not compile (CLOUD-2789).
+  'disk_watch\.rs:\d+:\d+: replace fanotify::arm -> Result<Group, String> with Ok\(Default::default\(\)\)$',
+  # `torn_tail`'s one caller runs it only after the whole line failed to
+  # decode, and offset 0 is that same whole line: admitting it decodes the
+  # same failing text again (CLOUD-2789).
+  'transcript\.rs:\d+:\d+: replace > with >= in torn_tail$',
+  # The one caller reads its rows past every line starting `#`, so no root
+  # starts with `#` and a comment's first word never names one (CLOUD-2789).
+  'module_graph\.rs:\d+:\d+: replace match guard !line\.starts_with\(.#.\) with true in tightened_record$',
+  # A crate's name is its manifest's `package.name`, which cargo refuses empty,
+  # so a head the guard would let through (`""` then the alias) names no
+  # module, and the arms after it answer `None` alike (CLOUD-2789).
+  'item_index\.rs:\d+:\d+: replace match guard !reader\.krate\.is_empty\(\) with true in Index::absolute_in$',
 ]

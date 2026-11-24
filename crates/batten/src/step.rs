@@ -2285,6 +2285,17 @@ mod tests {
         assert_eq!(Answer::NoKey.recording(), None);
     }
 
+    /// Fails by: a field taken as a capture handle when only one of its two
+    /// halves holds — a stream with no handle, or a handle under another
+    /// name — so `stderr:` or a held pipe's `held:open` reaches the pointer.
+    #[test]
+    fn a_verdict_line_points_only_at_named_stream_handles() {
+        assert_eq!(
+            super::verdict_line("g", "a", 0, 1.0, Some("exec: stdout:h1 held:open stderr:")),
+            "ok g a 0 1.000 stdout:h1"
+        );
+    }
+
     /// Fails by: a pass, a signal (`128 + N`) or a shell that could not run
     /// the child recorded as a verdict over the inputs.
     #[test]
