@@ -8508,3 +8508,17 @@ impl FlagDecl {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fails by: `required` building a flag the surface does not require, so
+    /// a release verb's `--workflow` is read as optional and its absence
+    /// passes the parse (CLOUD-2789).
+    #[test]
+    fn a_required_flag_is_declared_required() {
+        assert!(!FlagDecl::valued("w", "w", "a valued flag").required);
+        assert!(required("w", "w", "a required flag").required);
+    }
+}

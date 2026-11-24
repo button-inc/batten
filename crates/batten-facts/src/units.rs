@@ -409,6 +409,14 @@ mod tests {
         assert_eq!(held.nesting, 2);
     }
 
+    /// Fails by: a function's parameters left uncounted, every function read
+    /// as taking none (CLOUD-2789).
+    #[test]
+    fn a_function_counts_its_parameters() {
+        assert_eq!(one("fn f(a: u8, b: u8, c: u8) {}").params, 3);
+        assert_eq!(one("fn f() {}").params, 0);
+    }
+
     /// Fails by: a closure's body read at its enclosing level.
     #[test]
     fn a_closure_deepens_nesting() {

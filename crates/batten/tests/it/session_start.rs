@@ -102,6 +102,43 @@ pub(crate) fn settle(repo: &Path) -> String {
     panic!("the setup task never finished: {:?}", setup_phase(repo));
 }
 
+/// Write `line` into the FIFO at `gate` once the handler has opened it to
+/// read, GIVING UP AS SOON AS NOTHING EVER WILL (CLOUD-2789), as [`settle`]
+/// does. A blocking open waits for a reader forever: a setup task that
+/// returned before its handlers ran hung this case to nextest's timeout
+/// rather than turning it red. The open is non-blocking, so with no reader it
+/// fails at once and the task's liveness decides whether to try again.
+fn release(repo: &Path, gate: &Path, line: &str) {
+    use rustix::fs::{Mode, OFlags};
+    let began = Instant::now();
+    let mut asked = None::<Instant>;
+    while began.elapsed() < SETTLE {
+        match rustix::fs::open(
+            gate,
+            OFlags::WRONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(fd) => {
+                let wrote = rustix::io::write(&fd, line.as_bytes()).expect("write the gate");
+                assert_eq!(wrote, line.len(), "the whole line reaches the handler");
+                return;
+            }
+            Err(rustix::io::Errno::NXIO) => {}
+            Err(other) => panic!("the gate cannot be opened: {other}"),
+        }
+        if asked.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+            asked = Some(Instant::now());
+            assert!(
+                setup_alive(repo),
+                "the setup task exited before its handler read the gate: {:?}",
+                setup_phase(repo)
+            );
+        }
+        std::thread::yield_now();
+    }
+    panic!("the handler never opened the gate: {:?}", setup_phase(repo));
+}
+
 /// Whether `batten task alive` names the setup task as running.
 fn setup_alive(repo: &Path) -> bool {
     let alive = common::batten()
@@ -201,7 +238,7 @@ fn a_blocking_handler_holds_nothing_and_is_said_once() {
         "nothing is said while the task runs"
     );
 
-    std::fs::write(&gate, "released\n").expect("release the handler");
+    release(&repo, &gate, "released\n");
     assert_eq!(settle(&repo), "failed", "a speaking handler is a finding");
     let first = pre_tool(&repo);
     assert!(

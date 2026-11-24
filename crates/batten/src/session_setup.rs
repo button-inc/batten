@@ -538,6 +538,26 @@ mod tests {
         assert!(surface(&git_dir).is_empty(), "said once");
     }
 
+    /// Fails by: an outcome on disk skipped because a crash marker is already
+    /// there, so a finding the task recorded after its crash was said is never
+    /// surfaced (the early return read as `outcome.exists() && …`, CLOUD-2789).
+    #[test]
+    fn an_outcome_beside_a_spent_crash_marker_is_still_surfaced() -> std::io::Result<()> {
+        let git_dir = crate::scratch::scratch("session-setup-outcome-after-crash");
+        std::fs::create_dir_all(dir(&git_dir))?;
+        task::register(&git_dir, TASK, "4194305", task::FAILED, 100);
+        let report = Finding::Report {
+            id: "step".to_owned(),
+            text: "said".to_owned(),
+        };
+        let line = serde_json::to_string(&report).unwrap_or_default();
+        std::fs::write(dir(&git_dir).join(OUTCOME), format!("{line}\n"))?;
+        std::fs::write(dir(&git_dir).join(SURFACED), "")?;
+        assert_eq!(surface(&git_dir), vec![report.refusal()]);
+        assert!(surface(&git_dir).is_empty(), "said once");
+        Ok(())
+    }
+
     /// Fails by: a passing `[[startup]]` row reported as a finding, or the
     /// rows read as failed when every one passed.
     #[test]
