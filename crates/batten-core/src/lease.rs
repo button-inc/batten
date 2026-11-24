@@ -2974,15 +2974,22 @@ pub fn holder_alive(pid: u32, marker: &str) -> bool {
     command.contains(marker)
 }
 
-/// The same question where no `/proc` answers it — see the Linux arm's docs.
-///
-/// Inert by construction: every pid reads as gone, so this never renews a lease
-/// on a holder's behalf and never contributes to stealing one either. A steal
-/// still needs the corroboration clocks `turn` requires.
-#[must_use]
 #[cfg(not(target_os = "linux"))]
-pub fn holder_alive(_pid: u32, _marker: &str) -> bool {
-    false
+pub use off_proc::holder_alive;
+
+/// The off-Linux arm, in a module of its own so its compiled-out mutants are
+/// named apart from the Linux arm's (`.cargo/mutants.toml`).
+#[cfg(not(target_os = "linux"))]
+mod off_proc {
+    /// The same question where no `/proc` answers it — see the Linux arm's docs.
+    ///
+    /// Inert by construction: every pid reads as gone, so this never renews a
+    /// lease on a holder's behalf and never contributes to stealing one either.
+    /// A steal still needs the corroboration clocks `turn` requires.
+    #[must_use]
+    pub fn holder_alive(_pid: u32, _marker: &str) -> bool {
+        false
+    }
 }
 
 /// The lease ref's health, as a gate rather than a report.

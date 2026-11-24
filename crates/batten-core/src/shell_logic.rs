@@ -1969,6 +1969,9 @@ mod tests {
     fn a_shortened_valued_powershell_parameter_consumes_its_value() {
         assert!(!switch_script("pwsh", &["-workingd", "-c", "x.ps1"]));
         assert!(switch_script("pwsh", &["-workingd", "dir", "-c", "x"]));
+        // Fails by: a name of three letters or more read as valued whatever
+        // it prefixes, so the unknown `-xyz` swallows the `-c` after it.
+        assert!(switch_script("pwsh", &["-xyz", "-c", "x"]));
     }
 
     /// Fails by: any `cmd.exe` argument read as `/C`, `/K` or `/R`.

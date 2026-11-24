@@ -34679,6 +34679,83 @@ mod tests {
         );
     }
 
+    /// Fails by: a child's ending dispatched and never remembered, so the next
+    /// watch dispatches it again; or a child still working dispatched at all.
+    #[test]
+    fn an_ended_child_is_dispatched_once_and_remembered() {
+        let authority = crate::scratch::scratch("session-endings-authority");
+        std::fs::write(authority.join("batten.toml"), "version = 1\n").unwrap();
+        let overrides = Overrides {
+            config_in: Some(authority.display().to_string()),
+            ..Overrides::default()
+        };
+        let ring = crate::scratch::scratch("session-endings").join("seen");
+        let report = |session: &str, state| session_watch::Report {
+            session: session.to_owned(),
+            state,
+            inventory: session_watch::Inventory::default(),
+        };
+        let reports = [
+            report("done", session_watch::State::Done),
+            report("busy", session_watch::State::Working),
+        ];
+        let watch = session_watch::Watch::new(Vec::new());
+        let mut err = Vec::new();
+        dispatch_session_endings(
+            &watch,
+            &reports,
+            &ring,
+            (Mode::default(), &overrides),
+            &mut err,
+        )
+        .unwrap();
+        let said = String::from_utf8(err).unwrap();
+        let done = session_watch::ending_key(&reports[0]);
+        let busy = session_watch::ending_key(&reports[1]);
+        assert!(!forge_event::unseen(&ring, &done).unwrap(), "{said}");
+        assert!(forge_event::unseen(&ring, &busy).unwrap(), "{said}");
+    }
+
+    /// Fails by: a ready spent on a head no gate run passed. The forge's head
+    /// here is one this checkout never verified, so the lap stops before it
+    /// asks anything more of the forge.
+    #[test]
+    fn a_head_no_gate_passed_is_never_readied() {
+        let root = crate::scratch::scratch("spend-unverified");
+        let head = "1111111111111111111111111111111111111111";
+        let forge = crate::rest::routed(
+            "spend-unverified-forge",
+            &[
+                ("pulls?head=", 200, r#"[{"number": 7}]"#),
+                (
+                    "/pulls/7",
+                    200,
+                    &format!(
+                        r#"{{"draft": true, "node_id": "PR_7", "head": {{"sha": "{head}"}}}}"#
+                    ),
+                ),
+            ],
+        );
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let mut ledger = land::Ledger::default();
+        let code = crate::rest::with_fixture(&forge, || {
+            spend_the_matrix(&root, "work", &mut ledger, &mut out, &mut err)
+        })
+        .unwrap();
+        let said = String::from_utf8(out).unwrap();
+        assert_eq!(code, ExitCode::Internal, "{said}");
+        assert!(
+            said.contains("is at 1111111, which no gate run passed"),
+            "{said}"
+        );
+        let asked = crate::rest::asked(&forge);
+        assert_eq!(
+            asked.lines().count(),
+            2,
+            "nothing past the draft read: {asked}"
+        );
+    }
+
     #[test]
     fn two_paths_in_one_checkout_are_one_repository() {
         let here = Path::new(env!("CARGO_MANIFEST_DIR"));

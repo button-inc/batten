@@ -2863,16 +2863,20 @@ mod tests {
         );
         assert!(!real.contains_key("src/check/a.rs"), "{real:?}");
 
-        let parse =
-            parse("#[cfg( test )]\nmod t { fn f() {} }\n#[cfg(not(test))]\nmod u { fn g() {} }\n")
-                .expect("parses");
+        let parse = parse(concat!(
+            "#[cfg( test )]\nmod t { fn f() {} }\n#[cfg(not(test))]\nmod u { fn g() {} }\n",
+            // Fails by: the two halves of the atom's test joined by `||`,
+            // so another bare word or a valued `test` reads as `test`.
+            "#[cfg(unix)]\nmod v { fn h() {} }\n#[cfg(test = \"x\")]\nmod w { fn i() {} }\n",
+        ))
+        .expect("parses");
         let fns: Vec<bool> = parse
             .syntax()
             .descendants()
             .filter_map(ast::Fn::cast)
             .map(|function| cfg_test(function.syntax()))
             .collect();
-        assert_eq!(fns, [true, false]);
+        assert_eq!(fns, [true, false, false, false]);
     }
 
     /// `files` as the path-to-text map the recipes take.

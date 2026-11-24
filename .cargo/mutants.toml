@@ -85,6 +85,9 @@ exclude_re = [
   # built against it; its `Group` is uninhabited, so off Linux too the mutant
   # would not compile (CLOUD-2789).
   'disk_watch\.rs:\d+:\d+: replace fanotify::arm -> Result<Group, String> with Ok\(Default::default\(\)\)$',
+  # The same for the lease's off-Linux `holder_alive`, `#[cfg(not(target_os =
+  # "linux"))]` in `off_proc`: no Linux build compiles it (CLOUD-2789).
+  'lease\.rs:\d+:\d+: replace off_proc::holder_alive -> bool with true$',
   # `torn_tail`'s one caller runs it only after the whole line failed to
   # decode, and offset 0 is that same whole line: admitting it decodes the
   # same failing text again (CLOUD-2789).

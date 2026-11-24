@@ -66,17 +66,50 @@ pub(crate) fn pre_tool(repo: &Path) -> String {
 }
 
 /// The setup task's record, once its phase is terminal.
+///
+/// GIVES UP AS SOON AS THE TASK CANNOT FINISH, not only at [`SETTLE`]
+/// (CLOUD-2789): a task the registry never named, or one whose process is gone
+/// with its phase short of terminal, will never land one, and waiting out the
+/// bound for it read a broken start as a hung suite rather than a red case.
 pub(crate) fn settle(repo: &Path) -> String {
+    let terminal = |phase: &Option<String>| {
+        phase
+            .as_deref()
+            .is_some_and(|phase| phase == "ok" || phase == "failed")
+    };
     let began = Instant::now();
+    let mut asked = None::<Instant>;
     while began.elapsed() < SETTLE {
-        if let Some(phase) = setup_phase(repo)
-            && (phase == "ok" || phase == "failed")
-        {
-            return phase;
+        let phase = setup_phase(repo);
+        if terminal(&phase) {
+            return phase.unwrap_or_default();
+        }
+        // Registered before the door returns (`session_setup::start`), so a
+        // registry that does not name it never will.
+        assert!(phase.is_some(), "nothing registered the setup task");
+        // Asked at most once a second: each ask is a process.
+        if asked.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+            asked = Some(Instant::now());
+            if !setup_alive(repo) {
+                // Read once more: the phase lands before the process exits.
+                let last = setup_phase(repo);
+                assert!(terminal(&last), "the setup task exited at {last:?}");
+                return last.unwrap_or_default();
+            }
         }
         std::thread::yield_now();
     }
     panic!("the setup task never finished: {:?}", setup_phase(repo));
+}
+
+/// Whether `batten task alive` names the setup task as running.
+fn setup_alive(repo: &Path) -> bool {
+    let alive = common::batten()
+        .current_dir(repo)
+        .args(["task", "alive"])
+        .streamed_output()
+        .expect("the binary runs");
+    stdout(&alive).contains("session-setup")
 }
 
 /// The setup task's current phase, or `None` where nothing registered it.

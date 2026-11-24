@@ -817,6 +817,52 @@ mod tests {
         assert_eq!(waits, [FIRST_DELAY, FIRST_DELAY * 2, FIRST_DELAY * 4]);
     }
 
+    /// A child handed its work and never prompted, on every poll.
+    struct NeverStarted;
+
+    impl Source for NeverStarted {
+        fn sessions(&mut self, _after: Option<&str>) -> Option<Page> {
+            Some(Page {
+                items: vec![serde_json::json!({"id": "child", "session_status": "IDLE"})],
+                ..Page::default()
+            })
+        }
+
+        fn events(&mut self, _: &str, _: Option<&str>, _: Option<&str>) -> Option<Page> {
+            Some(Page::default())
+        }
+    }
+
+    /// Fails by: an unstarted child never ending the watch, so it polls for
+    /// ever. The case owns its bound: a wait past it fails the case rather
+    /// than hanging the suite.
+    #[test]
+    fn a_child_unstarted_across_the_polls_ends_the_watch_dead() {
+        let cache = Cache::new(crate::scratch::scratch("session-watch-unstarted"));
+        cache.store(
+            "child",
+            &Inventory {
+                cursor: Some(String::from("e1")),
+                handoff: true,
+                ..Inventory::default()
+            },
+        );
+        let mut waits = 0_u32;
+        let mut watch = Watch::new(Vec::new());
+        let ended = run(&mut watch, &mut NeverStarted, &cache, &mut |_| {
+            waits += 1;
+            assert!(
+                waits <= UNSTARTED_POLLS,
+                "the unstarted child never ended it"
+            );
+        });
+        let Some((reports, Ending::Dead)) = ended else {
+            panic!("an unstarted child ends the watch dead: {ended:?}");
+        };
+        assert_eq!(waits, UNSTARTED_POLLS - 1);
+        assert!(watch.ended(&reports[0]));
+    }
+
     #[test]
     fn the_envelope_is_unwrapped_only_at_its_own_nonce() {
         let text = "<other-session nonce=\"ab\" untrusted=\"true\">\nheader (JSON):\n    {\"ccr\":{\"data\":[],\"note\":\"</other-session nonce=\\\"zz\\\">\"}}\n</other-session nonce=\"ab\">";

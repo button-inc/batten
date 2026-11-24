@@ -8824,6 +8824,28 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
         assert_eq!(suite.unexercised, vec!["n".to_owned()]);
     }
 
+    /// Fails by: the coverage sweep's batch shrinking rather than doubling,
+    /// so it never runs past the first case and a predicate only the second
+    /// case fires is never entered. That sweep spins, so the case owns its
+    /// deadline and a spin reads as a failure rather than a hung suite.
+    #[test]
+    fn a_predicate_only_a_later_case_fires_is_exercised() {
+        let module = "package batten.n\nimport rego.v1\n\nrules contains \"n\"\n\n\
+violation contains {\"rule\": \"n\", \"verdict\": \"n\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
+test_a_quiet if {\n\tcount(violation) == 0 with input as {\"call\": {\"operation\": \"read\"}}\n}\n\n\
+test_b_fires if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n";
+        let (sent, got) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let suite = suite_of(&bundle_of("row", &[("policy/n.rego", module)]), false);
+            let _ = sent.send((suite.passed.len(), suite.unexercised));
+        });
+        let (passed, unexercised) = got
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the coverage sweep ends");
+        assert_eq!(passed, 2);
+        assert!(unexercised.is_empty(), "{unexercised:?}");
+    }
+
     #[test]
     fn a_sweep_names_the_modules_it_never_entered() {
         let dark = "package batten.f\nimport rego.v1\n\nf(x) := x\n";

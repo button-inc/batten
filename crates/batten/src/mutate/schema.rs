@@ -10444,6 +10444,29 @@ pub fn repo() -> u8 {{ scratch() }}
         assert_eq!(code.unwrap(), 2, "a red case alone keeps the exit non-zero");
     }
 
+    /// Fails by: an unjudged mutant with no red case beside it left out of
+    /// the closing count, so a sweep that judged nothing of it says nothing.
+    #[test]
+    fn an_unjudged_mutant_alone_is_counted() {
+        let state = crate::scratch::scratch("schema-report-unjudged");
+        let mutants: Vec<Listed> = ["m0", "m1"]
+            .map(|name| {
+                let mut mutant = listed("FnValue", "true", (1, 1), (1, 2));
+                mutant.name = String::from(name);
+                mutant
+            })
+            .into();
+        let mut out = Vec::new();
+        let unjudged = [(0, Verdict::Caught), (1, Verdict::Unjudged)];
+        let none = (&Red::new(), &std::collections::BTreeMap::new());
+        report(&mut out, &mutants, &unjudged, none, (0, 0), &state, 7).unwrap();
+        let said = String::from_utf8(out).unwrap();
+        assert!(
+            said.contains("mutate schema: 0 baseline-red case(s), 1 unjudged mutant(s)\n"),
+            "{said}"
+        );
+    }
+
     /// Each case's own recorded outcome against a mutant decides it or narrows
     /// its run: a recorded kill is a kill with no run, every case recorded
     /// passing is a survivor with no run, and a case recorded passing is left
