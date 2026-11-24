@@ -1627,13 +1627,31 @@ pub fn unviable(schema: &Schema, messages: &str) -> Refused {
     refused
 }
 
+/// The schema build's round bound, and WHAT IT COVERS (CLOUD-2882).
+///
+/// A round reports every refusal its keep-going build can see, and a crate's
+/// refusals are seen only once every crate it depends on builds clean. So the
+/// rounds a listing needs grow with the workspace's longest chain of
+/// workspace dependencies, plus the rounds inside one crate in which one
+/// refusal hid another (a body one mutant left ill-typed is not borrow-checked
+/// for the next) or a const caller handed a mutant back.
+///
+/// MEASURED on #1276's listing (13,805 mutants), cold and under `CI`: clean in
+/// round 11, 2,182 unviable. That is a six-crate chain (fsio, facts, base,
+/// core, batten, codemods), with batten-facts taking 2 rounds, batten-core 2
+/// and batten-codemods 4. Two rounds per crate in the chain is the allowance
+/// this bound covers, and `the_round_bound_covers_the_workspace_chain` fails
+/// once the chain outgrows it. That fails at the crate split that deepens the
+/// chain, before a reach job does.
+pub const ROUNDS: usize = 12;
+
 /// Build the schema in `work` into `target` until it compiles, switching off
 /// each mutant an error belongs to. Returns those unviable mutants and the
 /// schema that built.
 ///
 /// # Errors
 ///
-/// An error no mutant owns, or no clean build within the round bound.
+/// An error no mutant owns, or no clean build within [`ROUNDS`].
 pub fn build(
     root: &std::path::Path,
     work: &std::path::Path,
@@ -1666,7 +1684,7 @@ pub fn build(
         mut unprobed,
     } = known;
     skip.extend(handed.iter().copied());
-    for round in 1..=12 {
+    for round in 1..=ROUNDS {
         let schema = write_schema(root, work, mutants, &skip, &unprobed)?;
         // EVERY UNIT A ROUND CAN COMPILE, NOT THE FIRST THAT FAILS (CLOUD-2882).
         // `cargo test` stops scheduling at the first failed unit and has no
@@ -1739,7 +1757,7 @@ pub fn build(
         skip.extend(refused.reconst.iter().copied());
         handed.extend(refused.reconst);
     }
-    anyhow::bail!("the schema build was not clean within 12 rounds")
+    anyhow::bail!("the schema build was not clean within {ROUNDS} rounds")
 }
 
 /// The schema build's `cargo test --no-run …` respelled as the keep-going
