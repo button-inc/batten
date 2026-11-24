@@ -4991,19 +4991,18 @@ pub struct Swept {
 ///
 /// The repository state directory cannot be resolved.
 fn mirror_state(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    Ok(crate::state::repo_state_dir(root)?
-        .join("mutate")
-        .join("schema"))
+    crate::state::mutate_schema_dir(root)
 }
 
 /// The sweep's verdict journal for the checkout at `root`: append-only, and
-/// private session state (CLOUD-2887), so the push gate reads it here.
+/// private session state (CLOUD-2887). Spelled in the state layout, which the
+/// push gate reads directly.
 ///
 /// # Errors
 ///
 /// The repository state directory cannot be resolved.
 pub(crate) fn verdicts_path(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    Ok(mirror_state(root)?.join("verdicts"))
+    crate::state::mutate_verdicts_path(root)
 }
 
 /// The file under the mirror's state directory a sweep holds ([`hold`]).

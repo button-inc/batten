@@ -2798,6 +2798,16 @@ pub struct RawObject {
     pub body: Vec<u8>,
 }
 
+impl RawObject {
+    /// Whether this is a blob: file content, as opposed to a commit, tree or
+    /// tag (CLOUD-2887). Here so a caller outside the git modules never names
+    /// the backend's own kind type.
+    #[must_use]
+    pub fn is_blob(&self) -> bool {
+        self.kind == gix::object::Kind::Blob
+    }
+}
+
 /// Every object a push of `base..head` must carry.
 ///
 /// # What the set is, and why it is not simply "everything reachable from head"

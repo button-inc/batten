@@ -118,6 +118,20 @@ pub fn state_repo() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Where `session_watch` keeps its cache and inventory capture under a
+/// repository's state (CLOUD-2826).
+///
+/// SPELLED HERE, and `session_watch::state_dir` delegates (CLOUD-2887): the push
+/// gate lists this store, and reaching `session_watch` for it took
+/// `state_push`'s module closure past the crate's recorded worst.
+///
+/// # Errors
+///
+/// The state directory could not be resolved.
+pub fn watch_dir(repo_root: &Path) -> Result<PathBuf> {
+    Ok(crate::state::repo_state_dir(repo_root)?.join("session-watch"))
+}
+
 /// The session a warm fork was forked from. Absent means "not a fork".
 pub const PARENT_ENV: &str = "BATTEN_SESSION_PARENT";
 

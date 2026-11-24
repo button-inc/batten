@@ -20216,7 +20216,12 @@ fn state_push_for(
         && policy.reads_preset(envelope, preset_catalog::STATE_PRIVATE)
         && hook::pushes_git(envelope)
     {
-        state_push::fact(envelope, hook_authority_root())
+        state_push::fact(
+            &hook::git_pushes(envelope),
+            envelope.cwd.as_deref(),
+            envelope.transcript.as_deref(),
+            hook_authority_root(),
+        )
     } else {
         facts::Look::CouldNotLook
     }

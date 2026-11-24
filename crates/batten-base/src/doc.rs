@@ -1349,6 +1349,18 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
             "read one failure and assume the rest match",
         ],
     },
+    VendoredDoc {
+        id: "path carry loose",
+        why: Some("Session state is private; its one destination is the state repo"),
+        act: &[
+            "take the named path out of every commit the push sends: `git reset --soft <base>`",
+            "send the bytes to the repository `BATTEN_STATE_REPO` names",
+        ],
+        dont: &[
+            "rename the file to push it",
+            "push session state to the project's remote",
+        ],
+    },
     // ── the unclassed emitters' classes ─────────────────────────────────────
     VendoredDoc {
         id: "input parse refused",

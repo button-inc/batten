@@ -652,7 +652,7 @@ pub fn inventory_document(reports: &[Report]) -> Value {
 ///
 /// The state directory could not be resolved.
 pub fn state_dir(repo_root: &Path) -> anyhow::Result<PathBuf> {
-    Ok(crate::state::repo_state_dir(repo_root)?.join("session-watch"))
+    crate::session::watch_dir(repo_root)
 }
 
 #[cfg(test)]

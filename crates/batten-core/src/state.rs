@@ -200,6 +200,31 @@ fn session_authority_file(state: &Path, session: &str) -> PathBuf {
     sessions_dir(state).join(key).join("authority")
 }
 
+/// The schema mutation sweep's state directory for the checkout at
+/// `repo_root`: `<state>/mutate/schema`.
+///
+/// SPELLED HERE, in the state layout, and `mutate::schema` delegates
+/// (CLOUD-2887): the push gate lists the sweep's verdict journal, and reaching
+/// `mutate` for its path took the gate's module closure past the crate's
+/// recorded worst.
+///
+/// # Errors
+///
+/// The state root cannot be resolved.
+pub fn mutate_schema_dir(repo_root: &Path) -> Result<PathBuf> {
+    Ok(repo_state_dir(repo_root)?.join("mutate").join("schema"))
+}
+
+/// The schema mutation sweep's append-only verdict journal under
+/// [`mutate_schema_dir`] (CLOUD-2887).
+///
+/// # Errors
+///
+/// The state root cannot be resolved.
+pub fn mutate_verdicts_path(repo_root: &Path) -> Result<PathBuf> {
+    Ok(mutate_schema_dir(repo_root)?.join("verdicts"))
+}
+
 /// The per-session records under the state root `state` (CLOUD-2887).
 #[must_use]
 pub fn sessions_dir(state: &Path) -> PathBuf {

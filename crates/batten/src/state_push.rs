@@ -35,7 +35,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::facts::Look;
-use crate::hook::Envelope;
 
 /// How much of an append-only file is compared before the rest is read.
 const HEAD_BYTES: usize = 64;
@@ -111,10 +110,10 @@ pub(crate) fn stores(
             ledger.as_deref() == Some(path)
         });
     }
-    if let Ok(dir) = crate::session_watch::state_dir(repo_root) {
+    if let Ok(dir) = crate::session::watch_dir(repo_root) {
         walk(&mut found, "session-watch", &dir, &|_| false);
     }
-    if let Ok(path) = crate::mutate::schema::verdicts_path(repo_root) {
+    if let Ok(path) = crate::state::mutate_verdicts_path(repo_root) {
         walk(&mut found, "mutate-verdicts", &path, &|_| true);
     }
     if let Ok(root) = crate::state::state_root() {
@@ -366,27 +365,32 @@ fn starts(file: &StoreFile, body: &[u8]) -> bool {
     reader.read_to_end(&mut rest).is_ok() && rest == body[head_len..]
 }
 
-/// The fact for this call, or could-not-look where it is no push or the push
-/// cannot be looked at (git itself would fail it then too).
+/// The fact for a call making `pushes` — each as git's own options and the
+/// push's arguments — from `cwd`, in a session whose transcript is
+/// `transcript`. Could-not-look where there is no push or one cannot be looked
+/// at (git itself would fail it then too).
+///
+/// HANDED THE PUSHES, NOT THE ENVELOPE: the hook module reaches most of the
+/// crate, and this module's closure is held to a recorded worst.
 #[must_use]
-pub(crate) fn fact(envelope: &Envelope, authority: &Path) -> Look<serde_json::Value> {
-    let pushes = crate::hook::git_pushes(envelope);
+pub(crate) fn fact(
+    pushes: &[(Vec<String>, Vec<String>)],
+    cwd: Option<&Path>,
+    transcript: Option<&str>,
+    authority: &Path,
+) -> Look<serde_json::Value> {
     if pushes.is_empty() {
         return Look::CouldNotLook;
     }
-    let cwd = envelope
-        .cwd
-        .clone()
+    let cwd = cwd
         .filter(|dir| dir.is_dir())
-        .unwrap_or_else(|| authority.to_path_buf());
-    let transcript_dir = envelope
-        .transcript
-        .as_deref()
-        .and_then(|path| Path::new(path).parent().map(Path::to_path_buf));
+        .map_or_else(|| authority.to_path_buf(), Path::to_path_buf);
+    let transcript_dir =
+        transcript.and_then(|path| Path::new(path).parent().map(Path::to_path_buf));
     let state_repo = crate::session::state_repo();
     let mut remote_slug = None;
     let mut carried = Vec::new();
-    for (globals, arguments) in &pushes {
+    for (globals, arguments) in pushes {
         let push = parse(globals, arguments, &cwd);
         let Some(found) = judge(&push, authority, transcript_dir.as_deref()) else {
             return Look::CouldNotLook;
@@ -436,10 +440,7 @@ fn judge(
         for (id, path) in crate::git::blob_paths_at_rev(&root, &tip).unwrap_or_default() {
             names.entry(id).or_insert(path);
         }
-        for object in objects
-            .iter()
-            .filter(|object| object.kind == gix::object::Kind::Blob)
-        {
+        for object in objects.iter().filter(|object| object.is_blob()) {
             for (file, arm) in matches(&object.body, &files) {
                 let path = names
                     .get(&object.id)
