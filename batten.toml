@@ -2007,6 +2007,16 @@ regex = '[A-Za-z0-9_./-]+\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z
 id = "ledger-pair"
 regex = '\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_][A-Za-z0-9_.]*\[[^\]]+\](?:\.[A-Za-z0-9_]+)*)'
 
+# The same pair when the engine keys it bare or dotted (CLOUD-2920):
+# `strictness-lowered strictness`, `forge-credentials-removed
+# forge.credential_names` (`trust.rs`). The key must CLOSE the pair, followed by
+# `?` `,` `;` `:` `)` a backtick, a quote, `.` or the end, or any hyphenated
+# word before any word would read as one. Backtick and quote are `\x60` `\x27`
+# so the same text sits in a TOML literal and a Rego raw string.
+[[pattern]]
+id = "ledger-pair-bare"
+regex = '\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ [A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*(?:[?,;:)\x60\x27".]|$)'
+
 # CLOUD-2241: work promised to a later branch in a final message, which the turn
 # must file before it ends. The literals are the three witnessed on PR #1132
 # ("goes on the next branch", "ships on the next branch", "their own short
