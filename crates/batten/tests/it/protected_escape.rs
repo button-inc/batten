@@ -457,10 +457,16 @@ fn publish_origin_main(dir: &Path, when: Published<'_>) {
 
 /// Point `name` at `target` through `update-ref`, its reflog entry stamped as
 /// `when` says.
+///
+/// A before-the-call publish DROPS THE REF FIRST. `base_commit` pins
+/// `origin/main` at `HEAD` with no reflog, and an `update-ref` to the value a
+/// ref already holds writes no entry — so a publish at the base commit left no
+/// tip at all, and a case meant to stand on a pushed `HEAD` silently did not.
+/// The reflog is asserted, so that premise fails by name.
 fn publish_ref(dir: &Path, name: &str, target: &str, when: Published<'_>) {
-    let mut update = common::git_command(dir, &["update-ref", name, target]);
     let stamp = match when {
         Published::BeforeTheCall => {
+            common::git_in(dir, &["update-ref", "-d", name]);
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -469,9 +475,14 @@ fn publish_ref(dir: &Path, name: &str, target: &str, when: Published<'_>) {
         }
         Published::InTheCall(call) => snapshot_at(dir, call),
     };
+    let mut update = common::git_command(dir, &["update-ref", name, target]);
     update.env("GIT_COMMITTER_DATE", format!("@{stamp} +0000"));
     let output = update.streamed_output().expect("run git update-ref");
     assert!(output.status.success(), "{output:?}");
+    assert!(
+        dir.join(".git/logs").join(name).exists(),
+        "premise: {name} has a reflog entry for this publish"
+    );
 }
 
 /// THE INCIDENT (CLOUD-2923). Another session pushed a protected change; this
@@ -653,8 +664,8 @@ fn a_ref_the_call_moved_counts_at_its_value_before_the_call() {
 /// tree, so it differs from `HEAD`, and `git restore` brings it back.
 ///
 /// Fails by: `||` in place of `&&` in `paths_at_head`'s absent-file arm, which
-/// reads any absent file as equal to `HEAD` — excusing the delete on a pushed
-/// `HEAD` and dropping the restore that undoes it.
+/// reads any absent file as equal to `HEAD` and drops the restore that undoes
+/// the delete.
 #[test]
 fn a_shell_delete_of_a_protected_path_head_still_has_is_refused() {
     let dir = fixture("protected-escape-shell-delete");
@@ -668,4 +679,69 @@ fn a_shell_delete_of_a_protected_path_head_still_has_is_refused() {
         said.contains("run git restore guarded.txt; "),
         "HEAD still has the file, so the restore is prescribed: {said}"
     );
+}
+
+/// NO MOVE, NO EXCUSE. On a `HEAD` already pushed, a call that rolls an
+/// uncommitted protected edit back to `HEAD`'s bytes — `git checkout .`,
+/// `git stash`, `git reset --hard`, or a script writing them back — brought no
+/// history in, so the rollback is its own write to the path.
+///
+/// Fails by: reading a `HEAD` equal to the pre-call one as having moved forward
+/// onto pushed history (`head_moved_onto`'s `head == before` arm), which excused
+/// every path left at `HEAD`'s bytes and erased the edit unseen.
+#[test]
+fn a_rollback_to_head_bytes_with_head_unmoved_is_still_refused() {
+    let dir = fixture("protected-escape-unmoved-rollback");
+    publish_origin_main(&dir, Published::BeforeTheCall);
+    std::fs::write(dir.join(GUARDED), "an edit in progress\n").expect("the edit lands");
+    let (code, said) = around_with(&dir, "call-unmoved-rollback", "python3 tool.py", |dir| {
+        common::git_in(dir, &["checkout", "-q", "--", GUARDED]);
+    });
+    assert_eq!(code, Some(2), "HEAD did not move: {said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
+    assert!(
+        !said.contains("run git restore"),
+        "the file equals HEAD, so a restore is a no-op: {said}"
+    );
+}
+
+/// An UNTRACKED protected file deleted with `HEAD` unmoved is the call's own
+/// delete: absent from the tree and from `HEAD` alike, but no move removed it.
+///
+/// Fails by: excusing a path absent from both on an unmoved pushed `HEAD`.
+#[test]
+fn deleting_an_untracked_protected_file_with_head_unmoved_is_still_refused() {
+    let dir = fixture("protected-escape-unmoved-untracked-delete");
+    common::git_in(&dir, &["rm", "-q", "--cached", GUARDED]);
+    common::git_in(&dir, &["commit", "-q", "-m", "untrack the guarded file"]);
+    publish_origin_main(&dir, Published::BeforeTheCall);
+    assert!(dir.join(GUARDED).exists(), "premise: on disk, untracked");
+    let (code, said) = around_with(&dir, "call-untracked-delete", "python3 tool.py", |dir| {
+        std::fs::remove_file(dir.join(GUARDED)).expect("the delete lands");
+    });
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
+}
+
+/// A ROLLBACK BESIDE A FAST-FORWARD THAT LEFT THE PATH ALONE. The call moves
+/// `HEAD` onto pushed history that never touched the protected file, and also
+/// rolls an uncommitted edit to it back to `HEAD`'s bytes. Only what the move
+/// changed is history's; this path it did not change.
+///
+/// Fails by: excusing every path at `HEAD`'s bytes once `HEAD` moved onto
+/// pushed history, rather than the paths the move itself changed.
+#[test]
+fn a_rollback_beside_a_fast_forward_that_left_the_path_alone_is_still_refused() {
+    let dir = fixture("protected-escape-rollback-beside-ff");
+    std::fs::write(dir.join(ORDINARY), "pushed elsewhere\n").expect("the ordinary write lands");
+    common::git_in(&dir, &["commit", "-q", "-am", "pushed by another session"]);
+    publish_origin_main(&dir, Published::BeforeTheCall);
+    common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
+    std::fs::write(dir.join(GUARDED), "an edit in progress\n").expect("the edit lands");
+    let (code, said) = around_with(&dir, "call-rollback-beside-ff", "python3 tool.py", |dir| {
+        common::git_in(dir, &["checkout", "-q", "--", GUARDED]);
+        common::git_in(dir, &["merge", "--ff-only", "-q", "origin/main"]);
+    });
+    assert_eq!(code, Some(2), "the move never touched guarded.txt: {said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
 }
