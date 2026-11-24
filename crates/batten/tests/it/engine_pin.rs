@@ -128,12 +128,21 @@ fn a_source_pin_matching_the_stamp_loads() {
     common::write(&dir, "crates/engine/src/lib.rs", "// the engine\n");
     common::git_in(&dir, &["add", "crates"]);
     let binary = private_binary(&dir);
-    let stamped = run(&binary, &dir, &["engine", "stamp"]);
-    assert!(stamped.status.success(), "{}", text(&stamped));
     let digest = text(&run(&binary, &dir, &["engine", "digest"]))
         .trim()
         .to_owned();
     assert_eq!(digest.len(), 64, "a digest is 64 hex: {digest}");
+    // `engine stamp` REFUSES here (CLOUD-2903): this binary was built from
+    // batten's tree, not the fixture's, so it cannot attest the fixture. The
+    // stamp this case loads under is written as the install writes it.
+    let refused = run(&binary, &dir, &["engine", "stamp"]);
+    assert!(!refused.status.success(), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("built from source"),
+        "{}",
+        text(&refused)
+    );
+    batten::engine::stamp(&binary, &digest).unwrap();
     common::write(
         &dir,
         "batten.toml",
@@ -383,16 +392,13 @@ fn a_config_without_a_pin_gains_one_after_a_clean_load() {
     let output = installing(&dir, &served_env(&served));
     assert!(output.status.success(), "{}", text(&output));
     let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
-    assert_eq!(
-        pinned(&config).as_deref(),
-        Some(release.as_str()),
-        "{config}"
-    );
+    // A DEV BUILD NEVER PINS ITSELF (CLOUD-2906): every test build is a dev
+    // pre-release, published and answering, and still writes nothing. The
+    // release half is `lib.rs`'s `only_a_release_build_adopts_its_own_pin`.
+    assert_eq!(pinned(&config), None, "{config}");
     assert!(
-        text(&output).contains(&format!(
-            "batten note call fix silent at batten.toml engine (pinned {release})"
-        )),
-        "the write is reported: {}",
+        !text(&output).contains("(pinned "),
+        "nothing is reported written: {}",
         text(&output)
     );
 }
@@ -435,12 +441,8 @@ fn the_setup_task_writes_the_pin_and_the_hook_does_not() {
     );
     let output = following(&dir, &["startup", "--session"], &served_env(&served), None);
     let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
-    assert_eq!(
-        pinned(&config).as_deref(),
-        Some(release.as_str()),
-        "{config} {}",
-        text(&output)
-    );
+    // A dev build never pins itself at a session start either (CLOUD-2906).
+    assert_eq!(pinned(&config), None, "{config} {}", text(&output));
 }
 
 /// Under `--config-in` another directory's file is the authority, so a clean
@@ -520,14 +522,9 @@ fn the_written_pin_preserves_every_other_byte() {
     let output = installing(&dir, &served_env(&served));
     assert!(output.status.success(), "{}", text(&output));
     let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
-    assert_eq!(
-        config,
-        format!(
-            "# the consumer's own words\nversion   =   1\nengine = {{ release = \"{release}\" }}\n\n\
-             # trailing comment, no newline"
-        ),
-        "the pin goes under `version` and every other byte is the file's own"
-    );
+    // A dev build writes no pin (CLOUD-2906), so every byte is the file's own.
+    // Where a pin goes is `engine::adopted`'s own cases.
+    assert_eq!(config, original, "{release} writes no byte");
 }
 
 #[test]
@@ -542,14 +539,11 @@ fn init_writes_the_pin() {
     let output = following(&dir, &["init"], &served_env(&served), None);
     assert!(output.status.success(), "{}", text(&output));
     let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
-    assert_eq!(
-        pinned(&config).as_deref(),
-        Some(release.as_str()),
-        "{config}"
-    );
+    // `init` under a dev build writes the config and no pin (CLOUD-2906).
+    assert_eq!(pinned(&config), None, "{config}");
     assert!(
-        text(&output).contains(&format!("(pinned {release})")),
-        "init reports the pin it wrote: {}",
+        !text(&output).contains("(pinned "),
+        "init reports no pin: {}",
         text(&output)
     );
 }

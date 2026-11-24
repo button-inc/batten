@@ -152,16 +152,85 @@ pub fn own_build_for_release(in_tree: bool, local: bool, stamped: impl FnOnce() 
 
 /// Whether a release pin `tag` is met by a binary whose identity is `running`
 /// and whose source declares the release `declared` (CLOUD-2903): it IS the
-/// release, or it is the tree's own build and the pin names the release that
-/// tree will be cut as. Compared as parsed versions, build metadata included,
-/// so a pin naming a dev pre-release is met only by the build with its digest.
+/// release, or it is the tree's own build and either the pin names the release
+/// that tree will be cut as, or the pin is a DEV pre-release that build
+/// descends from ([`dev_pin_answered`]). Compared as parsed versions, build
+/// metadata included, so any OTHER binary meets a dev pin only by being that
+/// build, digest and all.
 #[must_use]
 pub fn release_satisfied(tag: &str, running: &str, declared: &str, own_build: bool) -> bool {
-    let same = |one: &str, two: &str| match (release_version(one), release_version(two)) {
-        (Ok(one), Ok(two)) => one == two,
-        _ => false,
+    let (Ok(pin), Ok(running)) = (release_version(tag), release_version(running)) else {
+        return false;
     };
-    same(tag, running) || (own_build && same(tag, declared))
+    if pin == running {
+        return true;
+    }
+    own_build
+        && (release_version(declared).is_ok_and(|declared| declared == pin)
+            || dev_pin_answered(&pin, &running))
+}
+
+/// Whether the tree's OWN build `running` answers the DEV pin `pin` (CLOUD-2903,
+/// the review of #1291's HIGH 1): both are dev pre-releases of one next patch,
+/// and `running` was committed at or after the pinned build.
+///
+/// WHY: a branch pins the dev pre-release CI published for one of its own
+/// heads, and every later commit on it builds a later identity (a later commit
+/// second, another digest), so without this arm every config load on the
+/// branch that carries the pin refuses — `config::parse` runs [`check`], and an
+/// in-tree build is never handed to the pinned engine. A RELEASE pin is never
+/// answered this way: it stays the release or the package version's own build,
+/// and the stamped-build question stays No ([`STAMPED_BUILD_ANSWERS_ITS_RELEASE`]).
+///
+/// The pin carries no commit, so descent is read from the identity's commit
+/// second (`<line>.<YYYYMMDDhhmmss>`): an equal-width digit string, ordered as
+/// text. An identity with no commit second (`dev.unknown`) answers nothing.
+#[must_use]
+pub fn dev_pin_answered(pin: &semver::Version, running: &semver::Version) -> bool {
+    let same_patch =
+        (pin.major, pin.minor, pin.patch) == (running.major, running.minor, running.patch);
+    let dev = crate::version::is_dev_prerelease(pin) && crate::version::is_dev_prerelease(running);
+    match (committed_second(pin), committed_second(running)) {
+        (Some(pinned), Some(built)) => same_patch && dev && built >= pinned,
+        _ => false,
+    }
+}
+
+/// The commit second a dev identity carries: its last pre-release identifier,
+/// when that is the 14-digit `YYYYMMDDhhmmss` [`crate::build_identity`] renders.
+fn committed_second(version: &semver::Version) -> Option<&str> {
+    let second = version.pre.as_str().rsplit('.').next()?;
+    (second.len() == 14 && second.bytes().all(|byte| byte.is_ascii_digit())).then_some(second)
+}
+
+/// Why `engine stamp` must refuse to attest the tree whose source digest is
+/// `digest` for a binary whose build identity is `identity` (CLOUD-2903, the
+/// measured 14:45 provenance defect), or `None` when it may.
+///
+/// A stamp attests "this binary was built from this tree". The identity
+/// carries the source digest the build itself read (its semver build
+/// metadata, a prefix of the full digest), so the stamp is refused unless
+/// that prefix names this tree: a binary built before an edit, or from
+/// another tree entirely, can no longer be stamped as this one. A build whose
+/// identity carries no digest (the release build, `dev.unknown`) attests
+/// nothing about any tree, so it is refused too.
+#[must_use]
+pub fn stamp_refusal(identity: &str, digest: &str) -> Option<String> {
+    let built = crate::version::parse(identity)
+        .map(|version| version.build.to_string())
+        .unwrap_or_default();
+    if built.is_empty() {
+        return Some(format!(
+            "this binary ({identity}) carries no source digest, so it attests no tree; build it from \
+             this checkout and stamp that build"
+        ));
+    }
+    (!digest.starts_with(&built)).then(|| {
+        format!(
+            "this binary was built from source {built}, and this tree is {}; rebuild, then stamp",
+            digest.get(..built.len()).unwrap_or(digest)
+        )
+    })
 }
 
 /// The stamp file beside `binary`.
@@ -2265,6 +2334,58 @@ mod tests {
             "v0.0.220",
             true
         ));
+    }
+
+    /// THE DEV PIN IS SATISFIABLE ON THE BRANCH THAT CARRIES IT (CLOUD-2903,
+    /// review HIGH 1): the tree's own build of a later commit answers it; any
+    /// other binary must BE the pinned build; and a release pin is never
+    /// answered by a dev build.
+    #[test]
+    fn a_dev_pin_is_answered_by_its_own_trees_later_build_and_a_release_pin_is_not() {
+        let pin = "v0.0.222-dev.pr1291.20261124120000+abcdef012345";
+        let later = "v0.0.222-dev.pr1291.20261124130000+0123456789ab";
+        let other_line = "v0.0.222-dev.claude-x.20261124130000+0123456789ab";
+        let earlier = "v0.0.222-dev.pr1291.20261124110000+0123456789ab";
+        let next_patch = "v0.0.223-dev.pr1291.20261124130000+0123456789ab";
+        let declared = "v0.0.221";
+        assert!(release_satisfied(pin, later, declared, true));
+        assert!(release_satisfied(pin, other_line, declared, true));
+        assert!(release_satisfied(pin, pin, declared, false));
+        assert!(!release_satisfied(pin, later, declared, false));
+        assert!(!release_satisfied(pin, earlier, declared, true));
+        assert!(!release_satisfied(pin, next_patch, declared, true));
+        assert!(!release_satisfied(
+            pin,
+            "v0.0.222-dev.unknown",
+            declared,
+            true
+        ));
+        // A release pin: never a dev build, own or not, unless it is the
+        // package version's own release.
+        assert!(!release_satisfied("v0.0.222", later, declared, true));
+        assert!(!release_satisfied("v0.0.220", later, declared, true));
+        assert!(release_satisfied(declared, later, declared, true));
+        // A non-dev pre-release pin is not answered by descent.
+        assert!(!release_satisfied(
+            "v0.0.222-rc.20261124120000",
+            "v0.0.222-rc.20261124130000",
+            declared,
+            true
+        ));
+    }
+
+    /// `engine stamp` refuses a binary whose embedded digest is not the tree's
+    /// (CLOUD-2903, the 14:45 provenance requirement), and one that embeds none.
+    #[test]
+    fn a_stamp_is_refused_unless_the_build_embedded_this_trees_digest() {
+        let tree = "abcdef0123456789aaaabbbbccccddddeeeeffff00001111222233334444abcd";
+        let built = "v0.0.222-dev.pr1291.20261124120000+abcdef012345";
+        assert_eq!(stamp_refusal(&built[1..], tree), None);
+        let other = "0.0.222-dev.pr1291.20261124120000+000000000000";
+        assert!(stamp_refusal(other, tree).is_some_and(|why| why.contains("000000000000")));
+        assert!(stamp_refusal("0.0.221", tree).is_some());
+        assert!(stamp_refusal("0.0.222-dev.unknown", tree).is_some());
+        assert!(stamp_refusal("not a version", tree).is_some());
     }
 
     /// THE OPEN QUESTION'S CURRENT ANSWER IS NO (CLOUD-2903): a stamped build
