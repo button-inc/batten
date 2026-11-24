@@ -778,9 +778,11 @@ type Grouped = (Vec<String>, blake3::Hasher, BTreeSet<String>);
 /// through the MIR of every function that inlines it; source has no such edge,
 /// so the edge is the name: a case depends on the items its executed functions
 /// name. An edited const, type or impl header moves exactly the cases whose
-/// functions name it, and an item ADDED moves none, which is the commit a
-/// mutant-fixing lap makes. A tree-wide skeleton in every key re-judged all
-/// 2386 viable mutants on #1276 after one commit of new tests.
+/// functions name what it binds ([`item_names`]), and an item ADDED moves only
+/// the cases naming what it binds, which is the commit a mutant-fixing lap
+/// makes. A tree-wide skeleton in every key re-judged all 2386 viable mutants
+/// on #1276 after one commit of new tests; an impl, `use` or item macro that
+/// answered to its whole text moved every key on 304fa50b (CLOUD-2904).
 fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Site>) -> Probed {
     let mut probed = Probed::default();
     let mut cuts: Vec<Range<usize>> = Vec::new();
@@ -892,13 +894,24 @@ fn owning_item(token: &ra_ap_syntax::SyntaxToken) -> Option<ast::Item> {
     })
 }
 
-/// The names a skeleton item answers to: its own where it has one, and for an
-/// impl, an import or an item-position macro every identifier in it (the
-/// type and trait an impl is for; what a `use` or a `thread_local!` binds).
-/// Over-inclusion is the safe direction: a name too many only re-runs a case.
+/// The names a skeleton item answers to: its own where it has one; for an
+/// impl, its header's unqualified names and its members' own names; for a
+/// `use`, the names it binds; for an item-position macro, each name after an
+/// item keyword, or every name in it when it has none ([`impl_names`],
+/// [`use_names`], [`macro_names`]).
+///
+/// WHAT IT BINDS, NEVER WHAT IT MENTIONS (CLOUD-2904). Over-inclusion is not
+/// free: a name too many joins this item's digest to that name's, so every
+/// case reaching that name moves when this item is added or edited. Answering
+/// to its whole text, 304fa50b's one `impl Known { fn of(..) }` joined the
+/// items of `String`, `u32` and `BTreeSet`, every case reached them, and a
+/// 32-shard census rerun reused 0 verdicts.
 fn item_names(item: &ast::Item) -> Vec<String> {
     use ast::HasName as _;
     let named = match item {
+        ast::Item::Impl(it) => return impl_names(it),
+        ast::Item::Use(it) => return use_names(it),
+        ast::Item::MacroCall(it) => return macro_names(it),
         ast::Item::Const(it) => it.name(),
         ast::Item::Static(it) => it.name(),
         ast::Item::Struct(it) => it.name(),
@@ -915,6 +928,142 @@ fn item_names(item: &ast::Item) -> Vec<String> {
     named.map_or_else(
         || names_in(item.syntax()).into_iter().collect(),
         |name| vec![name.text().to_string()],
+    )
+}
+
+/// An impl's names ([`item_names`]): the unqualified names in its header (its
+/// generic parameters, trait, self type and where clause; `Display`, never
+/// `std` or `fmt` of `std::fmt::Display`) and each member's own name. A
+/// member's body is its own item or a probed function, keyed apart.
+fn impl_names(it: &ast::Impl) -> Vec<String> {
+    use ast::HasGenericParams as _;
+    use ast::HasName as _;
+    let mut names = BTreeSet::new();
+    let header = [
+        it.generic_param_list().map(|list| list.syntax().clone()),
+        it.trait_().map(|ty| ty.syntax().clone()),
+        it.self_ty().map(|ty| ty.syntax().clone()),
+        it.where_clause().map(|clause| clause.syntax().clone()),
+    ];
+    for node in header.iter().flatten().flat_map(SyntaxNode::descendants) {
+        if let Some(name) = ast::Name::cast(node.clone()) {
+            names.insert(name.text().to_string());
+        } else if let Some(path) = ast::Path::cast(node)
+            && path
+                .syntax()
+                .parent()
+                .is_none_or(|parent| parent.kind() != SyntaxKind::PATH)
+            && let Some(last) = path.segment().and_then(|segment| segment.name_ref())
+        {
+            names.insert(last.text().to_string());
+        }
+    }
+    for member in it
+        .assoc_item_list()
+        .iter()
+        .flat_map(ast::AssocItemList::assoc_items)
+    {
+        let name = match member {
+            ast::AssocItem::Fn(member) => member.name(),
+            ast::AssocItem::Const(member) => member.name(),
+            ast::AssocItem::TypeAlias(member) => member.name(),
+            ast::AssocItem::MacroCall(_) => None,
+        };
+        names.extend(name.map(|name| name.text().to_string()));
+    }
+    names.into_iter().collect()
+}
+
+/// A `use`'s names ([`item_names`]): each leaf's rename, or its last segment
+/// (`self` binding the module it stands for), and for a glob the module it
+/// globs, which is the one name a glob's edit is reached through.
+fn use_names(it: &ast::Use) -> Vec<String> {
+    use ast::HasName as _;
+    let last = |path: Option<ast::Path>| {
+        path.and_then(|path| path.segment())
+            .and_then(|segment| segment.name_ref())
+            .map(|name| name.text().to_string())
+    };
+    let mut names = BTreeSet::new();
+    for tree in it.syntax().descendants().filter_map(ast::UseTree::cast) {
+        if tree.use_tree_list().is_some() {
+            continue;
+        }
+        if let Some(name) = tree.rename().and_then(|rename| rename.name()) {
+            names.insert(name.text().to_string());
+            continue;
+        }
+        // The path this leaf names, or for `self` and a glob the module: the
+        // path before it, or the enclosing tree's in `a::{self}`.
+        let own = tree.path().filter(|path| {
+            tree.star_token().is_none()
+                && path
+                    .segment()
+                    .is_some_and(|segment| segment.self_token().is_none())
+        });
+        let module = || {
+            tree.path()
+                .and_then(|path| {
+                    if tree.star_token().is_some() {
+                        Some(path)
+                    } else {
+                        path.qualifier()
+                    }
+                })
+                .or_else(|| {
+                    tree.syntax()
+                        .parent()
+                        .and_then(ast::UseTreeList::cast)
+                        .and_then(|list| list.parent_use_tree().path())
+                })
+        };
+        names.extend(last(own.or_else(module)));
+    }
+    names.into_iter().collect()
+}
+
+/// An item-position macro's names ([`item_names`]): the first identifier
+/// after each item keyword (`X` of `thread_local! { static X: u8 = y(); }`),
+/// or every identifier in it when it has none, since what it binds is then
+/// unknown and over-inclusion is the sound direction.
+fn macro_names(it: &ast::MacroCall) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    let mut after_keyword = false;
+    for token in it
+        .token_tree()
+        .iter()
+        .flat_map(|tree| tree.syntax().descendants_with_tokens())
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+    {
+        match token.kind() {
+            kind if item_keyword(kind) => after_keyword = true,
+            SyntaxKind::IDENT if after_keyword => {
+                names.insert(token.text().to_owned());
+                after_keyword = false;
+            }
+            kind if kind.is_trivia() || kind.is_keyword(ra_ap_syntax::Edition::Edition2024) => {}
+            _ => after_keyword = false,
+        }
+    }
+    if names.is_empty() {
+        names = names_in(it.syntax());
+    }
+    names.into_iter().collect()
+}
+
+/// Whether `kind` is a keyword an item's name follows.
+fn item_keyword(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::FN_KW
+            | SyntaxKind::STRUCT_KW
+            | SyntaxKind::ENUM_KW
+            | SyntaxKind::UNION_KW
+            | SyntaxKind::TRAIT_KW
+            | SyntaxKind::TYPE_KW
+            | SyntaxKind::CONST_KW
+            | SyntaxKind::STATIC_KW
+            | SyntaxKind::MOD_KW
     )
 }
 
@@ -9407,6 +9556,126 @@ mod tests {
         assert_eq!(
             (seeded[&a].clone(), seeded[&b].clone(), seeded[&c].clone()),
             (held[&a].clone(), held[&b].clone(), held[&c].clone())
+        );
+    }
+
+    /// Each case's digest over one rendered `source`, its items and mentions
+    /// aggregated by name as the schema aggregates them, each case running
+    /// the probe ids `executed` gives it.
+    fn source_digests(
+        cases: &BTreeSet<Case>,
+        executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+        source: &str,
+    ) -> std::collections::BTreeMap<Case, String> {
+        let root = crate::scratch::scratch("schema-source-digests");
+        let rendered = render(source, &[], &BTreeSet::new(), Some(0));
+        let mut items: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (name, digest) in &rendered.items {
+            items
+                .entry(name.clone())
+                .or_default()
+                .insert(digest.clone());
+        }
+        let mut mentions: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (name, mentioned) in &rendered.mentions {
+            mentions
+                .entry(name.clone())
+                .or_default()
+                .extend(mentioned.iter().cloned());
+        }
+        let depends = Depends {
+            names: &rendered.names,
+            items: &items,
+            mentions: &mentions,
+            ..depends(&rendered.probes)
+        };
+        case_digests(
+            &root,
+            cases,
+            &std::collections::BTreeMap::new(),
+            executed,
+            &depends,
+        )
+    }
+
+    /// T1 (CLOUD-2904): an impl, a `use` or an item macro added moves the
+    /// cases naming what it binds and no other. 304fa50b added
+    /// `impl Known { fn of(..) }`; answering to its whole text, it joined the
+    /// items of `String` and every case moved, so a census rerun reused 0.
+    ///
+    /// Fails by: an impl answering to its member bodies, a `use` to the path
+    /// it imports from, or an item macro to the type and initialiser of what
+    /// it binds (the first case moves); or any of them answering to nothing
+    /// (the naming case holds).
+    #[test]
+    fn an_added_impl_use_or_item_macro_moves_only_the_cases_naming_what_it_binds() {
+        let (plain, known, set, seen) = (case("plain"), case("known"), case("set"), case("seen"));
+        let cases: BTreeSet<Case> =
+            [plain.clone(), known.clone(), set.clone(), seen.clone()].into();
+        let executed = [
+            (plain.clone(), [0].into()),
+            (known.clone(), [1].into()),
+            (set.clone(), [2].into()),
+            (seen.clone(), [3].into()),
+        ]
+        .into();
+        let base = "pub fn plain(s: String) -> BTreeSet<String> { BTreeSet::from([s]) }\n\
+                    pub fn names_known() -> usize { size_of::<Known>() }\n\
+                    pub fn names_set() -> usize { size_of::<Set<u8>>() }\n\
+                    pub fn names_seen() -> usize { SEEN.with(String::len) }\n";
+        let held = source_digests(&cases, &executed, base);
+        for (added, naming) in [
+            (
+                "impl Known { fn of(x: u32) -> String { x.to_string() } }\n",
+                &known,
+            ),
+            ("use std::collections::BTreeSet as Set;\n", &set),
+            (
+                "thread_local! { static SEEN: String = String::new(); }\n",
+                &seen,
+            ),
+        ] {
+            let moved = source_digests(&cases, &executed, &format!("{base}{added}"));
+            assert_eq!(
+                moved[&plain], held[&plain],
+                "names String and BTreeSet: {added}"
+            );
+            assert_ne!(moved[naming], held[naming], "names what it binds: {added}");
+        }
+    }
+
+    /// An impl answers to its header's unqualified names and its members' own
+    /// names; a `use` to each leaf's last segment or rename, and to the
+    /// module a glob globs; an item macro to each name after an item keyword,
+    /// or to every name when it has none.
+    ///
+    /// Fails by: an impl answering to a member body or a path's qualifier, a
+    /// `use` to the path it imports from, or a `thread_local!` to its type.
+    #[test]
+    fn an_impl_a_use_and_an_item_macro_answer_to_what_they_bind() {
+        let source = "impl<T: Bound> std::fmt::Display for Known<T> where T: Other {\n\
+                          const C: u8 = 1;\n\
+                          fn fmt(&self) -> String { String::new() }\n\
+                      }\n\
+                      use a::{b::C as D, e, f::{self}, g::*};\n\
+                      thread_local! { static X: u8 = y(); pub static mut Z: u8 = 0; }\n\
+                      mutants!(alpha, beta);\n";
+        let names: Vec<Vec<String>> = items_of(source).iter().map(item_names).collect();
+        let owned = |list: &[&str]| {
+            list.iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names,
+            [
+                owned(&["Bound", "C", "Display", "Known", "Other", "T", "fmt"]),
+                owned(&["D", "e", "f", "g"]),
+                owned(&["X", "Z"]),
+                owned(&["alpha", "beta", "mutants"]),
+            ]
         );
     }
 
