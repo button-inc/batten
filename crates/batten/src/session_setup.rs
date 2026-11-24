@@ -409,6 +409,16 @@ mod tests {
         assert_eq!(Some(workspace.refusal()), inline.finding());
     }
 
+    /// Fails by: `started` answering true where no setup task ever ran.
+    #[test]
+    fn a_task_is_started_only_once_its_directory_exists() -> std::io::Result<()> {
+        let git_dir = crate::scratch::scratch("session-setup-started");
+        assert!(!started(&git_dir));
+        std::fs::create_dir_all(dir(&git_dir))?;
+        assert!(started(&git_dir));
+        Ok(())
+    }
+
     /// Fails by: a crash read as said only once it HAS an outcome, so a task
     /// that died before writing one is never surfaced.
     #[test]
