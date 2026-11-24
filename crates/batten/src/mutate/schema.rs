@@ -9926,7 +9926,10 @@ pub fn repo() -> u8 {{ scratch() }}
             .expect("the clean build's binaries");
         assert_eq!(reuse.ids, BTreeSet::from([String::from("p")]));
         let dir = state.join("reuse");
-        assert_eq!(std::fs::read_to_string(dir.join(PACKED_TREE)).unwrap(), "tree-1");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(PACKED_TREE)).unwrap(),
+            "tree-1"
+        );
         let packed: Known =
             serde_json::from_str(&std::fs::read_to_string(dir.join(PACKED_KNOWN)).unwrap())
                 .unwrap();
