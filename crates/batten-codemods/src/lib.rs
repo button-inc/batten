@@ -348,4 +348,16 @@ mod tests {
         );
         assert_eq!(package_name("[dependencies]\nname = \"x\"\n"), None);
     }
+
+    /// Fails by: a declared tree recipe not found by its own name.
+    #[test]
+    fn every_tree_recipe_is_found_by_its_name() {
+        for recipe in TREE_RECIPES {
+            assert_eq!(
+                named_tree(recipe.name).map(|found| found.name),
+                Some(recipe.name)
+            );
+        }
+        assert!(named_tree("no-such-recipe").is_none());
+    }
 }

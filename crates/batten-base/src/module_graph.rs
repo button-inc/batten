@@ -2914,4 +2914,39 @@ mod tests {
     fn a_super_chain_inside_a_macro_reaches_the_root_name() {
         assert_eq!(names("fn f() { m!(super::super::a); }", &["x", "y"]), ["a"]);
     }
+
+    fn owned(path: &[&str]) -> Vec<String> {
+        path.iter().map(|segment| (*segment).to_owned()).collect()
+    }
+
+    /// Fails by: a child module's name read root-relative from below the root,
+    /// or a crate the root does not own read as its child.
+    #[test]
+    fn only_a_crate_roots_own_child_is_read_root_relative() {
+        let nodes: BTreeSet<String> = std::iter::once("b".to_owned()).collect();
+        assert_eq!(
+            rebase(&owned(&["b", "x"]), &[], &nodes),
+            owned(&["crate", "b", "x"])
+        );
+        assert_eq!(
+            rebase(&owned(&["b", "x"]), &owned(&["a"]), &nodes),
+            owned(&["b", "x"])
+        );
+        assert_eq!(
+            rebase(&owned(&["serde", "x"]), &[], &nodes),
+            owned(&["serde", "x"])
+        );
+    }
+
+    /// Fails by: a trait left out of the items a path can name.
+    #[test]
+    fn a_trait_is_an_item_a_path_can_name() {
+        let tree = batten_facts::source::rust_parse(
+            "pub trait T {}\npub struct S;\n",
+            ra_ap_syntax::Edition::Edition2024,
+        )
+        .tree();
+        let names: Vec<String> = tree.items().filter_map(|item| item_name(&item)).collect();
+        assert_eq!(names, ["T", "S"]);
+    }
 }

@@ -590,6 +590,37 @@ documents = ["present.json"]
 }
 
 #[test]
+fn a_policy_only_config_still_walks_the_tree_its_sources_select() {
+    // The walk is skipped only when NO row is a policy row. A config whose every
+    // row is one must still walk: a `sources` glob selects over the walked list,
+    // so an unwalked tree hands the suite no documents. The module's own test
+    // reads the input this verb built rather than one it supplies.
+    let dir = Fixture::new("policy-test-walks-for-sources")
+        .config(
+            r#"version = 1
+
+[[rule]]
+id = "probe"
+kind = "policy"
+scope = "tree"
+module = "probe.rego"
+severity = "deny"
+sources = ["*.json"]
+"#,
+        )
+        .file("present.json", r#"{"ok": true}"#)
+        .file(
+            "probe.rego",
+            &format!(
+                "{CORRECT_TREE}\ntest_the_walk_selected_the_document if {{\n\tinput.tree.documents[\"present.json\"]\n}}\n"
+            ),
+        )
+        .build();
+    let output = run(&dir, &["policy", "test"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+#[test]
 fn the_json_document_is_byte_stable_and_carries_no_policy_body() {
     let dir = fixture("policy-test-json", CORRECT, CALL, "");
     let first = run(&dir, &["policy", "test", "-J"]);

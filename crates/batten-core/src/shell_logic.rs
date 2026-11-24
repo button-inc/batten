@@ -1939,4 +1939,33 @@ mod tests {
         assert_eq!(bare_pattern("\"a\"?"), Some("glob"));
         assert_eq!(bare_pattern("'a*'"), None);
     }
+
+    /// Fails by: a `!`-carrier's text judged with its bang, or any other
+    /// carrier's text judged without one.
+    #[test]
+    fn only_a_bang_carrier_strips_its_bang() {
+        assert_ne!(logic("echo hi"), logic("!echo hi"), "the premise");
+        let alias = carrier("git-alias").expect("the git alias row");
+        assert_eq!(
+            judge(Some(alias), &Spelling::Text("!echo hi")),
+            logic("echo hi")
+        );
+        let shell = CARRIERS
+            .iter()
+            .find(|row| row.text == Some(TextForm::Is(Form::Shell)))
+            .expect("a shell-text row");
+        assert_eq!(
+            judge(Some(shell), &Spelling::Text("!echo hi")),
+            logic("!echo hi")
+        );
+    }
+
+    /// Fails by: an abbreviated `-File` read as anything but a file switch.
+    #[test]
+    fn a_powershell_file_switch_abbreviates_from_two_letters() {
+        for file in ["-f", "-fi", "-fil", "-file", "/File"] {
+            assert!(!switch_script("powershell", &[file, "x.ps1"]), "{file}");
+        }
+        assert!(switch_script("powershell", &["x.ps1"]));
+    }
 }

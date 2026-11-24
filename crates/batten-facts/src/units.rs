@@ -529,4 +529,13 @@ mod tests {
         let positions: Vec<&str> = found.iter().map(|unit| unit.position).collect();
         assert_eq!(positions, ["trait"]);
     }
+
+    /// Fails by: a span's last line found from anything but its own offset.
+    #[test]
+    fn a_span_counts_the_lines_from_its_own_offset() {
+        let starts = line_starts("a\nb\nc\nd\n");
+        assert_eq!(lines_spanned(&starts, 2, 4), 2);
+        assert_eq!(lines_spanned(&starts, 2, 1), 1);
+        assert_eq!(lines_spanned(&starts, 0, 8), 4);
+    }
 }

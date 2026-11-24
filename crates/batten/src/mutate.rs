@@ -8476,3 +8476,27 @@ mod record_row_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod enrolled_tests {
+    use super::*;
+
+    /// Fails by: a name the base already mentioned as often counted as newly
+    /// enrolled, which sweeps every gate a config change leaves alone.
+    #[test]
+    fn a_name_mentioned_as_often_at_base_is_not_enrolled() {
+        let dir = crate::scratch::scratch("mutate-enrolled-since");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let config = crate::config_model::CONFIG_FILE;
+        std::fs::write(dir.join(config), "gates = [\"kept\"]\n").unwrap();
+        crate::gitwrite::commit_paths(&dir, &[config.to_owned()], "base").unwrap();
+        std::fs::write(dir.join(config), "gates = [\"kept\", \"added\"]\n").unwrap();
+        let names = ["kept".to_owned(), "added".to_owned()];
+        let changed = std::iter::once(config.to_owned()).collect();
+        assert_eq!(
+            enrolled_since(&dir, "HEAD", &names, &changed),
+            std::iter::once("added".to_owned()).collect()
+        );
+    }
+}

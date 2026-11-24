@@ -6330,4 +6330,35 @@ mod tests {
         assert!(declared.answered_here("T", "run me"));
         assert!(!declared.answered_here("T", "run you"));
     }
+
+    /// Fails by: a mint name carrying a path separator admitted.
+    #[test]
+    fn a_minted_query_naming_a_path_is_malformed() {
+        let row = |mint: &str, id: &str| MintedQuery {
+            id: id.to_owned(),
+            mint: mint.to_owned(),
+            field: 0,
+            recency: 1,
+            max_age_days: 1,
+        };
+        assert!(!row("m", "k").malformed());
+        for (mint, id) in [("a/b", "k"), ("a\\b", "k"), ("", "k"), ("m", "")] {
+            assert!(row(mint, id).malformed(), "{mint:?} {id:?}");
+        }
+    }
+
+    /// Fails by: the bare root recovered as a spilled path.
+    #[test]
+    fn the_bare_root_is_no_spilled_path() {
+        assert_eq!(spilled_path("Output saved to /."), None);
+        let named = if cfg!(windows) {
+            "C:\\t\\r.txt"
+        } else {
+            "/t/r.txt"
+        };
+        assert_eq!(
+            spilled_path(&format!("Output saved to {named}.")),
+            Some(named)
+        );
+    }
 }
