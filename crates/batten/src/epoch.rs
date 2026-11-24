@@ -1567,6 +1567,19 @@ mod projection_tests {
         );
     }
 
+    /// Fails by: an empty array or an array of scalars read as rows, which
+    /// drops a knob the module is handed (`allow`'s `&&`, CLOUD-2789).
+    #[test]
+    fn an_array_of_scalars_or_none_is_a_knob_not_rows() {
+        let mut value: toml::Table =
+            toml::from_str("empty = []\nscalars = [1, 2]\n[[hook]]\nx = 1\n").unwrap();
+        allow(&mut value, &TreeReads::of(&BTreeSet::new()).unwrap());
+        assert_eq!(
+            value.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["empty", "scalars"]
+        );
+    }
+
     /// Fails by: a raw string closing on its first character, which leaves
     /// the rest of its body in the code text.
     #[test]
