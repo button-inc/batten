@@ -23,7 +23,10 @@
 #MUTANT-SUITE crates/batten/tests/it/admit_ask.rs
 #MUTANT admit-label-unchecked|s@^\tnot labelled_admit(question)$@\tfalse@|an_admit_ask_without_the_exact_pair_is_refused
 #MUTANT admit-pair-unchecked|s@^\tnot paired(question)$@\tfalse@|an_admit_ask_naming_no_ledger_pair_is_refused
-#MUTANT single-answer-unchecked|s@^\tone_useful_answer(question)$@\tfalse@|a_question_with_one_useful_answer_is_refused
+#MUTANT single-answer-unchecked|s@^\tsettled(question)$@\tfalse@|a_question_with_one_useful_answer_is_refused
+#MUTANT ledger-exemption-dropped|s@^\tnot ledger_question(question)$@\ttrue@|a_ledger_question_with_a_recommendation_is_asked
+#MUTANT ledger-exemption-label-unchecked|s@^\tlabelled_admit(question)$@\ttrue@|a_ledger_question_with_a_recommendation_is_asked
+#MUTANT ledger-exemption-pair-unchecked|s@^\tpaired(question)$@\ttrue@|a_ledger_question_with_a_recommendation_is_asked
 
 # METADATA
 # description: |
@@ -95,31 +98,33 @@ violation contains {
 	not contains(token, "/")
 }
 
-# A QUESTION WITH ONE USEFUL ANSWER IS NOT A QUESTION (owner, 2026-11-23). It
-# marks one option `(Recommended)` and every other option is a non-action —
-# no, leave it, stay blocked, wait, revise, skip, defer. Measured on #1276: the
-# owner was asked to approve a dispatch already approved, and to authorise an
-# unsigned rewrite against "stay blocked", and answered both "why the fuck are
-# you stopping to ask questions where there's only one useful answer". AGENTS.md
-# already authorises the steps of agreed work; this refuses the question so the
-# step is taken instead.
-non_action := `(?i)^\s*(no|not now|leave|keep|stay|wait|revise|skip|defer|hold|cancel|don'?t)\b`
-
+# A QUESTION WITH ONE USEFUL ANSWER IS NOT A QUESTION (owner, 2026-11-23). On
+# #1276 the owner was asked to approve a dispatch already approved, and to
+# authorise an unsigned rewrite against "stay blocked", and answered both "why
+# the fuck are you stopping to ask questions where there's only one useful
+# answer". AGENTS.md already authorises the steps of agreed work; this refuses
+# the question so the step is taken instead.
+#
+# A `(Recommended)` OPTION IS THE ASKER SAYING THE EVIDENCE SETTLES IT, so the
+# question is refused whatever the other options say (CLOUD-2915). The first
+# version judged the alternatives against a list of non-action words, and the
+# list was the defect: "Keep fix 2 (Recommended)" / "Split fix 2 out" reached the
+# owner on 2026-11-24 because "Split" was not on it, and every action verb
+# escapes a list the same way. The remedy is the recommended action, its
+# reasoning recorded where the decision lives, and the owner free to overrule.
 recommended(option) if contains(lower(option.label), "(recommended)")
 
-one_useful_answer(question) if {
-	some pick in question.options
-	recommended(pick)
-	every other in question.options {
-		other_is_inert(pick, other)
-	}
+settled(question) if {
+	some option in question.options
+	recommended(option)
 }
 
-other_is_inert(pick, other) if other == pick
-
-other_is_inert(pick, other) if {
-	other != pick
-	regex.match(non_action, other.label)
+# THE ONE QUESTION A HUMAN MUST ANSWER BY DESIGN: the ledger's own. It binds
+# exactly when an option starts `Admit` and the text carries a `<smell-id> <key>`
+# pair (`asked::Entry::admits`), the word "admit" in the text being no part of it.
+ledger_question(question) if {
+	labelled_admit(question)
+	paired(question)
 }
 
 violation contains {
@@ -129,8 +134,8 @@ violation contains {
 } if {
 	input.call.tool == "AskUserQuestion"
 	some question in input.call.arguments.questions
-	count(question.options) > 1
-	one_useful_answer(question)
+	settled(question)
+	not ledger_question(question)
 }
 
 test_a_question_with_one_useful_answer_is_refused if {
@@ -147,11 +152,54 @@ test_an_approval_against_revise_is_refused if {
 	}]}}}
 }
 
+# Two actions and no recommendation: a choice the asker could not settle.
 test_two_real_choices_are_asked if {
 	count(violation) == 0 with input as {"call": {"tool": "AskUserQuestion", "arguments": {"questions": [{
 		"question": "Where should the shards run?",
-		"options": [{"label": "Dispatched sessions (Recommended)"}, {"label": "CI matrix legs"}],
+		"options": [{"label": "Dispatched sessions"}, {"label": "CI matrix legs"}],
 	}]}}}
+}
+
+# The 2026-11-24 question (CLOUD-2915): the alternative is an action, and the
+# word list let it through.
+test_the_measured_action_alternative_is_refused if {
+	count(judged(
+		"Keep fix 2 and close CLOUD-2904 with #1276?",
+		["Keep fix 2 (Recommended)", "Split fix 2 out"],
+	)) == 1
+}
+
+# The recommendation settles it, whatever the alternative is.
+test_a_recommendation_between_two_actions_is_refused if {
+	count(judged(
+		"Where should the shards run?",
+		["Dispatched sessions (Recommended)", "CI matrix legs"],
+	)) == 1
+}
+
+test_a_lone_recommended_option_is_refused if {
+	count(judged("Push the branch?", ["Push (Recommended)"])) == 1
+}
+
+# The ledger's own question is the exception: a human answers it by design.
+test_a_ledger_question_with_a_recommendation_is_asked if {
+	count(judged(
+		"Admit test-expectation-changed crates/batten/tests/it/cli.rs::every_format?",
+		["Admit the change (Recommended)", "Refuse"],
+	)) == 0
+}
+
+# The text carries no "admit", so only the settled arm can fire: each half of
+# the exception is required.
+test_a_recommended_admit_label_without_the_pair_is_refused if {
+	count(judged("Keep fix 2?", ["Admit it (Recommended)", "Split fix 2 out"])) == 1
+}
+
+test_a_recommended_pair_without_an_admit_label_is_refused if {
+	count(judged(
+		"Keep test-expectation-changed crates/batten/tests/it/cli.rs::every_format?",
+		["Keep it (Recommended)", "Split it out"],
+	)) == 1
 }
 
 test_a_question_with_no_recommendation_is_asked if {

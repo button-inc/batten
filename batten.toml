@@ -14719,13 +14719,17 @@ target = "policy/script-spawn-opaque.rego"
 # #1276, CLOUD-2775: an admission question the ledger could never record.
 [[verdict]]
 id = "call ask loose"
-gloss = "a question asks to admit a finding in words the ledger cannot bind"
+gloss = "a question asks what its own evidence settles, or asks to admit a finding in words the ledger cannot bind"
 class = """
-An admission binds only when the question names the exact `<verdict> <path>` \
-pair and the chosen option's label starts with `Admit`. A question that shortens \
-the path, names none, or labels its option anything else is asked and answered \
-and admits nothing, so the gate refuses again and the owner is asked again. Name \
-the full repository-relative path and label the admitting option `Admit…`.
+A question carrying a `(Recommended)` option is the asker saying the evidence \
+settles it, so it is never asked (CLOUD-2915): take the recommended action, \
+record the reasoning where the decision lives (the row, the commit), and let the \
+owner overrule. The one exception is the ledger's own question. An admission \
+binds only when the question names the exact `<verdict> <path>` pair and the \
+chosen option's label starts with `Admit`. A question that shortens the path, \
+names none, or labels its option anything else is asked and answered and admits \
+nothing, so the gate refuses again and the owner is asked again. Name the full \
+repository-relative path and label the admitting option `Admit…`.
 """
 
 [[verdict.route]]
