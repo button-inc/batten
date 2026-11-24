@@ -9360,6 +9360,17 @@ violation contains {\"rule\": \"d\", \"verdict\": \"d\"} if {\n\tinput.call.oper
         assert_eq!(splits(HOISTED), Vec::<String>::new());
     }
 
+    /// Fails by: `=` binding only its left side, so a variable unified on the
+    /// RIGHT is not one of the case's own and the `with` term reading it is
+    /// left unhoisted, naming an unbound variable.
+    #[test]
+    fn a_with_term_reading_a_variable_unified_on_the_right_is_hoisted() {
+        const HOISTED: &str = "package batten.h\nimport rego.v1\n\n\
+            p if input.v == 1\n\n\
+            test_x if {\n\t{\"v\": 1} = x\n\tp with input as x\n}\n";
+        assert_eq!(splits(HOISTED), Vec::<String>::new());
+    }
+
     /// Fails by: a read of `input` under `with` desugared rather than refused.
     #[test]
     fn a_read_of_input_under_with_stays_on_the_interpreter() {
