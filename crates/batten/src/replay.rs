@@ -85,6 +85,17 @@ pub struct Modified {
     pub line: usize,
 }
 
+impl Modified {
+    /// This test with `body` as the base body spliced at HEAD: the base body
+    /// respelled as HEAD spells, and nothing else of the test changed.
+    fn spliced_as(self, body: String) -> Self {
+        Self {
+            base_body: body,
+            ..self
+        }
+    }
+}
+
 /// What a diff did to the tests of one file.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Changed {
@@ -717,10 +728,7 @@ pub fn run(
                             )
                         },
                     );
-                    Modified {
-                        base_body: respell_cut(&body, &base_crate, &head_crate, &cuts),
-                        ..test
-                    }
+                    test.spliced_as(respell_cut(&body, &base_crate, &head_crate, &cuts))
                 })
                 .collect();
             splices.insert(head_path, (head_text.to_owned(), modified));
@@ -1921,6 +1929,31 @@ mod tests {
                 (String::from("app"), String::from("app_core")),
                 BTreeSet::from([String::from("m")])
             )])
+        );
+    }
+
+    /// The body a test is spliced with is the respelled one, and the rest of
+    /// the test is kept (CLOUD-2789).
+    ///
+    /// Fails by: the respelled body dropped, so the base body is spliced as
+    /// base spelled it and names a path HEAD no longer has.
+    #[test]
+    fn a_test_is_spliced_with_its_respelled_body() {
+        let test = Modified {
+            inner: String::from("tests::a"),
+            base_body: String::from("{ crate::m::f(); }"),
+            head_body: (3, 9),
+            line: 2,
+        };
+        let spliced = test
+            .clone()
+            .spliced_as(String::from("{ app_core::m::f(); }"));
+        assert_eq!(
+            spliced,
+            Modified {
+                base_body: String::from("{ app_core::m::f(); }"),
+                ..test
+            }
         );
     }
 

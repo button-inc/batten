@@ -1659,6 +1659,23 @@ mod tests {
         assert_eq!(field("task"), None);
     }
 
+    /// A live registrant's record carries the digest of ITS command line, the
+    /// stamp `alive` compares a reused pid against (CLOUD-1560, CLOUD-2789).
+    ///
+    /// Fails by: the digest dropped from the registered entry, so a recycled
+    /// pid reads as the registrant.
+    #[test]
+    fn a_live_registrant_is_recorded_with_its_command_line_digest() {
+        let dir = registry("cmdline-digest");
+        let pid = std::process::id().to_string();
+        register(&dir, "land", &pid, "start", 100);
+        let recorded = read_field(&dir, &pid, "cmdline_sha256").unwrap_or_default();
+        assert_eq!(recorded, cmdline_digest(&pid).unwrap_or_default());
+        if cfg!(target_os = "linux") {
+            assert_eq!(recorded.len(), 64, "a live pid's command line reads");
+        }
+    }
+
     /// Fails by: a pid's group misread, or a field that is not a pid read as
     /// one.
     #[test]
