@@ -440,6 +440,21 @@ fn each_decided_mechanism_bullet_is_a_plan_entry() {
     );
 }
 
+/// A row with no "Mechanism (decided)" section records nothing and says nothing.
+///
+/// Fails by: the count line printed whenever the claim speaks, including a
+/// `0 decided-mechanism` line for a row that declared none.
+#[test]
+fn a_row_with_no_decided_mechanism_says_nothing_about_one() {
+    let (dir, payload) =
+        crate::claim::ready_to_pull_with("plan-no-mechanism", &crate::claim::refined_body());
+    let output = crate::claim::check(&dir, &payload, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+    let said = common::stdout(&output);
+    assert!(said.contains("pullable"), "{said}");
+    assert!(!said.contains("decided-mechanism"), "{said}");
+}
+
 /// The plan store of whatever branch `dir` has checked out, through the
 /// engine's own path derivation ([`plan_store`] is keyed on `work`).
 fn branch_plan_store(dir: &Path) -> String {

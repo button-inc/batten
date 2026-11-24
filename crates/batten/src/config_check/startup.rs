@@ -210,6 +210,17 @@ mod tests {
         )
     }
 
+    /// Fails by: a leading underscore refused, or a leading non-letter that is
+    /// not one admitted, as the first character of a variable name.
+    #[test]
+    fn a_variable_name_starts_with_a_letter_or_underscore() {
+        assert!(super::is_variable_name("_PRIVATE"));
+        assert!(super::is_variable_name("X1"));
+        assert!(!super::is_variable_name("1X"));
+        assert!(!super::is_variable_name("-X"));
+        assert!(!super::is_variable_name(""));
+    }
+
     /// The anti-vacuity half: the refusals below are not a key every config
     /// fails on.
     #[test]

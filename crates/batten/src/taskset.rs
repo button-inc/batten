@@ -593,6 +593,20 @@ mod tests {
         }
     }
 
+    /// Fails by: the group list read past the first flag, or past a quoted
+    /// empty word, so a flag or its value is taken for a group.
+    #[test]
+    fn a_graph_line_names_its_groups_up_to_the_first_flag_or_empty_word() {
+        assert_eq!(
+            graph_groups("batten step graph run lint test=2 --jobs 3 extra"),
+            ["lint", "test"]
+        );
+        assert_eq!(
+            graph_groups("batten step graph run \"lint\" \"\" extra"),
+            ["lint"]
+        );
+    }
+
     /// Fails by: a record written before bodies existed refused whole (every
     /// reader of a released engine's receipt losing task existence), or read
     /// as bodies that run nothing (`task-programs` an empty list, so a guard

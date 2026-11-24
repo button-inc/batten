@@ -6279,6 +6279,21 @@ mod tests {
         assert_eq!(Reduction::Token.apply(&Look::Is(&over)), None);
     }
 
+    /// Fails by: a tag row carrying a path, or a filter with no path to apply
+    /// it to, read as a tag query rather than refused.
+    #[test]
+    fn a_tag_row_with_a_path_or_a_filter_has_no_shape() {
+        let row = |path: Option<&str>, filter: Option<&str>| HistoryQuery {
+            id: String::from("q"),
+            tags: Some(String::from("v*")),
+            path: path.map(str::to_owned),
+            filter: filter.map(str::to_owned),
+        };
+        assert_eq!(row(None, None).shape(), Some(HistoryShape::Tags));
+        assert_eq!(row(Some("a"), None).shape(), None);
+        assert_eq!(row(None, Some("A")).shape(), None);
+    }
+
     /// Fails by: any one refusal folded into another, so a mint carrying only
     /// a `/`, only a `\`, or a row with only an empty id reads as admissible.
     #[test]

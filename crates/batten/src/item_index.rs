@@ -3012,4 +3012,105 @@ mod tests {
             vec![vec!["std", "fs", "read"]]
         );
     }
+
+    /// Fails by: a `static` declaring no name the index records, so a path
+    /// naming one resolved nowhere and compared as written.
+    #[test]
+    fn a_static_is_an_item_a_path_names() {
+        let built = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod m { pub static S: u8 = 0; }\n"),
+        ]);
+        assert_eq!(
+            canonical("crate::m::S", "app", &built, &BTreeMap::new()),
+            "⟨src/lib.rs#S⟩"
+        );
+    }
+
+    /// Fails by: every file answering the crate root's module path, or one
+    /// the index never read answering any.
+    #[test]
+    fn a_files_module_path_is_the_one_it_was_indexed_at() {
+        let built = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\n"),
+            ("src/a.rs", "pub struct X;\n"),
+        ]);
+        assert_eq!(
+            built.module_path_of("src/a.rs"),
+            Some(&[String::from("a")][..])
+        );
+        assert_eq!(built.module_path_of("src/lib.rs"), Some(&[][..]));
+        assert_eq!(built.module_path_of("src/none.rs"), None);
+    }
+
+    /// Fails by: a path through a glob re-export counting the segments it
+    /// consumed by anything but the glob's own reach, so the item's tail was
+    /// cut short or overrun. Five segments, two of them the glob's target.
+    #[test]
+    fn a_path_through_a_glob_consumes_exactly_its_own_segments() {
+        let built = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", "pub mod c { pub mod d { pub struct X; } }\n"),
+            ("src/b.rs", "pub use crate::a::*;\n"),
+        ]);
+        let path: Vec<String> = ["app", "b", "c", "d", "X"].map(String::from).to_vec();
+        assert_eq!(
+            built.resolve_through(&path, 8, true),
+            Some(((String::from("src/a.rs"), String::from("X")), 5))
+        );
+    }
+
+    /// Fails by: a path headed by an underscore not read as a path, a token
+    /// starting with a digit read as one, or a segment glued to a single
+    /// colon before it read as starting a path.
+    #[test]
+    fn a_token_path_is_identifiers_joined_by_double_colons() {
+        let paths = |body: &str| -> Vec<Vec<String>> {
+            token_paths(body)
+                .into_iter()
+                .map(|(_, segments, _)| segments)
+                .collect()
+        };
+        assert_eq!(paths("_a::B"), [["_a", "B"].map(String::from).to_vec()]);
+        assert!(paths("0::X").is_empty());
+        assert!(paths("a:b::c").is_empty());
+    }
+
+    /// Fails by: a byte of an identifier not read as one, so a path glued to
+    /// the identifier before it in a comment was read as starting there.
+    #[test]
+    fn an_ident_byte_is_alphanumeric_or_underscore() {
+        assert!(is_ident_byte(b'a'));
+        assert!(is_ident_byte(b'7'));
+        assert!(is_ident_byte(b'_'));
+        assert!(!is_ident_byte(b':'));
+        assert!(paths_in("// 1a::b\n").is_empty());
+    }
+
+    /// Fails by: a glob anywhere in a use tree missed, so the tree was
+    /// regenerated without the names only the glob binds.
+    #[test]
+    fn a_use_tree_holding_a_glob_binds_unnamed() {
+        let first = |text: &str| {
+            batten_facts::source::rust_parse(text, Edition::Edition2024)
+                .tree()
+                .syntax()
+                .descendants()
+                .find_map(ast::Use::cast)
+                .and_then(|declaration| declaration.use_tree())
+                .unwrap_or_else(|| panic!("the fixture holds a use tree"))
+        };
+        assert!(binds_unnamed(&first("use a::{b, c::*};\n")));
+        assert!(!binds_unnamed(&first("use a::{b, c};\n")));
+    }
+
+    /// Fails by: a comment's span offset not taken back past the macro
+    /// wrapper, so a comment at the body's start was placed a byte in.
+    #[test]
+    fn a_comment_span_is_an_offset_into_the_body() {
+        assert_eq!(comment_spans("// x"), [(0, 4)]);
+        assert_eq!(comment_spans("a // x"), [(2, 6)]);
+    }
 }

@@ -576,4 +576,47 @@ mod tests {
             "{edges:?}"
         );
     }
+
+    fn edges(source: &str) -> Vec<(String, String, bool)> {
+        let Look::Is(found) = use_edges(source) else {
+            panic!("the fixture parses");
+        };
+        found
+            .into_iter()
+            .map(|edge| (edge.to, edge.item, edge.qualified))
+            .collect()
+    }
+
+    /// Fails by: a one-segment root `use` (`use serde;`) recorded as an export
+    /// keyed by its own name, when it names no path to resolve through.
+    #[test]
+    fn a_one_segment_root_use_exports_nothing() {
+        let Look::Is(table) = root_exports("use serde;\n") else {
+            panic!("the fixture parses");
+        };
+        assert!(table.is_empty(), "{table:?}");
+    }
+
+    /// Fails by: a `use crate::a::B` leaf reported as the module `a` rather
+    /// than the item `B` it names.
+    #[test]
+    fn a_use_names_its_leaf_item_in_its_module() {
+        assert_eq!(
+            edges("use crate::a::B;\n"),
+            [(String::from("a"), String::from("B"), false)]
+        );
+    }
+
+    /// Fails by: a second qualified path dropped as a duplicate of the first
+    /// although it names another module and item.
+    #[test]
+    fn two_distinct_qualified_paths_are_two_edges() {
+        assert_eq!(
+            edges("fn f() { crate::a::f(); crate::b::g(); }\n"),
+            [
+                (String::from("a"), String::from("f"), true),
+                (String::from("b"), String::from("g"), true),
+            ]
+        );
+    }
 }

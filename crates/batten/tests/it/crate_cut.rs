@@ -10,6 +10,9 @@
 use std::collections::BTreeMap;
 
 use batten::crate_cut::{Cut, Plan, cut_crate, respell_body};
+use batten::exit::ExitCode;
+
+use crate::common;
 
 fn tree() -> (BTreeMap<String, String>, BTreeMap<String, String>) {
     let files = [

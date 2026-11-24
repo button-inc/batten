@@ -34648,6 +34648,58 @@ mod tests {
         assert_eq!(bounded["kept"], result["kept"]);
         assert_eq!(bounded["short"], result["short"]);
     }
+
+    /// Each vendored environment manager's data directory is a root, from its
+    /// variable or the default under `$HOME`.
+    ///
+    /// Fails by: `install_roots` answering no root, so a program a running
+    /// setup task installed under one never reads as still pending.
+    #[test]
+    fn install_roots_names_every_declared_data_dir() {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let expected: Vec<std::path::PathBuf> = crate::preset_catalog::MANIFESTS
+            .iter()
+            .filter_map(|manifest| manifest.install.as_ref())
+            .filter_map(|install| {
+                let (variable, default) = install.data_dir;
+                std::env::var_os(variable)
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| home.as_ref().map(|home| home.join(default)))
+            })
+            .collect();
+        assert!(
+            !expected.is_empty(),
+            "premise: a preset declares an install root and the environment resolves it"
+        );
+        assert_eq!(super::install_roots(), expected);
+    }
+
+    /// The pathspec fact's fallback base is the process's own directory.
+    ///
+    /// Fails by: `current_process_dir` answering `None`, so a call with no
+    /// `cwd` in its envelope can never be placed.
+    #[test]
+    fn current_process_dir_is_the_working_directory() {
+        let here = std::env::current_dir().ok();
+        assert!(here.is_some(), "premise: the test has a working directory");
+        assert_eq!(super::current_process_dir(), here);
+    }
+
+    /// Only the engine's own `capture show` over a reader-chosen window is the
+    /// pointer-to-pointer loop.
+    ///
+    /// Fails by: either half sufficing — any engine call read as a windowed
+    /// show, or a non-engine command that merely spells one.
+    #[test]
+    fn shows_a_capture_needs_the_engine_and_a_windowed_show() {
+        assert!(super::shows_a_capture(
+            "batten capture show abc --lines 1:5"
+        ));
+        assert!(super::shows_a_capture("batten capture show abc --grep=x"));
+        assert!(!super::shows_a_capture("batten capture show abc"));
+        assert!(!super::shows_a_capture("batten check --lines"));
+        assert!(!super::shows_a_capture("echo capture show abc --lines 1:5"));
+    }
 }
 
 /// The lap's engine bookkeeping (CLOUD-2783).

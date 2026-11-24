@@ -1812,6 +1812,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: a store that has never folded a byte (`seqno` 0, no marks)
+    /// taken for one whose marks were lost, so an empty merge replays and
+    /// rewrites the merged log.
+    #[test]
+    fn a_merge_of_a_store_that_never_folded_does_not_replay() {
+        let dir = store("never-folded");
+        merge(&dir).unwrap();
+        let merged = merged_path(&dir);
+        std::fs::write(&merged, "marker\n").unwrap();
+        assert!(matches!(
+            merge(&dir).unwrap(),
+            Merge::Merged { applied: 0, .. }
+        ));
+        assert_eq!(
+            crate::fsio::read_to_string(&merged).unwrap(),
+            "marker\n",
+            "a store with nothing folded and nothing new is not replayed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a pending file that cannot be removed for any reason but
+    /// absence read as removed, so the stale entries stay behind silently.
+    #[test]
+    fn a_pending_file_that_cannot_be_removed_is_an_error() {
+        let dir = store("pending-unremovable");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        append(&dir, "shard-a", &entry_for("TODO", Disposition::Acted)).unwrap();
+        std::fs::create_dir_all(pending_path(&dir).join("occupied")).unwrap();
+        assert!(merge(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// CLOUD-2820. Fails by: an entry whose record did not exist yet being lost
     /// once its shard bytes are behind the high-water mark.
     #[test]

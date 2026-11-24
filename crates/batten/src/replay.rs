@@ -1873,6 +1873,97 @@ mod tests {
         assert!(one.starts_with("base src/a.rs "), "{one}");
     }
 
+    /// The `(sources, manifests)` index of one tree.
+    fn indexed(files: &[(&str, &str)]) -> crate::item_index::Index {
+        let (manifests, sources): (BTreeMap<String, String>, BTreeMap<String, String>) = files
+            .iter()
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .partition(|(path, _)| path.ends_with("Cargo.toml"));
+        crate::item_index::Index::new(&sources, &manifests)
+    }
+
+    /// Fails by: a cut recovered as anything but the crate pair a library
+    /// file moved between and the crate-root module that moved, or a move
+    /// within one crate read as a cut.
+    #[test]
+    fn a_cut_is_the_crate_pair_and_root_module_a_file_moved_between() {
+        let root = ("Cargo.toml", "[package]\nname = \"app\"\n");
+        let core = ("libs/core/Cargo.toml", "[package]\nname = \"app-core\"\n");
+        let before = indexed(&[
+            root,
+            core,
+            ("src/lib.rs", "pub mod m;\npub mod n;\n"),
+            ("src/m.rs", "pub fn f() {}\n"),
+            ("src/n.rs", "pub fn g() {}\n"),
+            ("libs/core/src/lib.rs", ""),
+        ]);
+        let after = indexed(&[
+            root,
+            core,
+            ("src/lib.rs", "pub mod o;\n"),
+            ("src/o.rs", "pub fn g() {}\n"),
+            ("libs/core/src/lib.rs", "pub mod m;\n"),
+            ("libs/core/src/m.rs", "pub fn f() {}\n"),
+        ]);
+        let moves = BTreeMap::from([
+            (String::from("src/m.rs"), String::from("libs/core/src/m.rs")),
+            (String::from("src/n.rs"), String::from("src/o.rs")),
+        ]);
+        assert_eq!(
+            cuts(&moves, &before, &after),
+            BTreeMap::from([(
+                (String::from("app"), String::from("app_core")),
+                BTreeSet::from([String::from("m")])
+            )])
+        );
+    }
+
+    /// Fails by: a body read in the crate a module left, naming it through
+    /// `crate::`, spliced unrespelled, so it names a path HEAD no longer has.
+    #[test]
+    fn a_base_body_is_respelled_through_the_cut() {
+        let cut = BTreeMap::from([(
+            (String::from("app"), String::from("app_core")),
+            BTreeSet::from([String::from("m")]),
+        )]);
+        assert_eq!(
+            respell_cut("{ crate::m::f(); }", "app", "app", &cut),
+            "{ app_core::m::f(); }"
+        );
+        assert_eq!(
+            respell_cut("{ crate::m::f(); }", "app_core", "app_core", &cut),
+            "{ crate::m::f(); }",
+            "a body read outside the crate cut from names no `crate::m` of it"
+        );
+    }
+
+    /// Fails by: the kept run log named only under `--json`, where the line
+    /// would corrupt the document, instead of only without it.
+    #[test]
+    fn a_failed_union_run_is_named_in_text_output_only() {
+        let scratch = crate::scratch::scratch("replay-admit-run-log");
+        crate::testing::contain_state(&scratch.join("data"));
+        let root = scratch.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("a.txt")], "base").unwrap();
+        let state = crate::state::repo_state_dir(&root).unwrap().join("replay");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join(RUN_LOG), "exit 101\n").unwrap();
+        let said = |json: bool| {
+            let mut out = Vec::new();
+            admit(&root, "HEAD", &[], (json, false), &mut out).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        assert!(
+            said(false).contains("a union test run failed"),
+            "{}",
+            said(false)
+        );
+        assert!(!said(true).contains("a union test run failed"));
+    }
+
     const BASE: &str = "\
 fn helper() -> u8 { 1 }
 

@@ -7206,6 +7206,75 @@ mod tests {
         assert_eq!(Suite::declared("infra/main.tf"), None);
     }
 
+    /// Fails by: a hidden directory walked and a plain one skipped, so the case
+    /// index reads `.git`-like trees and misses a nested module.
+    #[test]
+    fn a_deep_walk_skips_hidden_and_target_directories_only() {
+        let root = std::env::temp_dir().join(format!(
+            "batten-mutate-collect-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for file in [
+            "tests/a.rs",
+            "tests/sub/z.rs",
+            "tests/.hidden/x.rs",
+            "tests/target/y.rs",
+            "tests/notes.md",
+        ] {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap_or(&root))
+                .unwrap_or_else(|e| panic!("mkdir: {e}"));
+            std::fs::write(&path, "fn x() {}\n").unwrap_or_else(|e| panic!("write: {e}"));
+        }
+        let mut found = Vec::new();
+        collect_files(&root, "tests", "rs", true, &mut found);
+        found.sort();
+        assert_eq!(found, ["tests/a.rs", "tests/sub/z.rs"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Fails by: a suite under a target's root directory not mapped to that
+    /// target, or a tie in depth won by the later target rather than the first.
+    #[test]
+    fn a_suite_maps_to_the_first_deepest_target_root_holding_it() {
+        let staged = std::env::temp_dir().join(format!(
+            "batten-mutate-suite-binary-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&staged);
+        std::fs::create_dir_all(&staged).unwrap_or_else(|e| panic!("mkdir: {e}"));
+        let src = |path: &str| format!("{}/{path}", staged.display());
+        let target = |name: &str, kind: &str, path: &str| serde_json::json!({"name": name, "kind": [kind], "src_path": src(path)});
+        let doc = serde_json::json!({"packages": [{
+            "name": "p",
+            "targets": [
+                target("p", "lib", "src/lib.rs"),
+                target("first", "test", "tests/it/main.rs"),
+                target("second", "test", "tests/it/mod.rs"),
+                target("toy", "test", "tests/toy.rs"),
+            ],
+        }]});
+        let metadata = staged.join("metadata.json");
+        std::fs::write(&metadata, doc.to_string()).unwrap_or_else(|e| panic!("write: {e}"));
+        assert_eq!(
+            suite_binary(&metadata, &staged, "tests/it/mutate.rs").as_deref(),
+            Some("p::first")
+        );
+        assert_eq!(
+            suite_binary(&metadata, &staged, "src/x.rs").as_deref(),
+            Some("p")
+        );
+        assert_eq!(
+            suite_binary(&metadata, &staged, "tests/toy.rs").as_deref(),
+            Some("p::toy")
+        );
+        assert_eq!(suite_binary(&metadata, &staged, "benches/b.rs"), None);
+        let _ = std::fs::remove_dir_all(&staged);
+    }
+
     /// The recorded output of one harness, its version line dropped.
     fn recorded(arm: &str, state: &str) -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))

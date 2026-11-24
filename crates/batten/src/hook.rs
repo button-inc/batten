@@ -24481,4 +24481,113 @@ deny contains "refused by themodule" if {
             Some("module-gate")
         );
     }
+
+    /// A ratchet row is selected only when it blocks AND its glob covers the
+    /// write.
+    ///
+    /// Fails by: either half sufficing, so a non-blocking row or a row over
+    /// another tree is read for a write it cannot refuse.
+    #[test]
+    fn a_ratchet_needs_a_blocking_row_whose_glob_covers_the_write() {
+        let ratchet = |id: &str, glob: &str, severity: RuleSeverity| Rule {
+            glob: Some(glob.to_owned()),
+            severity: Some(severity),
+            ..shape(id, "unused", None)
+        };
+        let mut policy = ceiling_policy(Vec::new());
+        policy.ratchets = vec![
+            ratchet("covers-and-blocks", "src/**", RuleSeverity::Deny),
+            ratchet("covers-but-allows", "src/**", RuleSeverity::Allow),
+            ratchet("blocks-elsewhere", "docs/**", RuleSeverity::Deny),
+        ];
+        let envelope = write_envelope("Write", "src/a.rs");
+        assert!(envelope.writes.is_some(), "premise: the call is a write");
+        let ids: Vec<&str> = policy
+            .ratchets_for(&envelope)
+            .into_iter()
+            .map(|rule| rule.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["covers-and-blocks"]);
+    }
+
+    /// A git work tree names where git writes, whichever order the options
+    /// come in.
+    ///
+    /// Fails by: `--work-tree` read as a git dir, so a later `--git-dir`
+    /// overwrites it and the checkout it names wins.
+    #[test]
+    fn a_git_work_tree_outranks_its_git_dir() {
+        let here = Path::new("/r");
+        let acting = |command: &str| {
+            let tokens: Vec<&str> = command.split_whitespace().collect();
+            git_acting_dir(&tokens, here)
+        };
+        let at = |path: &str| Some(std::path::PathBuf::from(path));
+        assert_eq!(
+            acting("git --work-tree=/w --git-dir=/g/.git status"),
+            at("/w")
+        );
+        assert_eq!(
+            acting("git --work-tree /w --git-dir /g/.git status"),
+            at("/w")
+        );
+        assert_eq!(acting("git --git-dir=/g/.git status"), at("/g"));
+    }
+
+    /// `batten mcp call <server> <method>` with no params is the call with an
+    /// empty object.
+    ///
+    /// Fails by: the no-params arm dropped, so the bare call names no tool.
+    #[test]
+    fn a_mediated_call_without_params_carries_an_empty_object() {
+        assert_eq!(
+            mediated_mcp_call("batten mcp call linear get_issue"),
+            Some(("mcp__linear__get_issue".to_owned(), serde_json::json!({})))
+        );
+        assert_eq!(
+            mediated_mcp_call(r#"batten mcp call linear get_issue '{"id":"X"}'"#),
+            Some((
+                "mcp__linear__get_issue".to_owned(),
+                serde_json::json!({"id": "X"})
+            ))
+        );
+        assert_eq!(
+            mediated_mcp_call("batten mcp call linear get_issue a b"),
+            None
+        );
+    }
+
+    /// A lone `cp` operand names no destination, so it writes nothing.
+    ///
+    /// Fails by: the lone operand read as the destination directory.
+    #[test]
+    fn a_copy_with_one_operand_writes_nothing() {
+        assert!(program_writes(&["cp", "a"]).is_empty());
+        assert_eq!(program_writes(&["cp", "a", "d"]), vec!["d", "d/a"]);
+    }
+
+    /// A Perl or Ruby spawn with no arguments spawns nothing a reader can name.
+    ///
+    /// Fails by: the empty arm dropped, so it reads as an empty argv.
+    #[test]
+    fn an_empty_perl_or_ruby_spawn_is_none() {
+        assert_eq!(decide(Language::Perl, "system", &[]), None);
+        assert_eq!(decide(Language::Ruby, "system", &[]), None);
+        assert_eq!(
+            decide(Language::Perl, "system", &[Arg::Literal("ls".into())]),
+            Some(Spawned::Shell("ls".into()))
+        );
+    }
+
+    /// `mise tasks run` passes its task the words past its name, as `mise run`
+    /// does.
+    ///
+    /// Fails by: the nested `run` refused, so `mise tasks run t -- x` reads as
+    /// passing nothing.
+    #[test]
+    fn mise_tasks_run_passes_its_arguments() {
+        let passed = mise_task_arguments(&["tasks", "run", "t", "--", "x"]);
+        assert_eq!(passed.get("t"), Some(&vec!["x".to_owned()]));
+        assert!(mise_task_arguments(&["tasks", "ls", "t", "x"]).is_empty());
+    }
 }
