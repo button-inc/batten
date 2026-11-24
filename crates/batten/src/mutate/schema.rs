@@ -5380,17 +5380,26 @@ fn handback_verdict(
     }
 }
 
-/// Whether a hand-back's declared build fits the disk holding the mirror at
-/// `tree`, above the collector's floor. `Ok` when no cost is declared.
+/// Whether a hand-back's declared cold build fits the disk holding the mirror
+/// at `tree`, above the collector's floor. `Ok` when no cost is declared, or
+/// when the mirror is warm.
 ///
 /// # Errors
 ///
-/// It does not fit, or the disk's free space cannot be read: either way the
-/// build could only fail, so it is not run.
+/// A cold mirror's build does not fit, or the disk's free space cannot be
+/// read: either way the build could only fail, so it is not run.
 fn handback_room(handback: &Handback<'_>, tree: &std::path::Path) -> anyhow::Result<()> {
     let Some((need_mb, floor_mb)) = handback.disk else {
         return Ok(());
     };
+    // THE COLD COST IS A COLD MIRROR'S ALONE: `sync` keeps the mirror's own
+    // `target`, so only the first hand-back builds the workspace, and every
+    // later one rebuilds one mutated crate into it. Charged on every run, a
+    // container with under ~10 GB free refused hand-backs that would have
+    // built. Cargo tags a target directory it has built into.
+    if tree.join("target").join("CACHEDIR.TAG").is_file() {
+        return Ok(());
+    }
     // THE MIRROR'S OWN VOLUME, its nearest existing ancestor before its
     // first sync creates it.
     let at = tree.ancestors().find(|dir| dir.exists()).unwrap_or(tree);
@@ -8393,15 +8402,14 @@ mod tests {
         assert!(said.contains("changed during the sweep"), "{said}");
     }
 
-    /// A hand-back whose build the disk cannot hold is refused, said, and
-    /// judged nothing (CLOUD-2882): no run, no journal line, an `error`.
-    ///
-    /// Fails by: the build forced onto a full disk, which on #1276 failed and
-    /// was recorded `unviable`; the refusal journaled, so a later sweep reused
-    /// it; or the refusal left unsaid.
-    #[test]
-    fn a_handback_the_disk_cannot_hold_is_refused_unjudged() {
-        let base = crate::scratch::scratch("schema-handback-no-room");
+    /// One hand-back judged with a declared cost no disk holds, by a stub
+    /// cargo-mutants that reports it `caught`, over a mirror that is `warm`
+    /// (its target built into) or cold. Its verdicts, what it said, and
+    /// whether anything was journaled.
+    #[cfg(unix)]
+    fn judged_with_no_room(name: &str, warm: bool) -> (Vec<(u32, Verdict)>, String, bool) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let base = crate::scratch::scratch(name);
         crate::gitwrite::init_on_main(&base).expect("a repository");
         std::fs::create_dir_all(base.join("src")).unwrap();
         std::fs::write(base.join("src/lib.rs"), KEYED_SOURCE).unwrap();
@@ -8430,33 +8438,75 @@ mod tests {
             red: &red,
             reuse: None,
         };
-        let nowhere = base.join("nowhere");
+        // A RUNNER THAT WOULD CATCH IT, so a refusal shows in the verdict and
+        // not only in what is said.
+        let runner = base.join("cargo-mutants-stub");
+        std::fs::write(
+            &runner,
+            format!(
+                "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --output ] && out=$2; shift; done\n\
+                 mkdir -p \"$out/mutants.out\"\nprintf '%s\\n' '{}' > \"$out/mutants.out/caught.txt\"\n",
+                mutants[0].name
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
         let handback = Handback {
-            runner: &nowhere,
-            diff: Some(&nowhere),
+            runner: &runner,
+            diff: None,
             disk: Some((u64::MAX, 0)),
         };
+        // ITS OWN STATE, so the mirror is not inside the tree it copies.
+        let state = crate::scratch::scratch(&format!("{name}-state"));
+        if warm {
+            let target = state.join("classic").join("target");
+            std::fs::create_dir_all(&target).unwrap();
+            std::fs::write(
+                target.join("CACHEDIR.TAG"),
+                "Signature: 8a477f597d28d172789f06886806bc55\n",
+            )
+            .unwrap();
+        }
         let still = super::super::cover::source_digest(&base).unwrap();
         let mut out = Vec::new();
         let (verdicts, unviable) = judge_handbacks(
             &judging,
-            // ITS OWN STATE, so the mirror is not inside the tree it copies.
-            (
-                &handback,
-                &base,
-                &still,
-                &crate::scratch::scratch("schema-handback-no-room-state"),
-            ),
+            (&handback, &base, &still, &state),
             &BTreeSet::from([0]),
             (&Schema::default(), &Reach::default()),
             &mut out,
         )
         .expect("no room degrades, it does not fail the call");
-        assert_eq!(verdicts, [(0, Verdict::Error)]);
         assert_eq!(unviable, 0);
-        let said = String::from_utf8(out).unwrap();
+        (verdicts, String::from_utf8(out).unwrap(), store.exists())
+    }
+
+    /// A hand-back whose cold build the disk cannot hold is refused, said,
+    /// and judged nothing (CLOUD-2882): no run, no journal line, an `error`.
+    ///
+    /// Fails by: the build forced onto a full disk, which on #1276 failed and
+    /// was recorded `unviable` (here the runner would have said `caught`); the
+    /// refusal journaled, so a later sweep reused it; or the refusal unsaid.
+    #[cfg(unix)]
+    #[test]
+    fn a_handback_the_disk_cannot_hold_is_refused_unjudged() {
+        let (verdicts, said, journaled) = judged_with_no_room("schema-handback-no-room", false);
+        assert_eq!(verdicts, [(0, Verdict::Error)], "{said}");
         assert!(said.contains("no room: its build needs"), "{said}");
-        assert!(!store.exists(), "a refusal is journaled nowhere");
+        assert!(!journaled, "a refusal is journaled nowhere");
+    }
+
+    /// A warm mirror's hand-back runs however little room is left: its target
+    /// already holds the build, so only the mutated crate rebuilds.
+    ///
+    /// Fails by: the cold cost charged on every run, which refused every
+    /// hand-back in a container under ~10 GB free though each would have
+    /// built, so the local mutant tier went red where CI's did not.
+    #[cfg(unix)]
+    #[test]
+    fn a_warm_mirror_hands_back_under_the_cold_cost() {
+        let (verdicts, said, _) = judged_with_no_room("schema-handback-warm", true);
+        assert_eq!(verdicts, [(0, Verdict::Caught)], "{said}");
     }
 
     /// A listed mutant of `fn f` in `src/lib.rs` whose function span is known,
