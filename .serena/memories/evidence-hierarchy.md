@@ -31,7 +31,7 @@ that only ever saw a half-implementation.
 
 **A cheap discriminator, worth keeping:** a row or comment that cites a **retired
 artefact** — a shell variable (`spec_undo`, `spec_base`, `LAND_LOCK_HOLDER_PID`),
-a line number in `mise-tasks/land.sh` or `land-lock.sh` — was wrong **4 times in
+a line number in the retired land or land-lock script — was wrong **4 times in
 5**. A row citing live Rust paths was usually at least partly live. It is triage,
 not a substitute for reading the tree.
 
@@ -56,7 +56,7 @@ not a substitute for reading the tree.
   fast-forward and PRESERVES the sha (`mem:decision/landing-architecture`). A
   later session quoted it approvingly and built a fencing argument on it.
 - **Two Urgent rows refuted by inspection.** CLOUD-240 reasons over
-  `mise-tasks/land.sh:162`, a deleted file; CLOUD-1423 says `batten land` has zero
+  land-script line 162, a deleted file; CLOUD-1423 says `batten land` has zero
   callers, but `land lap` is `mise.toml:3494`.
 
 ## When you find one

@@ -15,7 +15,7 @@ the shell suite under CLOUD-843.
 **The provisioning order and its bounds are `batten.toml`'s, not a script's.**
 The `on = "session-start"` handler rows ARE the sequence: declaration order is running
 order, each row declares its own `timeout_ms`, and `batten hook` dispatches them
-inline at session start. `.claude/hooks/session-start.sh` used to hold all of
+inline at session start. A session-start hook script used to hold all of
 that and was the last by-path hook registration this repository owned; it is
 retired, and `crates/batten/tests/session_provisioning.rs` carries both its
 ledger and the tier that proves the door does what the rows say. Add a
@@ -101,7 +101,7 @@ So a change touching one has exactly two shapes:
 and no `bypass_env`. That is not an oversight to be worked around; it is the
 whole design.
 
-**A plan that says "this row edits `foo.sh`" has not found a blocked row — it has
+**A plan that says "this row edits a shell file" has not found a blocked row — it has
 found a row whose §1 is written in the wrong shape.** Re-scope it to a retirement
 or leave the file alone. Do not conclude the ratchet needs changing: that
 conclusion was reached twice in one planning session and was wrong both times,
@@ -158,7 +158,7 @@ ledger recorded both identically. Write `kind:verb` or `kind:mechanism` as a fie
 on the arm, beside the successor it qualifies:
 
 ```
-// carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs kind:verb crates/batten/tests/it/ready.rs
+// carried: mise-tasks/<gate>.sh crates/batten/src/<gate>.rs kind:verb crates/batten/tests/it/<gate>.rs
 ```
 
 A `policy/*.rego` or preset successor needs no field — its path already decides
@@ -310,8 +310,8 @@ losing" and began batching rebase→verify→push→land into one command to clo
 window — optimising _against_ the design, since batching removes no refusal and
 only makes each lap bigger. **A loop a caller has to notice is a loop a caller
 will eventually mis-model**, so the task laps itself and the inference has
-nowhere to start. `tests/land.bats` covers every way a lap can end, with a count
-assertion, so an unexercised path cannot go dead again.
+nowhere to start. `crates/batten/tests/it/land_lap.rs` covers the ways a lap
+can end, so an unexercised path cannot go dead again.
 
 The board gates follow the agents-fetch-gates-decide pattern — each is a pure
 function of stdin (`get_issue` payloads piped in by the caller, since no tracker
@@ -399,7 +399,7 @@ claude-code`), reading the `mediated_call` rows of `batten.toml` and nothing
 else (CLOUD-312). Six `mise run` launches per Bash call cost a measured 1.247 s
 serial / 605 ms concurrent to do milliseconds of policy, ~93% of it task-runner
 startup (CLOUD-435). **It is a direct invocation since CLOUD-824**, as the other
-four harnesses always were: the `.claude/hooks/batten-hook.sh` launcher it used
+four harnesses always were: the retired hook launcher script it used
 to route through was a second repo-root resolver in bash, asking
 `--show-toplevel` where `git::repo_root` asks the common dir — so from a linked
 worktree it read the wrong authority, or none, and allowed every mediated call
@@ -425,9 +425,9 @@ guard's predicate; which of them a hook actually fires is the settings file's
 answer, not this list's.
 
 **A missing binary fails open, and the report moved forward** (CLOUD-824).
-`session-start.sh` builds AND installs it (`mise run install:local`, whose
-destination is `install.sh`'s own), so a failure is an `::error::` line, a log
-pointer and a non-zero exit at provisioning time — where it can still be fixed —
+The `[[startup]]` rows build AND install it (`mise run install:local`, whose
+destination is `install.sh`'s own), so a failure is a failed row and a
+non-zero exit at provisioning time — where it can still be fixed —
 rather than the launcher's per-call stderr line and once-per-session
 `systemMessage`. At hook time a `batten` that is not there is a command the host
 cannot run, reported through the host's own channel. Silence still means it is
@@ -463,7 +463,7 @@ spend` is the way through that leaves a record. These four
   Serena tool to use instead travels as each row's `redirect`, so a move still
   names `rename_memory` — the only route that rewrites `mem:` referrers. The
   table in `batten.toml` is the one authority; the corpus that used to live in
-  `tests/memory-guard.bats` is `crates/batten/tests/it/mediated_verbs.rs`. There is
+  the guard's bats suite is `crates/batten/tests/it/mediated_verbs.rs`. There is
   no `BATTEN_MEMORY_GUARD_BYPASS`, and no hatch replaces it: a protected-path
   deny is `path write refused`, whose declared routes include an override, so
   the way through is `batten override request`/`spend` (CLOUD-1051) and
@@ -563,7 +563,7 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   `issue file same`'s declared route with its precondition, issued and
   spent through `batten override request`/`spend`. `land` still calls
   `mise run filed-here-check` by name — an inline `batten check` on that row now
-  — so that call site is byte-identical and `land.sh` never
+  — so that call site is byte-identical and the landing script never
   entered the changed-file set. The PR body reaches the predicate as a RECORD
   rather than on stdin, because `check` is declared `read` and has no stdin
   channel: the boundary captures what `gh pr view --jq .body` returned.
@@ -606,7 +606,7 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   engine's own `state record` call at `Stop` rides too — a caller who switched
   the rule off should not still pay a tree walk per turn for an answer nobody
   reads.
-- **The end of turn is the engine's since CLOUD-1051**, and `stop-guard.sh` is
+- **The end of turn is the engine's since CLOUD-1051**, and the stop-guard script is
   **deleted** rather than still runnable. `batten hook` already registers at
   `Stop`; its five rules live there now, ranked and emitting **at most one**,
   because two nudges on one turn is how a channel stops being read. The first is
@@ -621,7 +621,7 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   on that rung and never ahead of the ladder, and the engine names no program.
 
   **Two corrections, both measured 2026-09-02 (CLOUD-1372).** This clause named
-  `unlanded-check.sh` as a second spawned sibling; that program **does not
+  an unlanded-check script as a second spawned sibling; that program **does not
   exist** — it retired into the engine, and `unlanded_pointer` reads the store
   directly. And the ranking above is no longer by precision alone: **the
   completion reading is now FIRST**, ahead of `stop-posture`'s prose nit, because
@@ -813,7 +813,7 @@ silent-with-records, so every disclosure trailer is refused. `mise run
 attribution-identity` is the one write (`batten attribution identity`,
 self-declared per house style §5): repo-local only, it repairs an unset or denied
 identity, leaves a contributor's compliant one alone, and runs from
-`session-start.sh` so a clone is compliant before it writes a line.
+the `session-attribution-identity` handler row so a clone is compliant before it writes a line.
 
 `mise run gh-preflight` answers "does this token carry the claims our tasks
 need?" by probing the read endpoints and reporting each 403's
@@ -980,7 +980,7 @@ motivation. Its stated premise ("CI installs with `mise install --locked`") was
 false too; no workflow passes `--locked`.
 
 Split accordingly: `mise run lock-complete` is the pure gate (committed bytes
-only, no network, no write, `tests/lock-complete.bats`), and currency runs on a
+only, no network, no write, `crates/batten/tests/it/lock_complete.rs`), and currency runs on a
 schedule in `.github/workflows/lock-currency.yml`. When writing a gate, ask
 which of the two it is — a property of the commit belongs in the gate, a
 property of the world belongs on a clock.
@@ -995,7 +995,6 @@ sequence, and `crates/batten/tests/it/verify_chain.rs` asserts every step is
 argv and the receipt write is the last step, past every gate.
 
 The rule: **a gate step that cannot run must exit non-zero and leave no
-receipt.** Prefer `if ! cmd; then echo "::error:: …" >&2; exit 1; fi` over a
-bare call. A task complex enough to need several of those belongs in
-`mise-tasks/` as a file task with `set -euo pipefail` and a bats suite — which
-is why `linear-check` lives there, gated by `tests/linear-check.bats`.
+receipt.** A task complex enough to need several such steps is a `batten` verb
+with a compiled suite — which is why `linear-check` is `batten land linear`,
+gated by `crates/batten/tests/it/linear_check.rs`.

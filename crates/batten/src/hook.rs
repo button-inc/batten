@@ -654,7 +654,7 @@ impl HarnessExt for Harness {
                     config_surface: Declaration::Partial,
                 },
                 // The one host with a measured capture row, and it is one cell
-                // of three. `tests/board-write-record.bats` reads this host's
+                // of three. `tests/board-write-record.bats` read this host's
                 // MCP content-block response shape, so the post-tool member is
                 // reachable — as DECODED content, because [`decode`] hands the
                 // engine an already-parsed value and the member's original
@@ -3449,8 +3449,8 @@ impl FieldExt for Field {
 /// entirely", and that is not expressible in this return type. Since CLOUD-824
 /// there is no launcher to report it: an absent binary is a command the host
 /// cannot run, which every supported host reports through its own channel, and
-/// this consumer's provisioning (`mise run install:local`, from
-/// `session-start.sh`) fails loudly at the moment it could still be fixed.
+/// this consumer's provisioning (`mise run install:local`, a
+/// `[[startup]]` repair) fails loudly at the moment it could still be fixed.
 #[must_use]
 pub fn field(harness: Harness, raw: &str, field: Field) -> Option<String> {
     field.read(&decode(harness, raw)?)

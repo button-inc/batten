@@ -1,9 +1,8 @@
 ---
 paths:
   - "mise.toml"
-  - "mise-tasks/*"
   - "hk.pkl"
-  - "tests/*.bats"
+  - "crates/batten/tests/**"
   - ".github/workflows/*.yml"
 ---
 

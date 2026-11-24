@@ -58,8 +58,8 @@ path = "src/lib.rs"
 # (CLOUD-418): the IO-free test asserts a module cannot reach `http.send`, and
 # without a build where it CAN that assertion discriminates nothing.
 #
-# OFF in every shipped and every default build. `tests/evaluator-io.bats` is the
-# only caller, and it requires the test to FAIL here — a probe build that stays
+# OFF in every shipped and every default build. `mise run evaluator-io-record` is
+# the only caller, and its gate requires the test to FAIL here — a probe build that stays
 # green is the finding, not a pass.
 #
 # IT COSTS THE CLOSURE NOTHING, which is why this is affordable at all and why
