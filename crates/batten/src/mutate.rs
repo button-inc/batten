@@ -7441,12 +7441,105 @@ mod tests {
                 finding(Verdict::CaseErrored {
                     want: String::new(),
                 }),
+                finding(Verdict::NoMutantDeclared),
+                finding(Verdict::RunnerOwned { runner: "r" }),
             ],
             declared: 3,
             recorded: 0,
             gates: 1,
         };
         assert_eq!(sweep.unlooked(), 2);
+        // The gate-level count is its own class's, never a constant.
+        assert_eq!(sweep.gate_level(), 2);
+    }
+
+    /// Fails by: a set declaration with no glob in it enrolling every name,
+    /// where only the name it newly mentions joined.
+    #[test]
+    fn only_a_name_newly_written_into_the_authority_is_enrolled() {
+        let root = fixture("enrolled-literal");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        let config = crate::config_model::CONFIG_FILE;
+        put(
+            &root,
+            config,
+            "version = 1\n\n[mutate]\ngates = [\"toy\"]\n",
+        );
+        crate::gitwrite::commit_paths(&root, &[config.to_owned()], "base").expect("commit");
+        put(
+            &root,
+            config,
+            "version = 1\n\n[mutate]\ngates = [\"toy\", \"other\"]\n",
+        );
+        let names = ["toy", "other", "third"].map(String::from);
+        let changed = std::collections::BTreeSet::from([config.to_owned()]);
+        assert_eq!(
+            enrolled_since(&root, "HEAD", &names, &changed),
+            std::collections::BTreeSet::from([String::from("other")])
+        );
+    }
+
+    /// Fails by: a file defining no case named like the row's counted as one
+    /// of its case files, or the suite itself counted.
+    #[test]
+    fn a_rows_case_files_are_the_other_files_naming_its_case() {
+        let root = fixture("case-files");
+        put(&root, "tests/it/a.rs", "fn wanted_case() {}\n");
+        put(&root, "tests/it/b.rs", "fn wanted_case_too() {}\n");
+        put(&root, "tests/it/c.rs", "fn unrelated() {}\n");
+        put(&root, "tests/it/sub/d.rs", "fn wanted_case() {}\n");
+        let suite = Suite::Cargo {
+            path: String::from("tests/it/a.rs"),
+        };
+        assert_eq!(
+            case_files(&root, &suite, "m::wanted_case"),
+            ["tests/it/b.rs", "tests/it/sub/d.rs"].map(String::from)
+        );
+    }
+
+    /// Fails by: a shallow walk entering a directory, or a deep one entering a
+    /// hidden or a `target` directory.
+    #[test]
+    fn a_shallow_walk_stays_put_and_a_deep_one_skips_hidden_and_target() {
+        let root = fixture("collect-files");
+        for path in [
+            "a.rs",
+            "sub/b.rs",
+            ".hidden/c.rs",
+            "target/d.rs",
+            "sub/e.txt",
+        ] {
+            put(&root, path, "fn f() {}\n");
+        }
+        let walk = |deep: bool| {
+            let mut files = Vec::new();
+            collect_files(&root, "", "rs", deep, &mut files);
+            files.sort();
+            files
+        };
+        assert_eq!(walk(false), ["a.rs"].map(String::from));
+        assert_eq!(walk(true), ["a.rs", "sub/b.rs"].map(String::from));
+    }
+
+    /// Fails by: a target whose root file is not a `main.rs`, `lib.rs` or
+    /// `mod.rs`, or whose directory does not hold the suite, taken as its
+    /// binary; or a shallower match preferred over the deepest.
+    #[test]
+    fn a_suites_binary_is_the_deepest_root_file_above_it() {
+        let staged = fixture("suite-binary");
+        let src = |path: &str| staged.join(path).display().to_string();
+        let metadata = staged.join("metadata.json");
+        let doc = serde_json::json!({"packages": [{"name": "pkg", "targets": [
+            {"name": "pkg", "kind": ["lib"], "src_path": src("src/lib.rs")},
+            {"name": "tool", "kind": ["bin"], "src_path": src("src/a/main.rs")},
+            {"name": "deep", "kind": ["test"], "src_path": src("src/a/b/c/deep.rs")},
+            {"name": "aside", "kind": ["test"], "src_path": src("src/x/y/z/w/main.rs")},
+        ]}]});
+        fs::write(&metadata, doc.to_string()).expect("write the metadata");
+        assert_eq!(
+            suite_binary(&metadata, &staged, "src/a/b.rs").as_deref(),
+            Some("pkg::bin/tool")
+        );
     }
 
     /// Fails by: the row-defect count read as a constant, or as every finding.
