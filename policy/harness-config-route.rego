@@ -16,12 +16,22 @@
 # harness out. The patterns match a path at any directory, so a surface in the
 # tree and one under `$HOME` or a session root are one reading.
 #
-# THREE SHAPES, ONE CLASS:
+# DECIDED BY WHAT LANDS, NOT BY HOW THE SOURCE IS SPELLED (the review of #1287).
+# The engine places every shell write (`hook::write_targets`): each target
+# carries the files it `lands`, at or under it, with the content it receives —
+# a copied or linked file's, each file of a copied or linked directory, or what
+# a redirect or `tee` takes from `cat`, `git show` or `echo` — through `cd`,
+# `$PWD` and a `sh -c` script alike. So the shapes are:
 #
-# * a `ln`, `cp`, `mv` or `install` whose source is a harness surface and whose
-#   destination is one — named outright, or a directory the source's basename
-#   lands in;
-# * a write tool whose body registers batten's hook on a harness surface;
+# * any shell write whose landed content on a harness surface registers
+#   batten's hook (a copy, link, move, redirect or `tee`, of a file or a
+#   whole directory);
+# * where nothing landing on a surface could be read, a `ln`, `cp`, `mv` or
+#   `install` whose source is a harness surface and whose destination is one —
+#   named outright, or a directory the source's basename lands in;
+# * a write tool whose body ADDS a registration to a harness surface: never
+#   one keeping the registration the file already carries (`prior`), so the
+#   checkout's own settings keep their hooks through any other edit;
 # * a shell write to a harness surface whose command carries such a body.
 #
 # The vendor route (`policy/harness-config-advisory.rego`) is NEVER this class's
@@ -33,6 +43,9 @@
 #MUTANT registration-copy-admitted|s@^\ttarget.program in {"ln", "cp", "mv", "install"}$@\ttarget.program in {"ln", "mv", "install"}@|a_copied_registration_is_refused_naming_the_verb
 #MUTANT registration-write-routes-to-vendor|s@^\tregex.match(data.batten.patterns\["harness-hook-registration"\], text)$@\tfalse@|a_written_registration_is_refused_naming_the_verb
 #MUTANT registration-predicate-too-wide|s@^\tsurface(source)$@\ttrue@|an_unrelated_link_is_not_refused
+#MUTANT registration-content-unread|s@^\tregisters(land.content)$@\tfalse@|a_copy_by_content_is_refused_naming_the_verb
+#MUTANT registration-kept-is-refused|s@^\tnot registered_before$@\ttrue@|the_checkouts_own_settings_keep_their_hooks_through_an_edit
+#MUTANT registration-unread-by-spelling|s@^\tcount(read_landings(target)) == 0$@\ttrue@|a_permissions_only_copy_is_not_refused
 
 # METADATA
 # description: |
@@ -70,13 +83,40 @@ write_targets := input.call["write-targets"] if is_array(input.call["write-targe
 
 edits := input.call.arguments.edits if is_array(input.call.arguments.edits)
 
-# A link or a copy of one harness surface onto another.
+# What a target lands, as the engine placed it; empty where it placed nothing.
+landings(target) := target.lands if is_array(target.lands)
+
+landings(target) := [] if not is_array(target.lands)
+
+# Each file landing on a harness surface whose content was read.
+read_landings(target) := [land |
+	some land in landings(target)
+	surface(land.path)
+	is_string(land.content)
+]
+
+# A target's sources and destination, as spelled and as placed.
+sources(target) := {source | some source in target.sources} | {origin | some origin in object.get(target, "origins", [])}
+
+destinations(target) := {target.path} | {resolved | resolved := target.resolved; is_string(resolved)}
+
+# Any shell write whose landed content on a harness surface registers the hook.
+registration contains target.path if {
+	some target in write_targets
+	some land in read_landings(target)
+	registers(land.content)
+}
+
+# Where nothing landing on a surface could be read, a link or a copy of one
+# harness surface onto another is judged by its spelling.
 registration contains target.path if {
 	some target in write_targets
 	target.program in {"ln", "cp", "mv", "install"}
-	some source in target.sources
+	count(read_landings(target)) == 0
+	some source in sources(target)
 	surface(source)
-	lands_on_surface(target.path, source)
+	some destination in destinations(target)
+	lands_on_surface(destination, source)
 }
 
 # The text a write tool hands its target: a whole body, or an edit's new side.
@@ -96,7 +136,7 @@ written_text contains text if {
 	is_string(text)
 }
 
-# A write tool whose body registers batten's hook on a harness surface.
+# A write tool whose body ADDS a registration to a harness surface.
 #
 # `is_string` is load-bearing: `writes` is `null` on every non-write call, and
 # `regex.match(_, null)` is an evaluation error rather than a false answer.
@@ -107,6 +147,16 @@ registration contains path if {
 	surface(path)
 	some text in written_text
 	registers(text)
+	not registered_before
+}
+
+# The file a write tool writes over already registers the hook: the write keeps
+# it, `batten startup --repair` could not make the edit, and the vendor route
+# is the one `harness-config-advisory.rego` names.
+registered_before if {
+	prior := input.call.prior
+	is_string(prior)
+	registers(prior)
 }
 
 # A shell write to a harness surface whose command carries the registration.
@@ -227,4 +277,107 @@ test_a_compound_link_is_refused if {
 test_a_call_carrying_no_write_is_silent if {
 	count(violation) == 0 with input as {"call": {"operation": "command", "write-targets": null}}
 		with data.batten.patterns as surfaces
+}
+
+# --- the review of #1287: decided by what lands ----------------------------
+
+registered := `{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "batten adjudicate --harness claude-code"}]}]}}`
+
+# `cat <cs> > <rs>`: the source is spelled nowhere a link arm reads.
+test_a_redirect_landing_a_registration_is_refused if {
+	some v in violation with input as {"call": {
+		"operation": "command",
+		"command": "cat /w/.claude/settings.json > /root/.claude/settings.json",
+		"write-targets": [{
+			"path": "/root/.claude/settings.json",
+			"program": null,
+			"sources": [],
+			"symbolic": false,
+			"resolved": "/root/.claude/settings.json",
+			"origins": [],
+			"lands": [{"path": "/root/.claude/settings.json", "content": registered}],
+		}],
+	}}
+		with data.batten.patterns as surfaces
+	v.subjects == [{"path": "/root/.claude/settings.json"}]
+}
+
+# A directory copied whole: the target is no surface, a file landing under it is.
+test_a_directory_landing_a_registration_is_refused if {
+	some v in violation with input as {"call": {
+		"operation": "command",
+		"command": "cp -r /w/.claude /root/",
+		"write-targets": [{
+			"path": "/root/",
+			"program": "cp",
+			"sources": ["/w/.claude"],
+			"symbolic": false,
+			"resolved": "/root/",
+			"origins": ["/w/.claude"],
+			"lands": [{"path": "/root/.claude/settings.json", "content": registered}],
+		}],
+	}}
+		with data.batten.patterns as surfaces
+	v.subjects == [{"path": "/root/"}]
+}
+
+# A surface copied whose content was read and registers nothing is no
+# registration, whatever its spelling.
+test_a_read_copy_registering_nothing_is_silent if {
+	count(violation) == 0 with input as {"call": {
+		"operation": "command",
+		"command": "cp /w/.claude/settings.local.json /root/.claude/settings.local.json",
+		"write-targets": [{
+			"path": "/root/.claude/settings.local.json",
+			"program": "cp",
+			"sources": ["/w/.claude/settings.local.json"],
+			"symbolic": false,
+			"resolved": "/root/.claude/settings.local.json",
+			"origins": ["/w/.claude/settings.local.json"],
+			"lands": [{"path": "/root/.claude/settings.local.json", "content": `{"permissions": {"allow": ["Bash(git status)"]}}`}],
+		}],
+	}}
+		with data.batten.patterns as surfaces
+}
+
+# A relative source whose content could not be read is judged by its placement.
+test_an_unread_source_is_judged_by_its_placement if {
+	some v in violation with input as {"call": {
+		"operation": "command",
+		"command": "cd /w/.claude && cp settings.json /root/.claude/settings.json",
+		"write-targets": [{
+			"path": "/root/.claude/settings.json",
+			"program": "cp",
+			"sources": ["settings.json"],
+			"symbolic": false,
+			"resolved": "/root/.claude/settings.json",
+			"origins": ["/w/.claude/settings.json"],
+			"lands": [{"path": "/root/.claude/settings.json", "content": null}],
+		}],
+	}}
+		with data.batten.patterns as surfaces
+	v.verdict == "hook wire wrong"
+}
+
+test_a_write_keeping_the_files_own_registration_is_silent if {
+	count(violation) == 0 with input as {"call": {
+		"operation": "write",
+		"writes": ".claude/settings.json",
+		"write-targets": null,
+		"prior": registered,
+		"arguments": {"content": concat("", [`{"permissions": {"allow": ["Read"]}, `, substring(registered, 1, -1)])},
+	}}
+		with data.batten.patterns as surfaces
+}
+
+test_a_write_adding_a_registration_over_a_plain_file_is_refused if {
+	some v in violation with input as {"call": {
+		"operation": "write",
+		"writes": "/root/.claude/settings.json",
+		"write-targets": null,
+		"prior": `{"permissions": {}}`,
+		"arguments": {"content": registered},
+	}}
+		with data.batten.patterns as surfaces
+	v.verdict == "hook wire wrong"
 }

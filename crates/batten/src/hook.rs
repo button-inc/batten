@@ -78,6 +78,8 @@ use crate::severity::{self, ReportLevel, RuleSeverity};
 #[cfg(test)]
 use crate::shell::shell_commands;
 use crate::shell::{Segment, SegmentLine, Separator, segments};
+
+mod landing;
 use crate::verbs::{MutatingVerb, OperandScope};
 
 /// `Harness` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
@@ -7742,43 +7744,25 @@ pub fn write_sites(envelope: &Envelope, start: &Path) -> Option<Vec<(Value, std:
 }
 
 /// The files a shell call writes BY NAME (CLOUD-1636), one entry per target:
-/// `{"path", "program", "sources", "symbolic"}`. An output redirection's target
-/// (`program` null), every `tee` operand, and the destination of `ln`, `cp`,
-/// `mv` and `install` with the operands it is made from as `sources`;
-/// `symbolic` is whether an `ln` makes a symbolic link. Paths are as written,
-/// unquoted. `None` for a call that is not a shell command, whose target is
-/// `writes`, and for a command that does not parse.
+/// `{"path", "program", "sources", "symbolic", "resolved", "origins",
+/// "lands"}`. An output redirection's target (`program` null), every `tee`
+/// operand, and the destination of `ln`, `cp`, `mv` and `install` with the
+/// operands it is made from as `sources`; `symbolic` is whether an `ln` makes a
+/// symbolic link. `path` and `sources` are as written, unquoted; `resolved`,
+/// `origins` and `lands` are placed against `start` and every followed `cd`,
+/// and say what arrives at the target ([`landing`]). A shell's `-c` script is
+/// read as the command line it is. `None` for a call that is not a shell
+/// command, whose target is `writes`, and for a command that does not parse.
 ///
-/// AS WRITTEN, NOT RESOLVED: a module matching a declared surface matches the
-/// spelling at any directory, in the tree or outside it, so the reading needs
-/// no `cd` placement and cannot fail on one.
+/// THE SPELLING STAYS BESIDE THE PLACEMENT: a module matching a declared surface
+/// matches the spelling at any directory, so a target whose `cd` cannot be
+/// placed is still judged by its name, and by its content wherever that reads.
 #[must_use]
-pub fn write_targets(envelope: &Envelope) -> Option<Vec<Value>> {
+pub fn write_targets(envelope: &Envelope, start: Option<&Path>) -> Option<Vec<Value>> {
     if envelope.command.is_empty() {
         return None;
     }
-    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
-        return None;
-    };
-    let mut targets = Vec::new();
-    for (_, _, line) in per_line(&parsed) {
-        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
-        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
-        let redirects: Vec<&str> = line.redirects.iter().map(String::as_str).collect();
-        for target in redirect_writes(&redirects) {
-            targets.push(serde_json::json!({
-                "path": crate::shell::unquote(target),
-                "program": null,
-                "sources": [],
-                "symbolic": false,
-            }));
-        }
-        if let Some(at) = effective_program(handed) {
-            let name = program_name(program_token(handed[at]));
-            targets.extend(named_writes(name, &handed[at + 1..]));
-        }
-    }
-    Some(targets)
+    landing::targets(&envelope.command, start)
 }
 
 /// The targets one program writes by name, for [`write_targets`]: a `tee`'s
@@ -9836,7 +9820,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // WHAT A SHELL CALL WRITES BY NAME (CLOUD-1636): redirections,
             // `tee`, and the destination of `ln`/`cp`/`mv`/`install` with its
             // sources. `null` for a write tool, whose target is `writes`.
-            "write-targets": write_targets(envelope),
+            "write-targets": write_targets(
+                envelope,
+                facts.reach.cwd.as_deref().map(Path::new),
+            ),
             // WHICH WRITES LAND IN THE LIVE LAP'S CHECKOUT (CLOUD-2832): each
             // as `{"path": …}` or `{"git": <subcommand>}`, judged by the
             // checkout it lands in rather than its path prefix. `null` while no
@@ -10013,6 +10000,15 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
     // macro's recursion limit.
     if let Some(call) = document.get_mut("call").and_then(Value::as_object_mut) {
         call.insert("cwd".to_owned(), serde_json::json!(facts.reach.cwd));
+        // THE TEXT A WRITE TOOL WRITES OVER (CLOUD-1636), so a module tells a
+        // write ADDING a registration from one keeping the file's own.
+        call.insert(
+            "prior".to_owned(),
+            serde_json::json!(landing::prior(
+                envelope,
+                facts.reach.cwd.as_deref().map(Path::new)
+            )),
+        );
         call.insert("roots".to_owned(), serde_json::json!(facts.reach.roots));
         call.insert("home".to_owned(), serde_json::json!(facts.reach.home));
         // THE KIND OF MACHINE (CLOUD-2709), the one fact only the environment
@@ -25089,7 +25085,7 @@ deny contains "refused by themodule" if {
                 }),
             )
             .expect("the envelope decodes");
-            super::write_targets(&envelope).expect("a shell command is read")
+            super::write_targets(&envelope, None).expect("a shell command is read")
         };
         let only = |command: &str| -> (String, Vec<String>, bool) {
             let found = targets(command);

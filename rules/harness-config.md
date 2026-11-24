@@ -48,11 +48,23 @@ file and outlives it; a copy is a second authority nothing reconciles. Measured
 ran for seven hours, and the repair was a symlink and then a hand copy. The
 refusal names the verb so the route is a literal, not a judgement.
 
+The refusal is decided by **what lands** on a surface, never by how the source
+is spelled: `cat <cs> > <rs>`, `cat <cs> | tee <rs>`, `git show HEAD:<cs> >
+<rs>`, a relative or `$PWD` source behind a `cd`, a whole `.claude` directory
+copied or linked, and any of them inside `sh -c` are all a registration when the
+content arriving registers the hook. A copy whose content registers none (a
+permissions-only `settings.local.json`) is not. A write tool is refused only when
+it ADDS a registration: an edit of a surface that already registers the hook and
+keeps it changes something else, and the vendor route is that edit's route.
+
 ## What this does not gate
 
 `hook edit partial` reports; it never requires the other harnesses to change in
 the same commit. A harness with no surveyed vendor route (every one but Claude
 Code today) gets the neutrality line and no vendor pointer: the route is unknown,
 not absent. Shell writes are read from `input.call["write-targets"]` — a
-redirection, `tee`, and the destination of `ln`/`cp`/`mv`/`install` — so a write
-through any other program is not seen.
+redirection, `tee`, and the destination of `ln`/`cp`/`mv`/`install`, a shell's
+`-c` script included — so a write through any other program is not seen, and
+what a redirect receives is read only from `cat`, `git show`, `echo` and
+`printf`: content from any other producer is unread, and an unread copy falls
+back to its spelling.

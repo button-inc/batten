@@ -120,6 +120,13 @@
             "null"
           ]
         },
+        "prior": {
+          "description": "The text of the file a write tool writes over, read bounded before the write. NULL off a write tool, and where the file is absent or unreadable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "programs": {
           "description": "Each segment's effective program, resolved through environment assignments, wrapper programs and shell grammar. ANCHOR A PROGRAM HERE: `segments[_].words[0]` is the first WORD, which six one-keystroke shell constructs occupy in their own right (CLOUD-1382).",
           "items": {
@@ -494,14 +501,44 @@
         },
         "transcript": {},
         "write-targets": {
-          "description": "What a shell call writes BY NAME, as written and unquoted: an output redirection's target (`program` null), each `tee` operand, and the destination of `ln`, `cp`, `mv` or `install` with the operands it is made from as `sources`. `symbolic` is whether an `ln` makes a symbolic link. NULL for a call that is not a shell command, whose target is `writes`, and for a command that does not parse.",
+          "description": "What a shell call writes BY NAME, a shell's `-c` script included: an output redirection's target (`program` null), each `tee` operand, and the destination of `ln`, `cp`, `mv` or `install` with the operands it is made from as `sources`. `path` and `sources` are as written and unquoted; `resolved` and `origins` are placed against the call's directory and every followed `cd` (null or absent where they cannot be). `symbolic` is whether an `ln` makes a symbolic link. `lands` is each file the write leaves at or under the target with its `content`: a copied or linked file's, each file of a copied directory, or what a redirect or `tee` receives from `cat`, `git show` or `echo`; `content` is null where nothing could be read. NULL for a call that is not a shell command, whose target is `writes`, and for a command that does not parse.",
           "items": {
             "additionalProperties": false,
             "properties": {
+              "lands": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "origins": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "path": {
                 "type": "string"
               },
               "program": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resolved": {
                 "type": [
                   "string",
                   "null"

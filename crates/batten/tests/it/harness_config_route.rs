@@ -202,6 +202,12 @@ fn an_unrelated_link_is_not_refused() {
     assert_eq!(code, Some(0), "{said}");
     assert!(!said.contains("hook wire wrong"), "{said}");
     assert!(said.contains("hook edit early"), "{said}");
+    // A source that cannot be read is judged by its spelling, which names no
+    // surface here either.
+    let missing = notes.replace("notes.md", "missing.md");
+    let (code, said) = adjudicate(&dir, &bash(&format!("ln -s {missing} {root}")));
+    assert_eq!(code, Some(0), "{said}");
+    assert!(!said.contains("hook wire wrong"), "{said}");
 }
 
 #[test]
@@ -283,4 +289,117 @@ fn a_family_leaving_a_harness_out_is_refused_at_load() {
     let (code, said) = adjudicate(&dir, &write("src/lib.rs", "x"));
     assert_ne!(code, Some(0), "an incomplete family must not load: {said}");
     assert!(said.contains("harness-config-cursor"), "{said}");
+}
+
+// --- the review of #1287: decided by what lands, not by the spelling --------
+
+/// A bench whose checkout carries a REAL registration in `.claude/settings.json`
+/// (committed, so `git show` reads it) and a permissions-only
+/// `.claude/settings.local.json`, so a copy's content can be read.
+fn registered_bench(name: &str) -> PathBuf {
+    let mut fixture = Fixture::new(name).config(&committed_rows(None));
+    for path in MODULES {
+        let text = std::fs::read_to_string(common::at_root(path)).expect("module reads");
+        fixture = fixture.file(path, &text);
+    }
+    fixture
+        .file("rules/harness-config.md", "the consumer's doctrine\n")
+        .file(".serena/memories/serena-setup.md", "the measured forms\n")
+        .file(".claude/settings.json", REGISTRATION)
+        .file(".claude/settings.local.json", PERMISSIONS_ONLY)
+        .git()
+        .base_commit()
+        .build()
+}
+
+const PERMISSIONS_ONLY: &str = r#"{"permissions": {"allow": ["Bash(git status)"]}}"#;
+
+/// Finding 1: a copy made by CONTENT lands the registration as surely as `cp`.
+#[test]
+fn a_copy_by_content_is_refused_naming_the_verb() {
+    let dir = registered_bench("hcr-content");
+    let (cs, rs) = spellings(&dir);
+    let checkout = dir.canonicalize().unwrap().display().to_string();
+    for command in [
+        format!("cat {cs} > {rs}"),
+        format!("cat {cs} | tee {rs}"),
+        format!("git -C {checkout} show HEAD:.claude/settings.json > {rs}"),
+        format!("cd {checkout}/.claude && cp settings.json {rs}"),
+        format!("cd {checkout}/.claude && ln -sfn $PWD/settings.json {rs}"),
+    ] {
+        let (code, said) = adjudicate(&dir, &bash(&command));
+        assert_routed_to_the_verb(code, &format!("{command}: {said}"));
+    }
+}
+
+/// Finding 2: a whole `.claude` directory carries the registration with it.
+#[test]
+fn a_whole_directory_registration_is_refused_naming_the_verb() {
+    let dir = registered_bench("hcr-directory");
+    let (_, rs) = spellings(&dir);
+    let checkout = dir.canonicalize().unwrap().display().to_string();
+    let root = rs.trim_end_matches("/.claude/settings.json").to_owned();
+    for command in [
+        format!("cp -r {checkout}/.claude {root}/"),
+        format!("ln -sfn {checkout}/.claude {root}/.claude"),
+    ] {
+        let (code, said) = adjudicate(&dir, &bash(&command));
+        assert_routed_to_the_verb(code, &format!("{command}: {said}"));
+    }
+}
+
+/// Finding 3: a script handed to a shell is the command line it is.
+#[test]
+fn a_shell_wrapped_registration_is_refused_naming_the_verb() {
+    let dir = registered_bench("hcr-wrapped");
+    let (cs, rs) = spellings(&dir);
+    let echoed = REGISTRATION.replace('"', "\\\"");
+    for command in [
+        format!("sh -c 'ln -sfn {cs} {rs}'"),
+        format!("bash -c 'cp {cs} {rs}'"),
+        format!("bash -lc \"echo '{echoed}' > {rs}\""),
+    ] {
+        let (code, said) = adjudicate(&dir, &bash(&command));
+        assert_routed_to_the_verb(code, &format!("{command}: {said}"));
+    }
+}
+
+/// Finding 4: an edit of the checkout's own settings that keeps its hooks and
+/// changes a permission ADDS no registration, so it is not refused, and the
+/// vendor route keeps its advisory.
+#[test]
+fn the_checkouts_own_settings_keep_their_hooks_through_an_edit() {
+    let dir = registered_bench("hcr-keep");
+    let (cs, _) = spellings(&dir);
+    let body = REGISTRATION.replacen(
+        '{',
+        r#"{"permissions": {"allow": ["Bash(git status)"]}, "#,
+        1,
+    );
+    for file in [cs.as_str(), ".claude/settings.json"] {
+        let (code, said) = adjudicate(&dir, &write(file, &body));
+        assert_eq!(code, Some(0), "{file}: {said}");
+        assert!(!said.contains("hook wire wrong"), "{file}: {said}");
+        assert!(said.contains("hook edit early"), "{file}: {said}");
+    }
+}
+
+/// Finding 6: a surface whose content is read and registers no hook is not a
+/// registration, whatever its spelling.
+#[test]
+fn a_permissions_only_copy_is_not_refused() {
+    let dir = registered_bench("hcr-local");
+    let checkout = dir.canonicalize().unwrap();
+    let local = checkout
+        .join(".claude/settings.local.json")
+        .display()
+        .to_string();
+    let target = checkout
+        .join("session-root/.claude/settings.local.json")
+        .display()
+        .to_string();
+    let (code, said) = adjudicate(&dir, &bash(&format!("cp {local} {target}")));
+    assert_eq!(code, Some(0), "{said}");
+    assert!(!said.contains("hook wire wrong"), "{said}");
+    assert!(said.contains("hook edit early"), "{said}");
 }

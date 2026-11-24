@@ -369,8 +369,11 @@ reads `input.call.command`, `input.call.segments`, `input.call.programs`,
 `input.call.event`, `input.call.operation`, `input.call.tool`,
 `input.call.arguments`, `input.call.writes`, `input.call["write-targets"]` (what
 a shell call writes by name — a redirection, a `tee` operand, the destination of
-`ln`/`cp`/`mv`/`install` with its `sources` — `null` for a write tool, whose
-target is `writes`, CLOUD-1636), `input.call["lap-held"]` (each of
+`ln`/`cp`/`mv`/`install` with its `sources`, a shell's `-c` script included,
+each placed against the call's directory and carrying the files it `lands` with
+their read content — `null` for a write tool, whose target is `writes`,
+CLOUD-1636), `input.call.prior` (the text a write tool writes over, `null`
+where there is none to read — CLOUD-1636), `input.call["lap-held"]` (each of
 the call's writes that lands in a live `land` lap's checkout, as `{path}` or
 `{git}`, `null` while no lap is live — CLOUD-2832),
 `input.call["run-in-background"]`, `input.call["background-max"]` (the host's
