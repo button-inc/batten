@@ -36,6 +36,8 @@
 #MUTANT cover-may-be-asserted-unchecked|s@\tnot covering_holds(task, covering)@\tfalse@|a_declared_cover_whose_bodies_no_longer_hold_is_refused
 #MUTANT cover-may-skip-the-reach|s@\tlane_reaches(covering)@\ttrue@|a_covered_lane_verify_never_reaches_is_still_refused
 #MUTANT both-lanes-may-be-named|s@\tnames_the_covering_lane(list, covering)@\tfalse@|a_depends_list_naming_a_lane_and_its_cover_is_refused
+#MUTANT leg-may-go-unseen|s@^\tnot leg_reached(task, leg)$@\tfalse@|a_ci_leg_verify_never_runs_is_refused
+#MUTANT called-workflow-may-go-unseen|s@^\tcalled_workflow(job) == path$@\tfalse@|a_task_a_called_workflow_runs_verify_does_not_is_refused
 #MUTANT approximation-may-be-asserted-unchecked|s@\tapproximation_holds(task, entry)@\ttrue@|an_approximation_whose_bodies_no_longer_share_the_triple_is_refused
 #MUTANT approximation-may-skip-the-reach|s@\tlane_reaches(entry.by)@\ttrue@|an_approximator_verify_never_reaches_is_still_refused
 #MUTANT approximated-task-may-run-nowhere|s@\tnot approximated_task_runs_in_ci(task)@\tfalse@|a_declared_approximation_for_a_task_no_job_runs_is_refused
@@ -247,8 +249,27 @@ foreign_runner(runner) if startswith(runner, "windows-")
 
 foreign_runner(runner) if startswith(runner, "macos-")
 
+# A REUSABLE WORKFLOW RUNS ON THE PULL REQUEST ITS CALLER RUNS ON (CLOUD-2789).
+# `dist.yml` is `on: workflow_call` alone, and `rust.yml`, a `pull_request`
+# workflow, calls it with a job's `uses:`; read by its own trigger it ran on no
+# pull request, so its seven legs' tasks were invisible to the local-versus-CI
+# check while they gated every one. One hop, the depth this tree calls at: Rego
+# refuses a recursive rule, and a second hop is a clause of the same shape.
+runs_on_pull_request(path) if on_pull_request(path)
+
+runs_on_pull_request(path) if {
+	some caller, _ in workflow
+	on_pull_request(caller)
+	some job in workflow[caller].jobs
+	called_workflow(job) == path
+}
+
+# `uses: ./.github/workflows/dist.yml` names the document at that path; a remote
+# `owner/repo/...@ref` names no document in this tree and matches none.
+called_workflow(job) := trim_prefix(job.uses, "./")
+
 judged_job(path, name) if {
-	on_pull_request(path)
+	runs_on_pull_request(path)
 	not foreign_runner(object.get(workflow[path].jobs[name], "runs-on", ""))
 }
 
@@ -279,6 +300,45 @@ violation contains {
 	not covered_by_a_lane_verify_runs(task)
 	not approximated_by_a_lane_verify_runs(task)
 	not run_by_a_hook_step_verify_runs(task)
+}
+
+# --- the legs of a task, not only its name (CLOUD-2789) -----------------------
+#
+# A NAME MATCH CANNOT SEE A MISSING LEG. `darwin-link` runs in CI as a matrix,
+# one leg per Darwin triple, and `verify` named it bare: the property above was
+# satisfied while only the task's default triple linked locally, so the Intel
+# leg went red in CI where no local gate looked. A leg here is a `matrix.target`
+# value a judged job hands to a task whose `usage` declares it, which is how a
+# task takes a triple; the clause asks that `verify` reach that leg — by name
+# with the leg, or bare where the task's own body names it.
+ci_task_leg contains [path, task, leg] if {
+	some path, _ in workflow
+	some name, job in workflow[path].jobs
+	judged_job(path, name)
+	some leg in object.get(job, ["strategy", "matrix", "target"], [])
+	is_string(leg)
+	some step in job.steps
+	contains(json.marshal(step), "matrix.target")
+	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], step.run, -1)
+	task = split(fragment, " ")[2]
+	contains(object.get(input.tree.documents["mise.toml"].tasks, [task, "usage"], ""), leg)
+}
+
+leg_reached(task, leg) if contains(verify_text, sprintf("%s %s", [task, leg]))
+
+leg_reached(task, leg) if {
+	contains(verify_text, task)
+	contains(task_run(task), leg)
+}
+
+violation contains {
+	"rule": "job run other",
+	"verdict": "task run missing",
+	"subjects": [{"path": path}, {"artifact": sprintf("%s %s", [task, leg])}],
+} if {
+	governed
+	some [path, task, leg] in ci_task_leg
+	not leg_reached(task, leg)
 }
 
 # --- a task an hk step runs, where verify runs the hooks ----------------------
@@ -2133,6 +2193,81 @@ test_a_task_named_only_in_an_hk_comment_is_refused if {
 	found := violation with input as hooked(["  // `mise run smoke` is not run here"])
 	some f in found
 	f.verdict == "task run missing"
+}
+
+# A CI job linking two triples as matrix legs of `link`, which `verify:gated`
+# runs as `verify_runs`, and whose own body is `body`.
+legged(verify_runs, body) := out if {
+	wf := object.union(sound_workflow, {"jobs": object.union(sound_workflow.jobs, {"link": {
+		"name": "link (${{ matrix.target }})",
+		"runs-on": "ubuntu-latest",
+		"strategy": {"matrix": {"target": ["a-darwin", "x-darwin"]}},
+		"steps": [lease_first, {"run": "mise run link --", "env": {"T": "${{ matrix.target }}"}}],
+	}})})
+	gated := object.union(sound_manifest.tasks["verify:gated"], {"run": concat("\n", ["mise run lint", verify_runs])})
+	link := {"usage": "arg \"[target]\" {\n  choices \"a-darwin\" \"x-darwin\"\n}", "run": body}
+	tasks := object.union(sound_manifest.tasks, {"verify:gated": gated, "link": link})
+	base := swap(".github/workflows/ci.yml", wf)
+	docs := object.union(base.tree.documents, {"mise.toml": object.union(sound_manifest, {"tasks": tasks})})
+	out := {"tree": object.union(object.remove(base.tree, ["documents"]), {"documents": docs})}
+}
+
+# THE SHAPE `darwin-link` HAD: run bare, linking only the triple it defaulted to.
+test_a_ci_leg_verify_never_runs_is_refused if {
+	found := violation with input as legged("mise run link", "zigbuild --target {{usage.target}}")
+	some f in found
+	f.verdict == "task run missing"
+	some s in f.subjects
+	s.artifact == "link x-darwin"
+}
+
+test_a_bare_run_whose_body_names_every_leg_reaches_them if {
+	found := violation with input as legged("mise run link", "zigbuild --target a-darwin --target x-darwin")
+	every f in found {
+		f.verdict != "task run missing"
+	}
+}
+
+test_a_leg_verify_names_with_the_task_is_reached if {
+	found := violation with input as legged("mise run link a-darwin\nmise run link x-darwin", "zigbuild --target {{usage.target}}")
+	every f in found {
+		f.verdict != "task run missing"
+	}
+}
+
+# A `trigger` workflow calling `reusable.yml`, whose one job runs `smoke`.
+called_by(trigger) := out if {
+	caller := {
+		"on": {trigger: {"types": ["opened"]}},
+		"jobs": {
+			"ci": {"name": "ci", "runs-on": "ubuntu-latest", "steps": [lease_first]},
+			"dist": {"uses": "./.github/workflows/reusable.yml"},
+		},
+	}
+	reusable := {
+		"on": {"workflow_call": {}},
+		"jobs": {"leg": {"name": "leg", "runs-on": "ubuntu-latest", "steps": [{"run": "mise run smoke"}]}},
+	}
+	base = swap(".github/workflows/ci.yml", caller)
+	docs := object.union(base.tree.documents, {".github/workflows/reusable.yml": reusable})
+	out := {"tree": object.union(object.remove(base.tree, ["documents"]), {"documents": docs})}
+}
+
+# THE SHAPE `dist.yml` HAS: called from a pull request, its tasks are CI's.
+test_a_task_a_called_workflow_runs_verify_does_not_is_refused if {
+	found := violation with input as called_by("pull_request")
+	some f in found
+	f.verdict == "task run missing"
+	some s in f.subjects
+	s.path == ".github/workflows/reusable.yml"
+}
+
+# Called only from a workflow no pull request triggers, it gates no pull request.
+test_a_workflow_called_off_the_pull_request_is_not_judged if {
+	found := violation with input as called_by("push")
+	every f in found {
+		f.verdict != "task run missing"
+	}
 }
 
 test_a_ci_task_verify_does_not_run_is_refused if {
