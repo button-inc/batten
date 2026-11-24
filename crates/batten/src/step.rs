@@ -3102,4 +3102,48 @@ mod tests {
             ["src/a.rs"]
         );
     }
+
+    /// Fails by: an answer that may not record naming a key to record under.
+    #[test]
+    fn only_a_run_that_may_record_names_its_key() {
+        assert_eq!(Answer::Miss("k".to_owned()).recording(), Some("k"));
+        assert_eq!(Answer::Suspect("k".to_owned()).recording(), Some("k"));
+        assert_eq!(Answer::Hit("k".to_owned()).recording(), None);
+        assert_eq!(Answer::Off.recording(), None);
+        assert_eq!(Answer::NoKey.recording(), None);
+    }
+
+    /// Fails by: a failure receipt marked flaky read as malformed (so run
+    /// rather than run as a suspect), or another trailing word read as flaky.
+    #[test]
+    fn a_failure_receipt_reads_its_flaky_mark() {
+        let (failure, flaky) = failure_of("1 2ms k exit 3 flaky", "k").unwrap();
+        assert_eq!(failure.code, 3);
+        assert!(flaky);
+        assert_eq!(
+            failure_of("1 2ms k exit 3", "k").map(|(_, f)| f),
+            Some(false)
+        );
+        assert!(failure_of("1 2ms k exit 3 other", "k").is_none());
+    }
+
+    /// Fails by: the repository root, spelled `.`, `./`, `/` or empty, looked
+    /// up as a path inside the commit rather than as its tree.
+    #[test]
+    fn the_root_spellings_name_the_commits_tree() {
+        let dir = crate::scratch::scratch("step-base-root");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        std::fs::write(dir.join("a"), "a\n").unwrap();
+        crate::gitwrite::commit_paths(&dir, &["a".to_owned()], "one").unwrap();
+        let tree = crate::git::resolve_ref(&dir, "HEAD^{tree}")
+            .unwrap()
+            .unwrap();
+        for path in [".", "./", "/", ""] {
+            assert_eq!(
+                base_lines_at(&dir, "HEAD", &[path.to_owned()]),
+                Some(format!("base {path} {tree}")),
+                "{path:?}"
+            );
+        }
+    }
 }

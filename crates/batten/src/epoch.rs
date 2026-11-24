@@ -1217,6 +1217,39 @@ mod rule_surface_tests {
         assert!(!tree.reads_every_row(), "{:?}", tree.keys);
         assert!(tree.opens_only_declared_files(), "{:?}", tree.keys);
     }
+
+    fn reads(paths: &[&str]) -> super::TreeReads {
+        super::TreeReads::of(&paths.iter().map(|path| (*path).to_owned()).collect()).unwrap()
+    }
+
+    /// Fails by: a named records read widened to the whole family, or an
+    /// empty subpath kept as a name.
+    #[test]
+    fn a_named_records_read_narrows_to_its_names() {
+        assert_eq!(
+            reads(&["tree.records.lease"]).records,
+            Some(std::iter::once("lease".to_owned()).collect())
+        );
+        assert_eq!(reads(&["tree.records."]).records, None);
+        assert_eq!(reads(&["tree.records"]).records, None);
+    }
+
+    /// Fails by: a store read by its exact name, or through a field beneath
+    /// it, judged unread — or another store judged read.
+    #[test]
+    fn a_record_row_is_read_by_its_name_or_a_field_beneath_it() {
+        let row = |record: &str| {
+            let mut table = toml::Table::new();
+            table.insert("record".to_owned(), toml::Value::from(record));
+            toml::Value::Table(table)
+        };
+        let exact = reads(&["tree.records.lease"]);
+        assert!(exact.reads_record(&row("lease")));
+        assert!(!exact.reads_record(&row("other")));
+        let field = reads(&["tree.records.lease.holder"]);
+        assert!(field.reads_record(&row("lease")));
+        assert!(!field.reads_record(&row("lea")));
+    }
 }
 
 /// The module half of a rule's digest (#1276).

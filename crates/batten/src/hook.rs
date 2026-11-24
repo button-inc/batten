@@ -21683,6 +21683,30 @@ deny contains "refused by themodule" if {
         assert_eq!(targets("git -C sub"), at(&["/r", "/r/sub"]));
     }
 
+    /// Fails by: a `--git-dir` naming a `.git` read as the checkout itself (or a
+    /// bare one read as its parent), or a single-dash `-C` value holding `=`
+    /// split as a long option.
+    #[test]
+    fn a_git_dir_names_its_checkout_and_a_glued_dash_c_keeps_its_equals() {
+        let here = Path::new("/r");
+        assert_eq!(
+            git_acting_dir(&["git", "--git-dir=repo/.git", "status"], here),
+            Some(PathBuf::from("/r/repo"))
+        );
+        assert_eq!(
+            git_acting_dir(&["git", "--git-dir=bare", "status"], here),
+            Some(PathBuf::from("/r/bare"))
+        );
+        assert_eq!(
+            option_acting_dir(&["make", "-Csub=dir", "all"], here),
+            Some(PathBuf::from("/r/sub=dir"))
+        );
+        assert_eq!(
+            option_acting_dir(&["make", "--directory=sub", "all"], here),
+            Some(PathBuf::from("/r/sub"))
+        );
+    }
+
     /// Fails by: a piped `cd` followed, `-C` misread, a `--work-tree` placed,
     /// a `--` checkout of `.` refused, or `-s <tree>` read as a pathspec.
     #[test]
@@ -22535,6 +22559,26 @@ deny contains "refused by themodule" if {
             Decision::Deny(_)
         ));
         assert!(no_facts(|f| gate_nonblocking(&denied, &call, f)).is_empty());
+    }
+
+    /// Fails by: the record pass running its rows at their own grade (a `warn`
+    /// row is no blocking row, so nothing refuses), or over every row (a `deny`
+    /// row the call also matches answers first and its refusal is dropped).
+    #[test]
+    fn the_record_pass_runs_only_its_rows_promoted_to_deny() {
+        let call = envelope("git push origin main");
+        let warned = Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..shape("push-warned", "git push", None)
+        };
+        let alone = ceiling_policy(vec![warned.clone()]);
+        let found = no_facts(|f| gate_nonblocking(&alone, &call, f));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, RuleSeverity::Advise);
+        let beside = ceiling_policy(vec![shape("push-denied", "git push", None), warned]);
+        let found = no_facts(|f| gate_nonblocking(&beside, &call, f));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1.rule(), "push-warned");
     }
 
     /// The tool receipt gate denies a selecting receipt row whose receipt is
@@ -24061,6 +24105,17 @@ deny contains "refused by themodule" if {
         assert_eq!(string_literal(Language::Node, "aba"), None);
         assert_eq!(string_literal(Language::Node, "\""), None);
         assert_eq!(string_literal(Language::Node, "\"\"").as_deref(), Some(""));
+    }
+
+    /// Fails by: a Ruby double-quoted string that interpolates read as a
+    /// literal, or a plain one refused.
+    #[test]
+    fn a_ruby_double_quoted_string_interpolates_only_with_hash_brace() {
+        assert_eq!(string_literal(Language::Ruby, "\"a#{b}\""), None);
+        assert_eq!(
+            string_literal(Language::Ruby, "\"a$b\"").as_deref(),
+            Some("a$b")
+        );
     }
 
     /// Fails by: a `batten step` verb other than `run` reached as a step run.

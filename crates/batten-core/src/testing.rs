@@ -816,4 +816,19 @@ mod tests {
         let census = require_census(&file);
         assert_eq!((census.unnamed, census.which_literals), (1, 1));
     }
+
+    /// Fails by: the resolver named as a value (`.map(require_tool)`) counted
+    /// nowhere, or counted inside the resolver's own body.
+    #[test]
+    fn the_resolver_named_as_a_value_is_unnamed_outside_its_own_body() {
+        let census = |text: &str| require_census(&syn::parse_file(text).expect("parses"));
+        assert_eq!(
+            census("fn f() { let _ = names.iter().map(require_tool); }").unnamed,
+            1
+        );
+        assert_eq!(
+            census("fn require_tool(name: &str) { other(require_bin); }").unnamed,
+            0
+        );
+    }
 }

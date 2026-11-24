@@ -2014,4 +2014,21 @@ mod tests {
             );
         }
     }
+
+    /// Fails by: `vec!`'s list dropped as an argv, or another macro's wrapper
+    /// list kept as one.
+    #[test]
+    fn only_vec_makes_a_macro_list_an_argv() {
+        let lines = |text: &str| -> Vec<usize> {
+            spawn_sites("src/a.rs", text)
+                .iter()
+                .map(|site| site.line)
+                .collect()
+        };
+        assert_eq!(
+            lines("fn f() {\n    let argv = vec![\"bash\", \"-c\", \"x\"];\n}\n"),
+            [2]
+        );
+        assert!(lines("fn f() {\n    m!(\"bash\", \"-c\", \"x\");\n}\n").is_empty());
+    }
 }

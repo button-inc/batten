@@ -301,3 +301,44 @@ pub(crate) fn validate_select(select: &[String]) -> std::result::Result<(), Stri
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn query(text: &str) -> Query {
+        toml::from_str(text).unwrap()
+    }
+
+    /// Fails by: a reserved placeholder, or a word no template can spell,
+    /// admitted as a fan-out's input.
+    #[test]
+    fn an_each_input_must_be_a_name_the_engine_does_not_bind() {
+        let source = query(
+            "id = \"heads\"\nendpoint = \"x\"\nper_page = 1\nmax_pages = 1\nselect = [\"sha\"]\n",
+        );
+        let derived = |input: &str| {
+            query(&format!(
+                "id = \"tips\"\nendpoint = \"y\"\nper_page = 1\nmax_pages = 1\n\
+                 select = [\"date\"]\neach = {{ query = \"heads\", field = \"sha\", input = \"{input}\" }}\n"
+            ))
+        };
+        for input in ["owner", "a.b", "tip"] {
+            let row = derived(input);
+            let named = std::iter::once(input).collect();
+            let verdict = validate_derived(&row, &[source.clone(), row.clone()], &named);
+            if input == "tip" {
+                assert_eq!(verdict, Ok(()));
+            } else {
+                assert_eq!(
+                    verdict,
+                    Err(String::from(
+                        "`each.input` must be a placeholder name the engine does not bind itself"
+                    )),
+                    "{input}"
+                );
+            }
+        }
+    }
+}

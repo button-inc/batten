@@ -8757,4 +8757,38 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
         remember_reads(&path, &key, &third);
         assert_eq!(third.tree_reads(), known(&["sentinel"]));
     }
+
+    /// Fails by: a string's span widened past its opening quote.
+    #[test]
+    fn a_string_span_widens_over_exactly_its_delimiters() {
+        assert_eq!(spanned("x \"ab\" y", 3, 5), Some("\"ab\""));
+        assert_eq!(spanned("x ab y", 2, 4), Some("ab"));
+    }
+
+    /// Fails by: a rewrite whose start falls inside a character applied (a
+    /// panic) because its end happens to fall on a boundary.
+    #[test]
+    fn a_rewrite_off_a_char_boundary_at_either_end_is_refused() {
+        let facts: std::collections::BTreeMap<String, RuleFacts> = std::iter::once((
+            "r".to_owned(),
+            RuleFacts {
+                reads: true,
+                ..RuleFacts::default()
+            },
+        ))
+        .collect();
+        let locals = std::collections::BTreeSet::new();
+        let case = CaseText {
+            text: "\u{e9}\u{e9} r",
+            package: "p",
+            facts: &facts,
+            locals: &locals,
+        };
+        let mods = [serde_json::json!({"span": {"start": 6, "end": 6}})];
+        let at = |start: usize, end: usize| {
+            redirected_statement(&case, 0, &mods, &[("r".to_owned(), start, end, false)], "k")
+        };
+        assert_eq!(at(1, 5), Err(String::from("a span off its text")));
+        assert_eq!(at(5, 6).map(|(_, read)| read.len()), Ok(1));
+    }
 }

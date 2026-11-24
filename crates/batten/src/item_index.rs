@@ -2781,4 +2781,37 @@ mod tests {
             changed.get("src/action.rs")
         );
     }
+
+    /// Fails by: a comment's path judged by the byte at it rather than the one
+    /// before it, so no comment path is ever found.
+    #[test]
+    fn a_comment_path_is_found_after_a_space_and_not_inside_a_word() {
+        let found: Vec<(usize, Vec<String>)> = paths_in("// see crate::a::b\n")
+            .into_iter()
+            .map(|(at, segments, _)| (at, segments))
+            .collect();
+        assert_eq!(
+            found,
+            [(7, vec!["crate".to_owned(), "a".to_owned(), "b".to_owned()])]
+        );
+        // After a `:` is the tail of a path already passed, never a new one.
+        assert!(paths_in("// x:crate::a::b\n").is_empty());
+    }
+
+    /// Fails by: a comment span shifted by the wrapper's length.
+    #[test]
+    fn a_comment_span_is_in_the_bodys_own_offsets() {
+        assert_eq!(comment_spans("x // c\n"), [(2, 6)]);
+    }
+
+    /// Fails by: a `use` leaf asked about at anything but its file offset.
+    #[test]
+    fn a_use_leaf_is_respelled_at_its_file_offset() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let _ = respell_body_with("{ use a::b; }", 10, &|at, _| {
+            asked.borrow_mut().push(at);
+            None
+        });
+        assert_eq!(*asked.borrow(), [12]);
+    }
 }

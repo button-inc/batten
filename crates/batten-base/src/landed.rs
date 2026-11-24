@@ -966,6 +966,14 @@ mod tests {
         assert_eq!(second_of("1970-01-01T00:00:00+23:59"), Some(-86_340));
     }
 
+    /// Fails by: an instant missing only one of its two time separators read
+    /// as an instant.
+    #[test]
+    fn each_time_separator_is_held_on_its_own() {
+        assert_eq!(second_of("1970-01-01T00-00:00Z"), None);
+        assert_eq!(second_of("1970-01-01T00:00-00Z"), None);
+    }
+
     /// One payload, a bare array, or an array wrapping one.
     #[test]
     fn a_claim_set_wrapped_in_an_array_is_read_through_the_wrapper() {
