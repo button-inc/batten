@@ -484,6 +484,7 @@ mod stop_posture;
 mod stop_watchdog;
 mod store_lifecycle;
 mod stub;
+mod stub_shell_census;
 mod submodule;
 mod surface;
 mod sweep_exit_table;
