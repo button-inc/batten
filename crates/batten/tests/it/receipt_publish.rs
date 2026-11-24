@@ -133,8 +133,8 @@ fn second_clone(case: &str, first: &Path) -> PathBuf {
 
 /// This clone's canonical receipt store under `state`.
 fn receipts_dir(state: &Path, repo: &Path) -> PathBuf {
-    state
-        .join(batten::state::derive_repo_name(repo).unwrap())
+    batten::state::repo_state_dir_under(state, repo)
+        .unwrap()
         .join("receipts")
 }
 
