@@ -1057,8 +1057,21 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
         return gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
             .map_err(|_| refused());
     }
-    let (found, trust) =
-        gix::discover::upwards_opts(start, discovery(&ceilings)).map_err(|_| refused())?;
+    // THE WALK IS REMEMBERED TOO (CLOUD-2840's perf-gate). One hook call walked
+    // up from the same directory nine times, each walk a `statx` per level and
+    // marker; a found repository is the same repository for the rest of the
+    // scope unless a write spends it, which forgets the walks with the opens.
+    let walk_key: WalkKey = (start.to_path_buf(), ceilings.clone());
+    let walked = with_opens(|opens| opens.3.get(&walk_key).cloned()).flatten();
+    let (found, trust) = match walked {
+        Some(walked) => walked,
+        None => {
+            let walked =
+                gix::discover::upwards_opts(start, discovery(&ceilings)).map_err(|_| refused())?;
+            let _ = with_opens(|opens| opens.3.insert(walk_key, walked.clone()));
+            walked
+        }
+    };
     let (git_dir, worktree) = found.into_repository_and_work_tree_directories();
     let key = OpenKey {
         git_dir,
@@ -1133,14 +1146,21 @@ struct OpenKey {
 /// handle takes [`open_fresh`], which spends nothing.
 ///
 /// `.0` is the remembered opens; `.1` is whether a write has spent the scope;
-/// `.2` is [`root_commits`]' answers ([`RootsKey`]). A tuple rather than named
-/// fields so the memo's existing cases keep their base form (`test replay`).
+/// `.2` is [`root_commits`]' answers ([`RootsKey`]); `.3` is the upward walks
+/// ([`WalkKey`]). A tuple rather than named fields so the memo's existing cases
+/// keep their base form (`test replay`).
 #[derive(Default)]
 struct Opens(
     BTreeMap<OpenKey, Opened>,
     bool,
     BTreeMap<RootsKey, Vec<String>>,
+    BTreeMap<WalkKey, (gix::discover::repository::Path, gix::sec::Trust)>,
 );
+
+/// An upward walk's whole input: the canonical start and the canonical
+/// ceilings. A walk that found nothing is never remembered, so a repository
+/// made later in the scope is still found.
+type WalkKey = (PathBuf, Vec<PathBuf>);
 
 /// A [`root_commits`] answer's whole input: the repository's git directory and
 /// its sorted, deduplicated ref tips.
@@ -1426,6 +1446,7 @@ impl Opens {
     /// the rest of the scope (CLOUD-2526).
     fn spend(&mut self) {
         self.0.clear();
+        self.3.clear();
         self.1 = true;
     }
 }
