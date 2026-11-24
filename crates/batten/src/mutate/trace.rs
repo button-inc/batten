@@ -251,7 +251,7 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
             && let Some(quote) = line[open..].find('"')
         {
             let (argument, after) = quoted_arg(&line[open + quote + 1..])?;
-            if library_lookup(&argument, line) || url_lookup(&argument, line, outcome) {
+            if library_lookup(&argument, line, outcome) || url_lookup(&argument, line, outcome) {
                 continue;
             }
             if !LINK_CONTENT.contains(&syscall(line)) {
@@ -289,16 +289,18 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
 /// descriptor `-y` printed for it, so a library really loaded from the tree
 /// stays a read, and a probe is dropped only when it found nothing. Never an
 /// absolute or slashed path, never a write, never a name that is no soname. A
-/// probe strace split across two lines carries its result on the resumed half,
-/// so its first half stays a probe: the stated gap, and the loud direction.
-fn library_lookup(argument: &str, line: &str) -> bool {
-    let searched = match access_of(line) {
-        Access::Read => matches!(syscall(line), "open" | "openat" | "openat2"),
-        Access::Probe => {
+/// probe strace split across two lines carries its result, and an open any flag
+/// past the split, on the resumed half, `outcome` ([`resumptions`]): judged off
+/// the first half alone, a cold `lint:clippy` refused on `libgcc_s.so.1`
+/// (CLOUD-2789).
+fn library_lookup(argument: &str, line: &str, outcome: &str) -> bool {
+    let searched = match (access_of(line), access_of(outcome)) {
+        (_, Access::Write) | (Access::Write, _) => false,
+        (Access::Read, _) => matches!(syscall(line), "open" | "openat" | "openat2"),
+        (Access::Probe, _) => {
             PROBES.contains(&syscall(line))
-                && result_of(line).is_some_and(|result| result.starts_with("-1 ENOENT"))
+                && result_of(outcome).is_some_and(|result| result.starts_with("-1 ENOENT"))
         }
-        Access::Write => false,
     };
     searched && !argument.contains('/') && soname(argument)
 }
@@ -878,8 +880,10 @@ mod tests {
     /// Fails by: dropping the `library_lookup` skip (the bare name resolves to
     /// `/repo/libgcc_s.so.1`); dropping its no-`/`, soname, ENOENT or
     /// not-a-write clause (the slashed, the non-library, the found or the
-    /// written path vanishes); or dropping the descriptor read (a library found
-    /// in the tree vanishes).
+    /// written path vanishes); dropping the descriptor read (a library found
+    /// in the tree vanishes); reading a split probe's result off its first half
+    /// (the split lookup stays); or judging write flags on the first half alone
+    /// (the split create vanishes).
     #[test]
     fn a_bare_library_lookup_is_no_touch() {
         use super::Access::{Probe, Read, Write};
@@ -937,6 +941,25 @@ mod tests {
         ] {
             assert_eq!(accessed(&[line]), vec![want], "{line}");
         }
+        // A split probe is judged on its resumed half (CLOUD-2789), and a split
+        // open whose write flags sit past the split stays.
+        assert_eq!(
+            accessed(&[
+                "7     access(\"libgcc_s.so.1\", F_OK <unfinished ...>",
+                "7     <... access resumed>) = -1 ENOENT (No such file or directory)",
+            ]),
+            vec![],
+            "a split lookup that found nothing"
+        );
+        assert_eq!(
+            accessed(&[
+                "7     openat(AT_FDCWD</repo>, \"libz.so\", <unfinished ...>",
+                "7     <... openat resumed>O_WRONLY|O_CREAT, 0644) = -1 EACCES (Permission \
+                 denied)",
+            ]),
+            vec![(PathBuf::from("/repo/libz.so"), Read)],
+            "a split create is never dropped"
+        );
     }
 
     // STRACE'S C ESCAPES DECODE (CLOUD-2835): `darwin-link`'s trace never read
