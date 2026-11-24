@@ -5269,6 +5269,23 @@ mod tests {
         }
     }
 
+    /// Fails by: `Hold::after` answering `None` for a held landing, so a
+    /// final verify never ends a held lap; or answering for an unheld one
+    /// (CLOUD-2789).
+    #[test]
+    fn only_a_held_landing_ends_on_its_final_verify() {
+        use super::{Hold, Step};
+        use crate::exit::ExitCode;
+        assert_eq!(
+            Hold::new(true).after(Step::Verify, ExitCode::Violation),
+            Some(ExitCode::Violation)
+        );
+        assert_eq!(
+            Hold::new(false).after(Step::Verify, ExitCode::Success),
+            None
+        );
+    }
+
     /// The held line names the head, the entry, and each step in the order run.
     #[test]
     fn a_held_line_carries_every_phase_in_order() {

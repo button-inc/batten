@@ -422,6 +422,28 @@ mod tests {
         );
     }
 
+    /// Fails by: a machine-applicable fix of another lint treated as an
+    /// unused import (`unused && stream == NonTest` read as `unused ||
+    /// stream == NonTest`), so the library build's fix is routed to the
+    /// `#[cfg(test)]` gate, which leaves it for a person (CLOUD-2789).
+    #[test]
+    fn a_fix_of_another_lint_is_applied_as_written() {
+        let other_lint = unused("src/a.rs", 0, 14, 1).replace("unused_imports", "unused_mut");
+        let plan = plan(
+            Streams {
+                non_test: &other_lint,
+                unit_test: "",
+                other: "",
+            },
+            &reader(),
+        );
+        assert_eq!((plan.gated, plan.left, plan.errors), (0, 0, 0));
+        assert_eq!(
+            apply(SRC, &plan.edits["src/a.rs"]).expect("applies"),
+            "use std::io;\nfn f() {}\n"
+        );
+    }
+
     /// Fails by: an import the TEST build alone reports gated as if tests used
     /// it. Unused only where tests are compiled means test-only code imports
     /// it for nothing, so it is deleted.

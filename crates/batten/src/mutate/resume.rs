@@ -2003,4 +2003,43 @@ mod tests {
         assert_ne!(declared, DeclaredEnv::default());
         assert!(!declared.env.is_empty(), "{declared:?}");
     }
+
+    /// Fails by: `lap_live` answering `false` under a held land singleton, so
+    /// a run during a lap seeds beside it; or `lap_ended` answering `None`
+    /// for an owed seed, so the seed a lap deferred is never started
+    /// (CLOUD-2789). The singleton stays held throughout, so the owed seed is
+    /// deferred again rather than spawned from the test binary.
+    #[test]
+    fn a_held_lap_owes_the_seed_and_its_end_answers_for_it() {
+        let scratch = crate::scratch::scratch("resume-lap-live");
+        crate::testing::contain_state(&scratch.join("state"));
+        let root = scratch.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let git_dir = crate::git::git_dir(&root).unwrap();
+        assert!(!lap_live(&root), "anti-vacuity: no lap holds the singleton");
+        assert_eq!(lap_ended(&root), None, "nothing was owed");
+        let pid = std::process::id().to_string();
+        assert_eq!(
+            batten_base::task::singleton_acquire(
+                &git_dir,
+                LAND_TASK,
+                &pid,
+                std::time::Duration::ZERO
+            ),
+            batten_base::task::Claim::Taken
+        );
+        assert!(lap_live(&root), "a held land singleton is a live lap");
+        let owed = crate::state::repo_state_dir(&root)
+            .unwrap()
+            .join("test-run")
+            .join(SEED_PENDING);
+        assert!(owed.is_file(), "a live lap leaves the seed owed");
+        let ended = lap_ended(&root);
+        assert!(
+            matches!(ended, Some(Seeded::NotOnCi | Seeded::Deferred)),
+            "{ended:?}"
+        );
+        batten_base::task::singleton_release(&git_dir, LAND_TASK);
+    }
 }

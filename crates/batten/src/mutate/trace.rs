@@ -710,6 +710,19 @@ mod tests {
         assert_eq!(super::quoted_arg(r#"cut"..."#), None);
     }
 
+    // Fails by: an escape's second byte not stepped past (`at += 1` read as
+    // `at -= 1`), so the walk reads its backslash again. A hex escape then
+    // reads `\x` as its digits and refuses at once, where a quote or a
+    // backslash escape would spin; so this case alone can fail inside its
+    // own run, beside the cases that hang (CLOUD-2789).
+    #[test]
+    fn a_hex_escape_is_stepped_past_whole() {
+        assert_eq!(
+            super::quoted_arg("a\\x41b\", 0"),
+            Some((String::from("aAb"), ", 0"))
+        );
+    }
+
     // Fails by: an absent trace read as an empty one (every case keyed on
     // nothing rather than on every file), or a whole one not read back.
     #[test]
