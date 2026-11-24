@@ -2119,6 +2119,13 @@ id = "mise-run-task"
 # as the defined `present`. A trailing `.` (a sentence ending) is not captured.
 regex = 'mise run [a-z][a-z0-9:_-]*(\.[a-z0-9_-]+)*'
 
+[[pattern]]
+id = "mise-template-tag"
+# A Tera control tag in a task body (`{% if … %}`, `{% else %}`, `{% endif %}`),
+# dropped by `ci-parity`'s leg clause so it reads the command a line renders to
+# (CLOUD-2789). An expression tag (`{{ … }}`) is kept: it names a value.
+regex = '\{%[^%]*%\}'
+
 # A mise template reading a variable a forge runner sets and a local shell does
 # not, through `env.X`, `env["X"]` or `get_env(name="X")` with any whitespace:
 # the forges' own flags as whole names (`\b`, so this manifest's
