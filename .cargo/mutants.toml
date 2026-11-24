@@ -170,4 +170,13 @@ exclude_re = [
   # exactly when they collide under `==`. Pinned to the column: the other `==`
   # in `validate` is not this argument's (CLOUD-2789).
   'mint\.rs:\d+:56: replace == with != in validate$',
+  # `surface`'s early return is a shortcut, never a different answer: with no
+  # outcome on disk, the path past it answers nothing either. A finished task's
+  # `rename` of the absent outcome fails and returns empty; a crashed one with
+  # the marker present returns empty; and with the session-setup directory
+  # absent the marker cannot be written (`durable::replace` creates no
+  # parent), so that also returns empty. The `&&` reaches that path only in
+  # those states, and the registry read it adds writes nothing. Column 48 is
+  # the inner `||`, the one argued here (CLOUD-2789).
+  'session_setup\.rs:\d+:48: replace \|\| with && in surface$',
 ]

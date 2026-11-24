@@ -1400,6 +1400,10 @@ mod tests {
         }
         assert_eq!(argv("find . -exec rm {} \\;").len(), 6);
         assert_eq!(argv("xargs rm"), ["xargs", "rm"]);
+        // ONLY A WRAPPER IS LOOKED THROUGH (CLOUD-2789): a program that runs
+        // nothing names a shell in its words as data, not as a utility.
+        // Fails by: every program read as a look-through wrapper.
+        assert_eq!(argv("echo sh -c 'x'"), ["echo", "sh", "-c", "x"]);
         assert_eq!(argv("env -S 'cargo test'").len(), 3);
         // The words after the `-S` string, and only those, follow its split.
         assert_eq!(

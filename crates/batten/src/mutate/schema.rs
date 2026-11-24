@@ -8459,6 +8459,34 @@ mod tests {
         assert!(!untraced_again(&dir).unwrap(), "once");
     }
 
+    /// ONLY A TRACED RUN IS RUN AGAIN (U3, CLOUD-2789): a case recorded
+    /// untraced already took the branch judging takes, so a refusal mark it
+    /// left is not a reason to run it twice. The case here leaves the mark
+    /// and counts its runs outside its record, which the re-run clears.
+    ///
+    /// No tracer runs here on any host: this process is under the recorder's
+    /// own tracer, or `TREE_ENV` is unset, and either leaves the case untraced.
+    ///
+    /// Fails by: the re-run taken on the mark alone (`&&` read as `||`), so an
+    /// untraced case runs twice and its untraced reason is overwritten.
+    #[test]
+    fn an_untraced_case_that_marks_a_refusal_runs_once() {
+        let base = crate::scratch::scratch("schema-untraced-refusal");
+        let counter = crate::scratch::scratch("schema-untraced-refusal-count").join("runs");
+        let script = format!(
+            "echo run >> '{}'; : > \"${RECORD}/{}\"",
+            counter.display(),
+            trace::REFUSED
+        );
+        let test = [String::from("sh"), String::from("-c"), script];
+        assert_eq!(record_into(&base, &test).unwrap(), 0);
+        assert_eq!(
+            std::fs::read_to_string(&counter).unwrap().lines().count(),
+            1,
+            "an untraced case is run once, refusal mark or not"
+        );
+    }
+
     /// A RENDERED TREE HAS THE ORIGINAL'S MODULE GRAPH (U2): the prelude's
     /// helpers sit in `lib.rs`, and every probe and switch names one through
     /// `crate::`, which read as an edge from each probed module to the root
@@ -9379,10 +9407,12 @@ mod tests {
             },
         ];
         let shards = |listing: &[Listed]| {
-            let keys: Vec<String> = listing
-                .iter()
-                .map(|m| shard_key(m, site_key(&root, m).as_deref()))
-                .collect();
+            // THROUGH `shard_keys`, the slice's own caller's spelling, so a
+            // listing whose keys came back empty is a case that fails here.
+            let site_keys: Vec<Option<String>> =
+                listing.iter().map(|m| site_key(&root, m)).collect();
+            let keys = shard_keys(listing, &site_keys);
+            assert_eq!(keys.len(), listing.len(), "one key per listed mutant");
             let ids: Vec<u32> = (0..u32::try_from(listing.len()).unwrap()).collect();
             let mut shard_of: std::collections::BTreeMap<String, usize> =
                 std::collections::BTreeMap::new();
