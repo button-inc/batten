@@ -1236,6 +1236,9 @@ mod tests {
             // verb that writes the receipt, and so the only place the question is
             // answerable at the moment it matters.
             "receipt clean".to_owned(),
+            // CLOUD-1544: the published-receipt transport, both `write`.
+            "receipt publish".to_owned(),
+            "receipt pull".to_owned(),
             "receipt record".to_owned(),
             "receipt status".to_owned(),
             "receipt verified".to_owned(),
