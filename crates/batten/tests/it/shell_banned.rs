@@ -382,6 +382,34 @@ fn an_added_shell_script_is_refused() {
     assert!(grew(&found, "scripts/deploy.sh"), "{found:?}");
 }
 
+/// The preset judges presence over the whole tree for a consumer that declares
+/// no `[census.shell]` at all: a shell program known only by its shebang,
+/// outside every line source the row names, is still read and refused.
+///
+/// Fails by: the preset row's whole-tree reach dropped where no census table
+/// is declared, so that program goes unread and is admitted.
+#[test]
+fn a_shebang_program_is_refused_where_no_census_table_is_declared() {
+    let config = format!(
+        "version = 1\n\
+         \n[[rule]]\nid = \"{ROW}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+         preset = \"shell-hygiene\"\nseverity = \"deny\"\n\
+         base = \"origin/main\"\ndelta_sources = [\"**\"]\n\
+         documents = [\"batten.toml\"]\n\
+         line_sources = [\"mise.toml\"]\n"
+    );
+    let dir = Fixture::new("shell-ban-undeclared")
+        .config(&config)
+        .files(&[("README.md", "x\n")])
+        .git()
+        .base_commit()
+        .build();
+    change(&dir, "bin/deploy", "#!/bin/sh\necho deploy\n");
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "bin/deploy"), "{found:?}");
+}
+
 /// An added `path` holding `text` is refused as a shell file, pointing at it.
 fn placed_shell_is_refused(name: &str, path: &str, text: &str) {
     let dir = repo(name, &[("README.md", "x\n")]);

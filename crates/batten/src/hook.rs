@@ -13469,8 +13469,14 @@ fn watched_tasks(rest: &[&str]) -> Vec<String> {
     let mut tasks = Vec::new();
     let mut at = 0;
     let mut bare = false;
-    while at < rest.len() {
-        let word = rest[at];
+    // BOUNDED BY THE WORD COUNT (CLOUD-2789): every pass moves `at` forward
+    // by at least one word, so `rest.len()` passes reach the end. A change
+    // that stops it advancing then ends the scan with a wrong answer a case
+    // can see, rather than spinning until the suite's timeout.
+    for _ in 0..rest.len() {
+        let Some(&word) = rest.get(at) else {
+            break;
+        };
         if word == "-t" || word == "--task" {
             tasks.extend(rest.get(at + 1).map(|task| (*task).to_owned()));
             at += 2;
@@ -23021,6 +23027,13 @@ deny contains "refused by themodule" if {
             ("mise run --continue-on-error a x ::: b", vec!["a", "b"]),
             ("mise watch verify", vec!["verify"]),
             ("mise watch -w src -t verify", vec!["verify"]),
+            // `-t` past a one-word flag: its task is the one word after it,
+            // and the scan resumes past both, not at a multiple of where it was.
+            ("mise watch --clear -t verify", vec!["verify"]),
+            // Past a `--task=` spelling and past the bare task, the scan moves
+            // on to the next word, so a `-t` after either is read too.
+            ("mise watch --task=build -t verify", vec!["build", "verify"]),
+            ("mise watch build -t verify", vec!["build", "verify"]),
         ] {
             assert_eq!(
                 program_reach(command).remove(0)["tasks"],
