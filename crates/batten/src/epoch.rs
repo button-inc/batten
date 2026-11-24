@@ -1250,6 +1250,25 @@ mod rule_surface_tests {
         assert!(field.reads_record(&row("lease")));
         assert!(!field.reads_record(&row("lea")));
     }
+
+    /// Fails by: a key no row declares for itself (`forge`, built from every
+    /// row) read as self-declared, which narrows a module that reads it to its
+    /// own row (CLOUD-2789).
+    #[test]
+    fn a_key_built_from_every_row_reads_every_row() {
+        assert!(reads(&["tree.forge"]).reads_every_row());
+        assert!(!reads(&["tree.documents", "tree.records.lease"]).reads_every_row());
+    }
+
+    /// Fails by: either walk alone (`traversals` or `shell`) taken for a read
+    /// of declared files, which narrows its input past the files it opens.
+    #[test]
+    fn a_walk_opens_files_no_row_declares() {
+        assert!(reads(&["tree.documents"]).opens_only_declared_files());
+        assert!(!reads(&["tree.traversals"]).opens_only_declared_files());
+        assert!(!reads(&["tree.shell"]).opens_only_declared_files());
+        assert!(!reads(&["tree.forge"]).opens_only_declared_files());
+    }
 }
 
 /// The module half of a rule's digest (#1276).

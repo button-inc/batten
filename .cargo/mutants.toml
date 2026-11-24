@@ -179,4 +179,10 @@ exclude_re = [
   # those states, and the registry read it adds writes nothing. Column 48 is
   # the inner `||`, the one argued here (CLOUD-2789).
   'session_setup\.rs:\d+:48: replace \|\| with && in surface$',
+  # `end` is `subcommand_index` over the same words with the same steps (two
+  # for a `GIT_VALUE_OPTIONS` word, else one), so the scan lands on `end` only
+  # where that walk stopped: the subcommand, a word not starting `-`, which no
+  # arm reads, or past the last word, where `get` answers `None`. `< end` and
+  # `<= end` agree (CLOUD-2789).
+  'hook\.rs:\d+:\d+: replace < with <= in git_dir_operands$',
 ]

@@ -2428,9 +2428,9 @@ fn judge_run(
     let _ = std::fs::create_dir_all(&temp);
     let _ = std::fs::create_dir_all(own.join("fixtures"));
     // THE VERDICT IS READ FROM THE RUN'S OWN JUNIT REPORT, written under this
-    // run's scratch so no two workers share one (#1276).
-    let store = own.join("store");
-    let config = own.join("nextest.toml");
+    // run's own temp so no two workers share one (#1276), and never under the
+    // mirror's `target/tmp` ([`judge_files`]).
+    let (store, config) = judge_files(&temp);
     if let Err(why) = judge_config(judging.work, &store)
         .and_then(|text| Ok(crate::durable::replace(&config, text)?))
     {
@@ -2510,6 +2510,19 @@ const JUDGE_TEMP: &str = "judge-tmp";
 /// unjudged.
 fn judge_temp(work: &std::path::Path, active: &str) -> std::path::PathBuf {
     work.with_file_name(JUDGE_TEMP).join(active)
+}
+
+/// One judging run's nextest store and config file, under its `temp`
+/// ([`judge_temp`]), BESIDE the mirror (CLOUD-2789).
+///
+/// NEVER UNDER THE MIRROR'S `target/tmp`: the suite's `clear-scratch` setup
+/// script empties that directory whenever it sees no other nextest running
+/// over the target, and a worker that has written its config but not yet
+/// started its nextest is not one. Three of 684 judging runs on #1276 then
+/// failed to parse a config that was gone, and were recorded as errors.
+/// `clear-scratch` touches only `batten-suite` under a run's `TMPDIR`.
+fn judge_files(temp: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    (temp.join("store"), temp.join("nextest.toml"))
 }
 
 /// Every baseline-red case, and every case that reaches a site and is red
@@ -7934,6 +7947,29 @@ mod tests {
         assert_ne!(temp, judge_temp(&work, NULL_MUTANT));
     }
 
+    /// A judging run's nextest store and config live in its own temp, outside
+    /// the mirror's `target/`, which another worker's `clear-scratch` empties
+    /// (CLOUD-2789).
+    ///
+    /// Fails by: either put back under the mirror (three of 684 runs erred on
+    /// a config deleted before their nextest started), or shared between runs.
+    #[test]
+    fn a_judging_runs_config_and_store_are_its_own_and_outside_the_target() {
+        let work = std::path::Path::new("/state/tree");
+        let temp = judge_temp(work, "7");
+        let (store, config) = judge_files(&temp);
+        for path in [&store, &config] {
+            assert!(path.starts_with(&temp), "{}", path.display());
+            assert!(!path.starts_with(work), "{}", path.display());
+        }
+        assert_ne!(store, config);
+        assert_ne!(
+            judge_files(&judge_temp(work, NULL_MUTANT)).1,
+            config,
+            "a config shared between runs"
+        );
+    }
+
     /// A judging run sets its temp, fixture root and switch, and trusts the
     /// mirror's own task-runner config (CLOUD-2789).
     ///
@@ -8865,6 +8901,30 @@ mod tests {
             baseline_red(false, Some(panicked), &BTreeSet::new()).expect("red")[&pair("r", "fix")],
             "red first",
             "the panic message is the failure line"
+        );
+    }
+
+    /// Fails by: a record that finished at zero, or never finished, named as
+    /// failed — or a non-zero one dropped, which leaves a blind run's refusal
+    /// pointing at nothing (CLOUD-2789).
+    #[test]
+    fn a_failed_record_is_one_that_finished_non_zero() {
+        let base = crate::scratch::scratch("schema-failed-records");
+        for (dir, case, done) in [
+            ("a", "m::red\tbatten::it", Some("101\n")),
+            ("b", "m::green\tbatten::it", Some("0\n")),
+            ("c", "m::running\tbatten::it", None),
+        ] {
+            let dir = base.join(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("case"), case).unwrap();
+            if let Some(code) = done {
+                std::fs::write(dir.join(DONE), code).unwrap();
+            }
+        }
+        assert_eq!(
+            failed_records(&base),
+            BTreeSet::from([(String::from("m::red"), String::from("batten::it"))])
         );
     }
 
