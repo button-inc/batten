@@ -2016,6 +2016,18 @@ regex = '[A-Za-z0-9_./-]+\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z
 id = "ledger-pair"
 regex = '\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+ (?:[A-Za-z0-9_./-]+\.(?:rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(?:::[A-Za-z0-9_:]+)?|[A-Za-z_][A-Za-z0-9_.]*\[[^\]]+\](?:\.[A-Za-z0-9_]+)*)'
 
+# A question marking an option as recommended, in its label or description
+# (CLOUD-2915): the word, case-insensitive, whatever surrounds it. A match
+# preceded by `not` is captured with it so `admit-ask.rego` can discard it.
+[[pattern]]
+id = "recommendation-marked"
+regex = '(?i)(?:\bnot\s+)?\brecommended\b'
+
+# A `(Recommended)` or `[Recommended]` tag in a question's text, naming no option.
+[[pattern]]
+id = "recommendation-tagged"
+regex = '(?i)[(\[]\s*recommended\s*[)\]]'
+
 # CLOUD-2241: work promised to a later branch in a final message, which the turn
 # must file before it ends. The literals are the three witnessed on PR #1132
 # ("goes on the next branch", "ships on the next branch", "their own short
