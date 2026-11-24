@@ -366,3 +366,27 @@ fn a_target_that_cannot_be_stated_is_could_not_look() {
         Look::Is(SHELL_PATH)
     );
 }
+
+/// The fact is resolved for a PRE-tool write only: after the write has
+/// landed there is nothing left to refuse, so a post-tool write of a fresh
+/// shell file reads could-not-look and no verdict names it.
+///
+/// Fails by: the event test joined to the rest by `||`, which decides the fact
+/// for any write a policy row selects, and the post-tool call then carries the
+/// refusal the pre-tool one does.
+#[test]
+fn a_post_tool_write_of_a_shell_file_is_not_judged() {
+    let dir = repo("shell-authored-post-tool", &[]);
+    let post = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "x.sh", "content": "echo hi\n"},
+        "tool_response": {"filePath": "x.sh", "success": true},
+    })
+    .to_string();
+    let output = common::run_with_stdin(&dir, &["adjudicate", "--harness", "claude-code"], &post);
+    let raw = common::stdout(&output);
+    assert!(!raw.contains(VERDICT), "{raw}");
+    // ANTI-VACUITY: the same write before the tool runs is refused.
+    assert!(refused(&dir, &write("x.sh", "echo hi\n")));
+}
