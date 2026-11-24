@@ -3023,7 +3023,10 @@ mod tests {
                 "src/rules.rs",
                 "use crate::model::Rule;\nimpl Rule {\n    pub fn twice(&self) -> u8 { self.x * 2 }\n}\n",
             ),
-            ("src/main.rs", "fn m(r: &app::model::Rule) -> u8 { r.twice() }\n"),
+            (
+                "src/main.rs",
+                "fn m(r: &app::model::Rule) -> u8 { r.twice() }\n",
+            ),
             (
                 "src/bin/tool.rs",
                 "fn t(r: &app::model::Rule) -> u8 { r.twice() }\n",
@@ -3067,7 +3070,10 @@ mod tests {
             ("src/a.rs", "pub struct S;\npub type Alias = S;\n"),
             ("src/b.rs", "impl crate::a::Alias { fn f() {} }\n"),
         ]);
-        assert_eq!(impl_plan("src", &files), ["src/b.rs:1 Alias -> a (1 lines)"]);
+        assert_eq!(
+            impl_plan("src", &files),
+            ["src/b.rs:1 Alias -> a (1 lines)"]
+        );
     }
 
     /// Fails by: a `mod.rs` read as the module `mod`, so its children land a

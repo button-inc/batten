@@ -7366,7 +7366,11 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
         let ast = Ast::of(engine).expect("the AST serialises");
         let packages = package_facts(&ast.0);
         let rules = packages.values().next().expect("the package's facts");
-        assert!(rules["f"].function, "{:?}", rules.keys().collect::<Vec<_>>());
+        assert!(
+            rules["f"].function,
+            "{:?}",
+            rules.keys().collect::<Vec<_>>()
+        );
         assert!(!rules["r"].function);
     }
 
