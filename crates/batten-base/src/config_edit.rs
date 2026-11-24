@@ -319,3 +319,22 @@ fn remove(root: &mut toml_edit::Table, path: &[String]) -> Result<()> {
     table.remove(leaf);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fails by: an `id` no row carries reported through the duplicate arm, as
+    /// "0 rows have id", which reads as a count rather than as an absence.
+    #[test]
+    fn an_id_no_row_carries_is_refused_as_absent() {
+        let source = "[[rule]]\nid = \"a\"\n";
+        let edits = [Edit::InRow {
+            array: String::from("rule"),
+            id: String::from("b"),
+            edits: Vec::new(),
+        }];
+        let refused = apply(Format::Toml, source, &edits).map_err(|error| error.to_string());
+        assert_eq!(refused, Err(String::from("no `[[rule]]` row has id `b`")));
+    }
+}

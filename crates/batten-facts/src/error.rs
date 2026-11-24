@@ -542,3 +542,15 @@ impl Native {
         Native::RegisterTableRefused,
     ];
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fails by: the passthrough rendered as nothing, which leaves a log line
+    /// with no trace of the child's code.
+    #[test]
+    fn a_passthrough_names_the_childs_code() {
+        assert_eq!(Passthrough(3).to_string(), "the wrapped command exited 3");
+    }
+}

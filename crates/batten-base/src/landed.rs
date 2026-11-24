@@ -1364,6 +1364,16 @@ mod tests {
         assert_eq!(later.zip(earlier).map(|(a, b)| a - b), Some(2));
     }
 
+    /// Fails by: the two separator checks joined so only a stamp missing BOTH
+    /// hyphens is refused — each stamp here keeps one, and every digit `day_of`
+    /// reads is a digit, so only the separator check can refuse it.
+    #[test]
+    fn a_stamp_missing_either_hyphen_is_unreadable() {
+        assert!(day_of("2026x08-20").is_none());
+        assert!(day_of("2026-08x20").is_none());
+        assert!(day_of("2026-08-20").is_some(), "the control reads");
+    }
+
     /// `second_of` pinned against KNOWN epoch values, not merely non-None — the
     /// same standard the case above holds `day_of` to. `1_788_000_000` is
     /// 2026-08-29T10:40:00Z, which `clock::rfc3339_utc` independently renders.

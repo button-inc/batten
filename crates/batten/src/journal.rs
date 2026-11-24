@@ -1883,6 +1883,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: the marks' two vouchers joined by `||`, so a marked shard that
+    /// is gone is merged incrementally over marks that no longer describe the
+    /// shards, rather than replayed.
+    #[test]
+    fn a_marked_shard_that_is_gone_forces_a_replay() {
+        let dir = store("merge-gone");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        append(&dir, "shard-a", &entry_for("TODO", Disposition::Acted)).unwrap();
+        append(&dir, "shard-b", &entry_for("TODO", Disposition::Acted)).unwrap();
+        merge(&dir).unwrap();
+        let gone = std::fs::read_dir(shards_dir(&dir))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("shard-b"))
+            })
+            .expect("the second shard's file");
+        std::fs::remove_file(gone).unwrap();
+        let Merge::Merged { format, applied } = merge(&dir).unwrap() else {
+            panic!("the merge ran");
+        };
+        assert_eq!(applied, 1, "the remaining shard is replayed");
+        assert_eq!(format.folded.len(), 1, "{:?}", format.folded);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Fails by: a record's line carrying anything but its pointers.
     #[test]
     fn a_disposition_line_is_the_records_pointers() {

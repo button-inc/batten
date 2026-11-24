@@ -389,4 +389,25 @@ mod tests {
                 .starts_with("#[cfg(test)]\nuse std::fmt;\n")
         );
     }
+
+    /// Fails by: an import the TEST build alone reports gated as if tests used
+    /// it. Unused only where tests are compiled means test-only code imports
+    /// it for nothing, so it is deleted.
+    #[test]
+    fn an_import_only_the_test_build_reports_is_deleted() {
+        let test = unused("src/a.rs", 0, 14, 1);
+        let plan = plan(
+            Streams {
+                non_test: "",
+                unit_test: &test,
+                other: "",
+            },
+            &reader(),
+        );
+        assert_eq!((plan.gated, plan.left, plan.errors), (0, 0, 0));
+        assert_eq!(
+            apply(SRC, &plan.edits["src/a.rs"]).expect("applies"),
+            "use std::io;\nfn f() {}\n"
+        );
+    }
 }
