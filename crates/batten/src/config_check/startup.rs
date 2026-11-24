@@ -180,6 +180,15 @@ fn is_variable_name(name: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    /// Fails by: a leading `_` refused, or a leading digit admitted.
+    #[test]
+    fn a_variable_name_starts_with_a_letter_or_an_underscore() {
+        assert!(super::is_variable_name("_MISE_ENV"));
+        assert!(super::is_variable_name("MISE_ENV"));
+        assert!(!super::is_variable_name("1MISE"));
+        assert!(!super::is_variable_name(""));
+    }
+
     /// A config enabling `mise` with `rule_tail` appended to its row, and the
     /// placing `[[startup]]` row when `placed`.
     fn config(rule_tail: &str, placed: bool) -> String {

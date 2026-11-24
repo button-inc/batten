@@ -1589,6 +1589,19 @@ mod tests {
         names.iter().map(|name| (*name).to_owned()).collect()
     }
 
+    /// Fails by: a macro body re-read past its closing delimiter, which no
+    /// longer parses, so a spawn in a macro's arguments is no site.
+    #[test]
+    fn a_shell_spawn_inside_a_macros_arguments_is_a_site() {
+        let text = "use std::process::Command;\n\npub fn run() {\n    \
+                    let _ = format!(\"{:?}\", Command::new(\"sh\").args([\"-c\", \"x\"]).status());\n}\n";
+        let sites: Vec<(usize, Option<String>)> = spawn_sites("src/lib.rs", text)
+            .into_iter()
+            .map(|site| (site.line, site.function))
+            .collect();
+        assert_eq!(sites, [(4, Some(String::from("run")))]);
+    }
+
     #[test]
     fn a_body_counts_its_code_lines_and_skips_comments_and_blanks() {
         let lines = [

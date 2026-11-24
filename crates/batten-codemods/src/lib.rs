@@ -337,4 +337,15 @@ mod tests {
             "{changed:?}"
         );
     }
+
+    /// Fails by: a `name` read from a table other than `[package]`, or the
+    /// `[package]` table's own missed.
+    #[test]
+    fn a_package_name_is_read_from_the_package_table_only() {
+        assert_eq!(
+            package_name("[package]\nname = \"batten-core\"\n").as_deref(),
+            Some("batten-core")
+        );
+        assert_eq!(package_name("[dependencies]\nname = \"x\"\n"), None);
+    }
 }

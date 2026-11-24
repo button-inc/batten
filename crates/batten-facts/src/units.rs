@@ -360,6 +360,15 @@ fn logical(node: &SyntaxNode) -> Option<ast::LogicOp> {
 mod tests {
     use super::*;
 
+    /// Fails by: a unit's line count one short, or zero for a one-line unit.
+    #[test]
+    fn a_unit_spans_every_line_it_touches() {
+        let starts = line_starts("ab\ncd\nef\n");
+        assert_eq!(lines_spanned(&starts, 0, 2), 1);
+        assert_eq!(lines_spanned(&starts, 1, 4), 2);
+        assert_eq!(lines_spanned(&starts, 0, 8), 3);
+    }
+
     fn functions(source: &str) -> Vec<Unit> {
         let crate::facts::Look::Is(found) = units(source) else {
             panic!("the fixture parses");

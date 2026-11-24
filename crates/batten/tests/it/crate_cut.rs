@@ -136,6 +136,27 @@ fn a_closed_module_set_moves_to_its_own_crate_with_every_path_respelled() {
     assert!(!small.contains("Why big exists"), "{small}");
 }
 
+/// Fails by: the run over the tree on disk reading no `.rs` file or no
+/// manifest, so it plans other than the fixture does in memory.
+#[test]
+fn a_cut_run_over_the_tree_on_disk_plans_what_the_fixture_plans() {
+    let (files, manifests) = tree();
+    let root = crate::common::scratch("crate-cut-on-disk");
+    for (path, text) in files.iter().chain(&manifests) {
+        let target = root.join(path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, text).unwrap();
+    }
+    let plan = cut_crate(&CUT, &files, &manifests);
+    let mut out = Vec::new();
+    batten::crate_cut::run_cut(&root, &CUT, true, &mut out).unwrap();
+    let said = String::from_utf8(out).unwrap();
+    for path in plan.writes.keys() {
+        assert!(said.contains(&format!("write {path}\n")), "{path}: {said}");
+    }
+    assert!(!plan.writes.is_empty());
+}
+
 /// Fails by: the second run moving or rewriting anything.
 #[test]
 fn a_cut_run_on_its_own_output_plans_nothing() {
