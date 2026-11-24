@@ -19235,19 +19235,35 @@ tools = [
   ],
 ]
 
+# THE TWO COMMIT-METADATA STEPS KEY WHAT THEY JUDGE (CLOUD-2897). Each is handed
+# refs (`origin/main..HEAD`), so files and tool versions alone kept one key across
+# a rewrite that left the tree identical: on #1276 a committer rewrite replayed
+# `commit own refused` for a sha that no longer existed. `commit-check` judges
+# each message, `commit-attribution` each message and author and committer
+# identity, so each keys a `git log` answer over exactly that (content, never a
+# commit id, so a rebase changing none of it still hits). An empty range is no
+# key (`step.rs` `material`), so the step runs.
 [[step]]
 id = "commit-check"
 # `.cargo` for `cross-check`'s reason (CLOUD-2835): cargo probes
 # `.cargo/config{,.toml}` on every run, and the whole-trace read refused both.
 inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock", ".cargo"]
-tools = [["rustc", "--version"], ["cargo", "--version"]]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["git", "log", "--format=%B", "origin/main..HEAD"],
+]
 
 [[step]]
 id = "commit-attribution"
 # `.cargo` for `cross-check`'s reason (CLOUD-2835): cargo probes
 # `.cargo/config{,.toml}` on every run, and the whole-trace read refused both.
 inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock", ".cargo"]
-tools = [["rustc", "--version"], ["cargo", "--version"]]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["git", "log", "--format=%an%x00%ae%x00%cn%x00%ce%x00%B", "origin/main..HEAD"],
+]
 
 [[step]]
 id = "cross-check"
