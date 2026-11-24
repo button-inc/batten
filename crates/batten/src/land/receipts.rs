@@ -223,7 +223,10 @@ fn files(dir: &Path) -> Vec<(String, std::path::PathBuf)> {
 pub fn local_set(receipts_dir: &Path, compat_dir: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut set = BTreeMap::new();
     for (name, path) in files(receipts_dir) {
-        if !name.ends_with(".json") {
+        if !Path::new(&name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        {
             continue;
         }
         let Ok(bytes) = std::fs::read(&path) else {
