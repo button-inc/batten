@@ -1158,8 +1158,10 @@ child := "session_01ChildAbc"
 
 open_child := {"minted": {"children-open": {"session_01ChildAbc": "open"}}}
 
+# `command` is the empty string, as the engine emits it for a call that is not a
+# shell: the field is a `String`, never null.
 timer_call(tool, arguments) := {"call": {
-	"command": null,
+	"command": "",
 	"tool": tool,
 	"arguments": arguments,
 	"run-in-background": null,

@@ -7449,6 +7449,19 @@ scope = "mediated_call"
 module = "policy/run-shape.rego"
 severity = "deny"
 
+# THE OPEN CHILDREN A TIMER MAY NAME (CLOUD-2889). One subject per `child-open`
+# receipt under a day old, keyed by the child's session id; the module admits a
+# `send_later`, a `create_trigger` or a backgrounded wait only when its own
+# arguments name one of these ids, so a timer for anything else — a PR heartbeat
+# above all — names none and is refused by construction. Null on a fresh clone,
+# and a child archived or older than the bound is absent: both refuse.
+[[rule.minted]]
+id = "children-open"
+mint = "child-open"
+field = 1
+recency = 0
+max_age_days = 1
+
 
 [[rule]]
 id = "lane guard other"
