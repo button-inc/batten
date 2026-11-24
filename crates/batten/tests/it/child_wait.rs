@@ -95,7 +95,7 @@ fn archive_child(dir: &Path, id: &str) {
     );
 }
 
-fn call(dir: &Path, tool: &str, input: serde_json::Value) -> std::process::Output {
+fn call(dir: &Path, tool: &str, input: &serde_json::Value) -> std::process::Output {
     adjudicate(
         dir,
         &serde_json::json!({
@@ -110,7 +110,7 @@ fn bash(dir: &Path, command: &str, background: bool) -> std::process::Output {
     call(
         dir,
         "Bash",
-        serde_json::json!({"command": command, "run_in_background": background}),
+        &serde_json::json!({"command": command, "run_in_background": background}),
     )
 }
 
@@ -154,13 +154,14 @@ fn a_create_session_id_outside_the_session_shape_mints_nothing() {
     let dir = repo("child-wait-shape");
     create_child(&dir, "session_../escape");
     let store = receipts(&dir);
-    let minted = std::fs::read_dir(&store)
-        .map(|entries| {
-            entries
-                .flatten()
-                .any(|entry| entry.file_name().to_string_lossy().starts_with("child-open."))
+    let minted = std::fs::read_dir(&store).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("child-open.")
         })
-        .unwrap_or(false);
+    });
     assert!(!minted, "no child-open receipt for a malformed id");
 }
 
@@ -203,7 +204,7 @@ fn send_later_naming_an_open_child_is_admitted_under_every_spelling() {
             &call(
                 &dir,
                 &format!("{prefix}send_later"),
-                serde_json::json!({"delay_minutes": 5, "message": format!("read {CHILD} again")}),
+                &serde_json::json!({"delay_minutes": 5, "message": format!("read {CHILD} again")}),
             ),
             &["timer mint refused"],
         );
@@ -221,7 +222,7 @@ fn send_later_naming_no_open_child_is_refused() {
             &call(
                 &dir,
                 &format!("{prefix}send_later"),
-                serde_json::json!({"delay_minutes": 5, "message": "check CI on PR #1282"}),
+                &serde_json::json!({"delay_minutes": 5, "message": "check CI on PR #1282"}),
             ),
             "timer mint refused",
         );
@@ -237,7 +238,7 @@ fn create_trigger_naming_an_open_child_is_admitted() {
         &call(
             &dir,
             "mcp__Claude_Code_Remote__create_trigger",
-            serde_json::json!({"name": "watch", "prompt": format!("read {CHILD}"), "initiation": "own_followup"}),
+            &serde_json::json!({"name": "watch", "prompt": format!("read {CHILD}"), "initiation": "own_followup"}),
         ),
         &["event mint refused"],
     );
@@ -252,7 +253,7 @@ fn create_trigger_naming_no_open_child_is_refused() {
         &call(
             &dir,
             "mcp__Claude_Code_Remote__create_trigger",
-            serde_json::json!({"name": "babysit", "prompt": "check PR #1282", "initiation": "own_followup"}),
+            &serde_json::json!({"name": "babysit", "prompt": "check PR #1282", "initiation": "own_followup"}),
         ),
         "event mint refused",
     );
@@ -267,7 +268,7 @@ fn subscribe_pr_activity_stays_refused_with_a_child_open() {
         &call(
             &dir,
             "mcp__Claude_Code_Remote__subscribe_pr_activity",
-            serde_json::json!({"owner": "o", "repo": "r", "pullNumber": 1}),
+            &serde_json::json!({"owner": "o", "repo": "r", "pullNumber": 1}),
         ),
         "review watch refused",
     );
@@ -281,14 +282,14 @@ fn a_missing_empty_archived_or_stale_store_admits_nothing() {
 
     let missing = repo("child-wait-missing");
     refused_by(
-        &call(&missing, "send_later", message.clone()),
+        &call(&missing, "send_later", &message),
         "timer mint refused",
     );
 
     let empty = repo("child-wait-empty");
     std::fs::create_dir_all(receipts(&empty)).expect("an empty receipt store");
     refused_by(
-        &call(&empty, "send_later", message.clone()),
+        &call(&empty, "send_later", &message),
         "timer mint refused",
     );
 
@@ -296,7 +297,7 @@ fn a_missing_empty_archived_or_stale_store_admits_nothing() {
     create_child(&archived, CHILD);
     archive_child(&archived, CHILD);
     refused_by(
-        &call(&archived, "send_later", message.clone()),
+        &call(&archived, "send_later", &message),
         "timer mint refused",
     );
 
@@ -312,5 +313,5 @@ fn a_missing_empty_archived_or_stale_store_admits_nothing() {
         format!("{} open\n", now - 2 * 86_400),
     )
     .expect("plant a stale receipt");
-    refused_by(&call(&stale, "send_later", message), "timer mint refused");
+    refused_by(&call(&stale, "send_later", &message), "timer mint refused");
 }
