@@ -82,8 +82,8 @@ fn check_in(dir: &std::path::Path) -> Output {
     common::run(dir, &["check"])
 }
 
-/// The build's own version, which the gate compares against.
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The build's own identity, which the gate compares against (CLOUD-2903).
+const VERSION: &str = batten::config::VERSION;
 
 // --- the schema is derived, published, and agrees with the binary ------------
 

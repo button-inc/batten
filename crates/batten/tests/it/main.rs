@@ -165,6 +165,7 @@ mod derived_facts;
 mod design_audit;
 mod detached_call;
 mod dev_profile;
+mod dev_tags;
 mod digest_major_agreement;
 mod dispatch_tier;
 mod dist;

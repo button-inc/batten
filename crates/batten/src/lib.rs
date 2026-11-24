@@ -2563,24 +2563,24 @@ fn engine_pin(
             _ => return Ok(ExitCode::Success),
         },
         Some("source") => source()?,
-        Some("version")
-            if !crate::version::Tag::parse(&engine::release())
-                .is_some_and(|tag| tag.is_release()) =>
+        // The release this source is cut as, never the build identity
+        // (CLOUD-2903): `release-plz.yml` runs this through `cargo run` on the
+        // release PR's head, which is not the marked release build.
+        Some("version") => release(engine::declared_release()),
+        // A RELEASE TAG, PARSED (CLOUD-2906): `vfoo` is no tag. A release is
+        // pinned, and so is a DEV pre-release (CLOUD-2903, owner ruling): a
+        // source-pinned branch pins the published dev build of its own head.
+        // Any other pre-release is never shipped, so it is never pinned.
+        Some(tag)
+            if crate::version::Tag::parse(tag).is_some_and(|tag| {
+                tag.is_release() || crate::version::is_dev_prerelease(&tag.version)
+            }) =>
         {
-            return Err(UsageError::raise(format!(
-                "engine pin: this build is {}, a pre-release, and a pre-release is never pinned",
-                engine::release()
-            )));
-        }
-        Some("version") => release(engine::release()),
-        // A RELEASE TAG, PARSED, AND A RELEASE (CLOUD-2906): `vfoo` is no tag,
-        // and a pre-release is never shipped, so it is never pinned.
-        Some(tag) if crate::version::Tag::parse(tag).is_some_and(|tag| tag.is_release()) => {
             release(tag.to_owned())
         }
         Some(tag) if crate::version::Tag::parse(tag).is_some() => {
             return Err(UsageError::raise(format!(
-                "engine pin: {tag} is a pre-release, and a pre-release is never pinned"
+                "engine pin: {tag} is a pre-release that is not a dev build, and it is never pinned"
             )));
         }
         Some(other) => {
@@ -32914,15 +32914,16 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
     let current = config::schema_keys(&derived, "the derived schema")?;
     let added = config::additions_since(&released, &current);
     // The floor is read from the working tree's own authority and compared with
-    // THIS build's version — exactly the pair `check_min_version` compares, so
-    // the two cannot disagree about what "the floor is current" means.
+    // the release this source will be cut as. A floor names a release, so it is
+    // the PACKAGE version, never the build identity (CLOUD-2903): no floor equals
+    // a dev pre-release, and every key addition would read as owed.
     let owed = config::floor_owed(
         &added,
         resolve::resolve(Path::new("."), &Overrides::default())
             .ok()
             .and_then(|resolved| resolved.min_batten_version.clone())
             .as_deref(),
-        config::VERSION,
+        config::PACKAGE_VERSION,
     );
     let unannounced = config::removals_unannounced(
         &released,
@@ -34296,6 +34297,12 @@ pub(crate) mod fixture_root;
 /// The build script's marker scanner, compiled here only so its own unit tests run.
 #[cfg(test)]
 mod mutation_markers;
+
+/// The build's identity (CLOUD-2903): `build.rs` stamps it, and this
+/// declaration exists so its cases run here and an integration case can render
+/// one. No library code calls it; see the file's own header.
+#[path = "../build/identity.rs"]
+pub mod build_identity;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
