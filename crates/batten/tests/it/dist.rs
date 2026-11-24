@@ -587,3 +587,84 @@ fn every_declared_channel_names_its_generator() {
         "the flake's inputs are locked"
     );
 }
+
+/// One workflow under `.github/workflows/`, parsed.
+fn workflow(name: &str) -> yaml_rust2::Yaml {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.github/workflows")
+        .join(name);
+    let text = std::fs::read_to_string(&path).expect("the workflow reads");
+    yaml_rust2::YamlLoader::load_from_str(&text)
+        .expect("the workflow parses as YAML")
+        .remove(0)
+}
+
+/// THE RELEASE BUILD IS MARKED BY ITS TAG (CLOUD-2903): `dist.yml`'s `dist` job
+/// carries `BATTEN_RELEASE_TAG` as the draft's tag, job-wide, so the release
+/// build stamps the package version as its identity; and no other workflow
+/// names the marker, so no other build can claim to be the release.
+#[test]
+fn the_release_build_is_marked_by_its_tag() {
+    let dist = workflow("dist.yml");
+    assert_eq!(
+        dist["jobs"]["dist"]["env"]["BATTEN_RELEASE_TAG"].as_str(),
+        Some("${{ inputs.tag }}")
+    );
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "dist.yml" {
+            continue;
+        }
+        let text = std::fs::read_to_string(entry.path()).unwrap();
+        assert!(
+            !text.contains(batten::build_identity::RELEASE_MARKER),
+            "{name} names the release marker"
+        );
+    }
+}
+
+/// A DEV PRE-RELEASE IS PUBLISHED UNDER THE `dev/` NAMESPACE (CLOUD-2903), on
+/// every push to a pull request, drafts included, as a draft then a non-latest
+/// pre-release; and the tag the workflow spells is the one `engine::forge_tag`
+/// fetches a dev pin from.
+#[test]
+fn a_dev_prerelease_is_published_under_the_dev_namespace() {
+    let dev = workflow("dev-prerelease.yml");
+    let types: Vec<&str> = dev["on"]["pull_request"]["types"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(yaml_rust2::Yaml::as_str)
+        .collect();
+    assert!(types.contains(&"synchronize") && types.contains(&"opened"));
+    assert!(
+        dev["jobs"]["build"]["if"]
+            .as_str()
+            .is_some_and(|guard| !guard.contains("draft")),
+        "drafts are published too"
+    );
+    let publish = dev["jobs"]["publish"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["run"].as_str())
+        .find(|run| run.contains("gh release create"))
+        .expect("a step publishes");
+    let spelled = format!("tag=\"{}v${{version}}\"", batten::engine::DEV_TAG_PREFIX);
+    assert!(
+        publish.lines().any(|line| line.trim() == spelled),
+        "{publish}"
+    );
+    for flag in ["--draft", "--prerelease", "--latest=false"] {
+        assert!(publish.contains(flag), "{flag}: {publish}");
+    }
+    // The shell's `${identity%%+*}` is `forge_tag`'s drop of the metadata.
+    let identity = "0.0.222-dev.pr1290.20261124120000+abcdef012345";
+    let shell = format!(
+        "{}v{}",
+        batten::engine::DEV_TAG_PREFIX,
+        identity.split('+').next().unwrap()
+    );
+    assert_eq!(batten::engine::forge_tag(&format!("v{identity}")), shell);
+}

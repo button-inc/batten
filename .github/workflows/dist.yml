@@ -1,4 +1,6 @@
 name: dist
+#MUTANT-SUITE crates/batten/tests/it/dist.rs
+#MUTANT release-build-unmarked|s@^      BATTEN_RELEASE_TAG: .*$@@|the_release_build_is_marked_by_its_tag
 
 # workflow-shell: CLOUD-2554 the release's dist job moved here verbatim, and a
 # pull request's run takes the landing-lease step every pull-request job starts
@@ -53,6 +55,14 @@ jobs:
   dist:
     name: dist (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    # THE RELEASE MARKER (CLOUD-2903). `build.rs` stamps the package version as
+    # the build's identity only when this names `v{package version}`; every
+    # other build reports a dev pre-release. JOB level, not the build step's:
+    # every `mise run batten` step here is a `cargo run`, so a step-level marker
+    # would rebuild the library as it flipped. Empty on a pull request, whose
+    # legs therefore build dev identities; the release passes the draft's tag.
+    env:
+      BATTEN_RELEASE_TAG: ${{ inputs.tag }}
     timeout-minutes: 45 # budget: grandfathered measured=2026-10-15
     # NO `permissions:` HERE: a called job runs under its caller's grant,
     # so the release grants its upload and attestation scopes and a pull

@@ -88,6 +88,14 @@ pub fn is_release(version: &Version) -> bool {
     version.pre.is_empty()
 }
 
+/// Whether `version` is a DEV pre-release (CLOUD-2903): a pre-release whose
+/// first identifier is `dev`, the shape every unmarked build reports
+/// (`<next patch>-dev.<line>.<ts>+<digest>`). The one pre-release a pin may name.
+#[must_use]
+pub fn is_dev_prerelease(version: &Version) -> bool {
+    version.pre.as_str() == "dev" || version.pre.as_str().starts_with("dev.")
+}
+
 /// Semver §11 precedence: a pre-release below its release, build metadata
 /// ignored. The only ordering any reader uses.
 #[must_use]
@@ -200,6 +208,15 @@ mod tests {
         assert_eq!(parse_lenient("v1.2.3"), Some(Version::new(1, 2, 3)));
         assert_eq!(parse_lenient("1.2.3"), Some(Version::new(1, 2, 3)));
         assert_eq!(parse_lenient("vv1.2.3"), None);
+    }
+
+    #[test]
+    fn a_dev_prerelease_is_the_dev_identifier_first() {
+        assert!(is_dev_prerelease(&tag(DEV).version));
+        assert!(is_dev_prerelease(&tag("v0.0.222-dev.unknown").version));
+        assert!(!is_dev_prerelease(&tag("v0.0.222-rc.1").version));
+        assert!(!is_dev_prerelease(&tag("v0.0.222-devel.1").version));
+        assert!(!is_dev_prerelease(&tag("v0.0.222").version));
     }
 
     #[test]
