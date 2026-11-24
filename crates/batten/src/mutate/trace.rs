@@ -726,6 +726,26 @@ mod tests {
         out
     }
 
+    // Fails by: a Linux host with `strace` on `PATH` answered no tracer (the
+    // platform test inverted), or a host without one answered one. The answer
+    // is computed from what this host has, never skipped, so a host with no
+    // `strace` or a run already under a tracer still asserts it (CLOUD-2789).
+    #[test]
+    fn a_linux_host_untraced_with_strace_on_path_has_a_tracer() {
+        let on_path = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("strace"))
+                .find(|candidate| candidate.is_file())
+                .map(|found| found.to_string_lossy().into_owned())
+        });
+        let expected = if cfg!(target_os = "linux") && !super::traced_already() {
+            on_path
+        } else {
+            None
+        };
+        assert_eq!(super::tracer(), expected);
+    }
+
     // Fails by: a zero `TracerPid` read as a tracer, a set one read as none,
     // or a status with no such line read as traced.
     #[test]

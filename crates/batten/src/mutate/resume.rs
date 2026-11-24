@@ -1723,6 +1723,27 @@ mod tests {
         }
     }
 
+    /// Fails by: a passing case's note never written (`note_ran` emptied), so
+    /// a seed over the run's tree keys nothing; or written under another name,
+    /// tree or argv than [`key_ran_passes`] reads back (CLOUD-2789).
+    #[test]
+    fn a_passing_case_notes_the_tree_its_run_started_on() {
+        let state = crate::scratch::scratch("test-run-note-ran");
+        std::fs::write(state.join(RUN), "tree-1").unwrap();
+        let program = "/t/deps/batten-0123";
+        let binary = super::super::cover::binary_id(program, &std::env::current_dir().unwrap());
+        assert!(
+            !binary.is_empty(),
+            "the premise: a case runs in its package's directory, which names a binary"
+        );
+        let test: Vec<String> = [program, "--exact", "a"].map(str::to_owned).to_vec();
+        note_ran(&state, program, &test);
+        assert_eq!(
+            std::fs::read_to_string(state.join(RAN).join(expect_name("a", &binary))).unwrap(),
+            "tree-1\n--exact\x1fa"
+        );
+    }
+
     /// Fails by: a case keyed whose run passed it over another tree, one whose
     /// run left no note keyed, or the count of keyed passes misreported.
     #[test]
