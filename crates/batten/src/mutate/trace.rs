@@ -166,6 +166,14 @@ const TWO_PATHS: [&str; 7] = [
     "symlinkat",
 ];
 
+/// The syscalls whose FIRST quoted argument is a link's content, not a path
+/// (CLOUD-2789): `symlink(target, linkpath)` stores `target` as text and never
+/// resolves it, so only `linkpath` is touched. Read as a path, gix's capability
+/// probe, `symlink("dangling", "<git dir>/__file_link…")`, wrote `dangling`
+/// against the prober's working directory, a file in no tree, and refused
+/// `test-replay` and `perf-gate` (#1276).
+const LINK_CONTENT: [&str; 2] = ["symlink", "symlinkat"];
+
 /// The open flags that make an open a write.
 const WRITE_FLAGS: [&str; 4] = ["O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC"];
 
@@ -244,10 +252,12 @@ fn walk(trace: &str, cwd: Option<&Path>, second: bool) -> Option<Vec<(PathBuf, A
             if library_lookup(&argument, line) {
                 continue;
             }
-            out.push((
-                resolve(&argument, &line[open + 1..open + quote], cwd)?,
-                access,
-            ));
+            if !LINK_CONTENT.contains(&syscall(line)) {
+                out.push((
+                    resolve(&argument, &line[open + 1..open + quote], cwd)?,
+                    access,
+                ));
+            }
             if second
                 && TWO_PATHS.contains(&syscall(line))
                 && let Some(next) = after.find('"')
@@ -957,6 +967,29 @@ mod tests {
                 accessed(&[line]),
                 vec![(PathBuf::from("/repo/a"), Write)],
                 "{line}"
+            );
+        }
+    }
+
+    // Fails by: a symlink's target text read as a path (CLOUD-2789) — gix's
+    // probe `symlink("dangling", …)` then writes `/repo/dangling`, which no
+    // process touched — or its link path no longer read as the one write.
+    #[test]
+    fn a_symlinks_target_is_its_content_not_a_path() {
+        use super::Access::Write;
+        for line in [
+            "7     symlink(\"dangling\", \"/repo/.git/__file_link1\") = 0",
+            "7     symlinkat(\"dangling\", AT_FDCWD</repo>, \".git/__file_link1\") = 0",
+        ] {
+            assert_eq!(
+                accessed(&[line]),
+                vec![(PathBuf::from("/repo/.git/__file_link1"), Write)],
+                "{line}"
+            );
+            assert_eq!(
+                super::touched(&whole(&[line]), None).unwrap(),
+                vec![PathBuf::from("/bin/sh")],
+                "the target text is no path the reach reader keys on: {line}"
             );
         }
     }
