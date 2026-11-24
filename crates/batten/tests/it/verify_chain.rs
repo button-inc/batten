@@ -370,9 +370,11 @@ fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
         tier_one < tier_two && tier_two < suite,
         "seconds, then minutes, then the suite: {gated:?}"
     );
+    // `test:traced` (63f961882) is CI's traced test branches, run where the
+    // suite runs, so it is the suite's tier too.
     assert_eq!(
         members(&gated[suite]),
-        ["verify:ci-suite", "verify:ci-slow-needed"],
+        ["verify:ci-suite", "verify:ci-slow-needed", "test:traced"],
         "the suite is its own tier: {gated:?}"
     );
     assert!(
@@ -551,9 +553,91 @@ fn the_commit_range_and_the_trusted_base_are_the_laps_own() {
         steps("verify:config-lint"),
         vec!["mise run config-lint".to_owned()]
     );
+    // THE GATE SET EXPORTS NO RANGE OR BASE TO EVERY STEP: its `env` is the
+    // engine it built (CLOUD-2924) and nothing else, so no `BASE_SHA`,
+    // `HEAD_SHA` or `CONFIG_LINT_BASE` reaches every step. The dist leg's
+    // profile is `dist:lap`'s own.
+    let verify_gated = task("verify:gated");
+    let keys: Vec<&str> = verify_gated
+        .get("env")
+        .and_then(toml::Value::as_table)
+        .map(|env| env.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    assert_eq!(
+        keys,
+        ["BATTEN_BIN"],
+        "the gate set itself exports nothing a step did not see before but the engine"
+    );
+}
+
+/// HK'S STEPS RUN THE ENGINE `BATTEN_BIN` NAMES TOO (CLOUD-2924). Tier 2
+/// reaches `hk.pkl`'s `check` strings through `ci:checks`, so a step spelling
+/// `cargo run -p batten` itself queues on cargo's lock beside every sibling
+/// build exactly as a `{{vars.batten}}` entry did. Each spells the engine as
+/// `${BATTEN_BIN:-cargo run --quiet -p batten --}`: the binary `verify:gated`
+/// built, with `vars.batten`'s own fallback where nothing set it.
+///
+/// Fails by: any `check` that still spells `cargo run --quiet -p batten --`
+/// bare.
+#[test]
+fn every_hk_step_runs_the_named_engine() {
+    let hk = std::fs::read_to_string(common::at_root("hk.pkl")).expect("the hook config");
+    let engine = "cargo run --quiet -p batten --";
+    let named = format!("${{BATTEN_BIN:-{engine}}}");
+    let mut sites = 0;
+    for (index, line) in hk.lines().enumerate() {
+        let code = line.trim_start();
+        if code.starts_with("//") || !code.contains(engine) {
+            continue;
+        }
+        sites += 1;
+        assert!(
+            code.contains(&named),
+            "hk.pkl:{} spells the engine bare, so it waits on cargo's lock: {code}",
+            index + 1
+        );
+    }
     assert!(
-        task("verify:gated").get("env").is_none(),
-        "the gate set itself exports nothing a step did not see before"
+        sites > 0,
+        "hk.pkl runs the engine somewhere, so this case has a subject"
+    );
+}
+
+/// THE GATE SET RUNS THE ENGINE IT BUILT FIRST (CLOUD-2924): `build:debug`
+/// follows `tree-clean` at the head of the body, `BATTEN_BIN` names the binary
+/// it writes, and the build is pinned to that directory. So every `step run` a
+/// tier reaches renders `{{vars.batten}}` to this tree's engine rather than a
+/// `cargo run` per step, whatever `BATTEN_BIN` the caller of `verify` set or
+/// left unset; and `tree-clean`, the one entry ahead of the build, does not
+/// read `BATTEN_BIN` at all.
+#[test]
+fn the_gate_set_runs_the_engine_it_built_first() {
+    let gated = steps("verify:gated");
+    assert_eq!(
+        gated[..2],
+        ["mise run tree-clean", "mise run build:debug"],
+        "the engine is built before anything after tree-clean runs it"
+    );
+    assert!(
+        steps("tree-clean")
+            .iter()
+            .all(|step| !step.contains("vars.batten")),
+        "tree-clean runs before the build, so it names no BATTEN_BIN engine"
+    );
+    let target = env_of("build:debug", "CARGO_TARGET_DIR");
+    assert_eq!(
+        env_of("verify:gated", "BATTEN_BIN"),
+        format!("{target}/debug/batten"),
+        "BATTEN_BIN names the binary build:debug writes"
+    );
+    assert_eq!(
+        target, "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}",
+        "the build is pinned to the target dir BATTEN_BIN is built from"
+    );
+    assert_eq!(
+        steps("build:debug"),
+        ["cargo build --quiet -p batten --bin batten"],
+        "the dev-profile build of the one batten binary"
     );
 }
 

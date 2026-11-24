@@ -2974,9 +2974,18 @@ description = "cargo-deny: licenses, advisories, sources"
 run = "{{vars.batten}} step run deny -- cargo deny check"
 
 [tasks."build:debug"]
+#MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
+#MUTANT engine-unpinned|s@^env = { CARGO_TARGET_DIR = .*$@@|the_gate_set_runs_the_engine_it_built_first
+#MUTANT engine-profile-moved|s@ --bin batten"$@ --bin batten --release"@|the_gate_set_runs_the_engine_it_built_first
 description = "Build the tree's engine once, the binary `verify:gated` names in `BATTEN_BIN` (CLOUD-2924)"
 # `cargo run` per gate re-fingerprinted the engine under cargo's lock on every
 # step, hit or miss; one build up front lets every later step start at once.
+#
+# THE TARGET DIR IS PINNED to the expression `BATTEN_BIN` is built from, so a
+# user-level `build.target-dir` or `CARGO_BUILD_TARGET_DIR` cannot send the
+# build somewhere `BATTEN_BIN` does not name: cargo reads `CARGO_TARGET_DIR`
+# ahead of both, and an argv entry has no shell to read cargo's path back.
+env = { CARGO_TARGET_DIR = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}" }
 run = "cargo build --quiet -p batten --bin batten"
 
 [tasks."build:release"]
@@ -4514,9 +4523,22 @@ run = "{{vars.batten}} release install"
 description = "Effect: build the release binary for a target and stage its archive in dist/, printing archive= and binary= pointers"
 run = "cargo run --quiet --locked -p batten -- dist"
 
+[tasks."dist:lap"]
+description = "The dist leg at the lap's cost: `dist` for this host with the dist profile's LTO and codegen overridden (CLOUD-2789)"
+# THE PROFILE IS THIS TASK'S, NOT THE GATE SET'S: only `--profile dist` reads
+# these, so they are scoped to the one leg that builds it rather than exported
+# to every step `verify:gated` runs.
+env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "256", CARGO_PROFILE_DIST_OPT_LEVEL = "0", CARGO_PROFILE_DIST_INCREMENTAL = "true" }
+run = "mise run dist {{vars.dist_host}} --build-tool cargo-dist"
+
 [tasks."tree-clean"]
 description = "Gate: the working tree is the bytes at HEAD, so a receipt keyed to HEAD names what was actually validated"
-run = "{{vars.batten}} receipt clean"
+# `cargo run`, NOT `{{vars.batten}}` (CLOUD-2924): `verify:gated` runs this as
+# its first body entry, before `build:debug` writes the binary its `env` names
+# in `BATTEN_BIN`, so through `{{vars.batten}}` it would run a stale engine on a
+# warm clone and a missing one on a cold clone. It runs alone, so it waits on
+# no sibling build.
+run = "cargo run --quiet -p batten -- receipt clean"
 
 [tasks."verified"]
 description = "Gate: is HEAD verified? Answers from the receipts, so no shell idiom can mask the verdict"
@@ -4913,6 +4935,9 @@ run = [
 # which drive the verb the way `ci.yml` calls it.
 
 [tasks."verify:gated"]
+#MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
+#MUTANT engine-unbuilt|s@^  "mise run build:debug",$@@|the_gate_set_runs_the_engine_it_built_first
+#MUTANT engine-unnamed|s@^env = { BATTEN_BIN = "[^"]*" }$@@|the_gate_set_runs_the_engine_it_built_first
 description = "Every gate verify runs, and the receipt — invoked through `verify`, after the claim and linearity questions"
 # Split out of `[tasks.verify]` for CLOUD-407, when `verify` was a mapper that
 # flattened this task's code to 1. Nothing flattens it now (CLOUD-843): a gate
@@ -4977,18 +5002,17 @@ description = "Every gate verify runs, and the receipt — invoked through `veri
 # before the body, so a mistyped commit subject or a config-lint error was
 # reported only after the full suite and three cross builds. They moved into the
 # body's one fan, below, behind the cheap gates.
-depends = ["tree-clean"]
-# THE DIST LEG AT THE LAP'S COST (CLOUD-2789), declared here rather than as a
-# `VAR=… mise run dist` prefix, which is shell form. Only `--profile dist`
-# reads these, so they reach the dist entry below and no other gate.
 #
-# THE ENGINE IS BUILT ONCE, THEN NAMED (CLOUD-2924): `build:debug` heads the
-# body, and `BATTEN_BIN` points every child `mise run` at its binary, whose
-# `{{vars.batten}}` then renders to that path. Without it each of the tiers'
-# `step run` entries was `cargo run -p batten`, which takes cargo's lock and
-# fingerprints the engine before it even looks up its receipt, so a step that
-# hit still queued behind every sibling build.
-env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "256", CARGO_PROFILE_DIST_OPT_LEVEL = "0", CARGO_PROFILE_DIST_INCREMENTAL = "true", BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}/debug/batten" }
+# THE ENGINE IS BUILT ONCE, THEN NAMED (CLOUD-2924): `build:debug` is the
+# body's second entry, and `BATTEN_BIN` points every later child `mise run` at
+# the binary it writes. The one entry ahead of it, `tree-clean`, runs
+# `cargo run` itself rather than `{{vars.batten}}`, so it never reads a
+# `BATTEN_BIN` that names a binary not yet built. Without this each of the
+# tiers' `step run` entries was `cargo run -p batten`, which takes cargo's lock
+# and fingerprints the engine before it even looks up its receipt, so a step
+# that hit still queued behind every sibling build.
+depends = ["tree-clean"]
+env = { BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}/debug/batten" }
 # THE FAN (operator ruling, 2026-11-11). Every independent gate runs in ONE
 # `mise run --continue-on-error` invocation, listed cheapest first: mise starts
 # them in that order within its job limit, so the seconds-cheap gates report
@@ -5081,10 +5105,8 @@ env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "25
 # verify-4` and the `gate:*` rows together. Until then tier 2 keeps the graph's
 # fan width with `--jobs 2` and tier 3 its one-at-a-time with `--jobs 1`.
 run = [
-  # FIRST, so `BATTEN_BIN` (this task's `env`) names this tree's engine before
-  # any entry runs it (CLOUD-2924).
-  "mise run build:debug",
   "mise run tree-clean",
+  "mise run build:debug",
   "mise run record-verdicts",
   "mise run evaluator-io-record",
   "mise run signing-posture-record",
@@ -5100,9 +5122,9 @@ run = [
   # codegen unit cost 878 s cold here, every lap. What this leg proves (cargo-dist
   # builds through `cargo auditable`, the archive stages, the inventory reads
   # the binary) holds at `opt-level = 0`, so the profile is overridden for this
-  # entry alone, through this task's `env`: 145 s cold, and the same 318
+  # entry alone, through `dist:lap`'s own `env`: 145 s cold, and the same 318
   # packages inventoried.
-  "mise run dist {{vars.dist_host}} --build-tool cargo-dist",
+  "mise run dist:lap",
   "mise run sbom-binary target/{{vars.dist_host}}/dist/batten {{vars.dist_host}}",
   "mise run sbom-binary-check",
   "mise run --continue-on-error --jobs 1 verify:ci-suite ::: verify:ci-slow-needed ::: test:traced",
