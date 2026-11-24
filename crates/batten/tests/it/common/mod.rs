@@ -777,7 +777,7 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
 ///
 /// The test binary is ~140 MiB and several suites want it elsewhere, so copying
 /// would write most of a gigabyte per run — and those cases carry
-/// `//MUTANT-SUITE` rows, so a sweep replays them. A hard link is enough: the
+/// `MUTANT-SUITE` rows, so a sweep replays them. A hard link is enough: the
 /// kernel reports the path it was exec'd by (`/proc/self/exe`), which is what a
 /// case placing it inside a checkout needs, and nothing writes THROUGH it. A
 /// symlink would not do, because the exe path resolves to its target. A
