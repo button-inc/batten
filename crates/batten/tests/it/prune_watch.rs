@@ -1441,6 +1441,30 @@ fn a_workspace_wrapper_between_is_run_with_the_compiler() {
     assert!(bin.join("wrapped").is_file(), "the workspace wrapper ran");
     let seen = std::fs::read_to_string(bin.join("ran")).unwrap_or_default();
     assert_eq!(seen.trim(), "-vV", "the compiler's own argv");
+    // A BARE NAME, as `RUSTC_WORKSPACE_WRAPPER=sccache` reaches it: no path
+    // separator, so only the environment naming it marks it a wrapper.
+    std::fs::remove_file(bin.join("wrapped")).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let bare = common::batten()
+        .current_dir(&dir)
+        .arg("cargo-auditable")
+        .arg(&rustc)
+        .args(["-vV"])
+        .env("PATH", path)
+        .env("RUSTC_WORKSPACE_WRAPPER", "cargo-auditable")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_eq!(bare.status.code(), Some(7), "{}", common::stderr(&bare));
+    assert!(bin.join("wrapped").is_file(), "the bare-named wrapper ran");
 }
 
 /// The probe `mise.toml` sets `RUSTC_WRAPPER` from: this binary answers with
