@@ -139,19 +139,47 @@ fn release(repo: &Path, gate: &Path, line: &str) {
     panic!("the handler never opened the gate: {:?}", setup_phase(repo));
 }
 
-/// Whether `batten task alive` names the setup task as running.
+/// Whether `batten task alive` names the setup task as running, and its
+/// process has not exited.
+///
+/// AN EXITED PROCESS NOBODY REAPED STILL ANSWERS `kill -0` (CLOUD-2789): the
+/// door's detached task outlives the door, so its parent is whatever adopts
+/// it, and where that never reaps, a task that exited without pushing a phase
+/// read as running until [`SETTLE`]. Its `/proc` state says it exited.
 fn setup_alive(repo: &Path) -> bool {
     let alive = common::batten()
         .current_dir(repo)
         .args(["task", "alive"])
         .streamed_output()
         .expect("the binary runs");
-    stdout(&alive).contains("session-setup")
+    stdout(&alive).contains("session-setup") && !setup_exited(repo)
+}
+
+/// Whether the setup task's registered process has exited and waits to be
+/// reaped: state `Z` in `/proc/<pid>/stat`, read past the parenthesised name.
+/// Off Linux there is no `/proc` to read, and nothing is read as exited.
+fn setup_exited(repo: &Path) -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    setup_field(repo, "pid")
+        .and_then(|pid| std::fs::read_to_string(format!("/proc/{pid}/stat")).ok())
+        .is_some_and(|stat| {
+            stat.rsplit_once(')')
+                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+        })
 }
 
 /// The setup task's current phase, or `None` where nothing registered it.
 pub(crate) fn setup_phase(repo: &Path) -> Option<String> {
+    setup_field(repo, "phase")
+}
+
+/// One field of the setup task's registry record, or `None` where nothing
+/// registered it.
+fn setup_field(repo: &Path, field: &str) -> Option<String> {
     let dir = repo.join(".git/batten-tasks");
+    let prefix = format!("{field}: ");
     std::fs::read_dir(dir)
         .ok()?
         .filter_map(Result::ok)
@@ -159,7 +187,7 @@ pub(crate) fn setup_phase(repo: &Path) -> Option<String> {
         .find(|body| body.lines().any(|line| line == "task: session-setup"))
         .and_then(|body| {
             body.lines()
-                .find_map(|line| line.strip_prefix("phase: "))
+                .find_map(|line| line.strip_prefix(prefix.as_str()))
                 .map(str::to_owned)
         })
 }
