@@ -806,8 +806,14 @@ fn token_paths(body: &str) -> Vec<(usize, Vec<String>, usize)> {
     };
     let mut found = Vec::new();
     let mut at = 0;
-    while at < tokens.len() {
-        let (kind, text, start, end) = &tokens[at];
+    // BOUNDED BY THE TOKEN COUNT (CLOUD-2789): every pass moves `at` forward
+    // by at least one token, so `tokens.len()` passes reach the end. A change
+    // that stops it advancing then ends the scan with a wrong answer a case
+    // can see, rather than spinning until the suite's timeout.
+    for _ in 0..tokens.len() {
+        let Some((kind, text, start, end)) = tokens.get(at) else {
+            break;
+        };
         let glued = at > 0 && {
             let (prev_kind, prev_text, _, prev_end) = &tokens[at - 1];
             *prev_end == *start

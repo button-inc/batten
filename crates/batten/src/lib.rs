@@ -33352,6 +33352,25 @@ mod mutation_markers;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    /// Fails by: the decided-mechanism line said for a claim that recorded
+    /// none, as though saying were reason enough to report a count of zero.
+    #[test]
+    fn a_claim_that_records_no_mechanism_says_nothing() {
+        let repo = crate::scratch::scratch("decided-none");
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        let mut out = Vec::new();
+        super::record_decided_mechanisms(
+            &repo,
+            "main",
+            &[],
+            true,
+            output::Mode::default(),
+            &mut out,
+        )
+        .unwrap();
+        assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
+    }
+
     /// Fails by: a subject naming no finding read as naming one under another rule.
     #[test]
     fn a_subject_naming_no_finding_falls_back_to_the_head() {

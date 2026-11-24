@@ -1935,6 +1935,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: an incremental merge marking a shard short of the newline that
+    /// ends its last whole line, so the next merge re-reads a byte it already
+    /// folded rather than starting where the fold stopped.
+    #[test]
+    fn an_incremental_merge_marks_a_shard_through_its_last_newline() {
+        let dir = store("mark-through-newline");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        append(&dir, "shard-a", &entry_for("TODO", Disposition::Acted)).unwrap();
+        let sizes = shard_sizes(&dir);
+        // The premise: one shard, ending on the newline its one entry wrote.
+        assert_eq!(sizes.len(), 1, "{sizes:?}");
+        let Merge::Merged { format, .. } = merge(&dir).unwrap() else {
+            panic!("the lock is free");
+        };
+        assert_eq!(format.folded, sizes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Fails by: a merge reporting a count other than the entries it applied.
     #[test]
     fn a_merge_counts_every_entry_it_applied() {

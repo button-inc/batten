@@ -1398,6 +1398,8 @@ fn the_defect_a_mutation_the_suite_does_not_catch_fails() {
     );
     // A survivor is no row defect: the row applied, and named one case.
     assert!(!err.contains("prove nothing as written"), "{err}");
+    // Nor a gate-level finding: the one gate declared the row that was judged.
+    assert!(!err.contains("declare no row"), "{err}");
 }
 
 #[cfg(unix)]
