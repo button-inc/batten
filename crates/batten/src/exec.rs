@@ -4177,9 +4177,15 @@ mod tests {
             return;
         }
         let pid = Fifo::at(root.join("pid"));
-        let script = format!("{}; while :; do :; done", pid.write("$$"));
-        let answered = detached_in(Path::new("/bin/sh"), &["-c".to_owned(), script], &[], &root)
-            .expect("the child starts");
+        let spinner = root.join("spinner");
+        crate::exec::stub_at(
+            &spinner,
+            &serde_json::json!([{ "steps": [
+                { "write": [pid.path.display().to_string(), "{pid}\n"] },
+                { "sleep": 600_000 },
+            ] }]),
+        );
+        let answered = detached_in(&spinner, &[], &[], &root).expect("the child starts");
         // ASKED OF THE KERNEL BEFORE THE PIPE IS READ: a pid that names no
         // child started here answers at once, where waiting on the pipe for a
         // child that never ran would hang the case to its bound.
