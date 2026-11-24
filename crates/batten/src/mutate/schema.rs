@@ -2970,7 +2970,8 @@ fn record(test: &[String]) -> anyhow::Result<u8> {
     let base = std::path::PathBuf::from(
         std::env::var_os(REACH).ok_or_else(|| anyhow::anyhow!("no reach directory"))?,
     );
-    record_into(&base, test)
+    let tree = std::env::var_os(TREE_ENV).map(std::path::PathBuf::from);
+    record_into(&base, test, tree)
 }
 
 /// Record one case's reach under `base`, or nothing when a run over the same
@@ -2982,7 +2983,15 @@ fn record(test: &[String]) -> anyhow::Result<u8> {
 /// finished and runs only the rest. A case that failed, or never finished, runs
 /// again. The skip is here rather than in a filter, so the resumed run is the
 /// same single invocation and no list of names meets the argument limit.
-fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
+///
+/// `tree` is the schema tree the recorder names ([`TREE_ENV`]), taken by the
+/// caller so a case under test chooses it rather than inheriting the
+/// recorder's own.
+fn record_into(
+    base: &std::path::Path,
+    test: &[String],
+    tree: Option<std::path::PathBuf>,
+) -> anyhow::Result<u8> {
     let (program, rest) = test
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("no case to run"))?;
@@ -3009,7 +3018,6 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     // non-Rust file. The tree the paths are taken against comes from the
     // recorder, which knows it; a case run outside one is not traced. Every
     // case not traced says why in its record ([`Untraced`]).
-    let tree = std::env::var_os(TREE_ENV).map(std::path::PathBuf::from);
     let strace = trace::Host::here().tracer();
     let mut why_untraced =
         untraced_reason(tree.is_some(), trace::traced_already(), strace.is_some());
@@ -8080,7 +8088,7 @@ mod tests {
         let key = blake3::hash(test.join("\u{1f}").as_bytes()).to_hex()[..16].to_owned();
         std::fs::create_dir_all(base.join(&key)).unwrap();
         std::fs::write(base.join(&key).join(DONE), "0").unwrap();
-        assert_eq!(record_into(&base, &test).unwrap(), 0, "skipped");
+        assert_eq!(record_into(&base, &test, None).unwrap(), 0, "skipped");
         assert!(
             base.join(&key).join(SKIPPED).is_file(),
             "a skip is marked, so its run's time is never sealed"
@@ -8089,7 +8097,10 @@ mod tests {
         // Run again either way the host runs it: untraced, the missing
         // program is a spawn error; under a tracer, the tracer's own failing
         // exit. Only the skip answers a clean 0.
-        assert!(!matches!(record_into(&base, &test), Ok(0)), "run again");
+        assert!(
+            !matches!(record_into(&base, &test, None), Ok(0)),
+            "run again"
+        );
         assert!(
             !base.join(&key).join(SKIPPED).exists(),
             "a case that ran is not marked skipped"
@@ -8933,8 +8944,11 @@ mod tests {
     /// left is not a reason to run it twice. The case here leaves the mark
     /// and counts its runs outside its record, which the re-run clears.
     ///
-    /// No tracer runs here on any host: this process is under the recorder's
-    /// own tracer, or `TREE_ENV` is unset, and either leaves the case untraced.
+    /// No tracer runs here on any host: the case is recorded with no tree, so
+    /// it is untraced whatever this process inherits. Read from `TREE_ENV`,
+    /// the recorder's untraced re-run of this very case set it with no tracer
+    /// above, traced the inner case, and ran it twice (baseline-red on
+    /// #1276's shard 7/8, CLOUD-2789).
     ///
     /// Fails by: the re-run taken on the mark alone (`&&` read as `||`), so an
     /// untraced case runs twice and its untraced reason is overwritten.
@@ -8948,7 +8962,7 @@ mod tests {
             trace::REFUSED
         );
         let test = [String::from("sh"), String::from("-c"), script];
-        assert_eq!(record_into(&base, &test).unwrap(), 0);
+        assert_eq!(record_into(&base, &test, None).unwrap(), 0);
         assert_eq!(
             std::fs::read_to_string(&counter).unwrap().lines().count(),
             1,
