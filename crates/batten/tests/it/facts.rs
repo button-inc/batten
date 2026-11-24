@@ -39,8 +39,8 @@ use batten::facts::{
     GIT_INDEX, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_TAGS, GIT_WORKTREES,
     INSTALL_PENDING, INSTANT, INVOCATIONS, KEYS, LAND_LIVE, LANDING, LINES, Look, MINTED,
     PATHSPEC_STATUS, PINNED, PLAN, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED,
-    RED_HEAD, REVIEW, SHELL, SHELL_INTRODUCED, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS,
-    TOOL_VERDICT, TRACKED, TRAVERSALS, UNITS, USES, WAIVED,
+    RED_HEAD, REVIEW, SHELL, SHELL_INTRODUCED, STAGED, STATE, STATE_PUSH, STOP, SYMBOLS, Surface,
+    TASKS, TOOL_VERDICT, TRACKED, TRAVERSALS, UNITS, USES, WAIVED,
 };
 
 #[test]
@@ -172,6 +172,8 @@ fn every_fact_returns_its_stated_const() {
             Fact::InstallPending => INSTALL_PENDING,
             // CLOUD-2270. One record read and a stat per failed run.
             Fact::RedHead => RED_HEAD,
+            // CLOUD-2887. A stat walk of the named stores and the push's object walk.
+            Fact::StatePush => STATE_PUSH,
             // CLOUD-2684. One index and status read, only on a checkout/restore.
             Fact::PathspecStatus => PATHSPEC_STATUS,
             // CLOUD-2661. The target and a fixed count of literal members.
@@ -186,7 +188,8 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        53,
+        // CLOUD-2887 added `Fact::StatePush`.
+        54,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

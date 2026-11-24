@@ -2595,6 +2595,33 @@ look at again. Read each named failed job's log first; reading is what admits th
         }],
         patterns: &[],
     },
+    // CLOUD-2887: session state is private and its one destination is the state
+    // repo, so a push carrying a private store's bytes anywhere else is refused.
+    // The record is the `state-push` fact; its own bundle, so the row enabling
+    // it names the one class it raises.
+    Manifest {
+        name: "state-private",
+        version: semver::Version::new(0, 1, 0),
+        suggested: false,
+        install: None,
+        modules: &[PresetModule {
+            scope: RuleScope::MediatedCall,
+            provider: None,
+            pointer: "<preset:state-private>/no-state-push.rego",
+            embedded_source: include_str!("policy/presets/state-private/no-state-push.rego"),
+        }],
+        verdicts: &[VendoredVerdict {
+            id: "path carry loose",
+            gloss: "a push would carry a private session store's bytes to a remote other than the state repo",
+            class: "Session state is private, and its one destination is the state repo named by \
+BATTEN_STATE_REPO. This push sends a path whose bytes equal a private store's file, or begin one \
+that is append-only. Take the path out of every commit the push sends, and send the bytes to the \
+state repo instead.",
+            routes: &[run("path carry first", "git reset --soft <base>")],
+            applicability: Applicability::Advice,
+        }],
+        patterns: &[],
+    },
     // EVERY GIT CALL BATTEN ALLOWS IS PUT TO NO ONE (CLOUD-2057). One module and
     // no verdicts: it never refuses, it only stops the host re-deciding a call
     // the engine already allowed. Destructive calls are left to the host.

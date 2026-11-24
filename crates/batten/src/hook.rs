@@ -6424,6 +6424,10 @@ pub struct Facts<'a> {
     /// shape (CLOUD-2270). Anything but `Is` projects `null`, which a module
     /// reads as "no push over this head owes a read".
     pub red_head: &'a crate::facts::Look<serde_json::Value>,
+    /// What a `git push` would carry of the private session stores, already
+    /// projected (CLOUD-2887). Anything but `Is` projects `null`, which a module
+    /// reads as "nothing to refuse".
+    pub state_push: &'a crate::facts::Look<serde_json::Value>,
     /// Each pathspec a checkout or restore names, with its status (CLOUD-2684).
     pub pathspec_status: &'a crate::facts::Look<serde_json::Value>,
     /// Whether this call's write authors shell, and by which arm (CLOUD-2335):
@@ -6492,6 +6496,8 @@ impl<'a> Facts<'a> {
             // Could-not-look, never "no red head": a caller that resolved
             // nothing has not read the branch's record.
             red_head: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never "carries nothing": nothing walked the push.
+            state_push: &crate::facts::Look::CouldNotLook,
             pathspec_status: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never "introduces nothing": nothing read the write.
             shell_introduced: &crate::facts::Look::CouldNotLook,
@@ -9411,6 +9417,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             ),
             crate::facts::Fact::RedHead => Some(match facts.red_head {
                 crate::facts::Look::Is(record) => record.clone(),
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+            }),
+            crate::facts::Fact::StatePush => Some(match facts.state_push {
+                crate::facts::Look::Is(document) => document.clone(),
                 crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
                     serde_json::Value::Null
                 }
@@ -13698,6 +13710,28 @@ pub(crate) fn pushes_git(envelope: &Envelope) -> bool {
     })
 }
 
+/// Each `git push` this call makes, as git's own options before the verb and
+/// the push's arguments after it (CLOUD-2887), read off the same resolved argv
+/// [`pushes_git`] asks, so the two agree on which programs push.
+pub(crate) fn git_pushes(envelope: &Envelope) -> Vec<(Vec<String>, Vec<String>)> {
+    program_reach(&envelope.command)
+        .iter()
+        .filter(|entry| entry.get("name").and_then(serde_json::Value::as_str) == Some("git"))
+        .filter_map(|entry| {
+            let arguments: Vec<&str> = entry
+                .get("arguments")
+                .and_then(serde_json::Value::as_array)
+                .map(|list| list.iter().filter_map(serde_json::Value::as_str).collect())
+                .unwrap_or_default();
+            let verb = subcommand_index(&arguments, &GIT_VALUE_OPTIONS)?;
+            (arguments[verb] == "push").then(|| {
+                let owned = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
+                (owned(&arguments[..verb]), owned(&arguments[verb + 1..]))
+            })
+        })
+        .collect()
+}
+
 /// The target of a `git reset --hard` in this call, if it makes one (CLOUD-462).
 ///
 /// **Read off `programs`, which is the argv the boundary already resolved** — so
@@ -14695,6 +14729,7 @@ mod tests {
                 pinned: &crate::facts::Look::CouldNotLook,
                 dispatch: &crate::facts::Look::CouldNotLook,
                 red_head: &crate::facts::Look::CouldNotLook,
+                state_push: &crate::facts::Look::CouldNotLook,
                 pathspec_status: &crate::facts::Look::CouldNotLook,
                 shell_introduced: &crate::facts::Look::CouldNotLook,
             },

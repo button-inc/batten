@@ -12093,6 +12093,9 @@ gates = [
   "shell-write-advisory",
   "skill-frontmatter-complete",
   "spawn-widening",
+  # CLOUD-2887: the preset ships before its `[[rule]]` row (the pinned engine
+  # cannot load a row naming it), so this entry is what covers its directory.
+  "state-private",
   "stop-posture",
   "suite-subject-retirable",
   "task-substitution",

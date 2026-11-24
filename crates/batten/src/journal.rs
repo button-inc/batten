@@ -80,12 +80,12 @@ const LOCK_FILE: &str = "merge.lock";
 const PENDING_FILE: &str = "pending.jsonl";
 
 /// The journal directory under a bound store.
-fn journal_dir(store_dir: &Path) -> PathBuf {
+pub(crate) fn journal_dir(store_dir: &Path) -> PathBuf {
     store_dir.join(JOURNAL_DIR)
 }
 
 /// The directory holding one append file per writer.
-fn shards_dir(store_dir: &Path) -> PathBuf {
+pub(crate) fn shards_dir(store_dir: &Path) -> PathBuf {
     journal_dir(store_dir).join(SHARDS_DIR)
 }
 
@@ -907,7 +907,7 @@ fn write_pending(store_dir: &Path, pending: &[Entry]) -> Result<()> {
 }
 
 /// The merged log's path.
-fn merged_path(store_dir: &Path) -> PathBuf {
+pub(crate) fn merged_path(store_dir: &Path) -> PathBuf {
     journal_dir(store_dir).join(MERGED_FILE)
 }
 

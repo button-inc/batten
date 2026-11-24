@@ -752,6 +752,63 @@
           ],
           "type": "object"
         },
+        "state-push": {
+          "additionalProperties": false,
+          "description": "Fact::StatePush (CLOUD-2887) -- what a PreToolUse `git push` would carry of the private session stores, or null when the call is no push or the push could not be looked at. `remote` and `state_repo` are `<owner>/<name>` slugs, null when unresolved or unset; `carried` each pushed blob whose bytes equal a store file (`equal`) or begin an append-only one (`prefix`), by the first path naming it, its store and its size. Every match on every remote, size 0 included: the exemption and the size rule are the module's. Pointers only, never a byte.",
+          "properties": {
+            "carried": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "arm": {
+                    "enum": [
+                      "equal",
+                      "prefix"
+                    ]
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "integer"
+                  },
+                  "store": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "store",
+                  "arm",
+                  "size"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "remote": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state_repo": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "remote",
+            "state_repo",
+            "carried"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "stop": {
           "description": "Fact::Stop -- the end-of-turn facts."
         },

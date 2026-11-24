@@ -414,6 +414,12 @@ receipt store could not be located.
 `input.facts["red-head"]` is the current branch's red-head record a red landing
 stop wrote — each failed run with whether its log was read, and each check still
 running — or `null` when the branch has none (CLOUD-2270).
+`input.facts["state-push"]` is a PreToolUse `git push`'s `{remote, state_repo,
+carried}`: the remote and `BATTEN_STATE_REPO` as slugs, and each pushed blob
+whose bytes equal a private store's file or begin an append-only one, by path,
+store, arm and size — every match on every remote, so the module owns the
+exemption and the size rule; `null` when the call is no push or the push could
+not be looked at (CLOUD-2887).
 `input.facts["install-pending"]` is the session setup task's `{state, task,
 pid, pending}`: its state from the task registry, and the call's
 command-position programs that resolve to nothing or under the environment

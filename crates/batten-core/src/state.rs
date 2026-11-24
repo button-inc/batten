@@ -197,7 +197,13 @@ pub fn derive_repo_name(repo_root: &Path) -> Result<String> {
 /// point is to be readable from a cwd that resolves no checkout.
 fn session_authority_file(state: &Path, session: &str) -> PathBuf {
     let key = crate::identity::store_fingerprint(&[session]).to_hex();
-    state.join("sessions").join(key).join("authority")
+    sessions_dir(state).join(key).join("authority")
+}
+
+/// The per-session records under the state root `state` (CLOUD-2887).
+#[must_use]
+pub fn sessions_dir(state: &Path) -> PathBuf {
+    state.join("sessions")
 }
 
 /// Record `root` as the authority this session last resolved.

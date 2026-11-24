@@ -709,6 +709,10 @@ pub(crate) fn batten() -> Batten {
         // handed it to every case, and 17 that read a child's stderr found a
         // `disk-call` line before the one they assert. A case tracing sets it.
         "BATTEN_DISK_TRACE",
+        // NOR THE STATE REPO (CLOUD-2887): a container exporting it handed every
+        // case its own destination, so a push case would compare against that
+        // slug instead of the one it names. A case that means one sets it.
+        batten::session::STATE_REPO_ENV,
         // NOR THE SCHEMA SWEEP'S RECORDER (#1276): the reach baseline runs this
         // suite with both exported, so every `batten` a case started recorded
         // into the OUTER sweep's reach and read its tree. The cases driving a

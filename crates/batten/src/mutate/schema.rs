@@ -4996,6 +4996,16 @@ fn mirror_state(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
         .join("schema"))
 }
 
+/// The sweep's verdict journal for the checkout at `root`: append-only, and
+/// private session state (CLOUD-2887), so the push gate reads it here.
+///
+/// # Errors
+///
+/// The repository state directory cannot be resolved.
+pub(crate) fn verdicts_path(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    Ok(mirror_state(root)?.join("verdicts"))
+}
+
 /// The file under the mirror's state directory a sweep holds ([`hold`]).
 const LOCK: &str = "lock";
 
@@ -5133,7 +5143,7 @@ pub fn sweep(
     // AN ERROR LOG IS THIS SWEEP'S OR NOTHING: one left by a killed sweep
     // would read as a run of this one erring.
     let _ = std::fs::remove_dir_all(state.join("errors"));
-    let cache_path = state.join("verdicts");
+    let cache_path = verdicts_path(live)?;
     // NOT UNDER CI (CLOUD-2850), for `step`'s "Local only" reason: CI's job is
     // to confirm independently, so a journal a runner came by answers nothing.
     // The sweep still appends what it decides; it reads none of it back.

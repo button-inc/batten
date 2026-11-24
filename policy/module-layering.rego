@@ -81,6 +81,9 @@ declared_modules := {
 	# `session_watch` (CLOUD-2826): a parent's dispatched children, read through
 	# the declared session toolbox.
 	"session_watch",
+	# `state_push` (CLOUD-2887): the push gate's fact, over the stores' own
+	# path functions.
+	"state_push",
 	"register", "spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "trust_pin", "uses",
 	"verbs", "verdict", "waiver", "worktree",
 	# `brief`, `main` and `selfwrite` were absent from the first draft of this

@@ -839,6 +839,13 @@ pub enum Fact {
     /// A file read and one stat per failed run under `$GIT_DIR`. `null` when no
     /// record exists — the branch owes no push a read.
     RedHead,
+    /// What a `git push` would carry of the private session stores: each pushed
+    /// blob whose bytes equal a store file or begin an append-only one, with
+    /// the push's remote and `BATTEN_STATE_REPO` (CLOUD-2887).
+    ///
+    /// A stat walk of the named stores and an in-process object walk, only on
+    /// a push. `null` when the call is no push or it could not be looked at.
+    StatePush,
     /// Each pathspec a `git checkout`/`git restore` names, and whether it is
     /// literal, tracked and clean (CLOUD-2684).
     PathspecStatus,
@@ -1644,6 +1651,10 @@ pub const INSTALL_PENDING: Class = Class::new(Cost::Read, Surface::Hook);
 /// `$GIT_DIR` (CLOUD-2270). A read, asked of the mediated call it gates.
 pub const RED_HEAD: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::StatePush`] — a stat walk of the private stores and an object walk
+/// of the push (CLOUD-2887). A read, asked of the mediated push it gates.
+pub const STATE_PUSH: Class = Class::new(Cost::Read, Surface::Hook);
+
 /// [`Fact::PathspecStatus`]: one index and status read, only on a
 /// checkout or restore call (CLOUD-2684).
 pub const PATHSPEC_STATUS: Class = Class::new(Cost::Read, Surface::Hook);
@@ -1708,6 +1719,7 @@ impl Fact {
         Fact::LandLive,
         Fact::InstallPending,
         Fact::RedHead,
+        Fact::StatePush,
         Fact::PathspecStatus,
         Fact::Budgeted,
         Fact::ShellIntroduced,
@@ -1767,6 +1779,7 @@ impl Fact {
             Fact::LandLive => "land-live",
             Fact::InstallPending => "install-pending",
             Fact::RedHead => "red-head",
+            Fact::StatePush => "state-push",
             Fact::PathspecStatus => "pathspec-status",
             Fact::Budgeted => "budgeted",
             Fact::ShellIntroduced => "shell-introduced",
@@ -1834,6 +1847,7 @@ impl Fact {
             Fact::LandLive => LAND_LIVE,
             Fact::InstallPending => INSTALL_PENDING,
             Fact::RedHead => RED_HEAD,
+            Fact::StatePush => STATE_PUSH,
             Fact::PathspecStatus => PATHSPEC_STATUS,
             Fact::Budgeted => BUDGETED,
             Fact::ShellIntroduced => SHELL_INTRODUCED,
@@ -1931,6 +1945,7 @@ impl Fact {
             | Fact::LandLive
             | Fact::InstallPending
             | Fact::RedHead
+            | Fact::StatePush
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced
@@ -2116,6 +2131,7 @@ impl Fact {
             // CLOUD-2270. Hook-only: what a push over this head owes is a
             // question about the call, and a tree walk has none.
             | Fact::RedHead
+            | Fact::StatePush
             | Fact::PathspecStatus
             | Fact::Budgeted
             // CLOUD-2335. Hook-only for `Prospective`'s reason: what a write
@@ -2191,6 +2207,7 @@ impl Fact {
             | Fact::LandLive
             | Fact::InstallPending
             | Fact::RedHead
+            | Fact::StatePush
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced => Subject::Live,
@@ -2302,6 +2319,7 @@ impl Fact {
             | Fact::Extracted => Self::described_schema_fragment(self),
             Fact::Pinned => Self::pinned_schema_fragment(),
             Fact::RedHead => Self::red_head_schema_fragment(),
+            Fact::StatePush => Self::state_push_schema_fragment(),
             Fact::PathspecStatus => Self::pathspec_status_schema_fragment(),
             Fact::Budgeted => serde_json::json!({
                 "type": ["array", "null"],
@@ -2768,6 +2786,7 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::Pinned
             | Fact::RedHead
+            | Fact::StatePush
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced
@@ -2868,6 +2887,7 @@ impl Fact {
             | Fact::LandLive
             | Fact::InstallPending
             | Fact::RedHead
+            | Fact::StatePush
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced
@@ -2921,6 +2941,36 @@ impl Fact {
                 },
             },
             "required": ["pathspecs"],
+            "additionalProperties": false,
+        })
+    }
+
+    /// The schema fragment for [`Fact::StatePush`] (CLOUD-2887), stated so a
+    /// module walking `carried` must read the `null` a call that is no push,
+    /// or a push that could not be looked at, carries.
+    fn state_push_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::StatePush (CLOUD-2887) -- what a PreToolUse `git push` would carry of the private session stores, or null when the call is no push or the push could not be looked at. `remote` and `state_repo` are `<owner>/<name>` slugs, null when unresolved or unset; `carried` each pushed blob whose bytes equal a store file (`equal`) or begin an append-only one (`prefix`), by the first path naming it, its store and its size. Every match on every remote, size 0 included: the exemption and the size rule are the module's. Pointers only, never a byte.",
+            "properties": {
+                "remote": {"type": ["string", "null"]},
+                "state_repo": {"type": ["string", "null"]},
+                "carried": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "store": {"type": "string"},
+                            "arm": {"enum": ["equal", "prefix"]},
+                            "size": {"type": "integer"},
+                        },
+                        "required": ["path", "store", "arm", "size"],
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "required": ["remote", "state_repo", "carried"],
             "additionalProperties": false,
         })
     }
@@ -3090,6 +3140,7 @@ impl Fact {
             | Fact::Landing
             | Fact::DispatchBrief
             | Fact::RedHead
+            | Fact::StatePush
             | Fact::LandLive
             | Fact::InstallPending
             | Fact::PathspecStatus
@@ -3356,6 +3407,7 @@ impl Fact {
             | Fact::GitIndex
             | Fact::DispatchBrief
             | Fact::RedHead
+            | Fact::StatePush
             | Fact::LandLive
             | Fact::InstallPending
             | Fact::PathspecStatus
@@ -3429,6 +3481,7 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::Instant
             | Fact::RedHead
+            | Fact::StatePush
             | Fact::LandLive
             | Fact::InstallPending
             | Fact::PathspecStatus

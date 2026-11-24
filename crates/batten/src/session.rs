@@ -105,6 +105,19 @@ pub const SESSION_SCHEMA: u32 = 1;
 /// The host's id for the session this process serves.
 pub const SESSION_ENV: &str = "BATTEN_SESSION";
 
+/// The one repository session state may be pushed to, as `<owner>/<name>`
+/// (CLOUD-2717, CLOUD-2887). Unset or empty names none.
+pub const STATE_REPO_ENV: &str = "BATTEN_STATE_REPO";
+
+/// [`STATE_REPO_ENV`], trimmed; `None` when unset or empty.
+#[must_use]
+pub fn state_repo() -> Option<String> {
+    std::env::var(STATE_REPO_ENV)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
 /// The session a warm fork was forked from. Absent means "not a fork".
 pub const PARENT_ENV: &str = "BATTEN_SESSION_PARENT";
 
@@ -126,7 +139,7 @@ const SESSIONS_DIR: &str = "sessions";
 const MAX_LINEAGE: usize = 64;
 
 /// The sessions directory under a bound store.
-fn sessions_dir(store_dir: &Path) -> PathBuf {
+pub(crate) fn sessions_dir(store_dir: &Path) -> PathBuf {
     store_dir.join(SESSIONS_DIR)
 }
 

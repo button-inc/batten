@@ -221,6 +221,9 @@ pub mod tokens;
 pub mod session_setup;
 pub mod startup;
 pub use batten_core::state;
+/// The `state-push` fact: a push's blobs that are a private store's bytes
+/// (CLOUD-2887).
+mod state_push;
 /// The step cache (CLOUD-424): a step answered from its receipt when its exact
 /// declared inputs, arguments and tools already passed.
 pub mod step;
@@ -8943,7 +8946,7 @@ fn run_claim_check(
         json,
         overrides,
     } = *ask;
-    let receipts = git::git_dir(repo).ok().map(|dir| dir.join(RECEIPT_DIR));
+    let receipts = git::git_dir(repo).ok().map(|dir| minted::store_path(&dir));
     if adopt {
         let from = adopt_from;
         // No payload is read: adoption re-keys a claim that was already checked
@@ -9259,9 +9262,6 @@ fn claim_payloads(repo: &Path, issue: Option<&str>) -> Result<Vec<claim::Issue>>
     }
     values.iter().map(claim::Issue::parse).collect()
 }
-
-/// The out-of-tree receipt directory both halves of the claim protocol share.
-const RECEIPT_DIR: &str = "batten-receipts";
 
 use clock::now_unix;
 use config::anchor_at;
@@ -20201,6 +20201,23 @@ fn red_head_for(
     }
 }
 
+/// What a `git push` would carry of the private session stores (CLOUD-2887),
+/// behind [`red_head_for`]'s three conjuncts: asked only before a push that a
+/// selected module could judge, so every other call walks nothing.
+fn state_push_for(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+) -> facts::Look<serde_json::Value> {
+    if envelope.event == crate::config_model::Event::PreTool
+        && policy.reads_pinned(envelope)
+        && hook::pushes_git(envelope)
+    {
+        state_push::fact(envelope, hook_authority_root())
+    } else {
+        facts::Look::CouldNotLook
+    }
+}
+
 /// The root of a checkout this call writes in that a live `land` lap holds
 /// (CLOUD-2781, CLOUD-2789), read the way `land` reads it to refuse a second
 /// lap: the singleton lock under the per-worktree git dir, and a pid that
@@ -20384,6 +20401,7 @@ struct CallFacts {
     dispatch: facts::Look<brief::Report>,
     pinned: facts::Look<std::collections::BTreeSet<String>>,
     red_head: facts::Look<serde_json::Value>,
+    state_push: facts::Look<serde_json::Value>,
     commit_subject: facts::Look<String>,
     pathspec_status: facts::Look<serde_json::Value>,
     shell_introduced: hook::ShellIntroducedFacts,
@@ -20413,6 +20431,7 @@ fn call_facts(
         dispatch: dispatch_facts(envelope),
         pinned: pinned_for(policy, envelope),
         red_head: red_head_for(policy, envelope),
+        state_push: state_push_for(policy, envelope),
         commit_subject: commit_subject_for(policy, envelope),
         pathspec_status: pathspec_status_for(policy, envelope),
         shell_introduced: shell_introduced_for(policy, envelope),
@@ -21066,6 +21085,7 @@ fn dispatch_envelope(
         minted: &call.minted,
         dispatch: &call.dispatch,
         red_head: &call.red_head,
+        state_push: &call.state_push,
         pathspec_status: &call.pathspec_status,
         shell_introduced: &call.shell_introduced,
     };
@@ -23197,9 +23217,9 @@ fn stamp_session(envelope: &hook::Envelope) {
     let Ok(git_dir) = git::git_dir(hook_session_home()) else {
         return;
     };
-    // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
+    // The receipt store under the PER-WORKTREE directory, which is where
     // `run_claim_check` reads it: a linked worktree dates its own session.
-    let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
+    let _stamped = claim::stamp_session(&minted::store_path(&git_dir));
 }
 
 /// Pin this engine into a config that pins nothing, at the session's start
@@ -26444,7 +26464,7 @@ fn watchdog_stop(
     let Ok(git_dir) = git::git_dir(root) else {
         return (None, None);
     };
-    let receipt = git_dir.join(RECEIPT_DIR).join(WATCHDOG_SPOKEN);
+    let receipt = minted::store_path(&git_dir).join(WATCHDOG_SPOKEN);
     let (running, abandoned) = task::partition(&git_dir);
     let mut unspoken: Vec<task::Entry> = abandoned
         .into_iter()

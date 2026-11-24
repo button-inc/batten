@@ -166,6 +166,7 @@ const PRESET_SCOPES: &[(&str, &[bool])] = &[
     ("rust", &[true]),
     ("rust-quality", &[true]),
     ("red-head", &[false]),
+    ("state-private", &[false]),
     ("git", &[false]),
     ("shell-hygiene", &[true, false]),
     ("pinned-toolchain", &[false]),

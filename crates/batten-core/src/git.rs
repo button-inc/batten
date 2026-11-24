@@ -2976,6 +2976,60 @@ pub fn config_value(dir: &Path, key: &str) -> Result<Option<String>> {
         .map(|value| value.to_string()))
 }
 
+/// The URL a push to `remote` sends to (CLOUD-2887): a configured remote's push
+/// URL (`pushurl`, else `url`), or `remote` itself taken as a URL when no remote
+/// of that name is configured — after git's `insteadOf`/`pushInsteadOf`
+/// rewriting either way, which gix applies when it builds the remote.
+///
+/// `None` where the repository will not open or the name is no URL either.
+#[must_use]
+pub fn push_url(dir: &Path, remote: &str) -> Option<String> {
+    let repo = open_configured(dir).ok()?;
+    let url = match repo.find_remote(remote) {
+        Ok(found) => found.url(gix::remote::Direction::Push)?.to_bstring(),
+        Err(_) => repo
+            .remote_at(remote)
+            .ok()?
+            .url(gix::remote::Direction::Push)?
+            .to_bstring(),
+    };
+    Some(url.to_string())
+}
+
+/// Every ref under `prefix` (`refs/heads`, `refs/tags`), as full names, sorted.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
+pub fn refs_under(dir: &Path, prefix: &str) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refusal = || UsageError::raise("cannot list refs; this is not a git repository".to_owned());
+    let references = repo.references().map_err(|_| refusal())?;
+    let mut found: Vec<String> = references
+        .prefixed(prefix)
+        .map_err(|_| refusal())?
+        .flatten()
+        .map(|reference| reference.name().as_bstr().to_string())
+        .collect();
+    found.sort();
+    Ok(found)
+}
+
+/// Each blob at `rev` as `(object id, path)`, by [`walk_blob_ids`]' selection
+/// and without reading a blob's bytes (CLOUD-2887): what names a pushed blob.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when `rev` does not resolve.
+pub fn blob_paths_at_rev(dir: &Path, rev: &str) -> Result<Vec<(String, String)>> {
+    let repository = open(dir)?;
+    let mut found = Vec::new();
+    walk_blob_ids(&repository, rev, "**", |path, id| {
+        found.push((id.to_string(), path.to_owned()));
+    })?;
+    Ok(found)
+}
+
 /// Set one **repo-local** config value.
 ///
 /// Repo-local and never `--global`: the wider scope covers a developer's own

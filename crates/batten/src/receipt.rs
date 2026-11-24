@@ -494,12 +494,19 @@ fn repo_facts() -> Result<RepoFacts> {
     })
 }
 
+/// The receipt store under a checkout's state directory: `<state>/receipts`.
+///
+/// # Errors
+///
+/// The repository state directory cannot be resolved.
+pub(crate) fn receipts_dir(repo_root: &Path) -> Result<std::path::PathBuf> {
+    Ok(state::repo_state_dir(repo_root)?.join("receipts"))
+}
+
 /// The canonical receipt path for a check: `<state>/receipts/<fingerprint>.json`.
 fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
     let fingerprint = identity::scope_fingerprint(check, RECEIPT_SCOPE_KEY);
-    Ok(state::repo_state_dir(Path::new(repo_root))?
-        .join("receipts")
-        .join(format!("{}.json", fingerprint.to_hex())))
+    Ok(receipts_dir(Path::new(repo_root))?.join(format!("{}.json", fingerprint.to_hex())))
 }
 
 /// Resolve the verdict for each named check, for a caller that must not do I/O.

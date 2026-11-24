@@ -695,7 +695,7 @@ impl FindingRecord {
 }
 
 /// The directory holding one file per identity, under a bound store.
-fn findings_dir(store_dir: &Path) -> PathBuf {
+pub(crate) fn findings_dir(store_dir: &Path) -> PathBuf {
     store_dir.join(FINDINGS_DIR)
 }
 

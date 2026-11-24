@@ -918,7 +918,7 @@ fn anchor(counts: &mut BTreeMap<String, u64>, surfaced: &Surfaced<'_>) {
 }
 
 /// The directory holding one wake-state file per session, under a bound store.
-fn drain_dir(store_dir: &Path) -> PathBuf {
+pub(crate) fn drain_dir(store_dir: &Path) -> PathBuf {
     store_dir.join(DRAIN_DIR)
 }
 
