@@ -42,11 +42,11 @@ const AUTHORITY: &str = r#"version = 1
 
 [[pattern]]
 id = "hk-amends-version"
-regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
+regex = 'hk@([^#/"[:space:]]+)'
 
 [[pattern]]
 id = "hk-download-tag"
-regex = '/v([0-9]+\.[0-9]+\.[0-9]+)/hk@'
+regex = '/v([^/]+)/hk@'
 
 [[rule]]
 id = "tool pin other"
@@ -280,6 +280,39 @@ fn a_package_task_naming_another_version_is_refused() {
 
 /// The same fixture with the fetch agreeing: the arm refuses the disagreement
 /// and not the task's presence, so declaring it cannot itself be a violation.
+/// An hk pre-release named in all three places agrees (CLOUD-2906): the
+/// committed patterns capture the whole field and the module admits it as
+/// semver. A core-only capture read `1.57.0` and disagreed with the pin.
+#[test]
+fn a_pre_release_hk_pin_agrees_through_the_engine() {
+    let manifest = format!(
+        "[tools]\nhk = \"1.57.0-rc.1\"\n\n{}",
+        package_task("1.57.0-rc.1")
+    );
+    let root = fixture(
+        "hk-pre-release",
+        &[("mise.toml", &manifest), ("hk.pkl", &amends("1.57.0-rc.1"))],
+        &[],
+    );
+    clean(&root);
+}
+
+/// `#MUTANT hk-capture-validity-dropped` reddens here. `1.056.1` is not semver
+/// (a leading zero), so `hk.pkl` names no version even though the pin is
+/// spelled the same; without the guard the two strings agree and pass.
+#[test]
+fn a_non_semver_hk_capture_names_none_through_the_engine() {
+    let root = fixture(
+        "hk-non-semver",
+        &[
+            ("mise.toml", "[tools]\nhk = \"1.056.1\"\n"),
+            ("hk.pkl", &amends("1.056.1")),
+        ],
+        &[],
+    );
+    denied(&root, "tool pin other", "hk.pkl");
+}
+
 #[test]
 fn a_package_task_naming_the_pin_is_clean() {
     let manifest = format!("[tools]\nhk = \"1.56.1\"\n\n{}", package_task("1.56.1"));

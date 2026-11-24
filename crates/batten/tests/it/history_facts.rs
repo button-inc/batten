@@ -332,3 +332,82 @@ fn a_shallow_clone_is_could_not_look() {
         "a shallow clone must not answer a path filter\n{answer}{cause}"
     );
 }
+
+/// The committed `tag mint wrong` row over a fixture whose one tag is `tag`, and
+/// the committed module: the tier `policy/release-tag-shape.rego`'s own
+/// `test_` rules cannot reach, because there the input is fabricated
+/// (CLOUD-2906).
+const MINT: &str = r#"version = 1
+
+[[rule]]
+id = "tag mint wrong"
+kind = "policy"
+scope = "tree"
+module = "policy/release-tag-shape.rego"
+severity = "deny"
+
+[[rule.history]]
+id = "release-tags"
+tags = "v*"
+
+[[verdict]]
+id = "tag mint wrong"
+gloss = "a release tag is not `v` then a semver version"
+class = "A fixture class."
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/release-tag-shape.rego"
+"#;
+
+/// `batten check` over a repository whose one tag is `tag`.
+fn minted(name: &str, tag: &str) -> std::process::Output {
+    let dir = scratch_outside_tree("history-mint", name);
+    write(&dir, "batten.toml", MINT);
+    let module = std::fs::read_to_string(common::at_root("policy/release-tag-shape.rego"))
+        .expect("the committed module");
+    write(&dir, "policy/release-tag-shape.rego", &module);
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    git_in(&dir, &["config", "user.name", "Fixture Author"]);
+    git_in(&dir, &["config", "user.email", "fixture@example.com"]);
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
+    git_in(&dir, &["tag", tag]);
+    check(&dir)
+}
+
+/// `#MUTANT semver-swapped-for-core-regex` reddens here: a pre-release tag is
+/// well-minted through the engine (it ships nothing, which Rust decides).
+#[test]
+fn a_pre_release_tag_is_well_minted_through_the_engine() {
+    for (name, tag) in [
+        ("rc", "v0.0.1-rc.1"),
+        ("dev", "v0.0.221-dev.pr1.20261124T050057Z"),
+    ] {
+        let outcome = minted(name, tag);
+        assert_eq!(
+            outcome.status.code(),
+            Some(batten::exit::ExitCode::Success.code()),
+            "{tag} is a well-minted tag\nSTDOUT[{}]\nSTDERR[{}]",
+            stdout(&outcome),
+            stderr(&outcome)
+        );
+    }
+}
+
+/// `#MUTANT semver-validity-dropped` reddens here: `v0.99` is not semver, so it
+/// is `tag mint wrong` through the engine. The pre-release case above is the
+/// pass side, so a module refusing every tag cannot satisfy this one.
+#[test]
+fn a_non_semver_tag_is_refused_through_the_engine() {
+    let outcome = minted("partial", "v0.99");
+    assert_eq!(
+        outcome.status.code(),
+        Some(batten::exit::ExitCode::Violation.code()),
+        "v0.99 is not a release tag\nSTDOUT[{}]\nSTDERR[{}]",
+        stdout(&outcome),
+        stderr(&outcome)
+    );
+    assert!(stdout(&outcome).contains("tag mint wrong"));
+}
