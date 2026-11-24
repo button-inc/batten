@@ -618,7 +618,7 @@ pub fn destination(
 pub(crate) fn on_path_dirs(dir: &Path, on_path: &[std::path::PathBuf]) -> bool {
     on_path
         .iter()
-        .any(|entry| entry == dir || crate::wiring::same_file(entry, dir))
+        .any(|entry| entry == dir || crate::fsio::same_file(entry, dir))
 }
 
 /// Every program the script runs, read as the first word of each command: a
