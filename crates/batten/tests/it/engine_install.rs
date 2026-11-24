@@ -314,9 +314,8 @@ fn the_version_comes_from_the_refs_manifest() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(
-        std::fs::read(named.join(binary())).unwrap(),
-        SHIPPED,
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
         "the installed bytes are the ref's release, not the running binary"
     );
 }
@@ -459,7 +458,10 @@ fn a_pinned_worktree_installs_its_pin() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
 }
 
 /// A named version that disagrees with the worktree's pin is refused, and
@@ -513,7 +515,10 @@ fn the_ref_outranks_the_worktree_pin() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
 }
 
 /// The bootstrap's download is placed even when the worktree pins exactly the
@@ -542,9 +547,9 @@ fn the_bootstrap_places_a_running_pin() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(
-        std::fs::read(named.join(binary())).unwrap(),
-        std::fs::read(env!("CARGO_BIN_EXE_batten")).unwrap(),
+    assert!(
+        std::fs::read(named.join(binary())).unwrap()
+            == std::fs::read(env!("CARGO_BIN_EXE_batten")).unwrap(),
         "the running binary, which is the pin, was placed"
     );
 }
@@ -585,7 +590,10 @@ fn an_update_moves_an_older_pin_forward_and_installs_it() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
 }
 
 /// `engine update` NEVER MOVES A PIN BACKWARD: the name says newer, so a pin
@@ -619,7 +627,10 @@ fn an_update_never_moves_a_pin_backward() {
             .contains(&format!("engine = {{ release = \"{WANTED}\" }}")),
         "the newer pin stands"
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
 }
 
 /// AN UPDATE PRINTS WHAT IT CROSSES BEFORE IT MOVES THE PIN (CLOUD-2660): the
@@ -674,7 +685,10 @@ fn an_update_installs_its_target_whatever_the_ref_pins() {
         stdout(&output),
         common::stderr(&output)
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
 }
 
 /// A FAILED INSTALL LEAVES THE MOVED PIN (CLOUD-2418): the write stands, so a
@@ -829,7 +843,10 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         config.contains("# the platform's archive"),
         "every other byte is kept"
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
 }
 
 /// A ROW AT THE TARGET VERSION IS STILL REPAIRED (CLOUD-2418): its `version`
@@ -1575,7 +1592,10 @@ mod repair {
             "nothing written, nothing said: {}",
             text(&output)
         );
-        assert_eq!(std::fs::read(&binary).unwrap(), before, "nothing replaced");
+        assert!(
+            std::fs::read(&binary).unwrap() == before,
+            "nothing replaced"
+        );
         assert!(!dir.join("cargo-ran").exists(), "nothing built");
     }
 
@@ -1598,9 +1618,8 @@ mod repair {
         pin_source(&dir, &digest);
         let output = run(&binary, &dir, &["engine", "install"], "");
         assert!(output.status.success(), "{}", text(&output));
-        assert_eq!(
-            std::fs::read(&on_path).unwrap(),
-            b"the built engine\n",
+        assert!(
+            std::fs::read(&on_path).unwrap() == b"the built engine\n",
             "the PATH copy was replaced"
         );
         let stamp = std::fs::read_to_string(engine_stamp(&on_path)).unwrap_or_default();
@@ -1640,9 +1659,8 @@ mod repair {
             !dir.join("cargo-ran").exists(),
             "a current engine is copied, not rebuilt"
         );
-        assert_eq!(
-            std::fs::read(&on_path).unwrap(),
-            std::fs::read(&binary).unwrap(),
+        assert!(
+            std::fs::read(&on_path).unwrap() == std::fs::read(&binary).unwrap(),
             "the stale installed copy became the running engine"
         );
         let stamp = std::fs::read_to_string(engine_stamp(&on_path)).unwrap_or_default();
@@ -1674,9 +1692,8 @@ mod repair {
         let before = std::fs::read(&binary).unwrap();
         let output = run(&binary, &dir, &["engine", "install"], "");
         assert!(output.status.success(), "{}", text(&output));
-        assert_eq!(
-            std::fs::read(&on_path).unwrap(),
-            before,
+        assert!(
+            std::fs::read(&on_path).unwrap() == before,
             "the stale copy became the release"
         );
         let listed = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -1711,9 +1728,8 @@ mod repair {
         let output = run(&binary, &dir, &["engine", "install"], "");
         assert!(output.status.success(), "{}", text(&output));
         assert!(dir.join("cargo-ran").exists(), "the source pin was built");
-        assert_eq!(
-            std::fs::read(&binary).unwrap(),
-            b"the built engine\n",
+        assert!(
+            std::fs::read(&binary).unwrap() == b"the built engine\n",
             "the built engine replaced the running one"
         );
         let stamp = std::fs::read_to_string(dir.join("engine").join("batten.source")).unwrap();
@@ -1741,7 +1757,10 @@ mod repair {
             "a build of this checkout must not rebuild itself: {}",
             text(&output)
         );
-        assert_eq!(std::fs::read(&binary).unwrap(), before, "nothing replaced");
+        assert!(
+            std::fs::read(&binary).unwrap() == before,
+            "nothing replaced"
+        );
         // AND IT LOADS (CLOUD-2232): the checkout's own build answers for the
         // checkout's source pin whatever digest it names — a pin the tree moved
         // off is `engine-pin:check`'s to refuse, never this binary's.
@@ -1970,9 +1989,8 @@ mod repair {
             "the hook must run the pinned release, not refuse: {}",
             text(&output)
         );
-        assert_eq!(
-            std::fs::read(&binary).unwrap(),
-            before,
+        assert!(
+            std::fs::read(&binary).unwrap() == before,
             "following a pin never rewrites the installed binary"
         );
         assert!(!dir.join("cargo-ran").exists(), "nothing built");

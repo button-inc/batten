@@ -13819,8 +13819,9 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
                 i += 1;
                 // The wrapper's own flags, env assignments, and bare numeric
                 // arguments (timeout's duration) precede the wrapped program.
-                // Bounded as the outer walk is: each pass consumes a token.
-                for _ in i..tokens.len() {
+                // Bounded as the outer walk is: each pass consumes a token, so
+                // `tokens.len()` passes always reach the end.
+                for _ in 0..tokens.len() {
                     let Some(token) = tokens.get(i).map(|token| program_token(token)) else {
                         break;
                     };
