@@ -2159,11 +2159,12 @@ fn code_text(node: &SyntaxNode) -> String {
 
 /// Push `token` onto code text `text` ([`code_text`]): a code token as itself;
 /// a string an attribute or a macro's arguments hold as the markers in it,
-/// since a proc macro may compile it; nothing for a comment, a doc comment or
-/// any other string.
+/// since a proc macro may compile it; nothing for whitespace, a plain comment
+/// or any other string.
 fn push_code(text: &mut String, token: &ra_ap_syntax::SyntaxToken) {
     let kind = token.kind();
-    if unkeyed(kind) || kind == SyntaxKind::OUTER_DOC_COMMENT {
+    // A DOC COMMENT IS ONE TOKEN THAT STARTS `///`, which no marker is.
+    if unkeyed(kind) {
         return;
     }
     if kind == SyntaxKind::STRING || kind == SyntaxKind::BYTE_STRING || kind == SyntaxKind::C_STRING
@@ -15712,7 +15713,8 @@ mod tests {
                 "pub fn run() -> u8 {{ A.shout() }}\n#[derive(Clone)]\npub struct A;\n\
                  impl Shown for A {{}}\npub trait Shown {{ const K: u8 = {shown}; }}\n\
                  pub struct B {{ {cloned} }}\nimpl Clone for B {{ fn clone(&self) -> Self {{ B {{}} }} }}\n\
-                 pub struct C {{ {shouted} }}\nimpl C {{ pub fn shout(&self) -> u8 {{ 2 }} }}\n"
+                 pub struct C {{ {shouted} }}\nimpl C {{ pub fn shout(&self) -> u8 {{ 2 }} }}\n\
+                 pub trait Loud {{ fn shout(&self) -> u8; }}\n"
             )
         };
         let digest = |label: &str, cloned: &str, shouted: &str, shown: &str| {
@@ -16162,6 +16164,22 @@ mod tests {
             hasher.finalize()
         };
         assert_ne!(key("1"), key("2"), "{targets:?}");
+        let rooted = |other: &str| {
+            let mut hasher = blake3::Hasher::new();
+            let resources = [
+                (String::from("data.txt"), String::from("1")),
+                (String::from("other.txt"), other.to_owned()),
+            ]
+            .into();
+            include_key(
+                &mut hasher,
+                &format!("{ANY_PACKAGE}data.txt"),
+                (&resources, "e"),
+                std::path::Path::new("/nonexistent"),
+            );
+            hasher.finalize()
+        };
+        assert_eq!(rooted("1"), rooted("2"), "a file at another path");
     }
 
     /// CLOUD-2927 item 5 (in #1276): a build's output is keyed by the output
@@ -16210,6 +16228,115 @@ mod tests {
             "an item-level OUT_DIR include is every case's: {:?}",
             rendered.compiled.item_includes
         );
+    }
+
+    /// Fails by: a `crate` segment read as the root anywhere but first, or a
+    /// glob's path resolved against the wrong module (CLOUD-2904).
+    #[test]
+    fn a_glob_path_resolves_from_its_module() {
+        let segments =
+            |path: &str| -> Vec<String> { path.split("::").map(str::to_owned).collect() };
+        assert_eq!(glob_module("src::m", &segments("crate::x")), "src::x");
+        assert_eq!(
+            glob_module("src::m", &segments("a::crate")),
+            "src::m::a::crate"
+        );
+        assert_eq!(glob_module("src::m::c", &segments("super::y")), "src::m::y");
+        assert_eq!(glob_module("src::m", &segments("self::z")), "src::m::z");
+        assert_eq!(
+            glob_module("src::bin::t", &segments("crate::w")),
+            "src::bin::w"
+        );
+    }
+
+    /// Fails by: a `#[path]` read off another key's `= "…"` in the same
+    /// `cfg_attr` (CLOUD-2904).
+    #[test]
+    fn a_cfg_attr_path_is_its_own_keys_value() {
+        let parse = batten_facts::source::rust_parse(
+            "#[cfg_attr(unix, doc = \"d\", path = \"p.rs\")]\nmod a;\n",
+            ra_ap_syntax::Edition::Edition2024,
+        );
+        let module = parse
+            .syntax_node()
+            .descendants()
+            .find_map(ast::Module::cast)
+            .unwrap();
+        let attr = ast::HasAttrs::attrs(&module).next().unwrap();
+        assert_eq!(path_attr(&attr).as_deref(), Some("p.rs"));
+    }
+
+    /// Fails by: a `CARGO_MANIFEST_DIR` `include!` of Rust left out of the
+    /// files whose items are in their includer's module (CLOUD-2904).
+    #[test]
+    fn a_manifest_dir_include_is_an_included_source() {
+        let root = crate::scratch::scratch("schema-included-manifest");
+        std::fs::create_dir_all(root.join("crates/p/src")).unwrap();
+        std::fs::write(
+            root.join("crates/p/src/lib.rs"),
+            "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/gen.rs\"));\n",
+        )
+        .unwrap();
+        let included = included_sources(&root, &[String::from("crates/p/src/lib.rs")].into());
+        assert!(included.contains("crates/p/gen.rs"), "{included:?}");
+    }
+
+    /// Fails by: an item-level macro looked for anywhere, so a macro called
+    /// in a function body read the whole `tests/` (CLOUD-2904).
+    #[test]
+    fn only_an_item_level_macro_widens_a_test_crate() {
+        let root = crate::scratch::scratch("schema-item-macro");
+        for (path, text) in [
+            (
+                "tests/plain.rs",
+                "fn helper() { m!(); }\n#[test]\nfn t() { helper(); }\n",
+            ),
+            ("tests/elsewhere/x.rs", ""),
+        ] {
+            std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.join(path), text).unwrap();
+        }
+        let dirs = [(String::from("fix"), String::new())].into();
+        let plain = crate_sources(&root, &dirs, "fix::plain").unwrap();
+        assert_eq!(plain, [String::from("tests/plain.rs")], "{plain:?}");
+    }
+
+    /// Fails by: a build output read from another package's `OUT_DIR`, or
+    /// from a build directory with none (CLOUD-2904).
+    #[test]
+    fn a_packages_build_output_is_its_own_out_dir() {
+        let target = crate::scratch::scratch("schema-built-outputs");
+        let write = |path: &str, text: &str| {
+            std::fs::create_dir_all(target.join(path).parent().unwrap()).unwrap();
+            std::fs::write(target.join(path), text).unwrap();
+        };
+        write("debug/build/p-abc/out/x.bin", "1");
+        write("debug/build/q-def/out/y.bin", "1");
+        write("debug/build/p-zzz/output", "1");
+        let packages = [(String::from("p"), String::from("crates/p"))].into();
+        let held = built_outputs(&target, &packages);
+        assert_eq!(held.len(), 1, "{held:?}");
+        write("debug/build/q-def/out/y.bin", "2");
+        assert_eq!(built_outputs(&target, &packages), held, "another package's");
+        write("debug/build/p-abc/out/x.bin", "2");
+        assert_ne!(built_outputs(&target, &packages), held, "its own");
+    }
+
+    /// Fails by: a source directory named `target` below the root left out of
+    /// a tree read without git, or the root's own `target` read (CLOUD-2904).
+    #[test]
+    fn a_tree_without_git_reads_all_but_its_roots_target() {
+        let root = crate::scratch::scratch("schema-tree-rust-files");
+        for path in ["src/target/a.rs", "target/b.rs"] {
+            std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.join(path), "").unwrap();
+        }
+        let files = tree_rust_files(&root).unwrap();
+        assert!(
+            files.contains(&String::from("src/target/a.rs")),
+            "{files:?}"
+        );
+        assert!(!files.contains(&String::from("target/b.rs")), "{files:?}");
     }
 
     /// One integration case's digest over `files`, with `src/lib.rs` the
