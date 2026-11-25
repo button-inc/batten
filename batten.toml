@@ -19788,6 +19788,25 @@ inputs = [
 ]
 tools = [["cargo", "deny", "--version"]]
 
+# THE WORKFLOW AUDIT (CLOUD-2789): `[tasks.zizmor]` runs through this row wherever
+# an engine is built (`BATTEN_BIN`, which `verify:gated` sets), so `step cover`
+# has a pass to read for CI's `zizmor` check, and a lap whose workflows did not
+# move does not audit them again. The argv is the audit's own words, so `step
+# run` keys the command itself and no `mise tasks info` line is owed. CI's
+# `zizmor` job runs the task bare: it installs only zizmor and builds no engine.
+[[step]]
+id = "zizmor"
+inputs = [
+  ".github",
+  "action.yml",
+  # zizmor honours `.gitignore` in its walk and probes for a root config; the
+  # trace refused all three as undeclared on the first run of this row.
+  ".gitignore",
+  "zizmor.yml",
+  "zizmor.yaml",
+]
+tools = [["zizmor", "--version"]]
+
 # CLOUD-1891: keyed on BOTH sides of the comparison. This tree's crates are the
 # inputs; the baseline's side is the `step base` line (CLOUD-2787): the content
 # ids of `crates`, `Cargo.toml` and `Cargo.lock` at the merge base with
