@@ -50,22 +50,15 @@ fn artifact(deps: &Path, stem: &str, hash: &str, age: u64) {
 /// `lock()` and here shares the open file description, and with it the `flock`,
 /// until its child execs. Measured on #1132: the released reclaim found the lock
 /// still held and kept all three copies, while the case alone passed every time.
+/// So this takes the lock BLOCKING, which waits on the event itself — the
+/// sibling's exec closing the shared description — and lets it go at once
+/// (CLOUD-2789).
 fn released(lock: &std::path::Path) {
-    for _ in 0..200 {
-        let probe = std::fs::File::open(lock).unwrap();
-        if probe.try_lock().is_ok() {
-            return;
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "bounded by a real terminal state: the sibling's child execs and closes the shared description, capped at `200` tries"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!(
-        "{} stayed locked after this case released it",
-        lock.display()
-    );
+    let probe = std::fs::File::open(lock).unwrap();
+    probe
+        .lock()
+        .expect("the lock is taken once the sibling's child execs");
+    probe.unlock().expect("and let go at once");
 }
 
 // --- the disk collector (CLOUD-2197) -----------------------------------------
@@ -797,7 +790,7 @@ fn the_arm_watches_past_the_gate() {
     config.max_free_mb = Some(11);
     // ABOVE, ABOVE, then BELOW: the fall arrives on the third sample, after the
     // first step has returned.
-    let samples = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let samples = std::sync::Arc::new(Samples::default());
     let counted = std::sync::Arc::clone(&samples);
     let fallen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let fall = std::sync::Arc::clone(&fallen);
@@ -805,7 +798,7 @@ fn the_arm_watches_past_the_gate() {
         repo: repo.clone(),
         config: &config,
         free_mb: Box::new(move || {
-            let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let n = counted.take();
             Ok(
                 if fall.load(std::sync::atomic::Ordering::SeqCst) && n >= 1 {
                     9
@@ -820,17 +813,16 @@ fn the_arm_watches_past_the_gate() {
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
         // THE FIRST STEP: the volume is fine while it runs, and it returns.
-        wait_for(|| samples.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+        samples.wait_until(|taken| taken >= 1);
         // A LATER STEP: the volume falls now, and the watcher must still be there.
         fallen.store(true, std::sync::atomic::Ordering::SeqCst);
         // Every read from here on is the fallen volume. Two more mean a whole
         // pass has run over it: the sample that started it and the reading it
         // takes once it has removed what it will. So the wait ends on the
-        // unit going or on a pass that did not take it, never on the bound.
-        let fell_at = samples.load(std::sync::atomic::Ordering::SeqCst);
-        wait_for(|| {
-            !present(&profile, "stale", "eeeeeeeeeeeeeeee")
-                || samples.load(std::sync::atomic::Ordering::SeqCst) >= fell_at + 2
+        // unit going or on a pass that did not take it, never on a clock.
+        let fell_at = samples.count();
+        samples.wait_until(|taken| {
+            !present(&profile, "stale", "eeeeeeeeeeeeeeee") || taken >= fell_at + 2
         });
     });
     assert!(!present(&profile, "stale", "eeeeeeeeeeeeeeee"), "LRU went");
@@ -890,22 +882,18 @@ fn watched(
     free_mb: impl Fn(usize) -> u64 + Send + 'static,
     done: impl Fn(usize) -> bool,
 ) -> Vec<String> {
-    let samples = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let samples = std::sync::Arc::new(Samples::default());
     let counted = std::sync::Arc::clone(&samples);
     let watch = batten::disk_watch::DiskWatch {
         repo: repo.to_path_buf(),
         config,
-        free_mb: Box::new(move || {
-            Ok(free_mb(
-                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            ))
-        }),
+        free_mb: Box::new(move || Ok(free_mb(counted.take()))),
         kept: Vec::new(),
         copies: own_copies(repo),
         record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
-        wait_for(|| done(samples.load(std::sync::atomic::Ordering::SeqCst)));
+        samples.wait_until(&done);
     });
     lines
 }
@@ -954,38 +942,49 @@ fn the_first_sample_below_the_minimum_collects() {
     );
 }
 
-/// How many 50 ms polls [`wait_for`] takes before giving up: four of the
-/// watcher's 5 s ticks, the longest a live watcher can take to act.
+/// The samples a case's watcher has taken, and the EVENT each one is
+/// (CLOUD-2789): the watcher's `free_mb` calls [`Samples::take`], which rings
+/// the bell, and a case waits on that bell rather than on a clock or a count
+/// of polls.
 ///
-/// **HALVING THIS WAS A WRONG FIX AND IS RECORDED AS ONE (CLOUD-2376).** When
-/// `collect_toward_max -> None` made `the_arm_watches_past_the_gate` take a
-/// SIGTERM at 43.4s, this budget looked like the cost — it is spent in full
-/// exactly when the watcher never acts. Halving it moved the number by 2s,
-/// which is what proved it wrong: the bound WAS being reached, `wait_for` WAS
-/// panicking on schedule, and the case then hung anyway, past 100s when
-/// measured alone. [`batten::disk_watch::around`] skipped its `stop.store` on
-/// the unwind, so the scope's join waited on a watcher that could never stop.
-///
-/// Four ticks stands, because the real path genuinely needs one: this file's
-/// `the_arm_watches_past_the_gate` passes in a measured 6.018s. A failure budget
-/// is only a cost when a failure cannot terminate, and that is fixed where it
-/// was broken rather than here.
-const WAIT_POLLS: u32 = 400;
+/// No bound, deliberately. A watcher that never acts leaves the case waiting
+/// on a sample that never satisfies it, and the mutation judge's per-case cut
+/// files that as the timeout it is. CLOUD-2376 is why that is safe now:
+/// [`batten::disk_watch::around`] stops its watcher on an unwind too, so a
+/// case that fails cannot hang past its own failure.
+#[derive(Default)]
+struct Samples {
+    taken: std::sync::Mutex<usize>,
+    bell: std::sync::Condvar,
+}
 
-/// Wait until `done`, counted rather than clocked: at most [`WAIT_POLLS`]
-/// polls, then the case fails on the outcome it was waiting for.
-fn wait_for(done: impl Fn() -> bool) {
-    for _ in 0..WAIT_POLLS {
-        if done() {
-            return;
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "bounded by a count: at most `WAIT_POLLS` polls, four of the watcher's own ticks"
-        )]
-        std::thread::sleep(Duration::from_millis(50));
+impl Samples {
+    /// Count one sample and ring the bell; the count BEFORE this one.
+    fn take(&self) -> usize {
+        let mut taken = self.taken.lock().expect("the samples lock");
+        let before = *taken;
+        *taken += 1;
+        drop(taken);
+        self.bell.notify_all();
+        before
     }
-    panic!("the watcher did not act within `WAIT_POLLS` polls");
+
+    /// How many samples have been taken.
+    fn count(&self) -> usize {
+        *self.taken.lock().expect("the samples lock")
+    }
+
+    /// Wait until `done` holds over the samples taken, re-asked at every
+    /// sample. What `done` reads besides the count (a unit gone) is settled by
+    /// the time the sample after it rings.
+    fn wait_until(&self, done: impl Fn(usize) -> bool) {
+        let taken = self.taken.lock().expect("the samples lock");
+        drop(
+            self.bell
+                .wait_while(taken, |taken| !done(*taken))
+                .expect("the samples lock"),
+        );
+    }
 }
 
 /// A band undeclared is the DEFAULT band, never the arm switched off
@@ -1000,13 +999,13 @@ fn an_undeclared_band_watches_at_the_default() {
         let profile = repo.join("target/debug");
         unit(&profile, "stale", "eeeeeeeeeeeeeeee", 7200, 2 << 20);
         let config = rules("target");
-        let samples = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let samples = std::sync::Arc::new(Samples::default());
         let counted = std::sync::Arc::clone(&samples);
         let watch = batten::disk_watch::DiskWatch {
             repo: repo.clone(),
             config: &config,
             free_mb: Box::new(move || {
-                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                counted.take();
                 Ok(free)
             }),
             kept: Vec::new(),
@@ -1014,10 +1013,8 @@ fn an_undeclared_band_watches_at_the_default() {
             record: None,
         };
         let ((), lines) = batten::disk_watch::around(Some(watch), || {
-            wait_for(|| {
-                samples.load(std::sync::atomic::Ordering::SeqCst) >= 2
-                    || !present(&profile, "stale", "eeeeeeeeeeeeeeee")
-            });
+            samples
+                .wait_until(|taken| taken >= 2 || !present(&profile, "stale", "eeeeeeeeeeeeeeee"));
         });
         (present(&profile, "stale", "eeeeeeeeeeeeeeee"), lines)
     };
@@ -1137,8 +1134,8 @@ fn a_session_start_re_arms_every_fingerprint() {
 }
 
 /// A `step run` build is watched (CLOUD-2197): it is not a tool call, so only
-/// the watcher around it can collect while it runs. The step waits, bounded,
-/// for the aged unit to go — which only the watcher can make happen.
+/// the watcher around it can collect while it runs. The step waits for the aged
+/// unit to go — which only the watcher can make happen.
 #[test]
 fn a_step_run_build_is_watched() {
     if !cfg!(unix) {
@@ -1146,20 +1143,14 @@ fn a_step_run_build_is_watched() {
     }
     let dir = hooked("step-run-watched", true);
     let profile = dir.join("target/debug");
-    // 200 x 0.05s = 10s, which is TWO full `disk_watch::TICK`s against a MEASURED
-    // 1.092s for the real path (nextest, this suite) — the watcher samples at
-    // startup rather than after a tick, so the collection lands in about a
-    // second. It was 400, which is 18x a path that takes one second, and the
-    // excess is spent only when the collection never comes.
-    //
-    // NOT WHY THE SWEEP TIMED OUT, stated because this comment first said it
-    // was and measurement refuted it. That was `disk_watch::around` skipping its
-    // stop on an unwind (CLOUD-2376), which hung the case outright rather than
-    // making it slow. This number is proportion to a measured path, nothing
-    // more.
-    let waits = "for i in $(seq 1 200); do \
-                 [ -e target/debug/.fingerprint/aged-dddddddddddddddd ] || exit 0; \
-                 sleep 0.05; done; exit 1";
+    // THE STEP WAITS ON THE EVENT, the unit going, and on no clock (CLOUD-2789):
+    // it spins on a builtin test of the very condition, so a watcher that never
+    // collects hangs the case and the mutation judge's per-case cut files that
+    // as the timeout it is. It used to poll `sleep 0.05` two hundred times,
+    // which made a never-collecting watcher exit 1 at a guessed ten seconds.
+    // The watcher samples at startup rather than after a tick, so on the real
+    // path the collection lands in about a second (measured 1.092s).
+    let waits = "while [ -e target/debug/.fingerprint/aged-dddddddddddddddd ]; do :; done";
     let ran = common::batten()
         .current_dir(&dir)
         .env("TMPDIR", own_temp(&dir))
@@ -1421,10 +1412,14 @@ fn a_traced_watch_writes_its_samples_to_stderr() {
         return;
     }
     let dir = hooked("step-run-traced", true);
+    // The step runs until the watcher has ACTED, an event that follows a
+    // sample, rather than for a guessed half second (CLOUD-2789): under
+    // pressure the watcher collects the aged unit, and a sample came first.
+    let waits = "while [ -e target/debug/.fingerprint/aged-dddddddddddddddd ]; do :; done";
     let ran = common::batten()
         .current_dir(&dir)
         .env("TMPDIR", own_temp(&dir))
-        .args(["step", "run", "probe", "--", "sh", "-c", "sleep 0.5"])
+        .args(["step", "run", "probe", "--", "sh", "-c", waits])
         .env("TARGET_PRUNE_FREE_MB", "50")
         .env("BATTEN_DISK_TRACE", "1")
         .stdin(std::process::Stdio::null())
@@ -1897,44 +1892,21 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
     std::fs::write(singleton.join("pid"), std::process::id().to_string()).unwrap();
     let mut child = verify().spawn().expect("the binary runs");
     let taken = child.stderr.take().unwrap();
-    // READ ON A THREAD, WITH A BOUND, BECAUSE THE CASE AND THE CHILD WAIT ON
-    // EACH OTHER (CLOUD-2376). The child blocks on the build lock this case
+    // THE CASE AND THE CHILD WAIT ON EACH OTHER (CLOUD-2376), AND THE WAIT IS
+    // ON THE EVENT (CLOUD-2789). The child blocks on the build lock this case
     // holds, and this case only lets go once the first pass has REPORTED. When
-    // that line never comes the pair deadlocks — and mutating the collection
-    // away is exactly what stops it coming, so `collect_toward_max -> None` hung
-    // the suite instead of being caught: `cargo-mutants` reported
-    // `suite-timed-out`, which is could-not-look (CLOUD-1267), over a mutant
-    // this case does catch. Measured: it ran a full 300s bound where the
-    // baseline tests in 9s, which is what proved it a hang rather than a slow
-    // catch.
-    //
-    // THE BOUND MUST STAY UNDER THE SUITE'S MUTATION BUDGET, which is the
-    // non-obvious part: cargo-mutants derives a per-mutant bound from the
-    // unmutated baseline, so a wait long enough to exceed that just reproduces
-    // `suite-timed-out` by another route — and this is not the only case the
-    // mutation makes wait. `a_step_run_build_is_watched` polls four
-    // `disk_watch::TICK`s, 20s, for the same reason, and the two are summed
-    // against one bound.
-    //
-    // Five seconds against a MEASURED 0.188s for the real path (nextest, this
-    // suite) is ~26x margin and leaves the mutated suite near 34s against a
-    // bound derived at ~46s from a 9s baseline. Raising it buys nothing: the
-    // line either arrives in a fifth of a second or it is never coming.
-    let waited = Duration::from_secs(5);
-    let (lines, from_child) = std::sync::mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        let mut stderr = std::io::BufReader::new(taken);
-        let mut line = String::new();
-        while stderr.read_line(&mut line).unwrap_or(0) > 0 {
-            if lines.send(std::mem::take(&mut line)).is_err() {
-                break;
-            }
-        }
-    });
+    // that line never comes the pair deadlocks — mutating the collection away
+    // is exactly what stops it coming — and the case hangs on the read below.
+    // That is the honest verdict: the mutation judge's per-case cut files it
+    // as a timeout. A clock here would only race that cut, and the line either
+    // arrives or it is never coming; an EOF before it fails the assertion.
+    let mut stderr = std::io::BufReader::new(taken);
     let mut seen = String::new();
-    while let Ok(line) = from_child.recv_timeout(waited) {
-        seen.push_str(&line);
-        if line.contains("land verify: disk-collected ") {
+    let mut line = String::new();
+    while stderr.read_line(&mut line).unwrap_or(0) > 0 {
+        let reported = line.contains("land verify: disk-collected ");
+        seen.push_str(&std::mem::take(&mut line));
+        if reported {
             break;
         }
     }
@@ -1943,12 +1915,10 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
         "the first pass reported before the wait: {seen}"
     );
     drop(lock);
-    // The rest arrives through the same bound: the child runs to completion once
-    // the lock is gone, closing stderr, which ends the reader and the channel.
-    while let Ok(line) = from_child.recv_timeout(waited) {
-        seen.push_str(&line);
-    }
-    let _ = reader.join();
+    // The rest arrives once the lock is gone: the child runs to completion and
+    // closes stderr, which is the EOF this read ends on.
+    let _ = std::io::Read::read_to_string(&mut stderr, &mut line);
+    seen.push_str(&line);
     let _ = child.wait().unwrap();
     assert!(
         !seen.contains("min_free_mb 100"),

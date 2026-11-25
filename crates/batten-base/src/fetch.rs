@@ -64,6 +64,37 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// nobody is reading any more.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// THE FETCH'S BOUNDS, ONE INVENTORY ROW (CLOUD-1177, CLOUD-2789): every
+/// timed wait this module makes, in the three faces it needs, under the one
+/// exemption `waiver add refused` counts — the shape `pr_watch::clock` set.
+/// None has an event to wait on instead: a host that never answers a connect,
+/// a server that accepts and then says nothing, and a pool's background work
+/// after the verdict is already decided.
+mod bound {
+    use std::time::Duration;
+
+    /// Cap a connect at `within`.
+    pub(super) fn connect(
+        connector: &mut hyper_util::client::legacy::connect::HttpConnector,
+        within: Duration,
+    ) {
+        connector.set_connect_timeout(Some(within));
+    }
+
+    /// Await `work`, or its expiry at `within`.
+    pub(super) async fn total<F: std::future::Future>(
+        within: Duration,
+        work: F,
+    ) -> Result<F::Output, tokio::time::error::Elapsed> {
+        tokio::time::timeout(within, work).await
+    }
+
+    /// Tear `runtime` down, giving its background work `grace` to end.
+    pub(super) fn drain(runtime: tokio::runtime::Runtime, grace: Duration) {
+        runtime.shutdown_timeout(grace);
+    }
+}
+
 /// The one variable that moves the two bounds above, and what it is for.
 ///
 /// **It exists so the total bound is testable over the compiled binary**, which
@@ -442,7 +473,7 @@ pub fn spend(calls: &[Call<'_>]) -> Result<Vec<Response>> {
     // decided. What licenses cutting it short is `provision`'s own invariant:
     // this module writes no file and takes no lock, so there is nothing a
     // half-finished task could leave behind.
-    runtime.shutdown_timeout(SHUTDOWN_TIMEOUT);
+    bound::drain(runtime, SHUTDOWN_TIMEOUT);
     answer
 }
 
@@ -903,7 +934,7 @@ async fn one_exchange(
         .map_err(|_| UsageError::raise("fetch: the URL will not parse".to_owned()))?;
     let mut connector = hyper_util::client::legacy::connect::HttpConnector::new();
     connector.enforce_http(false);
-    connector.set_connect_timeout(Some(connect_timeout));
+    bound::connect(&mut connector, connect_timeout);
     let https = hyper_rustls::HttpsConnectorBuilder::new()
         .with_tls_config(tls_config()?)
         .https_only()
@@ -938,9 +969,12 @@ async fn one_exchange(
     // The TOTAL bound, over connect plus exchange plus body. The connect timeout
     // above bounds only the first of the three, and a server that accepts and
     // then says nothing is exactly the case this one exists for.
-    let answer = tokio::time::timeout(total_timeout, client.request(request))
+    let answer = bound::total(total_timeout, client.request(request))
         .await
-        .map_err(|_| anyhow::anyhow!("fetch: timed out"))?
+        // THE BOUND THAT FIRED, NAMED (CLOUD-2789): a count, so pointer-only,
+        // and what lets a case tell an override the fetch honoured from one it
+        // ignored by the cause alone, with no clock of its own.
+        .map_err(|_| anyhow::anyhow!("fetch: timed out after {}ms", total_timeout.as_millis()))?
         .map_err(|err| anyhow::anyhow!("fetch: the request failed: {err}"))?;
 
     let location = answer
@@ -962,9 +996,14 @@ async fn one_exchange(
                 .map(|value| (name.as_str().to_lowercase(), value.to_owned()))
         })
         .collect();
-    let body = tokio::time::timeout(total_timeout, answer.into_body().collect())
+    let body = bound::total(total_timeout, answer.into_body().collect())
         .await
-        .map_err(|_| anyhow::anyhow!("fetch: timed out reading the body"))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "fetch: timed out reading the body after {}ms",
+                total_timeout.as_millis()
+            )
+        })?
         .map_err(|err| anyhow::anyhow!("fetch: the body failed: {err}"))?
         .to_bytes()
         .to_vec();

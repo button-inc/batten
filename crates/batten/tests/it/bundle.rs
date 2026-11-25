@@ -278,21 +278,29 @@ fn a_bad_jobs_value_names_what_was_wrong_with_it() {
 fn the_record_is_in_declaration_order_whatever_order_they_finish_in() {
     // What `--jobs` would otherwise cost: with two children in flight the order
     // things FINISH in is a property of the machine, and Batten's output has to
-    // be a property of the bundle. Command 0 sleeps so it reliably finishes last.
+    // be a property of the bundle. Command 0 finishes last ON AN EVENT, never a
+    // clock (CLOUD-2789): it reads a FIFO whose write end command 1 holds for
+    // its whole life, so its read ends at command 1's exit. Run one at a time
+    // instead, command 0 would wait on a writer that never starts, and the
+    // mutation judge's per-case cut files that hang as the timeout it is.
+    let gate = scratch("bundle-jobs-order-gate").join("gate");
+    let _ = fs::remove_file(&gate);
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, test-only: a FIFO is made by `mkfifo`, and no door in `common` makes one"
+    )]
+    let made = Command::new("mkfifo")
+        .arg(&gate)
+        .streamed_output()
+        .expect("mkfifo runs");
+    assert!(made.status.success(), "{}", said(&made));
+    let gate = gate.to_str().expect("a UTF-8 temp path");
+    let slow = format!("cat '{gate}' > /dev/null; echo slow");
+    let fast = format!("exec 3> '{gate}'; echo fast");
     let (output, _) = exec(
         "bundle-jobs-order",
         &[
-            "exec",
-            "--jobs",
-            "2",
-            "--",
-            "sh",
-            "-c",
-            "sleep 1; echo slow",
-            ":::",
-            "sh",
-            "-c",
-            "echo fast",
+            "exec", "--jobs", "2", "--", "sh", "-c", &slow, ":::", "sh", "-c", &fast,
         ],
     );
     assert!(output.status.success(), "{}", said(&output));
@@ -441,13 +449,19 @@ fn live_child(name: &str, line: &str) -> (PathBuf, PathBuf) {
     let note = scratch(&format!("{name}-pid")).join("pid");
     let child = script(
         name,
-        &format!("echo {line}\necho $$ > {}\nexec sleep 300", note.display()),
+        // Held live by a builtin spin that ends with THIS TEST PROCESS
+        // (`kill -0` sends nothing), not by a `sleep` (CLOUD-2789).
+        &format!(
+            "echo {line}\necho $$ > {}\nwhile kill -0 {} 2>/dev/null; do :; done",
+            note.display(),
+            std::process::id()
+        ),
     );
     (child, note)
 }
 
-/// End the child [`live_child`] recorded, so the `sleep` it became does not
-/// outlive the case that killed its writer.
+/// End the child [`live_child`] recorded, so its spin does not outlive the
+/// case that killed its writer.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the live child is a real process the case left running, and ending it is a signal to its pid"

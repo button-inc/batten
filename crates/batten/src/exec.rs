@@ -3998,25 +3998,15 @@ mod tests {
             String::from_utf8_lossy(&said[..read]).trim().to_owned()
         }
 
-        /// The first write a child makes, waited for up to a fixed bound that
-        /// is this case's input rather than its assertion. The read blocks on
-        /// its own thread; a write that never comes fails the case at the
-        /// bound.
+        /// [`Fifo::awaited`], for a child that IS running: blocked on the same
+        /// event and nothing else (CLOUD-2789), and an empty read fails the
+        /// case naming `what` never happened. A write that never comes hangs
+        /// it, and the mutation judge's per-case cut files that as the timeout
+        /// it is; [`spin`] is what stops the child outliving that cut.
         fn first(&self, what: &str) -> String {
-            use std::io::Read as _;
-
-            let bound = Duration::from_secs(20);
-
-            let mut reader = self.file.try_clone().expect("share the fifo");
-            let (sent, answer) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let mut said = [0u8; 64];
-                let read = reader.read(&mut said).unwrap_or(0);
-                let _ = sent.send(String::from_utf8_lossy(&said[..read]).trim().to_owned());
-            });
-            answer
-                .recv_timeout(bound)
-                .unwrap_or_else(|_| panic!("{what} never happened"))
+            let said = self.awaited();
+            assert!(!said.is_empty(), "{what} never happened");
+            said
         }
     }
 
@@ -4054,7 +4044,7 @@ mod tests {
     /// holds the platform split.
     fn detached_group(dir: &Path, trap: &str) -> Group {
         let pid = Fifo::at(dir.join("pid"));
-        let script = format!("{trap} {}; while :; do :; done", pid.write("$$"));
+        let script = format!("{trap} {}; {}", pid.write("$$"), spin());
         detached(Path::new("/bin/sh"), &["-c".to_owned(), script], &[]);
         // THE EVENT, NOT A CLOCK: the child's pid arrives once it runs with its
         // trap set; `detached` that starts nothing leaves this read waiting.
@@ -4064,33 +4054,30 @@ mod tests {
         }
     }
 
-    /// How long [`reap`] waits for a group the case asked to leave.
-    #[cfg(unix)]
-    const REAP_GRACE: Duration = Duration::from_secs(5);
+    /// The spinner every detached child here runs: builtins alone, so its
+    /// group holds that one process, and it spins only WHILE THIS TEST
+    /// PROCESS LIVES. `kill -0` sends nothing; it asks whether the pid is
+    /// there. That is what lets [`reap`] wait on the leader's exit with no
+    /// bound (CLOUD-2789): a cancel mutated into a no-op hangs the case, the
+    /// mutation judge's cut kills this process without running a `Drop`, and
+    /// the spinner then ends on its own rather than outliving its case and
+    /// spinning a core for fourteen hours (#1276).
+    fn spin() -> String {
+        format!(
+            "while kill -0 {} 2>/dev/null; do :; done",
+            std::process::id()
+        )
+    }
 
     /// Reap this process's child `group` leader, which the caller has made
-    /// sure is exiting — or KILL it and fail at [`REAP_GRACE`].
-    ///
-    /// BOUNDED, BECAUSE A MUTANT BREAKS THE PREMISE. A cancel mutated into a
-    /// no-op leaves the spinner running, and an unbounded wait then hangs the
-    /// case until the runner's timeout SIGKILLs it, which runs no `Drop`: the
-    /// TERM-ignoring group outlived its case and spun a core for fourteen hours
-    /// (#1276). Failing here kills the mutant and reaps the group.
+    /// sure is exiting: a wait on the EVENT, its exit, with no bound
+    /// (CLOUD-2789). A cancel mutated into a no-op leaves the leader running
+    /// and the case hangs; the judge's per-case cut files that as a timeout,
+    /// and [`spin`] is what stops the group outliving the cut.
     #[cfg(unix)]
     fn reap(group: &mut Group) {
         let pid: u32 = group.pid.parse().expect("a numeric pid");
-        let (reaped, exited) = std::sync::mpsc::channel();
-        let waiter = std::thread::spawn(move || {
-            await_reaped(pid);
-            let _ = reaped.send(());
-        });
-        if exited.recv_timeout(REAP_GRACE).is_err() {
-            let _ = escalate_group(&group.pid);
-            let _ = waiter.join();
-            group.reaped = true;
-            panic!("the group outlived its cancel by {REAP_GRACE:?}, so it was killed");
-        }
-        let _ = waiter.join();
+        await_reaped(pid);
         group.reaped = true;
     }
 
@@ -4170,7 +4157,7 @@ mod tests {
             return;
         }
         let pid = Fifo::at(root.join("pid"));
-        let script = format!("{}; while :; do :; done", pid.write("$$"));
+        let script = format!("{}; {}", pid.write("$$"), spin());
         let answered = detached_in(Path::new("/bin/sh"), &["-c".to_owned(), script], &[], &root)
             .expect("the child starts");
         // ASKED OF THE KERNEL BEFORE THE PIPE IS READ: a pid that names no

@@ -191,8 +191,12 @@ fn a_run_in_another_checkout_defers_only_the_shared_root() {
         return;
     }
     let elsewhere = crate::common::scratch("clear-scratch-elsewhere");
-    let mut other = std::process::Command::new("sleep")
-        .arg("60")
+    // `cat` on a stdin pipe this case holds: alive exactly until the case
+    // closes that pipe, which ends it on the EOF rather than on a clock or a
+    // kill (CLOUD-2789).
+    let mut other = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
         .current_dir(&elsewhere)
         .spawn()
         .expect("start the other run");
@@ -201,7 +205,7 @@ fn a_run_in_another_checkout_defers_only_the_shared_root() {
         &other.id().to_string(),
         &["tmp", "../tmpdir/batten-suite"],
     );
-    let _ = other.kill();
+    drop(other.stdin.take());
     let _ = other.wait();
     assert_eq!(
         survived,
@@ -232,14 +236,18 @@ fn a_run_sharing_this_target_dir_from_another_checkout_defers_it() {
     let root = crate::common::scratch("clear-scratch-shared-target");
     let elsewhere = root.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
-    let mut other = std::process::Command::new("sleep")
-        .arg("60")
+    // `cat` on a stdin pipe this case holds: alive exactly until the case
+    // closes that pipe, which ends it on the EOF rather than on a clock or a
+    // kill (CLOUD-2789).
+    let mut other = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
         .current_dir(&elsewhere)
         .env("CARGO_TARGET_DIR", root.join("target"))
         .spawn()
         .expect("start the sharing run");
     let (survived, published) = collect_seeded_at(&root, &other.id().to_string(), &["tmp"]);
-    let _ = other.kill();
+    drop(other.stdin.take());
     let _ = other.wait();
     assert_eq!(
         survived,

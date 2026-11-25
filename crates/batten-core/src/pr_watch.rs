@@ -1007,42 +1007,36 @@ mod tests {
         assert_eq!(slices(5.0, 2), vec![1.0, 1.0]);
     }
 
-    /// The real pause holds its thread until the flag is raised, and then
-    /// lets it go: the outcome the wait stands in for, not its length.
+    /// The real pause holds its thread for the wait it was asked: measured
+    /// across the call as it RETURNS, the event, and never waited on with a
+    /// clock of the case's own (CLOUD-2789). A pause that let its thread go
+    /// at once reads a span short of the wait.
     #[test]
     fn a_pause_holds_until_its_flag_is_raised() {
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (done, finished) = std::sync::mpsc::channel();
-        let held = std::sync::Arc::clone(&stop);
-        let waiter = std::thread::spawn(move || {
-            pause_until(600.0, &held);
-            let _ = done.send(());
-        });
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let asked = std::time::Duration::from_millis(50);
+        let began = std::time::Instant::now();
+        pause_until(asked.as_secs_f64(), &stop);
         assert!(
-            finished
-                .recv_timeout(std::time::Duration::from_millis(300))
-                .is_err(),
-            "a pause of ten minutes let its thread go at once"
+            began.elapsed() >= asked,
+            "a pause of {asked:?} let its thread go at once"
         );
+        // AND THE FLAG ENDS IT: ten minutes over a flag already raised
+        // returns. A pause that ignored the flag never returns, and the
+        // mutation judge's per-case cut files that as the timeout it is.
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        finished.recv().expect("the raised flag ends the pause");
-        waiter.join().expect("the waiter exits");
+        pause_until(600.0, &stop);
     }
 
-    /// The unstoppable pause holds its thread too. Nothing can end it, so the
-    /// waiter is left to the process's exit rather than joined.
+    /// The unstoppable pause holds its thread too, measured the same way.
     #[test]
     fn a_pause_with_no_flag_holds_its_thread() {
-        let (done, finished) = std::sync::mpsc::channel();
-        drop(std::thread::spawn(move || {
-            pause(600.0);
-            let _ = done.send(());
-        }));
+        let asked = std::time::Duration::from_millis(50);
+        let began = std::time::Instant::now();
+        pause(asked.as_secs_f64());
         assert!(
-            finished
-                .recv_timeout(std::time::Duration::from_millis(300))
-                .is_err(),
-            "a pause of ten minutes let its thread go at once"
+            began.elapsed() >= asked,
+            "a pause of {asked:?} let its thread go at once"
         );
     }
 

@@ -1199,18 +1199,37 @@ impl Drop for Reaped {
 ///
 /// A WRITER CASE WITH A REAL CHILD, unlike the reader cases above that use this
 /// process: the subject is the loop's own registration, which only a running
-/// poller can make. Bounded twice over: the child is killed on drop, and the
-/// wait for its second tick is 600 × 50 ms.
+/// poller can make. The child is killed on drop, and the case waits on EVENTS
+/// only (CLOUD-2789): each round's source writes a line to a FIFO this case
+/// reads, so reading the THIRD round's line means two rounds ended before it
+/// and pushed their ticks. A poller that never ticks again hangs the case on
+/// the FIFO, and the mutation judge's per-case cut files that as the timeout it
+/// is.
 #[test]
 fn forge_poll_every_registers_and_ticks() {
+    use batten::capture::Streamed as _;
     let repo = registry_repo("forge-poll-every");
     std::fs::write(repo.join("empty.json"), "[]").unwrap();
+    // BESIDE the repository, so nothing reading the tree opens it.
+    let gate = repo.with_extension("rounds");
+    let _ = std::fs::remove_file(&gate);
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, test-only: a FIFO is made by `mkfifo`, and no door in `common` makes one"
+    )]
+    let made = std::process::Command::new("mkfifo")
+        .arg(&gate)
+        .streamed_output()
+        .expect("mkfifo runs");
+    assert!(made.status.success(), "{}", stderr(&made));
+    let gate_text = gate.to_str().expect("a UTF-8 temp path");
     let config = std::fs::read_to_string(repo.join("batten.toml")).unwrap();
     std::fs::write(
         repo.join("batten.toml"),
         format!(
             "{config}\n[forge]\n\n[[forge.source]]\nid = \"empty\"\nkind = \"command\"\n\
-             decode = \"events\"\nrun = [\"cat\", \"empty.json\"]\navailable = [\"true\"]\n"
+             decode = \"events\"\nrun = [\"sh\", \"-c\", \"echo round > '{gate_text}'; cat \
+             empty.json\"]\navailable = [\"true\"]\n"
         ),
     )
     .unwrap();
@@ -1222,26 +1241,18 @@ fn forge_poll_every_registers_and_ticks() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("the poller starts");
-    let mut child = Reaped(child);
+    let child = Reaped(child);
     let pid = child.0.id().to_string();
     let git_dir = repo.join(".git");
-    let mut ticked = false;
-    for _ in 0..600 {
-        assert!(
-            child.0.try_wait().unwrap().is_none(),
-            "the poller exited before it ticked twice"
-        );
-        let tick = batten::task::read_field(&git_dir, &pid, "tick").unwrap_or_default();
-        if tick.parse::<u64>().is_ok_and(|tick| tick >= 2) {
-            ticked = true;
-            break;
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a bounded poll: the exit condition is the poller's second tick in its registry record, and the `0..600` bound turns a poller that never ticks into a failed assertion rather than a hang (CLOUD-1177)"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    // Each read opens the read end, which waits for a round's writer, and ends
+    // at that round's EOF. The tick is pushed after each round's source runs,
+    // so the third round's line is written after the second tick.
+    for _ in 0..3 {
+        let said = std::fs::read_to_string(&gate).expect("a round writes the gate");
+        assert_eq!(said.trim(), "round", "the poller ran its source");
     }
+    let tick = batten::task::read_field(&git_dir, &pid, "tick").unwrap_or_default();
+    let ticked = tick.parse::<u64>().is_ok_and(|tick| tick >= 2);
     assert!(ticked, "the poller never ticked twice");
     let output = alive(&repo, &[]);
     let listed = stdout(&output);
