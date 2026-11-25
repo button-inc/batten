@@ -210,7 +210,20 @@ impl Readings {
 /// It does not try to tell current from stale: cargo keeps every generation's
 /// fingerprint, so "has a fingerprint" would mark everything live and reclaim
 /// nothing, which is CLOUD-766's disk exhaustion back.
-pub(crate) fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
+/// The flag a stoppable walk ends on (CLOUD-2789): the disk watcher's, set when
+/// the run it watches returns. `None` is a walk no one stops — the hook's and
+/// `target prune`'s, which a deadline or the verb's own end bounds.
+pub(crate) type Halt<'a> = Option<&'a std::sync::atomic::AtomicBool>;
+
+/// Whether `halt` has been set.
+pub(crate) fn halted(halt: Halt<'_>) -> bool {
+    halt.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+}
+
+///
+/// A PASS ENDS at the first `deps` boundary after `halt` is set: one over a
+/// 21 GB tree outlived the step it watched (CLOUD-2789). `None` never ends it.
+pub(crate) fn reclaim_superseded(root: &Path, keep: usize, halt: Halt<'_>) -> (usize, u64) {
     let mut pruned = 0;
     let mut bytes = 0;
     // `examples` BESIDE `deps` (CLOUD-2047). cargo writes an example target's
@@ -220,14 +233,20 @@ pub(crate) fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     // every bench: 56 units for 4 examples, 1,082 MB, measured 2026-09-30. Only an
     // `examples` whose parent is a profile (it carries `.fingerprint`) is a cargo
     // output; the name alone is one a fixture under `target/` could spell.
-    let examples: Vec<PathBuf> = directories_named(root, "examples")
+    let examples: Vec<PathBuf> = directories_named(root, "examples", halt)
         .into_iter()
         .filter(|dir| {
             dir.parent()
                 .is_some_and(|profile| profile.join(".fingerprint").is_dir())
         })
         .collect();
-    for deps in directories_named(root, "deps").into_iter().chain(examples) {
+    for deps in directories_named(root, "deps", halt)
+        .into_iter()
+        .chain(examples)
+    {
+        if halted(halt) {
+            break;
+        }
         let Ok(_building) = claim(root, &deps) else {
             continue;
         };
@@ -789,16 +808,26 @@ fn name_matches(candidate: &std::ffi::OsStr, declared: &str) -> bool {
 /// escalation, handed to `remove_dir_all`. The predecessor was safe by accident
 /// of its instrument (`find -type d` does not follow without `-L`); the port made
 /// it a decision, and review caught the window between the two on #734.
-pub(crate) fn directories_named(root: &Path, name: &str) -> Vec<PathBuf> {
-    directories_named_outside(root, name, &[])
+///
+/// A WALK ENDS where `halt` is set, with what it found so far (CLOUD-2789).
+pub(crate) fn directories_named(root: &Path, name: &str, halt: Halt<'_>) -> Vec<PathBuf> {
+    directories_named_outside(root, name, &[], halt)
 }
 
 /// [`directories_named`], never descending into a directory one of
-/// `shielded` names.
-fn directories_named_outside(root: &Path, name: &str, shielded: &[&str]) -> Vec<PathBuf> {
+/// `shielded` names, and ending at the next directory once `halt` is set.
+fn directories_named_outside(
+    root: &Path,
+    name: &str,
+    shielded: &[&str],
+    halt: Halt<'_>,
+) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if halted(halt) {
+            break;
+        }
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -1118,7 +1147,7 @@ mod tests {
         variant(&profile, "demo", "a3a3a3a3a3a3a3a3", 1000);
         variant(&profile, "other", "b1b1b1b1b1b1b1b1", 9000);
 
-        let (pruned, _) = reclaim_superseded(&root, 1);
+        let (pruned, _) = reclaim_superseded(&root, 1, None);
 
         let prints = profile.join(".fingerprint");
         assert_eq!(pruned, 2, "keep 1 of three `demo` variants");
@@ -1175,7 +1204,7 @@ mod tests {
         put(&deps.join(&named), b"k");
         put(&deps.join(format!("demo-{new}.old.rcgu.dwo")), b"gone");
         assert_eq!(
-            reclaim_superseded(&root, 1),
+            reclaim_superseded(&root, 1, None),
             (4, 5 + 7 + 3 + 4),
             "the old generation, two orphans and one superseded dwo"
         );
@@ -1349,12 +1378,16 @@ mod tests {
         let build = building(&profile);
 
         assert_eq!(
-            reclaim_superseded(&root, 1),
+            reclaim_superseded(&root, 1, None),
             (0, 0),
             "nothing under a held lock"
         );
 
         drop(build);
-        assert_eq!(reclaim_superseded(&root, 1).0, 1, "released, keep 1 of 2");
+        assert_eq!(
+            reclaim_superseded(&root, 1, None).0,
+            1,
+            "released, keep 1 of 2"
+        );
     }
 }
