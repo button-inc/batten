@@ -15284,12 +15284,21 @@ mod tests {
         let cases: BTreeSet<Case> = [t.clone()].into();
         let executed = [(t.clone(), BTreeSet::new())].into();
         let none = std::collections::BTreeMap::new();
+        // IN ANOTHER FILE (round 4 #18): one beside the test is in the test's
+        // own text already ([`test_texts`]), which kept this case green with
+        // the walk from that text removed.
+        let lib = "pub mod config;\n#[cfg(test)]\nmod tests {\n    #[test]\n    \
+                   fn t() { assert_eq!(crate::config::LIMIT, 1); }\n}\n";
         let digest = |label: &str, value: &str| {
-            let lib = format!(
-                "pub const LIMIT: u8 = {value};\n#[cfg(test)]\nmod tests {{\n    #[test]\n    \
-                 fn t() {{ assert_eq!(super::LIMIT, 1); }}\n}}\n"
-            );
-            tree_digests(label, &cases, &executed, &[("src/lib.rs", &lib)], &none)[&t].clone()
+            let config = format!("pub const LIMIT: u8 = {value};\n");
+            tree_digests(
+                label,
+                &cases,
+                &executed,
+                &[("src/config.rs", &config), ("src/lib.rs", lib)],
+                &none,
+            )[&t]
+                .clone()
         };
         assert_ne!(digest("schema-own-a", "1"), digest("schema-own-b", "2"));
     }
