@@ -714,10 +714,8 @@ mod tests {
         };
         reset_low_water();
         let (seen, _) = around(Some(watch), || {
-            // Bounded by the event: the watcher's second reading.
-            observed
-                .recv_timeout(std::time::Duration::from_secs(30))
-                .map(|()| low_water())
+            // The event: the watcher's second reading. No clock bounds it.
+            observed.recv().map(|()| low_water())
         });
         assert_eq!(
             seen.ok().flatten(),
@@ -847,8 +845,8 @@ mod tests {
             record: None,
         };
         let ((), lines) = around(Some(watch), || {
-            // Bounded by the events above; the bound is only a backstop.
-            let _ = settled.recv_timeout(std::time::Duration::from_secs(60));
+            // The event above, and no clock: a hang is the runner's to report.
+            let _ = settled.recv();
         });
         assert!(!stale.exists(), "the held tree was skipped: {lines:?}");
     }
@@ -945,16 +943,11 @@ mod tests {
             );
             // THE ARMED LINE REACHES THE SINK FIRST; the body waits for the
             // batch a collection hands over, the event this case is about.
-            // The bound is only a backstop (CLOUD-2789): a collection whose
-            // lines never reach the sink fails the case below instead of
-            // holding it until the suite's timeout.
+            // No clock bounds it (CLOUD-2789): a collection whose lines never
+            // reach the sink hangs the case, and the runner reports the hang.
             let (live, lines) = around_on(driver, Some(watch), || {
-                std::iter::from_fn(|| {
-                    arrived
-                        .recv_timeout(std::time::Duration::from_secs(10))
-                        .ok()
-                })
-                .find(|batch| batch.iter().any(|line| line.starts_with("disk-collected ")))
+                std::iter::from_fn(|| arrived.recv().ok())
+                    .find(|batch| batch.iter().any(|line| line.starts_with("disk-collected ")))
             });
             assert!(
                 live.is_some(),
@@ -969,8 +962,8 @@ mod tests {
 
     /// A VOLUME ABOVE THE FLOOR IS NEVER COLLECTED, however many samples read it.
     ///
-    /// ORDERED BY EVENTS: the reader signals on its 200th reading, and the bound
-    /// is only a backstop.
+    /// ORDERED BY EVENTS: the reader signals on its 200th reading, and no clock
+    /// bounds the wait for it.
     ///
     /// Fails by: the floor test inverted, so a sample above the floor starts a
     /// collection and the stale fixture goes.
@@ -993,11 +986,7 @@ mod tests {
             copies: no_copies(),
             record: None,
         };
-        let (observed, lines) = around(Some(watch), || {
-            settled
-                .recv_timeout(std::time::Duration::from_secs(10))
-                .is_ok()
-        });
+        let (observed, lines) = around(Some(watch), || settled.recv().is_ok());
         assert!(observed, "THE PREMISE: the watcher sampled: {lines:?}");
         assert!(stale.exists(), "collected above the floor: {lines:?}");
     }
@@ -1067,7 +1056,7 @@ mod tests {
             record: None,
         };
         let ((), _) = around(Some(watch), || {
-            let _ = filled.recv_timeout(std::time::Duration::from_secs(120));
+            let _ = filled.recv();
         });
         let stamps = stamps
             .lock()
