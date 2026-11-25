@@ -5838,13 +5838,13 @@ pub fn case_digests<'c>(
     depends: &Depends<'_>,
 ) -> std::collections::BTreeMap<Case, String> {
     type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<String>>)>;
+    /// What a case ran and its own text names, to the named part it keys.
+    type Named =
+        std::collections::HashMap<(Vec<usize>, BTreeSet<String>), (blake3::Hash, Vec<usize>)>;
     let mut parsed: std::collections::BTreeMap<String, Parsed> = std::collections::BTreeMap::new();
     let mut shared: std::collections::HashMap<String, (Vec<u8>, Vec<Shared>)> =
         std::collections::HashMap::new();
     let mut digests = std::collections::BTreeMap::new();
-    /// What a case ran and its own text names, to the named part it keys.
-    type Named =
-        std::collections::HashMap<(Vec<usize>, BTreeSet<String>), (blake3::Hash, Vec<usize>)>;
     let mut named_parts: Named = std::collections::HashMap::new();
     let graph = Graph::new(depends);
     let mut walk = Walk::default();
