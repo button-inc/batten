@@ -297,13 +297,18 @@ impl Finding {
 
 /// Run the session's setup: what `SessionStart` used to run inline.
 ///
+/// `fire_actions` fires the session-start actions for the session it is
+/// handed. THE CALLER FIRES THEM, NOT THIS MODULE (CLOUD-2789): the caller
+/// already reaches `action`, and a reach from here was the one edge that put
+/// `crates/batten/src`'s propagation over its `modules.lock` record.
+///
 /// Returns whether every step passed — the phase the task leaves behind.
 #[must_use]
 pub fn run(
     root: &Path,
     git_dir: &Path,
     handlers: &[crate::config_model::Handler],
-    actions: &[crate::config_model::Action],
+    fire_actions: &mut dyn FnMut(&str),
     rows: &[crate::config_model::Startup],
 ) -> bool {
     let pid = std::process::id().to_string();
@@ -362,17 +367,7 @@ pub fn run(
     let handlers_passed = !failed_any(&dispatched);
     // THE SESSION-START ACTIONS, which the hook used to fire inline: fire and
     // forget, as they always were, but from this task (CLOUD-2840).
-    crate::action::fire(
-        actions,
-        crate::config_model::Event::SessionStart,
-        crate::action::Facts {
-            event: "session-start",
-            tool: "",
-            path: "",
-            session: &session,
-        },
-        &mut std::io::stderr(),
-    );
+    fire_actions(&session);
 
     task::push(
         git_dir,

@@ -3302,8 +3302,28 @@ fn run_session_setup(overrides: &Overrides) -> Result<ExitCode> {
     if let Ok(Some(tag)) = adopt_engine_key(here, overrides) {
         let _ = writeln!(std::io::stderr(), "{}", adopted_line(&tag));
     }
+    // The session-start actions, fired for the session the task runs for.
+    let mut fire_actions = |session: &str| {
+        action::fire(
+            &actions,
+            crate::config_model::Event::SessionStart,
+            action::Facts {
+                event: "session-start",
+                tool: "",
+                path: "",
+                session,
+            },
+            &mut std::io::stderr(),
+        );
+    };
     Ok(
-        if session_setup::run(here, &git_dir, &handlers, &actions, &resolved.startup) {
+        if session_setup::run(
+            here,
+            &git_dir,
+            &handlers,
+            &mut fire_actions,
+            &resolved.startup,
+        ) {
             ExitCode::Success
         } else {
             ExitCode::Usage
