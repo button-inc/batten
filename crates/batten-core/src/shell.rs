@@ -183,8 +183,42 @@ pub struct SegmentLine {
     /// `command`, `sudo` or any other wrapper runs the `PATH` program, so its
     /// first word is the wrapper's and this stays `false`. Each of those was a
     /// way to hide a real program behind a name.
+    ///
+    /// A definition counts only once it CERTAINLY ran and was not removed: one
+    /// behind `&&` or `||`, one sent to the background with `&`, and one an
+    /// `unset` removed, does not.
     pub function_call: bool,
+    /// What a [`SegmentLine::function_call`] runs WITH ITS ARGUMENTS: each body
+    /// line that reads `$@`, `$*`, `$1`… with the call's arguments put there
+    /// (CLOUD-2840 review, findings 1 and 5). `f() { "$@"; }; f git push`
+    /// runs `git push`, which a reading of the call's first word never sees.
+    ///
+    /// A body that hands its arguments on in a way this cannot follow — a
+    /// variable in command position, an expansion this does not resolve —
+    /// also yields every suffix of the arguments, so whatever program they
+    /// name is read. Empty for a line that calls no function.
+    pub forwarded: Vec<Vec<String>>,
 }
+
+/// A shell function the walk has seen defined (CLOUD-2840): its name, the
+/// argv of every line its body runs, and the names its body `unset`s.
+///
+/// Several entries may share a name where a definition MAY have replaced
+/// another — inside a branch — and a call then runs either body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Definition {
+    /// The function's name.
+    pub name: String,
+    /// Each body line's argv, redirections dropped, `$@` and the rest as
+    /// written, nested commands included.
+    pub lines: Vec<Vec<String>>,
+    /// The names the body removes with `unset`, which a call removes too.
+    pub unsets: Vec<String>,
+}
+
+/// How deep a call through one function into another is followed: past it, a
+/// line is read as written, which names the function as its program.
+const CALL_DEPTH: usize = 6;
 
 /// The shell operator between two segments — what happens to the first one's
 /// exit status.
@@ -363,7 +397,7 @@ pub fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
     let mut out: Vec<Segment> = Vec::new();
     // ONE SCOPE ACROSS THE TOP-LEVEL NODES: a definition on one line is visible
     // to a call on the next (CLOUD-2840).
-    let mut defined: Vec<String> = Vec::new();
+    let mut defined: Vec<Definition> = Vec::new();
     for (position, node) in reading.iter().enumerate() {
         let first = out.len();
         flatten_scoped(node, source, None, None, &mut defined, &mut out);
@@ -408,18 +442,24 @@ pub fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
         // every walk reads this through — a local shadowing that name reads as the
         // function to anybody scanning for it.
         let mut line_readings: Vec<SegmentLine> = Vec::new();
-        let mut defined: Vec<String> = Vec::new();
+        let mut defined: Vec<Definition> = Vec::new();
         for node in &nodes {
             let mut produced: Vec<Segment> = Vec::new();
             flatten_scoped(node, command, None, None, &mut defined, &mut produced);
             for segment in produced {
                 if !segment.nested {
                     let function_call = segment.lines.iter().any(|line| line.function_call);
+                    let forwarded = segment
+                        .lines
+                        .into_iter()
+                        .flat_map(|line| line.forwarded)
+                        .collect();
                     line_readings.push(SegmentLine {
                         words: segment.words,
                         redirects: segment.redirects,
                         raw: segment.raw,
                         function_call,
+                        forwarded,
                     });
                 }
             }
@@ -444,10 +484,16 @@ pub fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
             let wanted = segment.words.len();
             let mut taken: Vec<SegmentLine> = Vec::new();
             let mut counted = 0;
-            while counted < wanted {
-                let Some(line) = lines.next() else { break };
+            // AT LEAST ONE LINE, THEN UNTIL THE COUNT IS MET (CLOUD-2840 review
+            // M3): a segment of no words — `''` — is a line of no words, and a
+            // loop that stops once the count is met took none for it, refused,
+            // and cancelled the per-line reading for every segment.
+            while let Some(line) = lines.next() {
                 counted += line.words.len();
                 taken.push(line);
+                if counted >= wanted {
+                    break;
+                }
             }
             // TWO REFUSALS, KEPT APART: a segment that took no line and one whose
             // count missed are each a reassignment that did not land, and neither
@@ -462,8 +508,9 @@ pub fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
             }
             assignment.push(taken);
         }
-        // Applied only where every segment landed AND no line is left over.
-        if let (true, None) = (landed, lines.next()) {
+        // Applied only where every segment landed AND no line is left over but
+        // a line of no words, which no segment can own.
+        if landed && lines.all(|line| line.words.is_empty()) {
             for (segment, taken) in out
                 .iter_mut()
                 .filter(|segment| !segment.nested)
@@ -576,15 +623,69 @@ pub fn covered(nodes: &[rable::Node], command: &str) -> bool {
 }
 
 /// Does this node, anywhere inside it, open a heredoc?
+///
+/// **EVERY COMPOUND, AND ITS OWN REDIRECTIONS** (CLOUD-2840 review M5): a
+/// heredoc written on `{ … }`, a loop, an `if`, a `case`, `[[ … ]]` or
+/// `(( … ))` is a heredoc too. Missed, its body read as a tail the parse
+/// dropped, a quote there made the whole call could-not-look, and every
+/// command in it went unjudged.
 pub fn opens_heredoc(node: &rable::Node) -> bool {
+    let any = |nodes: &[rable::Node]| nodes.iter().any(opens_heredoc);
     match &node.kind {
         rable::NodeKind::HereDoc { .. } => true,
-        rable::NodeKind::Command { redirects, .. } => redirects.iter().any(opens_heredoc),
-        rable::NodeKind::Pipeline { commands, .. } => commands.iter().any(opens_heredoc),
+        rable::NodeKind::Command { redirects, .. }
+        | rable::NodeKind::ConditionalExpr { redirects, .. }
+        | rable::NodeKind::ArithmeticCommand { redirects, .. } => any(redirects),
+        rable::NodeKind::Pipeline { commands, .. } => any(commands),
         rable::NodeKind::List { items } => items.iter().any(|item| opens_heredoc(&item.command)),
-        rable::NodeKind::Subshell { body, .. } | rable::NodeKind::BraceGroup { body, .. } => {
-            opens_heredoc(body)
+        rable::NodeKind::Subshell { body, redirects }
+        | rable::NodeKind::BraceGroup { body, redirects }
+        | rable::NodeKind::For {
+            body, redirects, ..
         }
+        | rable::NodeKind::ForArith {
+            body, redirects, ..
+        }
+        | rable::NodeKind::Select {
+            body, redirects, ..
+        } => opens_heredoc(body) || any(redirects),
+        rable::NodeKind::While {
+            condition,
+            body,
+            redirects,
+        }
+        | rable::NodeKind::Until {
+            condition,
+            body,
+            redirects,
+        } => opens_heredoc(condition) || opens_heredoc(body) || any(redirects),
+        rable::NodeKind::If {
+            condition,
+            then_body,
+            else_body,
+            redirects,
+        } => {
+            opens_heredoc(condition)
+                || opens_heredoc(then_body)
+                || else_body.as_deref().is_some_and(opens_heredoc)
+                || any(redirects)
+        }
+        rable::NodeKind::Case {
+            patterns,
+            redirects,
+            ..
+        } => {
+            patterns
+                .iter()
+                .filter_map(|arm| arm.body.as_ref())
+                .any(opens_heredoc)
+                || any(redirects)
+        }
+        rable::NodeKind::Function { body, .. } => opens_heredoc(body),
+        rable::NodeKind::Negation { pipeline } | rable::NodeKind::Time { pipeline, .. } => {
+            opens_heredoc(pipeline)
+        }
+        rable::NodeKind::Coproc { command, .. } => opens_heredoc(command),
         _ => false,
     }
 }
@@ -672,18 +773,22 @@ pub fn command_words(
 /// A word may CONTAIN commands: `rm $(cat list)` runs `cat`, and the character
 /// walk this replaces could not see them at all (CLOUD-1257). A redirect target
 /// may be a substitution too — `diff <(a) <(b)`.
+///
+/// The functions `defined` where the command runs are defined inside its
+/// substitutions too: a `$( … )` is a subshell, which inherits them.
 #[must_use]
 pub fn nested_commands(
     words: &[rable::Node],
     redirects: &[rable::Node],
     source: &str,
+    defined: &[Definition],
 ) -> Vec<Segment> {
     let mut nested = Vec::new();
     for word in words {
-        descend_word(word, source, &mut nested);
+        descend_word_in(word, source, defined, &mut nested);
     }
     for redirect in redirects {
-        descend_redirect(redirect, source, &mut nested);
+        descend_redirect_in(redirect, source, defined, &mut nested);
     }
     nested
 }
@@ -698,7 +803,7 @@ pub fn flatten_command(
     source: &str,
     after: Option<Separator>,
     construct: Option<(&'static str, &'static str)>,
-    defined: &[String],
+    defined: &mut Vec<Definition>,
     out: &mut Vec<Segment>,
 ) {
     let rable::NodeKind::Command {
@@ -740,22 +845,41 @@ pub fn flatten_command(
     // judged.
     let mut nested = Vec::new();
     for assignment in assignments {
-        descend_word(assignment, source, &mut nested);
+        descend_word_in(assignment, source, defined, &mut nested);
     }
-    nested.append(&mut nested_commands(words, redirects, source));
+    nested.append(&mut nested_commands(words, redirects, source, defined));
     if segment.words.iter().any(String::is_empty) {
         segment.words.retain(|word| !word.is_empty());
     }
     // THE FIRST WORD UNWRAPPED, against the definitions visible here: a
     // wrapper's call (`env f`, `command f`) has the wrapper as its first word.
-    let function_call = words
+    let call: Vec<String> = words.iter().map(|word| unquote(&word_text(word))).collect();
+    let function_call = call
         .first()
-        .is_some_and(|word| defined.contains(&unquote(&word_text(word))));
+        .is_some_and(|name| defined.iter().any(|definition| definition.name == *name));
+    // A CALL RUNS ITS BODY WITH ITS ARGUMENTS, and removes what that body
+    // `unset`s; an `unset` here removes its names from this point on.
+    let forwarded = if function_call {
+        let forwarded = call_lines(&call, defined, CALL_DEPTH);
+        let removed: Vec<String> = defined
+            .iter()
+            .filter(|definition| Some(&definition.name) == call.first())
+            .flat_map(|definition| definition.unsets.iter().cloned())
+            .collect();
+        defined.retain(|definition| !removed.contains(&definition.name));
+        forwarded
+    } else {
+        if let Some(names) = unset_functions(&call) {
+            defined.retain(|definition| !names.contains(&definition.name));
+        }
+        Vec::new()
+    };
     segment.lines = vec![SegmentLine {
         words: segment.words.clone(),
         redirects: segment.redirects.clone(),
         raw: segment.raw.clone(),
         function_call,
+        forwarded,
     }];
     // Everything the descent produced is nested, however deep: an inner `$(…)`
     // inside an outer one is still not a line of the command that contains them.
@@ -786,9 +910,26 @@ pub fn flatten_in(
 /// The tokens are appended to each command's words, redirections and lines, so
 /// they stay the suffix of its words; a command substitution inside runs with
 /// its output captured, so a nested segment takes none.
-fn redirected(out: &mut [Segment], first: usize, redirects: &[rable::Node], source: &str) {
+///
+/// A REDIRECTION'S TARGET MAY ITSELF RUN A COMMAND (CLOUD-2840 review M5):
+/// `{ cat f; } > >(tee out)` runs `tee`, so each target is descended too, as a
+/// simple command's is.
+fn redirected(
+    out: &mut Vec<Segment>,
+    first: usize,
+    redirects: &[rable::Node],
+    source: &str,
+    defined: &[Definition],
+) {
     if redirects.is_empty() {
         return;
+    }
+    let mut nested = Vec::new();
+    for redirect in redirects {
+        descend_redirect_in(redirect, source, defined, &mut nested);
+    }
+    for inner in &mut nested {
+        inner.nested = true;
     }
     let tokens: Vec<String> = redirects
         .iter()
@@ -806,23 +947,318 @@ fn redirected(out: &mut [Segment], first: usize, redirects: &[rable::Node], sour
             line.redirects.extend(tokens.iter().cloned());
         }
     }
+    out.append(&mut nested);
+}
+
+/// A `[[ … ]]` or `(( … ))` carrying a redirection, as the segment of its
+/// redirect tokens alone (CLOUD-2840 review M5): it runs no program, and its
+/// target is written all the same, as `> out` alone writes it.
+fn flatten_test(
+    node: &rable::Node,
+    source: &str,
+    after: Option<Separator>,
+    construct: Option<(&'static str, &'static str)>,
+    defined: &[Definition],
+    out: &mut Vec<Segment>,
+) {
+    let (rable::NodeKind::ConditionalExpr { redirects, .. }
+    | rable::NodeKind::ArithmeticCommand { redirects, .. }) = &node.kind
+    else {
+        return;
+    };
+    if redirects.is_empty() {
+        return;
+    }
+    let tokens: Vec<String> = redirects
+        .iter()
+        .flat_map(|redirect| redirect_words(redirect, source))
+        .collect();
+    let raw = node.source_text(source).to_owned();
+    out.push(Segment {
+        words: tokens.clone(),
+        redirects: tokens.clone(),
+        raw: raw.clone(),
+        terminator: after,
+        input_redirect: redirects.iter().any(binds_stdin),
+        stdin_text: redirects.iter().filter_map(stdin_text).collect(),
+        cat_bodies: Vec::new(),
+        lines: vec![SegmentLine {
+            words: tokens.clone(),
+            redirects: tokens,
+            raw,
+            function_call: false,
+            forwarded: Vec::new(),
+        }],
+        construct,
+        nested: false,
+        grouped: false,
+    });
+    let mut nested = Vec::new();
+    for redirect in redirects {
+        descend_redirect_in(redirect, source, defined, &mut nested);
+    }
+    for inner in &mut nested {
+        inner.nested = true;
+    }
+    out.append(&mut nested);
+}
+
+/// The definitions after a part of the walk that MAY have run, merged into
+/// those before it (CLOUD-2840 review B2): a name stays a function only where
+/// it was one before AND still is after — a definition that may not have run
+/// adds nothing, an `unset` that may have run removes — and a call may run
+/// either body, so both are kept.
+fn merge_uncertain(defined: &mut Vec<Definition>, branch: &[Definition]) {
+    let mut merged: Vec<Definition> = defined
+        .iter()
+        .filter(|before| branch.iter().any(|after| after.name == before.name))
+        .cloned()
+        .collect();
+    for after in branch {
+        if defined.iter().any(|before| before.name == after.name) && !merged.contains(after) {
+            merged.push(after.clone());
+        }
+    }
+    *defined = merged;
+}
+
+/// The function names an `unset` removes, or `None` where `call` is not one
+/// that can remove a function: `unset -v` and `unset -n` name variables only.
+/// A plain `unset NAME` removes the function where no variable has the name,
+/// so it is read as removing it — the direction that reads more programs.
+fn unset_functions(call: &[String]) -> Option<Vec<String>> {
+    let at = call
+        .iter()
+        .position(|word| !matches!(word.as_str(), "builtin" | "command"))?;
+    if call[at] != "unset" {
+        return None;
+    }
+    let mut names = Vec::new();
+    let mut options = true;
+    for word in &call[at + 1..] {
+        if options && word == "--" {
+            options = false;
+        } else if options && word.starts_with('-') {
+            if word.contains(['v', 'n']) {
+                return None;
+            }
+        } else {
+            names.push(word.clone());
+        }
+    }
+    Some(names)
+}
+
+/// The argv of each line a call to the function `call` names runs with its
+/// arguments, through every body that name may have (CLOUD-2840 review,
+/// findings 1 and 5). A line whose command word is itself a defined function
+/// is that function's call, followed `depth` deep.
+fn call_lines(call: &[String], defined: &[Definition], depth: usize) -> Vec<Vec<String>> {
+    let Some((name, arguments)) = call.split_first() else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for definition in defined.iter().filter(|definition| definition.name == *name) {
+        for line in substituted(&definition.lines, arguments) {
+            let at = line
+                .iter()
+                .position(|word| !is_assignment_word(word))
+                .unwrap_or(line.len());
+            let inner = &line[at..];
+            let calls = inner
+                .first()
+                .is_some_and(|first| defined.iter().any(|other| other.name == *first));
+            match depth.checked_sub(1) {
+                Some(deeper) if calls => found.extend(call_lines(inner, defined, deeper)),
+                _ => found.push(line),
+            }
+        }
+    }
+    found
+}
+
+/// The body `lines` that read the positional parameters, with `arguments` put
+/// in their place.
+///
+/// `shift` moves which arguments those are, and a branch may skip it, so each
+/// line is read at every offset a `shift` before it may leave. A line that
+/// still holds an expansion in command position after that, or one whose
+/// expansion this cannot resolve (`${1:-x}`, `${!1}`), is a body this cannot
+/// read: every suffix of the arguments is then read as a command too, which
+/// is where a forwarded program can begin.
+fn substituted(lines: &[Vec<String>], arguments: &[String]) -> Vec<Vec<String>> {
+    let mut offsets: Vec<usize> = vec![0];
+    let mut found = Vec::new();
+    let mut opaque = false;
+    let mut reads = false;
+    for line in lines {
+        if line.first().is_some_and(|word| word == "shift") {
+            let by = match line.get(1).map(|count| count.parse::<usize>()) {
+                None => 1,
+                Some(Ok(by)) => by,
+                Some(Err(_)) => {
+                    opaque = true;
+                    0
+                }
+            };
+            let shifted: Vec<usize> = offsets
+                .iter()
+                .map(|offset| (offset + by).min(arguments.len()))
+                .collect();
+            for offset in shifted {
+                if !offsets.contains(&offset) {
+                    offsets.push(offset);
+                }
+            }
+            continue;
+        }
+        if command_word(line).is_some_and(|word| word.contains('$')) {
+            opaque = true;
+        }
+        if !line.iter().any(|word| reads_positional(word)) {
+            continue;
+        }
+        reads = true;
+        for &offset in &offsets {
+            let rest = &arguments[offset.min(arguments.len())..];
+            let mut words = Vec::new();
+            for word in line {
+                if let Some(expanded) = expand_positional(word, rest) {
+                    words.extend(expanded);
+                } else {
+                    opaque = true;
+                    words.push(word.clone());
+                }
+            }
+            words.retain(|word| !word.is_empty());
+            if command_word(&words).is_some_and(|word| word.contains('$')) {
+                opaque = true;
+            }
+            if !found.contains(&words) {
+                found.push(words);
+            }
+        }
+    }
+    if opaque && reads {
+        for start in 0..arguments.len() {
+            found.push(arguments[start..].to_vec());
+        }
+    }
+    found
+}
+
+/// The first word of `line` that is not a `NAME=value` assignment.
+fn command_word(line: &[String]) -> Option<&String> {
+    line.iter().find(|word| !is_assignment_word(word))
+}
+
+/// Is `word` a `NAME=value` (or `NAME+=value`) assignment?
+fn is_assignment_word(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        let name = name.strip_suffix('+').unwrap_or(name);
+        name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// Does `word` read a positional parameter: `$@`, `$*`, `$1`…, or any
+/// `${…}` over one of them or through `!`?
+fn reads_positional(word: &str) -> bool {
+    word.match_indices('$').any(|(at, _)| {
+        let rest = &word[at + 1..];
+        let rest = rest.strip_prefix('{').unwrap_or(rest);
+        rest.starts_with(|c: char| matches!(c, '@' | '*' | '!' | '1'..='9'))
+    })
+}
+
+/// `word` with `arguments` in place of each positional parameter it reads, or
+/// `None` where it reads one in a form this does not resolve.
+///
+/// A word that is exactly `$@`, `$*` or a `${@:N[:M]}` slice is the arguments
+/// as words; anywhere else they are joined by a space, as `"$*"` joins them.
+fn expand_positional(word: &str, arguments: &[String]) -> Option<Vec<String>> {
+    if !reads_positional(word) {
+        return Some(vec![word.to_owned()]);
+    }
+    if matches!(word, "$@" | "$*" | "${@}" | "${*}") {
+        return Some(arguments.to_vec());
+    }
+    if let Some(slice) = word
+        .strip_prefix("${@:")
+        .or_else(|| word.strip_prefix("${*:"))
+        .and_then(|rest| rest.strip_suffix('}'))
+    {
+        let mut bounds = slice.splitn(2, ':');
+        let start: usize = bounds.next()?.trim().parse().ok()?;
+        let start = start.saturating_sub(1).min(arguments.len());
+        let rest = &arguments[start..];
+        let length = match bounds.next() {
+            Some(length) => length.trim().parse::<usize>().ok()?.min(rest.len()),
+            None => rest.len(),
+        };
+        return Some(rest[..length].to_vec());
+    }
+    let joined = arguments.join(" ");
+    let mut text = String::with_capacity(word.len());
+    let mut rest = word;
+    while let Some(at) = rest.find('$') {
+        text.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let (value, used) = if let Some(inner) = after.strip_prefix('{') {
+            let close = inner.find('}')?;
+            (
+                positional_value(&inner[..close], arguments, &joined)?,
+                close + 2,
+            )
+        } else {
+            match after.chars().next() {
+                Some(c @ ('@' | '*' | '1'..='9')) => {
+                    (positional_value(&c.to_string(), arguments, &joined)?, 1)
+                }
+                _ => (String::from("$"), 0),
+            }
+        };
+        text.push_str(&value);
+        rest = &after[used..];
+    }
+    text.push_str(rest);
+    Some(vec![text])
+}
+
+/// The value of the parameter `name` names, where it is a positional one: a
+/// non-positional name is kept as written, and one this does not resolve
+/// (`1:-x`, `!1`) is `None`.
+fn positional_value(name: &str, arguments: &[String], joined: &str) -> Option<String> {
+    match name {
+        "@" | "*" => Some(joined.to_owned()),
+        _ if name.chars().all(|c| c.is_ascii_digit()) && !name.is_empty() => {
+            let index: usize = name.parse().ok()?;
+            Some(match index.checked_sub(1) {
+                Some(index) => arguments.get(index).cloned().unwrap_or_default(),
+                None => String::from("$0"),
+            })
+        }
+        _ if name.starts_with(|c: char| matches!(c, '@' | '*' | '!' | '0'..='9')) => None,
+        _ => Some(format!("${{{name}}}")),
+    }
 }
 
 /// [`flatten_in`], over the shell functions `defined` before `node` runs
 /// (CLOUD-2840 review B2).
 ///
 /// A definition is visible to the LATER items of the list it is written in, and
-/// to everything nested in them. It does not escape a compound command, a
-/// subshell or a pipeline stage — a branch may not run, a subshell's
-/// definitions die with it — so those walk a copy. That reads fewer calls as
-/// functions than bash might, which reports a program where there may be none:
-/// the safe direction, where the other hid a real one.
+/// to everything nested in them, once it CERTAINLY ran. It does not escape a
+/// subshell or a pipeline stage, whose definitions die with it, nor a branch,
+/// loop, group or `&&`/`||` operand that may not run; but an `unset` in one of
+/// those may have run, so it does remove. That reads fewer calls as functions
+/// than bash might, which reports a program where there may be none: the safe
+/// direction, where the other hid a real one.
 pub fn flatten_scoped(
     node: &rable::Node,
     source: &str,
     after: Option<Separator>,
     construct: Option<(&'static str, &'static str)>,
-    defined: &mut Vec<String>,
+    defined: &mut Vec<Definition>,
     out: &mut Vec<Segment>,
 ) {
     let first = out.len();
@@ -844,11 +1280,16 @@ pub fn flatten_scoped(
             for segment in &mut out[first..] {
                 segment.grouped = true;
             }
-            redirected(out, first, redirects, source);
+            redirected(out, first, redirects, source, defined);
         }
         rable::NodeKind::BraceGroup { body, redirects } => {
-            flatten_scoped(body, source, after, construct, &mut defined.clone(), out);
-            redirected(out, first, redirects, source);
+            let mut inner = defined.clone();
+            flatten_scoped(body, source, after, construct, &mut inner, out);
+            merge_uncertain(defined, &inner);
+            redirected(out, first, redirects, source, defined);
+        }
+        rable::NodeKind::ConditionalExpr { .. } | rable::NodeKind::ArithmeticCommand { .. } => {
+            flatten_test(node, source, after, construct, defined, out);
         }
         rable::NodeKind::While { .. }
         | rable::NodeKind::Until { .. }
@@ -858,13 +1299,38 @@ pub fn flatten_scoped(
         | rable::NodeKind::Select { .. }
         | rable::NodeKind::Case { .. } => flatten_control(node, source, after, defined, out),
         // A DEFINITION is visible to the items after it, and to its own body
-        // (recursion); the body is walked and judged where it is written.
+        // (recursion); the body is walked and judged where it is written, and
+        // its lines are kept for a call to run with its arguments.
         rable::NodeKind::Function { name, body } => {
             let mut inner = defined.clone();
-            inner.push(name.clone());
+            inner.retain(|definition| definition.name != *name);
+            inner.push(Definition {
+                name: name.clone(),
+                lines: Vec::new(),
+                unsets: Vec::new(),
+            });
             let tag = Some(("function", "body"));
+            let start = out.len();
             flatten_scoped(body, source, after, tag, &mut inner, out);
-            defined.push(name.clone());
+            let lines: Vec<Vec<String>> = out[start..]
+                .iter()
+                .flat_map(|segment| &segment.lines)
+                .map(|line| {
+                    let handed = line.words.len().saturating_sub(line.redirects.len());
+                    line.words[..handed].to_vec()
+                })
+                .collect();
+            let unsets = lines
+                .iter()
+                .filter_map(|line| unset_functions(line))
+                .flatten()
+                .collect();
+            defined.retain(|definition| definition.name != *name);
+            defined.push(Definition {
+                name: name.clone(),
+                lines,
+                unsets,
+            });
         }
         // `! cmd` and `time cmd` WRAP a pipeline rather than being one, so the
         // command is one level down. Missing these is an under-deny and was
@@ -873,14 +1339,9 @@ pub fn flatten_scoped(
         // with the negation unwalked its `pgrep` reached no segment at all, so
         // the guard allowed the exact command it was written for.
         rable::NodeKind::Negation { pipeline } | rable::NodeKind::Time { pipeline, .. } => {
-            flatten_scoped(
-                pipeline,
-                source,
-                after,
-                construct,
-                &mut defined.clone(),
-                out,
-            );
+            let mut inner = defined.clone();
+            flatten_scoped(pipeline, source, after, construct, &mut inner, out);
+            merge_uncertain(defined, &inner);
         }
         rable::NodeKind::Coproc { command, .. } => {
             flatten_scoped(command, source, after, construct, &mut defined.clone(), out);
@@ -896,9 +1357,8 @@ pub fn flatten_scoped(
         // rather than by reading the enum.
         //
         // What remains here genuinely holds no command position: words and their
-        // expansions, the `[[ ]]` conditional family, arithmetic, and the
-        // separator tokens. A `$(...)` inside any of them is still reached, by
-        // `descend_word`.
+        // expansions, the `[[ ]]` conditional family's inner nodes, arithmetic,
+        // and the separator tokens.
         _ => {}
     }
 }
@@ -910,7 +1370,7 @@ fn flatten_pipeline(
     source: &str,
     after: Option<Separator>,
     construct: Option<(&'static str, &'static str)>,
-    defined: &[String],
+    defined: &[Definition],
     out: &mut Vec<Segment>,
 ) {
     for (index, command) in commands.iter().enumerate() {
@@ -947,15 +1407,19 @@ fn flatten_pipeline(
 }
 
 /// [`flatten_scoped`]'s list arm: the items share the scope, so a definition is
-/// visible to the items after it.
+/// visible to the items after it — where it certainly ran (CLOUD-2840 review
+/// B2). The operand after `&&` or `||` may not run, so its definitions add
+/// nothing; an item sent to the background with `&` runs in a subshell, so
+/// nothing it does reaches the items after it.
 fn flatten_list(
     items: &[rable::ListItem],
     source: &str,
     after: Option<Separator>,
     construct: Option<(&'static str, &'static str)>,
-    defined: &mut Vec<String>,
+    defined: &mut Vec<Definition>,
     out: &mut Vec<Segment>,
 ) {
+    let mut uncertain = false;
     for item in items {
         let follows = match item.operator {
             Some(rable::ListOperator::And) => Some(Separator::And),
@@ -966,7 +1430,26 @@ fn flatten_list(
             // it is the only one `rable` leaves without an operator.
             None => after,
         };
-        flatten_scoped(&item.command, source, follows, construct, defined, out);
+        if matches!(item.operator, Some(rable::ListOperator::Background)) {
+            flatten_scoped(
+                &item.command,
+                source,
+                follows,
+                construct,
+                &mut defined.clone(),
+                out,
+            );
+        } else if uncertain {
+            let mut branch = defined.clone();
+            flatten_scoped(&item.command, source, follows, construct, &mut branch, out);
+            merge_uncertain(defined, &branch);
+        } else {
+            flatten_scoped(&item.command, source, follows, construct, defined, out);
+        }
+        uncertain = matches!(
+            item.operator,
+            Some(rable::ListOperator::And | rable::ListOperator::Or)
+        );
     }
 }
 
@@ -1001,11 +1484,13 @@ fn flatten_control(
     node: &rable::Node,
     source: &str,
     after: Option<Separator>,
-    defined: &[String],
+    defined: &mut Vec<Definition>,
     out: &mut Vec<Segment>,
 ) {
     let first = out.len();
-    let mut inner = defined.to_vec();
+    let mut inner = defined.clone();
+    // Each arm that may not run, walked apart and merged as uncertain.
+    let mut arms: Vec<Vec<Definition>> = Vec::new();
     let redirects = match &node.kind {
         rable::NodeKind::While {
             condition,
@@ -1038,7 +1523,9 @@ fn flatten_control(
                 &mut inner,
                 out,
             );
-            flatten_scoped(then_body, source, None, tag, &mut inner.clone(), out);
+            let mut then_arm = inner.clone();
+            flatten_scoped(then_body, source, None, tag, &mut then_arm, out);
+            arms.push(then_arm);
             if let Some(body) = else_body {
                 flatten_scoped(body, source, after, tag, &mut inner, out);
             }
@@ -1073,13 +1560,19 @@ fn flatten_control(
         } => {
             for body in patterns.iter().filter_map(|arm| arm.body.as_ref()) {
                 let tag = Some(("case", "body"));
-                flatten_scoped(body, source, None, tag, &mut inner.clone(), out);
+                let mut arm = inner.clone();
+                flatten_scoped(body, source, None, tag, &mut arm, out);
+                arms.push(arm);
             }
             redirects
         }
         _ => return,
     };
-    redirected(out, first, redirects, source);
+    arms.push(inner);
+    for arm in &arms {
+        merge_uncertain(defined, arm);
+    }
+    redirected(out, first, redirects, source, defined);
 }
 
 /// A `while` or `until`: its condition and its body, tagged apart, in one scope.
@@ -1089,7 +1582,7 @@ fn flatten_loop(
     body: &rable::Node,
     source: &str,
     after: Option<Separator>,
-    inner: &mut Vec<String>,
+    inner: &mut Vec<Definition>,
     out: &mut Vec<Segment>,
 ) {
     flatten_scoped(
@@ -1164,15 +1657,28 @@ pub fn cat_heredoc_body(word: &rable::Node) -> Option<String> {
 /// them is a command this call will run. They are appended AFTER the command
 /// that contains them and carry no terminator: nothing takes their status.
 pub fn descend_word(word: &rable::Node, source: &str, out: &mut Vec<Segment>) {
+    descend_word_in(word, source, &[], out);
+}
+
+/// [`descend_word`], with the functions `defined` where the word is expanded
+/// (CLOUD-2840 review, finding 5): a substitution is a subshell, which
+/// inherits them, so a call to one inside `$( … )` runs the function and
+/// nothing on `PATH`. Its own definitions die with it, so it walks a copy.
+pub fn descend_word_in(
+    word: &rable::Node,
+    source: &str,
+    defined: &[Definition],
+    out: &mut Vec<Segment>,
+) {
     match &word.kind {
         rable::NodeKind::Word { parts, .. } => {
             for part in parts {
-                descend_word(part, source, out);
+                descend_word_in(part, source, defined, out);
             }
         }
         rable::NodeKind::CommandSubstitution { command, .. }
         | rable::NodeKind::ProcessSubstitution { command, .. } => {
-            flatten(command, source, None, out);
+            flatten_scoped(command, source, None, None, &mut defined.to_vec(), out);
         }
         _ => {}
     }
@@ -1180,8 +1686,18 @@ pub fn descend_word(word: &rable::Node, source: &str, out: &mut Vec<Segment>) {
 
 /// The same, for a redirection's target: `diff <(a) <(b)` runs three programs.
 pub fn descend_redirect(redirect: &rable::Node, source: &str, out: &mut Vec<Segment>) {
+    descend_redirect_in(redirect, source, &[], out);
+}
+
+/// [`descend_redirect`], with the functions `defined` where it runs.
+pub fn descend_redirect_in(
+    redirect: &rable::Node,
+    source: &str,
+    defined: &[Definition],
+    out: &mut Vec<Segment>,
+) {
     if let rable::NodeKind::Redirect { target, .. } = &redirect.kind {
-        descend_word(target, source, out);
+        descend_word_in(target, source, defined, out);
     }
 }
 
@@ -1295,5 +1811,79 @@ mod tests {
         };
         assert_eq!(parsed[0].words, ["echo", "x"]);
         assert_eq!(parsed[0].lines[0].words, ["echo", "x"]);
+    }
+
+    /// Every segment the command parses to, or a panic naming it.
+    fn parsed(command: &str) -> Vec<super::Segment> {
+        let Look::Is(parsed) = segments(command) else {
+            panic!("`{command}` parses");
+        };
+        parsed
+    }
+
+    /// A REDIRECTION ON `[[ … ]]` OR `(( … ))` WRITES ITS TARGET (CLOUD-2840
+    /// review M5, finding 3), as one on any other compound does.
+    ///
+    /// Fails by: the conditional or arithmetic command yielding no segment, so
+    /// its redirect target is no write anybody sees.
+    #[test]
+    fn a_test_or_arithmetic_commands_redirect_is_a_segments() {
+        for command in ["[[ -n x ]] > batten.toml", "(( 1 )) > batten.toml"] {
+            let parsed = parsed(command);
+            assert!(
+                parsed
+                    .iter()
+                    .any(|segment| segment.redirects == [">", "batten.toml"]
+                        && segment.words == [">", "batten.toml"]),
+                "`{command}`: {parsed:?}"
+            );
+        }
+    }
+
+    /// A PROCESS SUBSTITUTION IN A COMPOUND'S REDIRECT RUNS (finding 3).
+    ///
+    /// Fails by: the compound's redirect copied as tokens but never descended,
+    /// so `tee` reaches no segment.
+    #[test]
+    fn a_compounds_redirect_target_is_descended() {
+        for command in [
+            "{ cat f; } > >(tee out)",
+            "( cat f ) > >(tee out)",
+            "while false; do :; done > >(tee out)",
+            "[[ -n x ]] > >(tee out)",
+        ] {
+            let parsed = parsed(command);
+            assert!(
+                parsed.iter().any(|segment| segment.nested
+                    && segment.words.first().is_some_and(|word| word == "tee")),
+                "`{command}`: {parsed:?}"
+            );
+        }
+    }
+
+    /// A HEREDOC ON A COMPOUND IS A HEREDOC (finding 3): its body is data, so
+    /// the command after its delimiter is still read.
+    ///
+    /// Fails by: the newlines joined through the body, or a quote in it read as
+    /// an unclosed word, so the whole call abstains and the push is unjudged.
+    #[test]
+    fn a_heredoc_on_a_compound_keeps_the_command_after_it() {
+        for command in [
+            "{ cat; } <<'EOF'\nsay \"hi\nEOF\ngit push --force origin main",
+            "while read l; do echo \"$l\"; done <<'EOF'\nsay 'hi\nEOF\ngit push --force origin main",
+            "if true; then cat; fi <<'EOF'\nx\nEOF\ngit push --force origin main",
+            "git push --force origin main\n{ cat; } <<'EOF'\nsay \"hi\nEOF",
+            "git push --force origin main\nwhile read l; do :; done <<'EOF'\nit's\nEOF",
+            "git push --force origin main\n[[ -n x ]] <<'EOF'\nsay \"hi\nEOF",
+        ] {
+            let parsed = parsed(command);
+            assert!(
+                parsed
+                    .iter()
+                    .flat_map(|segment| &segment.lines)
+                    .any(|line| line.words.first().is_some_and(|word| word == "git")),
+                "`{command}`: {parsed:?}"
+            );
+        }
     }
 }
