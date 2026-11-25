@@ -14349,4 +14349,111 @@ pub fn repo() -> u8 {{ scratch() }}
             assert_eq!(include_path(call, "crates/x/src/lib.rs"), None, "{source}");
         }
     }
+
+    /// A file's module is its path in the package, less a crate root's own
+    /// directory: a root-level file and a `src/bin` binary are crate roots,
+    /// so their stem is no module, where any other file's stem is one.
+    ///
+    /// Fails by: the `[]` arm dropped (a package's root-level `build.rs`
+    /// read as module `build`), `src/bin` unrecognised (each binary read as a
+    /// module of its directory), or the stem test inverted (every ordinary
+    /// file scoped to its parent's module).
+    #[test]
+    fn a_files_module_is_its_path_less_a_crate_roots_directory() {
+        assert!(FileScope::of("build.rs").module.is_empty());
+        assert_eq!(FileScope::of("src/bin/tool.rs").module, ["src", "bin"]);
+        assert_eq!(
+            FileScope::of("crates/a/src/deep/leaf.rs").module,
+            ["src", "deep", "leaf"]
+        );
+        assert_eq!(
+            FileScope::of("crates/a/src/deep/mod.rs").module,
+            ["src", "deep"]
+        );
+    }
+
+    /// The modules widened are exactly those holding an `include!` or a
+    /// `#[path]` module, either one alone.
+    ///
+    /// Fails by: nothing or an empty name returned for every file, or the
+    /// two causes required together where either widens.
+    #[test]
+    fn either_an_include_or_a_path_module_widens_its_module() {
+        let place = FileScope::of("crates/a/src/deep.rs");
+        let widened = |source: &str| {
+            let parse =
+                batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
+            widened_modules(&parse.tree().syntax().clone(), &place)
+        };
+        let deep = BTreeSet::from(["src::deep".to_owned()]);
+        assert_eq!(widened("include!(\"gen.rs\");\n"), deep);
+        assert_eq!(widened("#[path = \"other.rs\"]\nmod other;\n"), deep);
+        assert_eq!(
+            widened("mod inner {\n    include!(\"gen.rs\");\n}\n"),
+            BTreeSet::from(["src::deep::inner".to_owned()])
+        );
+        assert!(widened("fn plain() {}\n").is_empty());
+    }
+
+    /// A qualified path's last segment and a name in a `use` list are both
+    /// associated positions, each alone.
+    ///
+    /// Fails by: the two required together, which reads `Host::here` as a
+    /// free name and so misses an associated item it calls.
+    #[test]
+    fn a_qualified_segment_or_a_use_list_name_is_associated() {
+        let position = |source: &str, name: &str| {
+            let parse =
+                batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
+            let token = parse
+                .tree()
+                .syntax()
+                .descendants_with_tokens()
+                .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+                .find(|token| token.text() == name)
+                .expect("the name is in the source");
+            associated_position(&token)
+        };
+        assert!(position("fn f() { Host::here(); }\n", "here"));
+        assert!(position("use a::{b};\n", "b"));
+        assert!(!position("fn f() { here(); }\n", "here"));
+    }
+
+    /// A source naming an included file contributes that file; one naming
+    /// none contributes nothing.
+    ///
+    /// Fails by: the cheap text filter inverted, which skips exactly the
+    /// files that include another and reads every file that cannot.
+    #[test]
+    fn an_including_source_names_the_file_it_includes() {
+        let root = crate::scratch::scratch("schema-included-sources");
+        std::fs::create_dir_all(root.join("crates/a/src")).expect("tree");
+        std::fs::write(root.join("crates/a/src/lib.rs"), "include!(\"gen.rs\");\n")
+            .expect("includer");
+        std::fs::write(root.join("crates/a/src/plain.rs"), "fn plain() {}\n").expect("plain");
+        let files = BTreeSet::from([
+            "crates/a/src/lib.rs".to_owned(),
+            "crates/a/src/plain.rs".to_owned(),
+        ]);
+        assert_eq!(
+            included_sources(&root, &files),
+            BTreeSet::from(["crates/a/src/gen.rs".to_owned()])
+        );
+    }
+
+    /// What a judge decided without a run reaches the sweep's line: its
+    /// skipped case runs and a held kill.
+    ///
+    /// Fails by: the tally dropped, so the line reports none decided.
+    #[test]
+    fn a_judged_tally_counts_skips_and_held_kills() {
+        let tally = Tally::default();
+        tally.judged(Judged {
+            verdict: Verdict::Caught,
+            skipped: 2,
+            held_kill: true,
+        });
+        tally.judged(Judged::ran(Verdict::Missed, 3));
+        assert_eq!(tally.line(4), reused_line(0, 1, 4, 5));
+    }
 }
