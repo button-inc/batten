@@ -72,6 +72,11 @@ disallowed_methods = "deny"
 # harness's background task, never this binary's orphan. The daemonize
 # primitives themselves are `clippy.toml`'s `disallowed-methods`.
 zombie_processes = "forbid"
+# ERRORS ARE NOT SUCCESS (CLOUD-2789). `.ok()` on a `Result` whose value is then
+# discarded turned a policy load failure into a green lint (lint.rs before
+# ea345e0d6). Handle or propagate; an `#[expect]` names why losing the error is
+# correct at that site.
+unused_result_ok = "deny"
 
 [workspace.dependencies]
 anyhow = "1"

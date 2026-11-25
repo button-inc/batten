@@ -25102,7 +25102,7 @@ deny contains "refused by themodule" if {
         let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let scripts = inner_scripts("watch", &["-d", "-n", "2", "git", "push"], Stage::call());
-            sent.send(scripts).ok();
+            sent.send(scripts).expect("the walk's receiver is alive");
         });
         let scripts = received
             .recv_timeout(std::time::Duration::from_secs(30))
