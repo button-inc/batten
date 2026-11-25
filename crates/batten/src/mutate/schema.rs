@@ -3323,6 +3323,42 @@ impl Verdict {
 /// Every case that failed the unmutated baseline, with its failure line.
 type Red = std::collections::BTreeMap<Case, String>;
 
+/// Each case the unmutated control run passed, with its seconds there
+/// ([`control_red`]): what a case cut under a mutant is held against
+/// ([`hang_kill`]).
+type Control = std::collections::BTreeMap<Case, f64>;
+
+/// Whether a case cut at its own limit under a mutant was killed by the hang
+/// (CLOUD-2911): its unmutated control run passed in at most a fifth of that
+/// limit ([`TIMEOUT_MULTIPLIER`]), so the hang is the mutant's, and a case
+/// that waits on an event the mutant suppresses detected it by hanging. A
+/// case with no control time, or whose control was itself slow, is a timeout.
+fn hang_kill(
+    case: &Case,
+    control: &Control,
+    seconds: &std::collections::BTreeMap<Case, f64>,
+) -> bool {
+    control
+        .get(case)
+        .is_some_and(|passed| TIMEOUT_MULTIPLIER * passed <= case_limit(case, seconds))
+}
+
+/// The seconds of each of `batch` a control run's `JUnit` report says passed:
+/// every case it timed that is neither failed (`red`) nor cut.
+fn control_times(xml: &str, batch: &BTreeSet<Case>, red: &Red) -> Control {
+    let ended: std::collections::BTreeMap<Case, CaseEnd> =
+        junit_cases(xml).unwrap_or_default().into_iter().collect();
+    durations(xml)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(case, _)| {
+            batch.contains(case)
+                && !red.contains_key(case)
+                && ended.get(case) == Some(&CaseEnd::Passed)
+        })
+        .collect()
+}
+
 /// How a case reads in a report line: its binary, a space, its name, as
 /// nextest spells it.
 fn case_label((name, binary): &Case) -> String {
@@ -4214,7 +4250,10 @@ fn judge_files(temp: &std::path::Path) -> (std::path::PathBuf, std::path::PathBu
 /// # Errors
 ///
 /// A control run could not start, or failed and named no failed case.
-fn control_red(judging: &Judging<'_>, out: &mut dyn std::io::Write) -> anyhow::Result<Red> {
+fn control_red(
+    judging: &Judging<'_>,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<(Red, Control)> {
     let cases: BTreeSet<Case> = judging
         .reach
         .values()
@@ -4223,8 +4262,9 @@ fn control_red(judging: &Judging<'_>, out: &mut dyn std::io::Write) -> anyhow::R
         .cloned()
         .collect();
     let mut red = Red::new();
+    let mut control = Control::new();
     let Some(mutant) = judging.mutants.first() else {
-        return Ok(judging.red.clone());
+        return Ok((judging.red.clone(), control));
     };
     for batch in batches(&cases) {
         // THE CONTROL IS NEVER CUT (CLOUD-2911): a slow case passing with no
@@ -4237,6 +4277,9 @@ fn control_red(judging: &Judging<'_>, out: &mut dyn std::io::Write) -> anyhow::R
             "the null-mutant control run failed and its report names no failed case, so no \
              judging run's verdict would mean anything"
         );
+        if let Some(xml) = xml.as_deref() {
+            control.extend(control_times(xml, &batch, &found));
+        }
         red.extend(found.into_iter().filter(|(case, _)| batch.contains(case)));
     }
     writeln!(
@@ -4245,7 +4288,7 @@ fn control_red(judging: &Judging<'_>, out: &mut dyn std::io::Write) -> anyhow::R
         red.len()
     )?;
     red.extend(judging.red.clone());
-    Ok(red)
+    Ok((red, control))
 }
 
 /// The nextest profile every judging run uses ([`nextest_args`]).
@@ -4624,6 +4667,7 @@ fn judge(
             verdict: Verdict::Caught,
             skipped: cases.len(),
             held_kill: true,
+            by_hang: false,
         };
     }
     let open: BTreeSet<Case> = cases
@@ -4653,11 +4697,12 @@ fn judge(
         |cases: &BTreeSet<Case>, fail_fast: bool| run_cases(judging, id, mutant, cases, fail_fast);
     // EVERY CASE'S OUTCOME, AS IT LANDS: a run killed mid-sweep keeps each
     // pass and kill it already proved.
-    let decided = decide(&runs, &mut run, |case| {
+    let by_hang = |case: &Case| hang_kill(case, judging.control, judging.seconds);
+    let decided = decide(&runs, &mut run, &by_hang, |case| {
         record(case, PASSED);
     });
     match decided {
-        Ok((verdict, killed_by)) => {
+        Ok((verdict, killed_by, hung_kill)) => {
             if let Some(case) = journaled_kill(verdict, killed_by.as_ref()) {
                 record(case, "caught");
             }
@@ -4666,7 +4711,10 @@ fn judge(
             {
                 hints.entry(key).or_default().insert(case);
             }
-            Judged::ran(verdict, skipped)
+            Judged {
+                by_hang: hung_kill,
+                ..Judged::ran(verdict, skipped)
+            }
         }
         Err(why) => {
             // A RUN THAT COULD NOT START SAYS WHY, beside the runs that
@@ -4697,6 +4745,12 @@ fn judge(
 /// of which hangs costs at most those two bounds per batch, never one run per
 /// case.
 ///
+/// A CASE CUT UNDER THE MUTANT THAT ITS CONTROL PASSED WELL INSIDE ITS LIMIT
+/// KILLED IT BY THE HANG (`by_hang`, [`hang_kill`]): a case that waits on an
+/// event never sleeps, so a mutant that suppresses the event is detected by
+/// the hang, and the third answer says the kill was one. A case with no
+/// control time, or a slow one, is a cut that decides only a timeout.
+///
 /// A BATCH WITH A CUT, OR A RUN ITS BOUND ENDED, KEEPS NO PASS: a hang that
 /// needs a sibling would otherwise find that sibling journaled passed on the
 /// next sweep, run alone, pass, and file a survivor. Each pass of a batch
@@ -4709,8 +4763,9 @@ fn judge(
 fn decide<R>(
     runs: &[BTreeSet<Case>],
     run: &mut R,
+    by_hang: &dyn Fn(&Case) -> bool,
     mut on_pass: impl FnMut(&Case),
-) -> anyhow::Result<(Verdict, Option<Case>)>
+) -> anyhow::Result<(Verdict, Option<Case>, bool)>
 where
     R: FnMut(&BTreeSet<Case>, bool) -> anyhow::Result<Turn>,
 {
@@ -4722,6 +4777,9 @@ where
         let mut clean = true;
         while !open.is_empty() {
             let turn = run(&open, fail_fast)?;
+            if let Some(hung) = turn.hung.iter().find(|case| by_hang(case)) {
+                return Ok((Verdict::Caught, Some(hung.clone()), true));
+            }
             clean &= turn.verdict != Verdict::Timeout;
             passes.extend(turn.passed.iter().cloned());
             match turn.verdict {
@@ -4733,7 +4791,7 @@ where
                             on_pass(case);
                         }
                     }
-                    return Ok((turn.verdict, turn.killer));
+                    return Ok((turn.verdict, turn.killer, false));
                 }
             }
             let rest: BTreeSet<Case> = open
@@ -4760,7 +4818,7 @@ where
     } else {
         Verdict::Missed
     };
-    Ok((verdict, None))
+    Ok((verdict, None, false))
 }
 
 /// What [`judge`] decided of one mutant.
@@ -4772,6 +4830,9 @@ struct Judged {
     /// Whether a kill recorded under an unchanged pair decided it, with no
     /// case run.
     held_kill: bool,
+    /// Whether a case cut under the mutant killed it by the hang
+    /// ([`hang_kill`]).
+    by_hang: bool,
 }
 
 impl Judged {
@@ -4781,6 +4842,7 @@ impl Judged {
             verdict,
             skipped,
             held_kill: false,
+            by_hang: false,
         }
     }
 }
@@ -7735,6 +7797,9 @@ struct Judging<'a> {
     /// Every case that failed the unmutated baseline ([`baseline_red`]): never
     /// run against a mutant, never a kill.
     red: &'a Red,
+    /// Each case the unmutated control run passed, with its seconds there:
+    /// what a case cut under a mutant is held against ([`hang_kill`]).
+    control: &'a Control,
     /// The clean build's recorded binaries, when they could be recorded.
     reuse: Option<&'a Reuse>,
 }
@@ -7743,6 +7808,11 @@ impl<'a> Judging<'a> {
     /// The same judging with `red` as its red cases.
     const fn with_red(self, red: &'a Red) -> Self {
         Self { red, ..self }
+    }
+
+    /// The same judging with `control` as its control run's passing times.
+    const fn with_control(self, control: &'a Control) -> Self {
+        Self { control, ..self }
     }
 }
 
@@ -7843,6 +7913,7 @@ fn judge_all(
             }
         }
     });
+    let _ = writeln!(out, "{}", tally.hang_line());
     let _ = writeln!(out, "{}", tally.line(todo.len()));
     let journal = journal
         .into_inner()
@@ -7870,6 +7941,8 @@ struct Tally {
     skipped: std::sync::atomic::AtomicUsize,
     /// Mutants a held kill pair decided.
     held: std::sync::atomic::AtomicUsize,
+    /// Mutants a case killed by its hang ([`hang_kill`]).
+    hangs: std::sync::atomic::AtomicUsize,
 }
 
 impl Tally {
@@ -7880,6 +7953,20 @@ impl Tally {
         if judged.held_kill {
             self.held.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+        if judged.by_hang {
+            self.hangs
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// The line naming the mutants a case killed by its hang: cut at its own
+    /// limit under the mutant, its control passing well inside it.
+    fn hang_line(&self) -> String {
+        format!(
+            "mutate schema: {} mutant(s) caught by a hang: cut at a case's own limit, its \
+             control passing inside a fifth of it",
+            self.hangs.load(std::sync::atomic::Ordering::Relaxed)
+        )
     }
 
     /// The [`reused_line`] over `todo` mutants.
@@ -8856,11 +8943,7 @@ pub fn sweep(
     })?;
     let live = root;
     let root = snapshot;
-    // AN ERROR LOG IS THIS SWEEP'S OR NOTHING: one left by a killed sweep
-    // would read as a run of this one erring.
-    let _ = std::fs::remove_dir_all(state.join("errors"));
-    // A KILLED SWEEP'S TEMP ROOTS: beside the mirror, so `sync` never clears them.
-    let _ = std::fs::remove_dir_all(state.join(JUDGE_TEMP));
+    clear_run_state(&state);
     let cache_path = state.join("verdicts");
     // NOT UNDER CI (CLOUD-2850), for `step`'s "Local only" reason: CI's job is
     // to confirm independently, so a journal a runner came by answers nothing.
@@ -8926,10 +9009,11 @@ pub fn sweep(
         digests: &digests,
         store: &cache_path,
         red: &red,
+        control: &Control::new(),
         reuse: reuse.as_ref(),
     };
-    let red = control_red(&judging, out)?;
-    let judging = judging.with_red(&red);
+    let (red, control) = control_red(&judging, out)?;
+    let judging = judging.with_red(&red).with_control(&control);
     let mut verdicts = judge_all(&judging, &todo, jobs, out);
     let (names, handed_unviable) = settle_handed(
         &judging,
@@ -8959,6 +9043,15 @@ pub fn sweep(
 /// # Errors
 ///
 /// `out` cannot be written.
+/// What a killed sweep left under `state` that this one must not read.
+fn clear_run_state(state: &std::path::Path) {
+    // AN ERROR LOG IS THIS SWEEP'S OR NOTHING: one left by a killed sweep
+    // would read as a run of this one erring.
+    let _ = std::fs::remove_dir_all(state.join("errors"));
+    // A KILLED SWEEP'S TEMP ROOTS: beside the mirror, so `sync` never clears them.
+    let _ = std::fs::remove_dir_all(state.join(JUDGE_TEMP));
+}
+
 fn held_elsewhere(state: &std::path::Path, out: &mut dyn std::io::Write) -> anyhow::Result<Swept> {
     writeln!(
         out,
@@ -10440,10 +10533,6 @@ mod tests {
     /// Unix only, inside the case: the subject is the `sh` command nextest
     /// runs, behind a `pgrep` stub that must be executable.
     #[test]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: the subject is the shell command nextest runs, so asserting it means running `sh`"
-    )]
     fn a_lone_runs_clear_scratch_leaves_the_judge_scratch() {
         if !cfg!(unix) {
             return;
@@ -10480,18 +10569,27 @@ mod tests {
             &std::env::var_os("PATH").unwrap_or_default(),
         )))
         .unwrap();
-        let status = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .current_dir(&root)
-            .env("CARGO_TARGET_DIR", &target)
-            .env_remove("CARGO_BUILD_BUILD_DIR")
-            .env("TMPDIR", root.join("tmpdir"))
-            .env("NEXTEST_ENV", root.join("nextest-env"))
-            .env("PATH", path)
-            .status()
-            .unwrap();
-        assert!(status.success(), "the collector exits 0");
+        // THROUGH `exec`'s ONE SHARED SPAWN, so the test adds no spawn of its
+        // own (`spawn add other`, CLOUD-1338).
+        let lossy = |path: &std::path::Path| Some(path.to_string_lossy().into_owned());
+        let published = [
+            (String::from("CARGO_TARGET_DIR"), lossy(&target)),
+            (String::from("CARGO_BUILD_BUILD_DIR"), None),
+            (String::from("TMPDIR"), lossy(&root.join("tmpdir"))),
+            (
+                String::from("NEXTEST_ENV"),
+                lossy(&root.join("nextest-env")),
+            ),
+            (
+                String::from("PATH"),
+                Some(path.to_string_lossy().into_owned()),
+            ),
+        ];
+        let argv = [String::from("sh"), String::from("-c"), command.to_owned()];
+        let (code, _) =
+            crate::exec::piped_argv(&root, &argv, "", crate::exec::Diagnostics::Drop, &published)
+                .expect("sh ran");
+        assert_eq!(code, 0, "the collector exits 0");
         assert!(!taken.exists(), "the premise: a lone run takes target/tmp");
         assert!(kept.is_file(), "the judge's config is left");
     }
@@ -11710,6 +11808,7 @@ mod tests {
             digests: &digests,
             store: base,
             red: &none,
+            control: &Control::new(),
             reuse: None,
         };
         let judged = judging.with_red(&control);
@@ -11748,6 +11847,7 @@ mod tests {
             digests: &digests,
             store: &store,
             red: &red,
+            control: &Control::new(),
             reuse: None,
         };
         let nowhere = base.join("nowhere");
@@ -11808,6 +11908,7 @@ mod tests {
             digests: &digests,
             store: &store,
             red: &red,
+            control: &Control::new(),
             reuse: None,
         };
         let nowhere = base.join("nowhere");
@@ -11958,6 +12059,7 @@ mod tests {
             digests: &digests,
             store: &store,
             red: &red,
+            control: &Control::new(),
             reuse: None,
         };
         let nowhere = base.join("nowhere");
@@ -12018,6 +12120,7 @@ mod tests {
             digests: &digests,
             store: &store,
             red: &red,
+            control: &Control::new(),
             reuse: None,
         };
         let schema = Schema {
@@ -12086,6 +12189,7 @@ mod tests {
             digests: &digests,
             store: &store,
             red: &red,
+            control: &Control::new(),
             reuse: None,
         };
         // NO PROBED FILE, SO NO OBSERVING SET AND NO FILTER: the run would be
@@ -12153,6 +12257,7 @@ mod tests {
             digests: &digests,
             store: &store,
             red: &red,
+            control: &Control::new(),
             reuse: None,
         };
         let schema = Schema {
@@ -15269,6 +15374,7 @@ mod tests {
             verdict: Verdict::Caught,
             skipped: 3,
             held_kill: true,
+            by_hang: false,
         });
         tally.judged(Judged::ran(Verdict::Missed, 1));
         assert_eq!(
@@ -18342,6 +18448,7 @@ pub fn repo() -> u8 {{ scratch() }}
             digests: &digests,
             store: &store,
             red: &red,
+            control: &Control::new(),
             reuse: None,
         };
         let mut out = Vec::new();
@@ -18560,6 +18667,7 @@ pub fn repo() -> u8 {{ scratch() }}
                 digests: &digests,
                 store: &store,
                 red: &Red::new(),
+                control: &Control::new(),
                 reuse: None,
             };
             let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
@@ -18692,6 +18800,11 @@ pub fn repo() -> u8 {{ scratch() }}
             verdict_of_run(Outcome::TimedOut, Some(&reported), &cases, passed),
             (Verdict::Timeout, None, vec![a])
         );
+    }
+
+    /// No case's cut is a kill by its hang.
+    fn no_hang(_: &Case) -> bool {
+        false
     }
 
     /// Every run a scripted judge was handed, with its `fail_fast`, in order.
@@ -18942,6 +19055,7 @@ pub fn repo() -> u8 {{ scratch() }}
             digests: &digests,
             store: &work,
             red: &red,
+            control: &Control::new(),
             reuse: None,
         };
         let cases: BTreeSet<Case> = [case("m::slow")].into();
@@ -19022,8 +19136,13 @@ pub fn repo() -> u8 {{ scratch() }}
                 turn(Verdict::Caught, Some(killer.clone()), &[], &hangs[1..]),
             ),
         ]);
-        let decided = decide(std::slice::from_ref(&batch), &mut run, |_| {});
-        assert_eq!(decided.expect("runs"), (Verdict::Caught, Some(killer)));
+        let decided = decide(std::slice::from_ref(&batch), &mut run, &no_hang, |_| {});
+        assert_eq!(
+            decided
+                .map(|(verdict, killer, _)| (verdict, killer))
+                .expect("runs"),
+            (Verdict::Caught, Some(killer))
+        );
         assert_eq!(*asked.borrow(), [(batch, true), (rest, false)]);
     }
 
@@ -19051,8 +19170,13 @@ pub fn repo() -> u8 {{ scratch() }}
                 turn(Verdict::Caught, Some(killer.clone()), &[left], &[]),
             ),
         ]);
-        let decided = decide(std::slice::from_ref(&batch), &mut run, |_| {});
-        assert_eq!(decided.expect("runs"), (Verdict::Caught, Some(killer)));
+        let decided = decide(std::slice::from_ref(&batch), &mut run, &no_hang, |_| {});
+        assert_eq!(
+            decided
+                .map(|(verdict, killer, _)| (verdict, killer))
+                .expect("runs"),
+            (Verdict::Caught, Some(killer))
+        );
         assert_eq!(asked.borrow().len(), 2);
     }
 
@@ -19073,11 +19197,17 @@ pub fn repo() -> u8 {{ scratch() }}
         let decided_with = |answer: Turn| {
             let (mut run, asked) = scripted(vec![((batch.clone(), true), answer)]);
             let mut passes = Vec::new();
-            let decided = decide(std::slice::from_ref(&batch), &mut run, |case| {
+            let decided = decide(std::slice::from_ref(&batch), &mut run, &no_hang, |case| {
                 passes.push(case.clone());
             });
             let runs = asked.borrow().len();
-            (decided.expect("runs"), passes, runs)
+            (
+                decided
+                    .map(|(verdict, killer, _)| (verdict, killer))
+                    .expect("runs"),
+                passes,
+                runs,
+            )
         };
         let cut = turn(
             Verdict::Timeout,
@@ -19126,10 +19256,15 @@ pub fn repo() -> u8 {{ scratch() }}
             ),
         ]);
         let mut passes = Vec::new();
-        let decided = decide(&[first, second], &mut run, |case| {
+        let decided = decide(&[first, second], &mut run, &no_hang, |case| {
             passes.push(case.clone());
         });
-        assert_eq!(decided.expect("runs"), (Verdict::Timeout, None));
+        assert_eq!(
+            decided
+                .map(|(verdict, killer, _)| (verdict, killer))
+                .expect("runs"),
+            (Verdict::Timeout, None)
+        );
         assert_eq!(passes, [case("fine")]);
         let rest: BTreeSet<Case> = [ok.clone()].into();
         let (mut run, _) = scripted(vec![
@@ -19143,10 +19278,15 @@ pub fn repo() -> u8 {{ scratch() }}
             ),
         ]);
         let mut passes = Vec::new();
-        let decided = decide(std::slice::from_ref(&batch), &mut run, |case| {
+        let decided = decide(std::slice::from_ref(&batch), &mut run, &no_hang, |case| {
             passes.push(case.clone());
         });
-        assert_eq!(decided.expect("runs"), (Verdict::Caught, Some(ok)));
+        assert_eq!(
+            decided
+                .map(|(verdict, killer, _)| (verdict, killer))
+                .expect("runs"),
+            (Verdict::Caught, Some(ok))
+        );
         assert!(passes.is_empty(), "a kill after a cut keeps no pass");
     }
 
@@ -19177,11 +19317,18 @@ pub fn repo() -> u8 {{ scratch() }}
             ])
         };
         let (mut run, _) = script(turn(Verdict::Caught, Some(killer.clone()), &[], &[]));
-        let decided = decide(&runs, &mut run, |_| {});
-        assert_eq!(decided.expect("runs"), (Verdict::Caught, Some(killer)));
+        let decided = decide(&runs, &mut run, &no_hang, |_| {});
+        assert_eq!(
+            decided
+                .map(|(verdict, killer, _)| (verdict, killer))
+                .expect("runs"),
+            (Verdict::Caught, Some(killer))
+        );
         let (mut run, _) = script(turn(Verdict::Missed, None, &[], &[]));
         assert_eq!(
-            decide(&runs, &mut run, |_| {}).expect("runs"),
+            decide(&runs, &mut run, &no_hang, |_| {})
+                .map(|(verdict, killer, _)| (verdict, killer))
+                .expect("runs"),
             (Verdict::Timeout, None)
         );
     }
@@ -19213,8 +19360,13 @@ pub fn repo() -> u8 {{ scratch() }}
             };
             Ok(turn(Verdict::Timeout, None, &[], &hung))
         };
-        let decided = decide(&batches, &mut run, |_| {});
-        assert_eq!(decided.expect("runs"), (Verdict::Timeout, None));
+        let decided = decide(&batches, &mut run, &no_hang, |_| {});
+        assert_eq!(
+            decided
+                .map(|(verdict, killer, _)| (verdict, killer))
+                .expect("runs"),
+            (Verdict::Timeout, None)
+        );
         let fast: Vec<bool> = asked.borrow().iter().map(|(_, fast)| *fast).collect();
         assert_eq!(fast, [true, false, true, false, true, false]);
         let bound: f64 = batches
@@ -19231,6 +19383,106 @@ pub fn repo() -> u8 {{ scratch() }}
         for (cases, fast) in asked.borrow().iter() {
             assert_eq!(cases.len(), if *fast { 4 } else { 3 });
         }
+    }
+
+    /// A case cut under a mutant killed it by the hang only when its control
+    /// passed within a fifth of its limit: a fast case whose control took
+    /// 0.5 s, or a slow one well inside five times its seconds, did; a control
+    /// past a fifth of the limit, or none at all, did not (CLOUD-2911).
+    ///
+    /// Fails by: every cut read as a kill, so a mutant that slows a case
+    /// beyond its limit is filed caught; or no cut ever a kill, so a case that
+    /// waits on the event a mutant suppresses is a timeout every sweep.
+    #[test]
+    fn a_cut_is_a_kill_by_hang_only_when_its_control_passed_in_time() {
+        let (fast, slow, unrun) = (case("fast"), case("slow"), case("unrun"));
+        let seconds = [(fast.clone(), 0.5), (slow.clone(), 10.0)].into();
+        let control = |passed: &[(&Case, f64)]| -> Control {
+            passed
+                .iter()
+                .map(|(case, s)| ((*case).clone(), *s))
+                .collect()
+        };
+        assert!(
+            hang_kill(&fast, &control(&[(&fast, 0.5)]), &seconds),
+            "0.5 s of 20 s"
+        );
+        assert!(
+            hang_kill(&fast, &control(&[(&fast, 4.0)]), &seconds),
+            "exactly a fifth"
+        );
+        assert!(
+            !hang_kill(&fast, &control(&[(&fast, 4.1)]), &seconds),
+            "past a fifth"
+        );
+        assert!(
+            hang_kill(&slow, &control(&[(&slow, 10.0)]), &seconds),
+            "10 s of 50 s"
+        );
+        assert!(!hang_kill(&slow, &control(&[(&slow, 10.5)]), &seconds));
+        assert!(
+            !hang_kill(&unrun, &control(&[(&fast, 0.5)]), &seconds),
+            "no control"
+        );
+    }
+
+    /// A fast-passing case that hangs under a mutant is caught by the hang,
+    /// with no second run; a case whose control was slow, or that has none,
+    /// stays a timeout (CLOUD-2911, shard 0's `exec.rs` `detached` and
+    /// `lease.rs` `stop` cases).
+    ///
+    /// Fails by: a case waiting on the event a mutant suppresses filed a
+    /// timeout, exiting 3 on every sweep; or a slow control's cut filed a
+    /// kill.
+    #[test]
+    fn a_fast_case_that_hangs_under_the_mutant_is_caught_by_the_hang() {
+        let (waits, other) = (case("a_waits"), case("z_other"));
+        let batch: BTreeSet<Case> = [waits.clone(), other.clone()].into();
+        let rest: BTreeSet<Case> = [other.clone()].into();
+        let script = || {
+            scripted(vec![
+                (
+                    (batch.clone(), true),
+                    turn(Verdict::Timeout, None, &[], std::slice::from_ref(&waits)),
+                ),
+                (
+                    (rest.clone(), false),
+                    turn(Verdict::Missed, None, std::slice::from_ref(&other), &[]),
+                ),
+            ])
+        };
+        let (mut run, asked) = script();
+        let caught = |case: &Case| case.0 == "a_waits";
+        let decided = decide(std::slice::from_ref(&batch), &mut run, &caught, |_| {});
+        assert_eq!(
+            decided.expect("runs"),
+            (Verdict::Caught, Some(waits.clone()), true)
+        );
+        assert_eq!(asked.borrow().len(), 1, "a kill by hang ends the mutant");
+        let (mut run, asked) = script();
+        let decided = decide(std::slice::from_ref(&batch), &mut run, &no_hang, |_| {});
+        assert_eq!(decided.expect("runs"), (Verdict::Timeout, None, false));
+        assert_eq!(asked.borrow().len(), 2);
+    }
+
+    /// The control run's passing times are its report's passed cases in the
+    /// batch, and no failed, cut or foreign one (CLOUD-2911).
+    ///
+    /// Fails by: a failed or cut case given a control time, so its cut under a
+    /// mutant reads as a kill; or a case outside the batch timed.
+    #[test]
+    fn the_control_times_are_the_batchs_passing_cases() {
+        let xml = r#"<testsuites><testsuite name="batten::it">
+            <testcase name="m::ok" classname="batten::it" time="0.25"/>
+            <testcase name="m::red" classname="batten::it" time="0.5"><failure type="test failure"/></testcase>
+            <testcase name="m::cut" classname="batten::it" time="20.0"><failure type="test timeout"/></testcase>
+            <testcase name="m::listed" classname="batten::it" time="0.1"/>
+            <testcase name="m::foreign" classname="batten::it" time="0.1"/>
+        </testsuite></testsuites>"#;
+        let batch: BTreeSet<Case> = ["m::ok", "m::red", "m::cut", "m::listed"].map(case).into();
+        let red: Red = [(case("m::listed"), String::from("red"))].into();
+        let times = control_times(xml, &batch, &red);
+        assert_eq!(times, [(case("m::ok"), 0.25)].into());
     }
 
     /// A judging run's fixture scratch and temp start empty, whatever the run
@@ -19310,6 +19562,7 @@ pub fn repo() -> u8 {{ scratch() }}
             digests: &digests,
             store: &store,
             red: &Red::new(),
+            control: &Control::new(),
             reuse: None,
         };
         let todo: Vec<u32> = (0..105).collect();
@@ -19408,6 +19661,7 @@ pub fn repo() -> u8 {{ scratch() }}
             digests: &digests,
             store: &store,
             red: &red,
+            control: &Control::new(),
             reuse: None,
         };
         let mut out = Vec::new();
@@ -20214,6 +20468,7 @@ pub fn repo() -> u8 {{ scratch() }}
             digests: &digests,
             store: &store,
             red: &red,
+            control: &Control::new(),
             reuse: None,
         };
         let nowhere = base.join("nowhere");
@@ -20427,6 +20682,7 @@ pub fn repo() -> u8 {{ scratch() }}
             verdict: Verdict::Caught,
             skipped: 2,
             held_kill: true,
+            by_hang: false,
         });
         tally.judged(Judged::ran(Verdict::Missed, 3));
         assert_eq!(tally.line(4), reused_line(0, 1, 4, 5));
