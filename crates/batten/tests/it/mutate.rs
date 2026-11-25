@@ -2547,6 +2547,75 @@ fn a_cargo_sweep_without_nextest_refuses_before_it_builds() {
     assert!(!out.contains("mutant(s) of"), "nothing was listed: {out}{err}");
 }
 
+/// [`rust_gate_repo`] with cargo-mutants provisioned, so only nextest can be
+/// the missing runner.
+fn provisioned_rust_gate_repo(name: &str) -> PathBuf {
+    let root = rust_gate_repo(name);
+    // The toy repository carries no config of its own; this is its whole one.
+    write(
+        &root,
+        "batten.toml",
+        &format!("version = 1\n{}", crate::step_journal::MUTANTS_PROVISION),
+    );
+    root
+}
+
+/// `PATH` holding only the `cargo` running this suite, and an empty
+/// `CARGO_HOME`: a host where `cargo nextest` does not answer.
+fn without_nextest(name: &str) -> (String, String) {
+    let cargo = PathBuf::from(env!("CARGO"));
+    let only_cargo = cargo.parent().expect("cargo lives in a directory");
+    assert!(
+        !only_cargo.join("cargo-nextest").exists(),
+        "this case needs a cargo directory without nextest"
+    );
+    let home = common::scratch(name);
+    (
+        only_cargo.to_string_lossy().into_owned(),
+        home.to_string_lossy().into_owned(),
+    )
+}
+
+/// RUNNER FIRST WITH THE OTHER RUNNER PRESENT (CLOUD-2881): cargo-mutants
+/// provisioned and nextest missing is `cargo-nextest runner-absent`, exit 3,
+/// and cargo-mutants is never asked to list. Fails by: the early return
+/// deleted or moved below `list_mutants`, so the run lists every mutant and
+/// pays the schema build before any judging run finds nextest gone.
+#[test]
+fn a_provisioned_sweep_without_nextest_refuses_before_it_lists() {
+    let root = provisioned_rust_gate_repo("cargo-sweep-provisioned-no-nextest");
+    let (path, home) = without_nextest("cargo-sweep-provisioned-no-nextest-home");
+    let (code, out, err) = mutate_cargo(
+        &root,
+        &[("MUTANT_WHOLE_TREE", "1"), ("PATH", &path), ("CARGO_HOME", &home)],
+    );
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert_eq!(out.matches("cargo-nextest runner-absent").count(), 1, "{out}{err}");
+    assert!(!out.contains("cargo-mutants runner-absent"), "provisioned: {out}{err}");
+    assert!(!out.contains("mutant(s) of"), "nothing was listed: {out}{err}");
+}
+
+/// THE REACH SEED ASKS TOO (CLOUD-2881): the detached seed lists and builds the
+/// schema like the sweep, so nextest missing is could-not-look before it lists.
+/// Fails by: the seed fetching cargo-mutants and listing with no probe.
+#[test]
+fn a_reach_seed_without_nextest_refuses_before_it_lists() {
+    let root = provisioned_rust_gate_repo("cargo-seed-no-nextest");
+    let (path, home) = without_nextest("cargo-seed-no-nextest-home");
+    let (code, out, err) = mutate_cargo(
+        &root,
+        &[
+            (batten::mutate::resume::SEED_ENV, "1"),
+            ("MUTANT_PHASE", "reach"),
+            ("PATH", &path),
+            ("CARGO_HOME", &home),
+        ],
+    );
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert_eq!(out.matches("cargo-nextest runner-absent").count(), 1, "{out}{err}");
+    assert!(!out.contains("reach seed over"), "nothing was listed: {out}{err}");
+}
+
 /// A CHANGE OR THE WHOLE WORKSPACE, NEVER BOTH (CLOUD-2849): a schedule that
 /// inherited a base would judge one diff while reporting a whole-tree sweep.
 /// Fails by: the base winning in silence, or the refusal not naming both.
