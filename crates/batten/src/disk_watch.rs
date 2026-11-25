@@ -411,6 +411,10 @@ fn run(
 }
 
 /// Hand the runtime one turn: `Pending` once, waking itself, then done.
+///
+/// Linux only: the fanotify event loop is its one caller, and no other
+/// platform has that loop.
+#[cfg(target_os = "linux")]
 async fn yield_once() {
     let mut yielded = false;
     std::future::poll_fn(|cx| {
