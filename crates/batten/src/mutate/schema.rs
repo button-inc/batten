@@ -1199,14 +1199,7 @@ fn probe_sites(
         }
         hasher.update(token.text().as_bytes());
         hasher.update(b"\x1f");
-        if token.kind() != SyntaxKind::OUTER_DOC_COMMENT
-            && token.kind() != SyntaxKind::STRING
-            && token.kind() != SyntaxKind::BYTE_STRING
-            && token.kind() != SyntaxKind::C_STRING
-        {
-            own.push_str(token.text());
-            own.push('\x1f');
-        }
+        push_code(own, &token);
         token_mentions(&token, place, mentions);
     }
     for (at, grouped) in items {
@@ -1339,6 +1332,7 @@ fn record_includes(
     for node in root.descendants() {
         let as_target = |included: Option<Included>| match included {
             Some(Included::Built) => Some(built_target(&place.file)),
+            Some(Included::AnyPackage(rest)) => Some(format!("{ANY_PACKAGE}{rest}")),
             Some(Included::File(path)) => Some(path),
             Some(Included::Unknown) | None => Some(String::from("?")),
         };
@@ -2157,18 +2151,47 @@ fn position_sensitive(text: &str) -> bool {
 fn code_text(node: &SyntaxNode) -> String {
     node.descendants_with_tokens()
         .filter_map(ra_ap_syntax::NodeOrToken::into_token)
-        .filter(|token| {
-            !unkeyed(token.kind())
-                && token.kind() != SyntaxKind::OUTER_DOC_COMMENT
-                && token.kind() != SyntaxKind::STRING
-                && token.kind() != SyntaxKind::BYTE_STRING
-                && token.kind() != SyntaxKind::C_STRING
-        })
         .fold(String::new(), |mut text, token| {
-            text.push_str(token.text());
-            text.push('\x1f');
+            push_code(&mut text, &token);
             text
         })
+}
+
+/// Push `token` onto code text `text` ([`code_text`]): a code token as itself;
+/// a string an attribute or a macro's arguments hold as the markers in it,
+/// since a proc macro may compile it; nothing for a comment, a doc comment or
+/// any other string.
+fn push_code(text: &mut String, token: &ra_ap_syntax::SyntaxToken) {
+    let kind = token.kind();
+    if unkeyed(kind) || kind == SyntaxKind::OUTER_DOC_COMMENT {
+        return;
+    }
+    if kind == SyntaxKind::STRING || kind == SyntaxKind::BYTE_STRING || kind == SyntaxKind::C_STRING
+    {
+        // A STRING A PROC MACRO MAY COMPILE (CLOUD-2927 item 1): its markers
+        // as the tokens they would lex to.
+        if token
+            .parent_ancestors()
+            .any(|node| node.kind() == SyntaxKind::ATTR || node.kind() == SyntaxKind::TOKEN_TREE)
+        {
+            for (marker, tokens) in [
+                ("line!", "line\x1f!\x1f"),
+                ("column!", "column\x1f!\x1f"),
+                ("file!", "file\x1f!\x1f"),
+                ("module_path!", "module_path\x1f!\x1f"),
+                ("track_caller", "track_caller\x1f"),
+                ("Location::caller", "Location\x1f::\x1fcaller\x1f"),
+                ("type_name", "type_name\x1f"),
+            ] {
+                if token.text().contains(marker) {
+                    text.push_str(tokens);
+                }
+            }
+        }
+        return;
+    }
+    text.push_str(token.text());
+    text.push('\x1f');
 }
 
 /// The tokens of code text ([`code_text`]): each ends in `\x1f`.
@@ -2531,7 +2554,10 @@ fn moves_modules(source: &str, file: &str) -> bool {
                             .is_some_and(|name| name.syntax().text_range() == token.text_range())
                     })
                     .and_then(|call| include_path(&call, file));
-                !matches!(resolved, Some(Included::File(_) | Included::Built))
+                !matches!(
+                    resolved,
+                    Some(Included::File(_) | Included::Built | Included::AnyPackage(_))
+                )
             })
 }
 
@@ -2622,10 +2648,20 @@ fn included_sources(root: &std::path::Path, files: &BTreeSet<String>) -> BTreeSe
         let parse = batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024);
         let dir = file.rsplit_once('/').map_or("", |(dir, _)| dir);
         for node in parse.tree().syntax().descendants() {
-            if let Some(call) = ast::MacroCall::cast(node.clone())
-                && let Some(Included::File(target)) = include_path(&call, file)
-            {
-                included.insert(target);
+            if let Some(call) = ast::MacroCall::cast(node.clone()) {
+                match include_path(&call, file) {
+                    Some(Included::File(target)) => {
+                        included.insert(target);
+                    }
+                    Some(Included::AnyPackage(rest)) => {
+                        if let Some(target) =
+                            package_dir_of(file).and_then(|dir| tree_join(dir, &rest))
+                        {
+                            included.insert(target);
+                        }
+                    }
+                    _ => {}
+                }
             }
             let Some(module) = ast::Module::cast(node) else {
                 continue;
@@ -6410,7 +6446,6 @@ pub fn case_digests<'c>(
     executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
     depends: &Depends<'_>,
 ) -> std::collections::BTreeMap<Case, String> {
-    type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<String>>)>;
     /// What a case ran and its own text names, to the named part it keys.
     type Named =
         std::collections::HashMap<(Vec<usize>, BTreeSet<String>), (blake3::Hash, Vec<usize>)>;
@@ -6424,8 +6459,7 @@ pub fn case_digests<'c>(
     let mut walk = Walk::default();
     let everything = everything_digest(depends.resources);
     for case in cases {
-        let (name, binary) = case;
-        let test = name.rsplit("::").next().unwrap_or(name);
+        let binary = &case.1;
         let mut hasher = blake3::Hasher::new();
         let ran = executed.get(case);
         // THE SET OF WHAT IT RAN, NEVER THE PROBE-ID SEQUENCE (CLOUD-2904): a
@@ -6442,33 +6476,7 @@ pub fn case_digests<'c>(
         }
         // The test's own text and its module's helpers, from the first source
         // that holds it: what a shared module is reached FROM.
-        let mut own: Option<Vec<String>> = None;
-        let mut unfound: Vec<String> = Vec::new();
-        for file in case_sources(package_dirs, name, binary) {
-            if file.ends_with("common/mod.rs") {
-                continue;
-            }
-            let held = parsed.entry(file.clone()).or_insert_with(|| {
-                let bytes = crate::fsio::read(root.join(&file)).ok()?;
-                let tests = test_texts(&String::from_utf8_lossy(&bytes));
-                Some((bytes, tests))
-            });
-            hasher.update(format!("\x1d{file}\x1f").as_bytes());
-            let Some((bytes, tests)) = held else {
-                continue;
-            };
-            if let Some(bodies) = tests.get(test) {
-                for text in bodies {
-                    hasher.update(text.as_bytes());
-                    hasher.update(b"\x1e");
-                }
-                own.get_or_insert_with(Vec::new)
-                    .extend(bodies.iter().cloned());
-            } else {
-                hasher.update(bytes);
-                unfound.push(file.clone());
-            }
-        }
+        let (own, unfound) = own_texts(&mut hasher, (root, package_dirs), case, &mut parsed);
         let reached = crate_part(
             &mut hasher,
             (root, package_dirs),
@@ -6514,7 +6522,13 @@ pub fn case_digests<'c>(
         // AND WHERE ITS OWN UNPROBED TEXT CALLS AN OBSERVER FROM (CLOUD-2904):
         // a test's files are keyed by their text, which a line above the call
         // leaves alone while the location the observer reports moves.
-        let observed = compiled_part(&mut hasher, (depends, &everything), &graph, ran, &defined);
+        let observed = compiled_part(
+            &mut hasher,
+            (depends, &everything, root),
+            &graph,
+            ran,
+            &defined,
+        );
         if observed || reached.as_ref().is_some_and(|reached| reached.observes) {
             key_callers(&mut hasher, (root, package_dirs), case, shared.get(binary));
         }
@@ -6530,6 +6544,55 @@ pub fn case_digests<'c>(
         digests.insert(case.clone(), hasher.finalize().to_hex().to_string());
     }
     digests
+}
+
+/// A source file read for a case's own text ([`own_texts`]): its bytes and
+/// its tests' texts ([`test_texts`]); `None` where it cannot be read.
+type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<String>>)>;
+
+/// A case's own text ([`case_digests`]): in each of its own module files,
+/// the test function it names and the helpers beside it, or the whole file
+/// where none is found; each file read once into `parsed`. Returns the texts
+/// found, and the files where none was.
+fn own_texts(
+    hasher: &mut blake3::Hasher,
+    (root, package_dirs): (
+        &std::path::Path,
+        &std::collections::BTreeMap<String, String>,
+    ),
+    case: &Case,
+    parsed: &mut std::collections::BTreeMap<String, Parsed>,
+) -> (Option<Vec<String>>, Vec<String>) {
+    let (name, binary) = case;
+    let test = name.rsplit("::").next().unwrap_or(name);
+    let mut own: Option<Vec<String>> = None;
+    let mut unfound: Vec<String> = Vec::new();
+    for file in case_sources(package_dirs, name, binary) {
+        if file.ends_with("common/mod.rs") {
+            continue;
+        }
+        let held = parsed.entry(file.clone()).or_insert_with(|| {
+            let bytes = crate::fsio::read(root.join(&file)).ok()?;
+            let tests = test_texts(&String::from_utf8_lossy(&bytes));
+            Some((bytes, tests))
+        });
+        hasher.update(format!("\x1d{file}\x1f").as_bytes());
+        let Some((bytes, tests)) = held else {
+            continue;
+        };
+        if let Some(bodies) = tests.get(test) {
+            for text in bodies {
+                hasher.update(text.as_bytes());
+                hasher.update(b"\x1e");
+            }
+            own.get_or_insert_with(Vec::new)
+                .extend(bodies.iter().cloned());
+        } else {
+            hasher.update(bytes);
+            unfound.push(file.clone());
+        }
+    }
+    (own, unfound)
 }
 
 /// What the files of an unfound case `unfound` name ([`case_digests`]), each
@@ -6653,6 +6716,7 @@ fn includes_in(node: &SyntaxNode, file: &str) -> BTreeSet<String> {
         includes.insert(match included {
             Included::File(path) => path,
             Included::Built => built_target(file),
+            Included::AnyPackage(rest) => format!("{ANY_PACKAGE}{rest}"),
             Included::Unknown => String::from("?"),
         });
     };
@@ -6698,25 +6762,46 @@ const BUILT: &str = "\u{2}built:";
 fn include_key(
     hasher: &mut blake3::Hasher,
     target: &str,
-    resources: &std::collections::BTreeMap<String, String>,
-    everything: &str,
+    (resources, everything): (&std::collections::BTreeMap<String, String>, &str),
+    root: &std::path::Path,
 ) {
     hasher.update(format!("\x16{target}\x1f").as_bytes());
     if target == "?" {
         hasher.update(everything.as_bytes());
-    } else if let Some(package) = target.strip_prefix(BUILT) {
-        let script = if package.is_empty() {
-            String::from("build.rs")
-        } else {
-            format!("{package}/build.rs")
+    } else if target.starts_with(BUILT) {
+        // THE OUTPUT ITSELF, WHERE THE SWEEP BUILT IT (CLOUD-2927 item 5): a
+        // build script reads what it likes; what it wrote is what is included.
+        // Where no build is known, every file.
+        match resources.get(target) {
+            Some(produced) => hasher.update(produced.as_bytes()),
+            None => hasher.update(everything.as_bytes()),
         };
-        for input in [String::from("Cargo.lock"), script] {
-            hasher.update(resource_id(resources, &input).as_bytes());
+    } else if let Some(rest) = target.strip_prefix(ANY_PACKAGE) {
+        // IN EVERY PACKAGE (CLOUD-2927 item 4): the one compiling it decides.
+        for (path, id) in resources {
+            if path == rest || path.ends_with(&format!("/{rest}")) {
+                hasher.update(format!("{path}\x1f{id}\x1e").as_bytes());
+            }
         }
-    } else {
+    } else if resources.contains_key(target)
+        || resources
+            .keys()
+            .any(|path| path.starts_with(&format!("{target}/")))
+    {
         hasher.update(resource_id(resources, target).as_bytes());
+    } else {
+        // NO ID, SO ITS CONTENT (CLOUD-2927 item 2): an ignored file the
+        // index holds no id for is in the snapshot all the same.
+        match crate::fsio::read(root.join(target)) {
+            Ok(bytes) => hasher.update(blake3::hash(&bytes).to_hex().as_bytes()),
+            Err(_) => hasher.update(b"-"),
+        };
     }
 }
+
+/// The prefix of an include target below whichever package compiles it
+/// ([`Included::AnyPackage`]).
+const ANY_PACKAGE: &str = "\u{2}any:";
 
 /// Every content id in `resources`, digested: what a `?` include keys.
 fn everything_digest(resources: &std::collections::BTreeMap<String, String>) -> String {
@@ -6788,7 +6873,7 @@ fn crate_part(
     };
     let includes: BTreeSet<&String> = taken.iter().flat_map(|item| &item.includes).collect();
     for target in includes {
-        include_key(hasher, target, depends.resources, everything);
+        include_key(hasher, target, (depends.resources, everything), root);
     }
     // AND WHAT THOSE ITEMS NAME STARTS THE CASE'S WALK (round 4b #1): a common
     // helper naming a `const` of the crate under test kept it out of the key.
@@ -6849,7 +6934,7 @@ fn named_part(
 /// position in an unprobed caller too.
 fn compiled_part(
     hasher: &mut blake3::Hasher,
-    (depends, everything): (&Depends<'_>, &str),
+    (depends, everything, root): (&Depends<'_>, &str, &std::path::Path),
     graph: &Graph<'_>,
     ran: Option<&BTreeSet<usize>>,
     defined: &[usize],
@@ -6886,7 +6971,7 @@ fn compiled_part(
             .map(String::as_str),
     );
     for target in targets {
-        include_key(hasher, target, depends.resources, everything);
+        include_key(hasher, target, (depends.resources, everything), root);
     }
     // A POSITION ONLY WHERE AN OBSERVER REPORTS IT (CLOUD-2904): keyed for
     // every function a case ran once one observer ran, a line above any of
@@ -8738,10 +8823,12 @@ pub fn sweep(
     // records are sealed against the snapshot it ran over, which the copy
     // below replaces.
     keep_leftovers(&state, out)?;
-    sync(root, &work, &package_sources(root, mutants))?;
-    let snapshot = snapshot_as_listed(root, &state, listed_over)?;
-    let resources = resource_digest(root)?;
-    let resource_ids = resource_ids(root)?;
+    // THE CONTENT IDS ARE OF THE TREE THE SYNC COPIED (CLOUD-2927 item 3):
+    // taken before it and checked after, so a non-Rust edit landing between
+    // the two refuses the sweep rather than keying new bytes to old verdicts.
+    let (snapshot, (resources, mut resource_ids)) = stable_resources(root, || {
+        copy_tree(root, (&work, &state), mutants, listed_over)
+    })?;
     let live = root;
     let root = snapshot;
     // AN ERROR LOG IS THIS SWEEP'S OR NOTHING: one left by a killed sweep
@@ -8769,6 +8856,8 @@ pub fn sweep(
         (&site_keys, &mut cache, &cache_path),
         out,
     )?;
+    // WHAT EACH BUILD SCRIPT PRODUCED, BY CONTENT (CLOUD-2927 item 5).
+    resource_ids.extend(built_outputs(&target, &package_dirs(mutants)));
     // PACKED FOR A SHARD THAT READS NO JOURNAL (CLOUD-2882).
     let rendered_with = Known::of(&unviable, &handed, &unprobed);
     let classic = schema.classic(handed);
@@ -8921,6 +9010,108 @@ fn settle_handed(
     let (judged, unviable) = judge_handbacks(judging, handback, classic, (schema, reach), out)?;
     verdicts.extend(judged);
     Ok((Vec::new(), unviable))
+}
+
+/// The checkout synced into the build's tree `work` and copied to `state`'s
+/// snapshot ([`snapshot_as_listed`]); the snapshot's path.
+///
+/// # Errors
+///
+/// The sync or the copy fails, or the sources moved since the listing.
+fn copy_tree(
+    root: &std::path::Path,
+    (work, state): (&std::path::Path, &std::path::Path),
+    mutants: &[Listed],
+    listed_over: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    sync(root, work, &package_sources(root, mutants))?;
+    snapshot_as_listed(root, state, listed_over)
+}
+
+/// A tree's non-Rust digest ([`resource_digest`]) and content ids
+/// ([`resource_ids`]).
+type Resources = (String, std::collections::BTreeMap<String, String>);
+
+/// `during`'s result, with the non-Rust digest and the content ids of `root`
+/// taken before it ran, refused if the digest moved while it ran.
+///
+/// # Errors
+///
+/// `during` fails, the tree cannot be read, or a non-Rust file changed.
+fn stable_resources<T>(
+    root: &std::path::Path,
+    during: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<(T, Resources)> {
+    let before = resource_digest(root)?;
+    let ids = resource_ids(root)?;
+    let done = during()?;
+    anyhow::ensure!(
+        resource_digest(root)? == before,
+        "a non-Rust file changed while the tree was copied, so no content id would name what \
+         was built; run the sweep again once the tree is still"
+    );
+    Ok((done, (before, ids)))
+}
+
+/// What each package's build script wrote, by content: every file under its
+/// `OUT_DIR`s in `target`, keyed as that package's [`built_target`].
+fn built_outputs(
+    target: &std::path::Path,
+    packages: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut produced = std::collections::BTreeMap::new();
+    let Ok(profiles) = std::fs::read_dir(target) else {
+        return produced;
+    };
+    let builds: Vec<std::path::PathBuf> = profiles
+        .flatten()
+        .map(|profile| profile.path().join("build"))
+        .filter(|build| build.is_dir())
+        .collect();
+    for (name, dir) in packages {
+        let mut outs: Vec<std::path::PathBuf> = builds
+            .iter()
+            .filter_map(|build| std::fs::read_dir(build).ok())
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|file| file.to_str())
+                    .and_then(|file| file.rsplit_once('-'))
+                    .is_some_and(|(package, _)| package == name)
+                    && path.join("out").is_dir()
+            })
+            .map(|path| path.join("out"))
+            .collect();
+        if outs.is_empty() {
+            continue;
+        }
+        outs.sort();
+        let mut hasher = blake3::Hasher::new();
+        for out in outs {
+            let mut files: Vec<std::path::PathBuf> = ignore::WalkBuilder::new(&out)
+                .standard_filters(false)
+                .build()
+                .flatten()
+                .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+                .map(ignore::DirEntry::into_path)
+                .collect();
+            files.sort();
+            for file in files {
+                let name = file.strip_prefix(&out).unwrap_or(&file);
+                hasher.update(name.as_os_str().as_encoded_bytes());
+                hasher.update(&[0]);
+                hasher.update(&std::fs::read(&file).unwrap_or_default());
+                hasher.update(&[0]);
+            }
+        }
+        produced.insert(
+            built_target(&format!("{dir}/src/lib.rs")),
+            hasher.finalize().to_hex().to_string(),
+        );
+    }
+    produced
 }
 
 /// The checkout at `root` copied to `state`'s `pristine`, refused unless the
@@ -9519,6 +9710,10 @@ enum Included {
     File(String),
     /// A file of the build's output, which the build key holds.
     Built,
+    /// A file at this path below whichever package compiles the include: a
+    /// `CARGO_MANIFEST_DIR` path, which a `#[path]` file another package
+    /// compiles reads in that package.
+    AnyPackage(String),
     /// What no syntax can name: an argument that is not a path.
     Unknown,
 }
@@ -9594,7 +9789,10 @@ fn include_path_in(tree: &ast::TokenTree, file: &str) -> Option<Included> {
             match var.as_str() {
                 "OUT_DIR" => Some(Included::Built),
                 "CARGO_MANIFEST_DIR" => {
-                    Some(Included::File(tree_join(package_dir_of(file)?, &path)?))
+                    let _ = package_dir_of(file)?;
+                    Some(Included::AnyPackage(
+                        path.trim_start_matches('/').to_owned(),
+                    ))
                 }
                 _ => None,
             }
@@ -9757,7 +9955,7 @@ fn read_gates_and_includes(
                 targets.insert(path.clone());
             }
             (Some(_), Included::Built) | (None, _) => {}
-            (Some(_), Included::Unknown) => *held = None,
+            (Some(_), Included::Unknown | Included::AnyPackage(_)) => *held = None,
         };
         match owner_of(&token, spans) {
             Owner::Probe(id) => merge(
@@ -12002,7 +12200,8 @@ mod tests {
                 "const X: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/data/x.txt\"));\n",
                 "crates/p/src/lib.rs"
             ),
-            Included::File(String::from("crates/p/data/x.txt"))
+            // IN WHICHEVER PACKAGE COMPILES IT (CLOUD-2927 item 4).
+            Included::AnyPackage(String::from("data/x.txt"))
         );
         assert_eq!(
             included(
@@ -15843,6 +16042,150 @@ mod tests {
         assert_ne!(tree("schema-r4b-obs-a", ""), tree("schema-r4b-obs-b", "\n"));
     }
 
+    /// CLOUD-2927 item 1 (in #1276): a marker word in a string an attribute
+    /// or a macro's arguments hold may be code a proc macro compiles, so the
+    /// function carrying it is keyed at its position.
+    ///
+    /// Fails by: markers matched only as macro-call tokens, so a line above
+    /// `#[attr("line!()")]` moved no key.
+    #[test]
+    fn a_marker_in_an_attributes_string_is_keyed_at_its_position() {
+        let render = |above: &str| {
+            render_in(
+                &format!("{above}#[attr(\"line!()\")]\npub fn f() {{}}\n"),
+                &[],
+                &BTreeSet::new(),
+                Some(0),
+                &FileScope::of("src/lib.rs"),
+            )
+        };
+        assert_ne!(render("").probes, render("\n").probes);
+    }
+
+    /// CLOUD-2927 item 2 (in #1276): an include target the content ids do not
+    /// hold (an ignored file) is keyed by what the snapshot holds there.
+    ///
+    /// Fails by: an absent id read as `-`, so an ignored fixture's edit moved
+    /// no key.
+    #[test]
+    fn an_include_target_without_an_id_is_keyed_by_its_content() {
+        let tree = |label: &str, data: &str| {
+            crate_case(
+                label,
+                ("s::t", "fix::it"),
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    ("tests/it/main.rs", "mod s;\n"),
+                    (
+                        "tests/it/s.rs",
+                        "#[test]\nfn t() { assert_eq!(include_str!(\"data.txt\"), \"x\"); }\n",
+                    ),
+                    ("tests/it/data.txt", data),
+                ],
+                &[],
+            )
+        };
+        assert_ne!(tree("schema-2927-2-a", "x"), tree("schema-2927-2-b", "y"));
+    }
+
+    /// CLOUD-2927 item 3 (in #1276): the content ids are of the tree the
+    /// sweep copied: a non-Rust edit landing while it copies refuses it.
+    ///
+    /// Fails by: content ids read after the copy with no check, so new
+    /// bytes were keyed to a verdict judged over old ones.
+    #[test]
+    fn a_non_rust_edit_while_the_tree_is_copied_refuses_the_sweep() {
+        let repo = crate::scratch::scratch("schema-2927-3");
+        std::fs::write(repo.join("notes.txt"), "a\n").unwrap();
+        crate::gitwrite::commit_paths(&repo, &[String::from("notes.txt")], "fixture").unwrap();
+        assert!(stable_resources(&repo, || Ok(())).is_ok(), "a still tree");
+        let moved = stable_resources(&repo, || {
+            std::fs::write(repo.join("notes.txt"), "b\n")?;
+            Ok(())
+        });
+        assert!(moved.is_err(), "an edit while copying");
+    }
+
+    /// CLOUD-2927 item 4 (in #1276): a `CARGO_MANIFEST_DIR` include is keyed
+    /// in every package, since a `#[path]` file another package compiles
+    /// reads that package's directory.
+    ///
+    /// Fails by: the include resolved against the writing file's package
+    /// alone.
+    #[test]
+    fn a_manifest_dir_include_is_keyed_in_every_package() {
+        let probed = render_in(
+            "pub fn f() -> &'static str { include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/data.txt\")) }\n",
+            &[],
+            &BTreeSet::new(),
+            Some(0),
+            &FileScope::of("crates/b/src/shared.rs"),
+        );
+        let targets: Vec<String> = probed.compiled.probe_includes[&0].iter().cloned().collect();
+        let key = |id: &str| {
+            let mut hasher = blake3::Hasher::new();
+            let resources = [(String::from("crates/a/data.txt"), id.to_owned())].into();
+            for target in &targets {
+                include_key(
+                    &mut hasher,
+                    target,
+                    (&resources, "e"),
+                    std::path::Path::new("/nonexistent"),
+                );
+            }
+            hasher.finalize()
+        };
+        assert_ne!(key("1"), key("2"), "{targets:?}");
+    }
+
+    /// CLOUD-2927 item 5 (in #1276): a build's output is keyed by the output
+    /// itself where the sweep built it, and by every file where it did not.
+    ///
+    /// Fails by: an `OUT_DIR` include keyed on the lockfile and `build.rs`
+    /// alone, which miss any other input the build script reads.
+    #[test]
+    fn a_builds_output_is_keyed_by_what_it_produced() {
+        let target = built_target("crates/p/src/lib.rs");
+        let key = |resources: &std::collections::BTreeMap<String, String>, everything: &str| {
+            let mut hasher = blake3::Hasher::new();
+            include_key(
+                &mut hasher,
+                &target,
+                (resources, everything),
+                std::path::Path::new("/nonexistent"),
+            );
+            hasher.finalize()
+        };
+        let produced = |id: &str| -> std::collections::BTreeMap<String, String> {
+            [(target.clone(), id.to_owned())].into()
+        };
+        assert_ne!(
+            key(&produced("1"), "e"),
+            key(&produced("2"), "e"),
+            "its output"
+        );
+        let none = std::collections::BTreeMap::new();
+        assert_ne!(
+            key(&none, "e1"),
+            key(&none, "e2"),
+            "every file, where unbuilt"
+        );
+        let source = "include!(concat!(env!(\"OUT_DIR\"), \"/x.rs\"));\n\
+                      static T: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/t.bin\"));\n";
+        let rendered = render_in(
+            source,
+            &[],
+            &BTreeSet::new(),
+            Some(0),
+            &FileScope::of("crates/p/src/lib.rs"),
+        );
+        assert!(
+            rendered.compiled.item_includes[""].contains(&target),
+            "an item-level OUT_DIR include is every case's: {:?}",
+            rendered.compiled.item_includes
+        );
+    }
+
     /// One integration case's digest over `files`, with `src/lib.rs` the
     /// probed source and the case running nothing probed.
     fn crate_case(
@@ -19072,7 +19415,8 @@ pub fn repo() -> u8 {{ scratch() }}
         };
         assert_eq!(
             include_path(call, "crates/x/src/lib.rs"),
-            Some(Included::File(String::from("crates/x/data/x.rs")))
+            // IN WHICHEVER PACKAGE COMPILES IT (CLOUD-2927 item 4).
+            Some(Included::AnyPackage(String::from("data/x.rs")))
         );
     }
 
@@ -19829,13 +20173,14 @@ pub fn repo() -> u8 {{ scratch() }}
             include_target(&call, file)
         };
         let source = "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/data/x.txt\"));\n";
+        // IN WHICHEVER PACKAGE COMPILES IT (CLOUD-2927 item 4).
         assert_eq!(
             target(source, "pkg/src/lib.rs"),
-            Included::File(String::from("pkg/data/x.txt"))
+            Included::AnyPackage(String::from("data/x.txt"))
         );
         assert_eq!(
             target(source, "src/lib.rs"),
-            Included::File(String::from("data/x.txt"))
+            Included::AnyPackage(String::from("data/x.txt"))
         );
         assert_eq!(package_dir_of("pkg/tests/it/main.rs"), Some("pkg"));
         assert_eq!(package_dir_of("README.md"), None);
