@@ -1652,6 +1652,24 @@ fn runner_absent(runner: &str) -> Finding {
     }
 }
 
+/// The [`NEXTEST`] `runner-absent` a Cargo sweep owes BEFORE it builds
+/// anything, where `cargo nextest` does not answer from `root` (CLOUD-2881).
+///
+/// The schema sweep judges every mutant under nextest, and it used to learn
+/// nextest was missing only when its first judging run failed — after the
+/// schema build, measured at 7-20 minutes cold. Asked first, a missing runner
+/// is could-not-look in seconds.
+#[must_use]
+pub fn nextest_absent(root: &Path) -> Option<Finding> {
+    (!cargo_answers(root, "nextest")).then(|| runner_absent(NEXTEST))
+}
+
+/// The `runner-absent` for a registered runner the sweep could not fetch.
+#[must_use]
+pub fn absent(runner: RunnerKind) -> Finding {
+    runner_absent(runner.id())
+}
+
 /// Whether `program` names something runnable from `root`: a path (any name
 /// with a separator) that is a file, or a bare name found on `PATH`.
 fn resolves(root: &Path, program: &str) -> bool {

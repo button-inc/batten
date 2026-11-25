@@ -2504,6 +2504,47 @@ fn a_whole_tree_run_needs_no_base_and_lists_no_change() {
         err.contains("no [[provision]] row ships cargo-mutants"),
         "the run reached the runner: {code:?} {out}{err}"
     );
+    assert!(
+        out.contains("cargo-mutants runner-absent"),
+        "the unfetched runner is named: {out}{err}"
+    );
+    // nextest answers on this suite's PATH, so the probe names nothing.
+    assert!(!out.contains("cargo-nextest runner-absent"), "{out}{err}");
+}
+
+/// RUNNER FIRST (CLOUD-2881): a Cargo sweep where `cargo nextest` does not
+/// answer is `cargo-nextest runner-absent`, exit 3, before any mutant is
+/// listed or the schema is built — the build it used to start first cost 7-20
+/// minutes before the first judging run found nextest missing. `PATH` holds
+/// only the directory of the `cargo` running this suite, and `CARGO_HOME` is
+/// empty, as in `a_declared_cargo_row_without_nextest_reads_one_runner_absent`.
+/// Fails by: the probe dropped or moved after the listing, so no
+/// `cargo-nextest runner-absent` is said.
+#[test]
+fn a_cargo_sweep_without_nextest_refuses_before_it_builds() {
+    let root = rust_gate_repo("cargo-sweep-no-nextest");
+    let cargo = PathBuf::from(env!("CARGO"));
+    let only_cargo = cargo.parent().expect("cargo lives in a directory");
+    assert!(
+        !only_cargo.join("cargo-nextest").exists(),
+        "this case needs a cargo directory without nextest"
+    );
+    let home = common::scratch("cargo-sweep-no-nextest-cargo-home");
+    let (code, out, err) = mutate_cargo(
+        &root,
+        &[
+            ("MUTANT_WHOLE_TREE", "1"),
+            ("PATH", &only_cargo.to_string_lossy()),
+            ("CARGO_HOME", &home.to_string_lossy()),
+        ],
+    );
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert_eq!(
+        out.matches("cargo-nextest runner-absent").count(),
+        1,
+        "{out}{err}"
+    );
+    assert!(!out.contains("mutant(s) of"), "nothing was listed: {out}{err}");
 }
 
 /// A CHANGE OR THE WHOLE WORKSPACE, NEVER BOTH (CLOUD-2849): a schedule that

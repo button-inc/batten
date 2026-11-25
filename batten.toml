@@ -9470,7 +9470,7 @@ kind = "policy"
 scope = "tree"
 staged = ["mise.lock", "mise.toml"]
 format = "toml"
-line_sources = ["mise.lock", "mise.toml", ".github/workflows/*.yml"]
+line_sources = ["mise.lock", "mise.toml", "mise.*.toml", "batten.toml", "renovate.json5", ".github/workflows/*.yml"]
 module = "policy/lock-complete.rego"
 severity = "deny"
 
@@ -14075,7 +14075,7 @@ target = "mise run lock-check"
 id = "tool pin absent"
 gloss = "a `[tools]` pin has no lockfile entry at all, so every CI job that installs it fails before any gate runs"
 class = """
-The omission every other class here is blind to, because each of them judges an entry that is PRESENT — and the one failure a local run structurally cannot see. `[settings] lockfile = false` means nothing here installs `--locked`, so the tool installs fine on this machine forever; CI passes `--locked` and dies at the INSTALL step, before a single gate runs, in every job whose install list names it. Measured on PR #272: a fully green `mise run verify`, then two required checks red for a pin neither of them owns.
+The omission every other class here is blind to, because each of them judges an entry that is PRESENT — and the one failure a local run structurally cannot see. Under `[settings] lockfile = false` (this repository's setting until CLOUD-2881) nothing here installed `--locked`, so the tool installed fine on this machine forever; CI passes `--locked` and dies at the INSTALL step, before a single gate runs, in every job whose install list names it. Measured on PR #272: a fully green `mise run verify`, then two required checks red for a pin neither of them owns.
 """
 
 [[verdict.route]]
@@ -14097,9 +14097,9 @@ target = "mise run lock-check"
 
 [[verdict]]
 id = "lock write unsafe"
-gloss = "the manifest re-enables install-time lockfile writes, so any `mise install` can write the residue this row rejects"
+gloss = "an install can run unlocked: `lockfile` or `locked` is off in `[settings]` or in an env outside the lock writer"
 class = """
-The other half of `lock write other` rather than a separate concern: that class is half a mechanism while any install can produce a residue key. A per-caller opt-out cannot reach a caller it does not own, which is how a sandbox's own provisioning kept dirtying the tree; `[settings] lockfile = false` denies the write to everyone. Set it false — the scheduled currency job opts back in with `MISE_LOCKFILE=true`.
+The other half of `lock write other` rather than a separate concern: that class is half a mechanism while any install can produce a residue key, and an unlocked install also resolves through the forges' release APIs, which a cloud session's proxy refuses for a third party (CLOUD-2881). Locked mode is the one setting that closes both: every install reads the lock's URLs and checksums, makes no API call and never writes the file. A per-caller opt-in cannot reach a caller it does not own — `mise run`'s pre-task install never sees a task's `env` — so set `[settings] lockfile = true` and `locked = true`, and remove any `MISE_LOCKED`/`MISE_LOCKFILE` off-switch outside `[tasks.lock-check]`, the declared writer.
 """
 
 [[verdict.route]]
@@ -14111,7 +14111,7 @@ target = "mise.toml"
 id = "workflow run unsafe"
 gloss = "a workflow installs with mise-action and sets no MISE_LOCKFILE, so it installs UNLOCKED and passes"
 class = """
-`lockfile = false` turns off the whole lockfile feature rather than only the write, so `mise install --locked` fails outright with "locked mode requires lockfile to be enabled" and a workflow has to set `MISE_LOCKFILE` itself. One that forgets does not fail loudly: mise-action passes `--locked` only when it detects a lockfile, so the job installs unlocked and goes green. A checksum check silently dropped, which is the class this row exists for. Add `MISE_LOCKFILE: "true"` to the workflow's env.
+Under `lockfile = false` (this repository's setting until CLOUD-2881) the whole lockfile feature was off, so `mise install --locked` failed outright with "locked mode requires lockfile to be enabled" and a workflow had to set `MISE_LOCKFILE` itself. One that forgot did not fail loudly: mise-action passes `--locked` only when it detects a lockfile, so the job installed unlocked and went green — a checksum check silently dropped. Locked `[settings]` now cover a workflow without it; the assignment stays required so a workflow keeps its locked install through any later edit to `[settings]`. Add `MISE_LOCKFILE: "true"` to the workflow's env.
 """
 
 [[verdict.route]]
@@ -18175,6 +18175,14 @@ regex = 'holds the lists above to those two files'
 id = "plain-dotted-version"
 regex = '^[0-9]+(\.[0-9]+)*$'
 
+# CLOUD-2881, for `policy/lock-complete.rego`'s predicate 8: an env assignment
+# turning mise's lockfile read or locked mode off, in any of the three spellings
+# the tree uses — a TOML inline table (`MISE_LOCKED = "false"`), an argv string
+# (`"MISE_LOCKFILE=0"`) and a YAML mapping (`MISE_LOCKED: false`).
+[[pattern]]
+id = "mise-lock-switched-off"
+regex = '''MISE_LOCK(ED|FILE)["']?\s*[:=]\s*["']?(?i:false|0|no|off)\b'''
+
 # The partition claim AGENTS.md's branch clause refuses, for
 # `policy/pr-partition-restated.rego` (CLOUD-TBD). A `[[pattern]]` row rather than
 # an inline regex for the registry's own reason, and the module's header says why
@@ -18652,8 +18660,9 @@ id = "toolchain-is-provisioned"
 gloss = "every tool this repository pins is installed, so a gate does not install one inside its own timeout"
 check = ["mise", "ls", "--current", "--missing"]
 decided_by = "silent-exit"
-# INSTALL FROM THE LOCK, NEVER THROUGH THE API (measured 2026-10-06). With
-# `[settings] lockfile = false` mise does not READ `mise.lock` either, so a bare
+# INSTALL FROM THE LOCK, NEVER THROUGH THE API (measured 2026-10-06). Under the
+# `[settings] lockfile = false` this repository held until CLOUD-2881, mise did
+# not READ `mise.lock` either, so a bare
 # `mise install` resolved every `github:` tool through api.github.com and 401'd
 # (`cargo-auditable`, then `nextest`) — this repair failed, and with it the two
 # rows below whose repairs auto-install. `mise.lock` already pins each platform's
