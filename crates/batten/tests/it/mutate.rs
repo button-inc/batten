@@ -1591,27 +1591,27 @@ fn the_copy_is_a_repository_so_a_suite_that_resolves_its_own_root_answers_about_
 
 /// The tier [`a_suite_reading_the_index_judges_the_mutant`] runs: the gate's
 /// STAGED bytes, `git show :path`, as a gate judging the committed rule reads
-/// them, never the checkout's. Gated as its one reader is: off unix it is
-/// dead, which `-D warnings` refuses on the cross targets.
-#[cfg(unix)]
-const INDEX_GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
-    std::process::Command::new("bash")
-        .args(["-c", "git show :mise-tasks/toy.sh | bash -s -- \"$0\"", input])
+/// them, never the checkout's. It reads them in Rust rather than running them
+/// through a shell, so the case runs on every target `cross-check` builds.
+const INDEX_GATE_HELPER: &str = r#"fn indexed() -> String {
+    let shown = std::process::Command::new("git")
+        .args(["show", ":mise-tasks/toy.sh"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .status()
-        .expect("run the toy gate from the index")
-        .code()
+        .output()
+        .expect("read the toy gate from the index");
+    String::from_utf8(shown.stdout).expect("the toy gate is UTF-8")
 }
 "#;
 
-#[cfg(unix)]
 #[test]
 fn a_suite_reading_the_index_judges_the_mutant() {
-    // CLOUD-2789: `mise.toml`'s `settings-unlocked` row survived because the
+    // CLOUD-2789: a manifest's `settings-unlocked` row survived because the
     // mutant reached the staged checkout and not its index, which is what
     // `batten check` reads for a committed rule. A suite that reads the index
-    // must see the mutant, and the restore must put the index back, or the
-    // control case after it reads the last row's corruption.
+    // must see the mutant: `limit-ignored` turns the staged `LIMIT=10` into
+    // `LIMIT=999`, and a mutant left in the working copy alone survives here.
+    // The control case reads the index too, so a restore that left it mutated
+    // would read as `case-already-red` on the next row.
     let root = toy("index");
     let mut gate = String::from(TOY_GATE);
     gate.push_str(CAUGHT);
@@ -1625,11 +1625,11 @@ fn a_suite_reading_the_index_judges_the_mutant() {
             INDEX_GATE_HELPER,
             case(
                 "over_the_limit_is_refused",
-                "assert_eq!(gate(\"99\"), Some(1));"
+                "assert!(indexed().contains(\"\\nLIMIT=10\\n\"));"
             ),
             case(
                 "under_the_limit_passes",
-                "assert_eq!(gate(\"1\"), Some(0));"
+                "assert!(indexed().contains(\"#MUTANT limit-ignored\"));"
             ),
         ),
     );
