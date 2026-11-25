@@ -840,6 +840,19 @@ pub fn render(
     skip: &BTreeSet<u32>,
     probe_from: Option<usize>,
 ) -> Rendered {
+    render_in(source, mutants, skip, probe_from, &FileScope::default())
+}
+
+/// [`render`] with the file's items defined and its names mentioned where
+/// `place` says ([`FileScope`]).
+#[must_use]
+pub fn render_in(
+    source: &str,
+    mutants: &[(u32, &Listed)],
+    skip: &BTreeSet<u32>,
+    probe_from: Option<usize>,
+    file_scope: &FileScope,
+) -> Rendered {
     let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
     let root = parse.tree().syntax().clone();
     let mut classic = Vec::new();
@@ -884,7 +897,7 @@ pub fn render(
             }),
         }
     }
-    let probed = probe_sites(&root, probe_from, &mut sites);
+    let probed = probe_sites(&root, probe_from, file_scope, &mut sites);
     for &(start, end) in erased.keys() {
         sites.push(Site {
             range: start..end,
@@ -993,8 +1006,14 @@ type Grouped = (Vec<String>, blake3::Hasher, BTreeSet<String>);
 /// answered to its whole text moved every key on 304fa50b (CLOUD-2904). A
 /// name with several definitions, such as a type and its impls, is keyed on
 /// all of them but not followed further ([`Graph::new`]).
-fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Site>) -> Probed {
+fn probe_sites(
+    root: &SyntaxNode,
+    probe_from: Option<usize>,
+    place: &FileScope,
+    sites: &mut Vec<Site>,
+) -> Probed {
     let mut probed = Probed::default();
+    let widened = widened_modules(root, place);
     let mut cuts: Vec<Range<usize>> = Vec::new();
     if let Some(mut next) = probe_from {
         for function in root.descendants().filter_map(ast::Fn::cast) {
@@ -1020,7 +1039,7 @@ fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Sit
                     .to_hex()
                     .to_string(),
             );
-            probed.names.push(names_in(function.syntax()));
+            probed.names.push(mentions_in(function.syntax(), place));
             probed.fn_names.push(
                 ast::HasName::name(&function)
                     .map_or_else(String::new, |name| name.text().to_string()),
@@ -1064,16 +1083,17 @@ fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Sit
         });
         let (_, hasher, mentions) = items.entry(at).or_insert_with(|| {
             (
-                owner
-                    .as_ref()
-                    .map_or_else(|| vec![String::new()], item_names),
+                owner.as_ref().map_or_else(
+                    || vec![String::new()],
+                    |item| definitions(item, place, &widened),
+                ),
                 blake3::Hasher::new(),
                 BTreeSet::new(),
             )
         });
         hasher.update(token.text().as_bytes());
         hasher.update(b"\x1f");
-        token_names(&token, mentions);
+        token_mentions(&token, place, mentions);
     }
     for (names, hasher, mentions) in items.into_values() {
         let digest = hasher.finalize().to_hex().to_string();
@@ -1132,6 +1152,33 @@ fn owning_item(token: &ra_ap_syntax::SyntaxToken) -> Option<ast::Item> {
 /// items of `String`, `u32` and `BTreeSet`, every case reached them, and a
 /// 32-shard census rerun reused 0 verdicts.
 fn item_names(item: &ast::Item) -> Vec<String> {
+    if is_member(item) {
+        return Vec::new();
+    }
+    own_names(item)
+}
+
+/// The names an item answers to in an ASSOCIATED position only (CLOUD-2904):
+/// an impl's members, and a member of an impl or trait its own name. Kept
+/// apart from [`item_names`], an impl's `fn here` moved every case binding a
+/// local `here`, though only `x.here()` or `Host::here` can reach it.
+fn associated_names(item: &ast::Item) -> Vec<String> {
+    match item {
+        ast::Item::Impl(it) => impl_members(it),
+        _ if is_member(item) => own_names(item),
+        _ => Vec::new(),
+    }
+}
+
+/// Whether `item` is a member of an impl or trait.
+fn is_member(item: &ast::Item) -> bool {
+    item.syntax()
+        .parent()
+        .is_some_and(|parent| parent.kind() == SyntaxKind::ASSOC_ITEM_LIST)
+}
+
+/// [`item_names`] for an item wherever it sits.
+fn own_names(item: &ast::Item) -> Vec<String> {
     use ast::HasName as _;
     let named = match item {
         ast::Item::Impl(it) => return impl_names(it),
@@ -1156,13 +1203,13 @@ fn item_names(item: &ast::Item) -> Vec<String> {
     )
 }
 
-/// An impl's names ([`item_names`]): the unqualified names in its header (its
-/// generic parameters, trait, self type and where clause; `Display`, never
-/// `std` or `fmt` of `std::fmt::Display`) and each member's own name. A
-/// member's body is its own item or a probed function, keyed apart.
+/// An impl's free names ([`item_names`]): the unqualified names in its header
+/// (its generic parameters, trait, self type and where clause; `Display`,
+/// never `std` or `fmt` of `std::fmt::Display`). Its members' names are
+/// associated ([`impl_members`]). A member's body is its own item or a probed
+/// function, keyed apart.
 fn impl_names(it: &ast::Impl) -> Vec<String> {
     use ast::HasGenericParams as _;
-    use ast::HasName as _;
     let mut names = BTreeSet::new();
     let header = [
         it.generic_param_list().map(|list| list.syntax().clone()),
@@ -1183,6 +1230,13 @@ fn impl_names(it: &ast::Impl) -> Vec<String> {
             names.insert(last.text().to_string());
         }
     }
+    names.into_iter().collect()
+}
+
+/// Each member's own name of the impl `it` ([`associated_names`]).
+fn impl_members(it: &ast::Impl) -> Vec<String> {
+    use ast::HasName as _;
+    let mut names = BTreeSet::new();
     for member in it
         .assoc_item_list()
         .iter()
@@ -1328,6 +1382,385 @@ fn token_names(token: &ra_ap_syntax::SyntaxToken, names: &mut BTreeSet<String>) 
         }
         _ => {}
     }
+}
+
+/// The prefix of an associated name ([`associated_names`]): a member of an
+/// impl or trait, which answers only to an identifier in an associated
+/// position ([`associated_position`]).
+const ASSOCIATED: char = '\u{1}';
+/// Between a definition's name and the scope it is visible in
+/// ([`definitions`]).
+const DEFINED_IN: char = '\u{2}';
+/// Between a mention's name and the scope it is made in ([`mentions_in`]).
+const MENTIONED_IN: char = '\u{3}';
+
+/// Where one source file's items are defined and its names mentioned: its
+/// package and module path, or nowhere in particular.
+///
+/// VISIBILITY SCOPES A NAME (CLOUD-2904): an item answers only to a mention
+/// it is visible from. Matched by spelling alone, a private `const fn
+/// covered` in one module re-keyed every case that bound a local `covered`
+/// anywhere in the workspace.
+#[derive(Debug, Clone, Default)]
+pub struct FileScope {
+    /// The package directory, `""` at the root.
+    package: String,
+    /// The file's module path, from its path in the package: the crate
+    /// root's directory for a crate root, so every file of the crate is in
+    /// it or below it. Two crates sharing a directory share a scope, which
+    /// over-includes and so is sound.
+    module: Vec<String>,
+    /// Every definition workspace-wide and every mention seeing them all:
+    /// what a name meant before scoping, for a file whose module is unknown.
+    unscoped: bool,
+}
+
+impl FileScope {
+    /// The scope of the package source `file`, a tree path.
+    #[must_use]
+    pub fn of(file: &str) -> Self {
+        let package = package_dir_of(file).unwrap_or("");
+        let relative = file
+            .strip_prefix(package)
+            .map_or(file, |rest| rest.trim_start_matches('/'));
+        let mut parts: Vec<String> = relative.split('/').map(str::to_owned).collect();
+        let stem = parts
+            .pop()
+            .map(|last| last.trim_end_matches(".rs").to_owned())
+            .unwrap_or_default();
+        let crate_dir = match parts.as_slice() {
+            [] => true,
+            [first] => ["tests", "examples", "benches"].contains(&first.as_str()),
+            [first, second] => first == "src" && second == "bin",
+            _ => false,
+        };
+        if !(crate_dir || ["lib", "main", "mod"].contains(&stem.as_str())) {
+            parts.push(stem);
+        }
+        Self {
+            package: package.to_owned(),
+            module: parts,
+            unscoped: false,
+        }
+    }
+
+    /// The scope of a file whose names are matched by spelling alone.
+    #[must_use]
+    pub fn unscoped() -> Self {
+        Self {
+            unscoped: true,
+            ..Self::default()
+        }
+    }
+
+    /// The module path at `node` in this file: the file's own, then each
+    /// inline `mod` holding it, joined by `::`.
+    fn module_at(&self, node: Option<&SyntaxNode>) -> String {
+        let mut inline: Vec<String> = node
+            .into_iter()
+            .flat_map(SyntaxNode::ancestors)
+            .filter(|ancestor| ancestor.kind() == SyntaxKind::ITEM_LIST)
+            .filter_map(|list| ast::Module::cast(list.parent()?))
+            .filter_map(|module| ast::HasName::name(&module))
+            .map(|name| name.text().to_string())
+            .collect();
+        inline.reverse();
+        let mut path = self.module.clone();
+        path.extend(inline);
+        path.join("::")
+    }
+}
+
+/// How far a definition is visible: its package and module, its package,
+/// or the workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Visible {
+    /// Its module and the modules inside it: no `pub`, or `pub(self)`.
+    Module,
+    /// Its package: `pub(crate)`, `pub(super)` or `pub(in ..)`, a crate
+    /// widened to its package, which only over-includes.
+    Package,
+    /// The workspace: `pub`, and every item whose visibility does not bound
+    /// what may name it (impls, macros).
+    Workspace,
+}
+
+/// How far `item` is visible ([`Visible`]). Impls (trait and inherent),
+/// macro definitions and item macros stay workspace-wide: a trait impl is
+/// reached wherever its type is, and a macro is expanded where it is called.
+fn visibility(item: &ast::Item) -> Visible {
+    match item {
+        ast::Item::Impl(_)
+        | ast::Item::MacroRules(_)
+        | ast::Item::MacroDef(_)
+        | ast::Item::MacroCall(_)
+        | ast::Item::ExternBlock(_)
+        | ast::Item::ExternCrate(_) => Visible::Workspace,
+        _ => {
+            let Some(visibility) = ast::AnyHasVisibility::cast(item.syntax().clone())
+                .and_then(|it| ast::HasVisibility::visibility(&it))
+            else {
+                return Visible::Module;
+            };
+            let words: String = visibility
+                .syntax()
+                .text()
+                .to_string()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            if words == "pub" {
+                Visible::Workspace
+            } else if words == "pub(self)" {
+                Visible::Module
+            } else {
+                Visible::Package
+            }
+        }
+    }
+}
+
+/// The keys skeleton item `item` is defined under: each free name
+/// ([`item_names`]) with the scope it is visible in, and each associated name
+/// ([`associated_names`]) workspace-wide, apart from every free name. A
+/// private item of a module in `widened` is visible to its whole package.
+fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) -> Vec<String> {
+    let module = place.module_at(item.syntax().parent().as_ref());
+    let visible = match visibility(item) {
+        Visible::Module if widened.contains(&module) => Visible::Package,
+        other => other,
+    };
+    let free = item_names(item).into_iter().map(|name| {
+        if place.unscoped || visible == Visible::Workspace {
+            name
+        } else if visible == Visible::Package {
+            format!("{name}{DEFINED_IN}{}", place.package)
+        } else {
+            format!("{name}{DEFINED_IN}{}{DEFINED_IN}{module}", place.package)
+        }
+    });
+    free.chain(
+        associated_names(item)
+            .into_iter()
+            .map(|name| format!("{ASSOCIATED}{name}")),
+    )
+    .collect()
+}
+
+/// The modules of the file at `root` holding an `include!` or a `#[path]`
+/// module: code another file holds is compiled into them, so their private
+/// items are visible to their package ([`definitions`]).
+fn widened_modules(root: &SyntaxNode, place: &FileScope) -> BTreeSet<String> {
+    let mut widened = BTreeSet::new();
+    for node in root.descendants() {
+        let includes = ast::MacroCall::cast(node.clone()).is_some_and(|call| {
+            call.path()
+                .and_then(|path| path.segment())
+                .and_then(|segment| segment.name_ref())
+                .is_some_and(|name| name.text() == "include")
+        });
+        let pathed = ast::Module::cast(node.clone()).is_some_and(|module| {
+            module.item_list().is_none()
+                && ast::HasAttrs::attrs(&module).any(|attr| path_attr(&attr).is_some())
+        });
+        if includes || pathed {
+            widened.insert(place.module_at(node.parent().as_ref()));
+        }
+    }
+    widened
+}
+
+/// The file a `#[path = "…"]` attribute names, as written.
+fn path_attr(attr: &ast::Attr) -> Option<String> {
+    let text = attr.syntax().text().to_string();
+    let value = text
+        .trim()
+        .strip_prefix("#[")?
+        .trim_start()
+        .strip_prefix("path")?
+        .trim_start()
+        .strip_prefix('=')?
+        .trim_start()
+        .strip_prefix('"')?;
+    value.split_once('"').map(|(path, _)| path.to_owned())
+}
+
+/// Every name `node` mentions, as mention keys ([`token_mentions`]).
+fn mentions_in(node: &SyntaxNode, place: &FileScope) -> BTreeSet<String> {
+    let mut mentions = BTreeSet::new();
+    for token in node
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+    {
+        token_mentions(&token, place, &mut mentions);
+    }
+    mentions
+}
+
+/// The mention keys one token carries into `mentions`: each name it carries
+/// ([`token_names`]) with the scope it is mentioned in, and, in an
+/// associated position, the name as an associated one too. A name in a
+/// `macro_rules!` body is unscoped: it resolves where the macro is called.
+fn token_mentions(
+    token: &ra_ap_syntax::SyntaxToken,
+    place: &FileScope,
+    mentions: &mut BTreeSet<String>,
+) {
+    let mut names = BTreeSet::new();
+    token_names(token, &mut names);
+    if names.is_empty() {
+        return;
+    }
+    let associated = associated_position(token);
+    let unscoped = place.unscoped
+        || token
+            .parent_ancestors()
+            .any(|node| matches!(node.kind(), SyntaxKind::MACRO_RULES | SyntaxKind::MACRO_DEF));
+    let scope = (!unscoped).then(|| {
+        format!(
+            "{MENTIONED_IN}{}{MENTIONED_IN}{}",
+            place.package,
+            place.module_at(token.parent().as_ref())
+        )
+    });
+    for name in names {
+        if associated {
+            mentions.insert(format!("{ASSOCIATED}{name}"));
+        }
+        match &scope {
+            Some(scope) => mentions.insert(format!("{name}{scope}")),
+            None => mentions.insert(name),
+        };
+    }
+}
+
+/// Whether `token` is in a position an associated item can be named from: a
+/// method call's name, a path segment after the first (`Host::here`,
+/// `Self::X`, `<T as Tr>::X`, `a::{b}`), an associated type binding
+/// (`Item = u8`), or anything unparsed, inside a macro's token tree or a
+/// string's format capture.
+fn associated_position(token: &ra_ap_syntax::SyntaxToken) -> bool {
+    if token.kind() == SyntaxKind::STRING
+        || token
+            .parent_ancestors()
+            .any(|node| node.kind() == SyntaxKind::TOKEN_TREE)
+    {
+        return true;
+    }
+    let Some(name) = token.parent().and_then(ast::NameRef::cast) else {
+        return false;
+    };
+    let Some(parent) = name.syntax().parent() else {
+        return false;
+    };
+    match parent.kind() {
+        SyntaxKind::METHOD_CALL_EXPR | SyntaxKind::ASSOC_TYPE_ARG => true,
+        SyntaxKind::PATH_SEGMENT => parent
+            .parent()
+            .and_then(ast::Path::cast)
+            .is_some_and(|path| {
+                path.qualifier().is_some()
+                    || path
+                        .syntax()
+                        .parent()
+                        .and_then(ast::UseTree::cast)
+                        .and_then(|tree| tree.syntax().parent())
+                        .is_some_and(|list| list.kind() == SyntaxKind::USE_TREE_LIST)
+            }),
+        _ => false,
+    }
+}
+
+/// The name a definition or mention key is keyed under, its namespace kept:
+/// an associated key keeps its prefix, a scope is cut.
+fn key_base(key: &str) -> &str {
+    key.split([DEFINED_IN, MENTIONED_IN]).next().unwrap_or(key)
+}
+
+/// The bare identifier of a definition or mention key: no scope and no
+/// namespace, as a name was spelt before scoping.
+fn bare(key: &str) -> &str {
+    key_base(key).trim_start_matches(ASSOCIATED)
+}
+
+/// Whether `definition` is visible from where `mention` is made. A mention
+/// with no scope sees every definition, and a definition with none is seen
+/// from everywhere; a package-wide one from its package; a module's from it
+/// and every module inside it.
+fn visible_from(mention: &str, definition: &str) -> bool {
+    let Some((_, made)) = mention.split_once(MENTIONED_IN) else {
+        return true;
+    };
+    let (package, module) = made.split_once(MENTIONED_IN).unwrap_or((made, ""));
+    let Some((_, scope)) = definition.split_once(DEFINED_IN) else {
+        return true;
+    };
+    match scope.split_once(DEFINED_IN) {
+        None => scope == package,
+        Some((home, home_module)) => {
+            home == package
+                && (home_module.is_empty()
+                    || module == home_module
+                    || module
+                        .strip_prefix(home_module)
+                        .is_some_and(|rest| rest.starts_with("::")))
+        }
+    }
+}
+
+/// `node`'s keyed tokens, one per line: its text as a key reads it, with
+/// whitespace and plain and inner doc comments dropped ([`unkeyed`]). One
+/// token per line keeps it Rust a parser reads back, an outer doc comment
+/// ending at its own line.
+fn keyed_text(node: &SyntaxNode) -> String {
+    let mut text = String::new();
+    for token in node
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+    {
+        if unkeyed(token.kind()) {
+            continue;
+        }
+        text.push_str(token.text());
+        text.push('\n');
+    }
+    text
+}
+
+/// The files the package sources `files` under `root` compile into another
+/// module than their path says: each an `include!` or a `#[path]` module
+/// names. Their names are matched by spelling alone ([`FileScope::unscoped`]).
+fn included_sources(root: &std::path::Path, files: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut included = BTreeSet::new();
+    for file in files {
+        let Ok(source) = crate::fsio::read_to_string(root.join(file)) else {
+            continue;
+        };
+        if !(source.contains("include!") || source.contains("path")) {
+            continue;
+        }
+        let parse = batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024);
+        let dir = file.rsplit_once('/').map_or("", |(dir, _)| dir);
+        for node in parse.tree().syntax().descendants() {
+            if let Some(call) = ast::MacroCall::cast(node.clone())
+                && let Some(Included::File(target)) = include_path(&call, file)
+            {
+                included.insert(target);
+            }
+            let Some(module) = ast::Module::cast(node) else {
+                continue;
+            };
+            for target in ast::HasAttrs::attrs(&module).filter_map(|attr| path_attr(&attr)) {
+                included.extend(tree_join(dir, &target));
+                let inline = FileScope::default().module_at(module.syntax().parent().as_ref());
+                if !inline.is_empty() {
+                    let nested = format!("{dir}/{}", inline.replace("::", "/"));
+                    included.extend(tree_join(&nested, &target));
+                }
+            }
+        }
+    }
+    included
 }
 
 // ---------------------------------------------------------------------------
@@ -1569,12 +2002,22 @@ pub fn write_schema(
     let included = build_script_includes(root, mutants);
     let mut schema = Schema::default();
     let mut skeleton = blake3::Hasher::new();
-    for file in package_sources(root, mutants) {
+    let sources = package_sources(root, mutants);
+    // A FILE ANOTHER INCLUDES IS IN ITS INCLUDER'S MODULE, which its path does
+    // not say, so its names are matched by spelling alone.
+    let mut moved = included_sources(root, &sources);
+    moved.extend(included.iter().cloned());
+    for file in sources {
         let source = crate::fsio::read_to_string(root.join(&file))?;
         let listed = by_file.get(file.as_str()).map_or(&[][..], Vec::as_slice);
         let probe_from =
             (!unprobed.contains(&file) && !included.contains(&file)).then_some(schema.probes.len());
-        let rendered = render(&source, listed, skip, probe_from);
+        let place = if moved.contains(&file) {
+            FileScope::unscoped()
+        } else {
+            FileScope::of(&file)
+        };
+        let rendered = render_in(&source, listed, skip, probe_from, &place);
         if probe_from.is_some() {
             schema.probed.insert(file.clone());
         }
@@ -2873,9 +3316,9 @@ fn judge(
     cases: &BTreeSet<Case>,
     hints: &std::sync::Mutex<std::collections::BTreeMap<Sibling, BTreeSet<Case>>>,
     journal: &std::sync::Mutex<Journal>,
-) -> (Verdict, usize) {
+) -> Judged {
     if cases.is_empty() {
-        return (Verdict::Uncovered, 0);
+        return Judged::ran(Verdict::Uncovered, 0);
     }
     let sibling: Option<Sibling> = mutant.function.as_ref().map(|function| {
         (
@@ -2898,7 +3341,11 @@ fn judge(
             .map(String::as_str)
     };
     if cases.iter().any(|case| recorded(case) == Some("caught")) {
-        return (Verdict::Caught, cases.len());
+        return Judged {
+            verdict: Verdict::Caught,
+            skipped: cases.len(),
+            held_kill: true,
+        };
     }
     let open: BTreeSet<Case> = cases
         .iter()
@@ -2907,7 +3354,7 @@ fn judge(
         .collect();
     let skipped = cases.len() - open.len();
     if open.is_empty() {
-        return (Verdict::Missed, skipped);
+        return Judged::ran(Verdict::Missed, skipped);
     }
     let record = |case: &Case, verdict: &str| {
         if let Some(key) = pairs.get(case) {
@@ -2938,17 +3385,39 @@ fn judge(
                 {
                     hints.entry(key).or_default().insert(case);
                 }
-                return (verdict, skipped);
+                return Judged::ran(verdict, skipped);
             }
             Err(why) => {
                 // A RUN THAT COULD NOT START SAYS WHY, beside the runs that
                 // failed: on #1276 six such errors left no log at all.
                 keep_error(judging, id, &format!("{why:#}\n"));
-                return (Verdict::Error, skipped);
+                return Judged::ran(Verdict::Error, skipped);
             }
         }
     }
-    (Verdict::Missed, skipped)
+    Judged::ran(Verdict::Missed, skipped)
+}
+
+/// What [`judge`] decided of one mutant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Judged {
+    verdict: Verdict,
+    /// The case runs a recorded outcome decided.
+    skipped: usize,
+    /// Whether a kill recorded under an unchanged pair decided it, with no
+    /// case run.
+    held_kill: bool,
+}
+
+impl Judged {
+    /// A verdict no held kill decided.
+    const fn ran(verdict: Verdict, skipped: usize) -> Self {
+        Self {
+            verdict,
+            skipped,
+            held_kill: false,
+        }
+    }
 }
 
 /// The case a run's verdict journals as a kill: its killer, and only when
@@ -4344,10 +4813,20 @@ fn named_closure<'n>(
 
 /// The mentions graph by integer id, built once per sweep: ids are ranked in
 /// name order, so a walk listed by id is listed by name.
+///
+/// A NODE IS A NAME AS MENTIONED, an edge leads from it to what the one
+/// definition it resolves to mentions, and what a walk reaches is keyed by
+/// the DEFINITIONS its nodes resolve to ([`visible_from`]), never by the
+/// spelling: a mention resolves to the definitions visible where it is made.
 struct Graph<'g> {
     ids: std::collections::HashMap<&'g str, usize>,
     names: Vec<&'g str>,
     edges: Vec<Vec<usize>>,
+    /// Each node's visible definitions, by definition id.
+    resolves: Vec<Vec<usize>>,
+    /// Every definition key, ranked by key.
+    definitions: Vec<&'g str>,
+    /// Each definition's token, by definition id.
     tokens: Vec<Option<blake3::Hash>>,
 }
 
@@ -4362,9 +4841,20 @@ struct Walk {
 impl<'g> Graph<'g> {
     /// Every name the mentions graph or a probe names, ranked by name.
     fn new(depends: &Depends<'g>) -> Self {
-        let mut all: BTreeSet<&'g str> = BTreeSet::new();
-        for (name, mentioned) in depends.mentions {
-            all.insert(name);
+        let defined: BTreeSet<&'g str> = depends
+            .items
+            .keys()
+            .chain(depends.mentions.keys())
+            .map(String::as_str)
+            .collect();
+        let definitions: Vec<&'g str> = defined.iter().copied().collect();
+        let mut by_base: std::collections::HashMap<&'g str, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (id, key) in definitions.iter().enumerate() {
+            by_base.entry(key_base(key)).or_default().push(id);
+        }
+        let mut all: BTreeSet<&'g str> = defined;
+        for mentioned in depends.mentions.values() {
             all.extend(mentioned.iter().map(String::as_str));
         }
         for names in depends.names {
@@ -4376,42 +4866,56 @@ impl<'g> Graph<'g> {
             .enumerate()
             .map(|(id, name)| (*name, id))
             .collect();
+        let resolves: Vec<Vec<usize>> = names
+            .iter()
+            .map(|name| {
+                by_base
+                    .get(key_base(name))
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|id| visible_from(name, definitions[*id]))
+                    .collect()
+            })
+            .collect();
         // A NAME WITH MORE THAN ONE DEFINITION IS KEYED, NEVER EXPANDED
         // (CLOUD-2904): its token holds every definition's digest, but its
         // edges are empty. Expanded, a type joined its impls' mentions to its
         // own, and with `item_names` fixed the real edits on 304fa50b still
         // reached 11,523 of 11,744 probed functions; cut, 125. The cost: an
         // edit reached only through such a name's definitions moves nothing.
-        let edges = names
+        // Counted PER MENTION, over the definitions visible where it is made:
+        // a private namesake in another module is not a second definition.
+        let edges = resolves
             .iter()
-            .map(|name| {
-                if depends.items.get(*name).map_or(0, BTreeSet::len) > 1 {
+            .map(|found| {
+                let count: usize = found
+                    .iter()
+                    .map(|id| depends.items.get(definitions[*id]).map_or(0, BTreeSet::len))
+                    .sum();
+                if count > 1 {
                     return Vec::new();
                 }
-                depends
-                    .mentions
-                    .get(*name)
-                    .into_iter()
+                found
+                    .iter()
+                    .filter_map(|id| depends.mentions.get(definitions[*id]))
                     .flatten()
                     .filter_map(|next| ids.get(next.as_str()).copied())
                     .collect()
             })
             .collect();
-        // EACH NAME'S ITEMS HASHED ONCE PER SWEEP, here rather than on first
-        // reach: nearly every name is reached by some case.
-        let tokens = names
+        // EACH DEFINITION'S ITEMS HASHED ONCE PER SWEEP, here rather than on
+        // first reach: nearly every definition is reached by some case.
+        let tokens = definitions
             .iter()
-            .map(|name| {
-                depends
-                    .items
-                    .get(*name)
-                    .map(|items| name_token(name, items))
-            })
+            .map(|key| depends.items.get(*key).map(|items| name_token(key, items)))
             .collect();
         Self {
             ids,
             names,
             edges,
+            resolves,
+            definitions,
             tokens,
         }
     }
@@ -4444,9 +4948,21 @@ impl<'g> Graph<'g> {
         &walk.reached
     }
 
-    /// A reached id's token, computed when the graph was built.
-    fn token_of(&self, id: usize) -> Option<blake3::Hash> {
-        self.tokens[id]
+    /// The definitions the nodes `reached` resolve to, by definition id in
+    /// key order, each once.
+    fn defined(&self, reached: &[usize]) -> Vec<usize> {
+        let mut found: Vec<usize> = reached
+            .iter()
+            .flat_map(|id| self.resolves[*id].iter().copied())
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+
+    /// A reached definition's token, computed when the graph was built.
+    fn token_of(&self, definition: usize) -> Option<blake3::Hash> {
+        self.tokens[definition]
     }
 }
 
@@ -4499,15 +5015,17 @@ pub fn case_digests<'c>(
         let test = name.rsplit("::").next().unwrap_or(name);
         let mut hasher = blake3::Hasher::new();
         let ran = executed.get(case);
-        for probe in ran.into_iter().flatten() {
+        // THE SET OF WHAT IT RAN, NEVER THE PROBE-ID SEQUENCE (CLOUD-2904): a
+        // probe id is a function's position in the tree, so a function moved
+        // whole re-keyed every case that ran it with nothing it runs changed.
+        let ran_digests: BTreeSet<&str> = ran
+            .into_iter()
+            .flatten()
+            .map(|probe| depends.probes.get(*probe).map_or("", String::as_str))
+            .collect();
+        for digest in ran_digests {
             hasher.update(b"\x1c");
-            hasher.update(
-                depends
-                    .probes
-                    .get(*probe)
-                    .map_or("", String::as_str)
-                    .as_bytes(),
-            );
+            hasher.update(digest.as_bytes());
         }
         // ONCE PER DISTINCT PROBE SET, OVER A GRAPH INDEXED ONCE PER SWEEP
         // (#1276). Measured: the union of every reached name's items, built and
@@ -4526,12 +5044,13 @@ pub fn case_digests<'c>(
                 .flatten()
                 .filter_map(|name| graph.id(name));
             let reached = graph.reach(starts, &mut walk);
+            let defined = graph.defined(reached);
             let mut part = blake3::Hasher::new();
             if let Some(token) = depends.items.get("").map(|items| name_token("", items)) {
                 part.update(token.as_bytes());
             }
-            for id in reached {
-                if let Some(token) = graph.token_of(*id) {
+            for id in defined {
+                if let Some(token) = graph.token_of(id) {
                     part.update(token.as_bytes());
                 }
             }
@@ -4602,8 +5121,20 @@ pub fn case_digests<'c>(
 /// The digest of the items of a shared test module (`common`) that `texts`
 /// reach by name, transitively: an item is reached when a reached text names
 /// it, and then everything it names is reached too. An item with no name of
-/// its own (a `use`) is always taken; an `impl` answers to its self type's
-/// name, so a reached type brings its methods.
+/// its own (an item macro) is always taken; an `impl` answers to its self
+/// type's name, so a reached type brings its methods; a `use` answers to the
+/// names it binds ([`use_names`]), and one binding no name (`as _`, a glob)
+/// is always taken.
+///
+/// A `use`'s path before each leaf names only modules and types, so a taken
+/// `use` takes by those segments only a module, struct, enum, union, trait or
+/// type alias: taken by every segment, `use batten::surface::ROOT;` took
+/// `fn batten`, and with it `pin_mise`, into every integration case's key
+/// (CLOUD-2904).
+///
+/// TOKENS, NOT TEXT ([`keyed_text`]): a comment or a blank line in a reached
+/// helper moved every case reaching it, and one comment in `pin_mise` moved
+/// all 6,524 integration cases (6df55d534).
 ///
 /// BY NAME, NOT BY CALL: a name mentioned is taken whether or not it runs, so
 /// the set errs toward more, which costs a re-judge and never a stale verdict.
@@ -4614,22 +5145,7 @@ fn common_reached(common: &str, texts: &[String]) -> String {
     if !parse.errors().is_empty() {
         return blake3::hash(common.as_bytes()).to_hex().to_string();
     }
-    let items: Vec<(Option<String>, String, BTreeSet<String>)> = parse
-        .tree()
-        .items()
-        .map(|item| {
-            let name = match &item {
-                ast::Item::Impl(it) => it
-                    .self_ty()
-                    .and_then(|ty| names_in(ty.syntax()).into_iter().next_back()),
-                ast::Item::Use(_) | ast::Item::MacroCall(_) => None,
-                other => ast::AnyHasName::cast(other.syntax().clone())
-                    .and_then(|named| ast::HasName::name(&named))
-                    .map(|name| name.text().to_string()),
-            };
-            (name, item.syntax().to_string(), names_in(item.syntax()))
-        })
-        .collect();
+    let items: Vec<Shared> = parse.tree().items().map(|item| Shared::of(&item)).collect();
     let mut wanted: BTreeSet<String> = texts
         .iter()
         .flat_map(|text| {
@@ -4639,6 +5155,7 @@ fn common_reached(common: &str, texts: &[String]) -> String {
             )
         })
         .collect();
+    let mut wanted_types: BTreeSet<String> = BTreeSet::new();
     let mut taken = vec![false; items.len()];
     // BOUNDED BY THE ITEM COUNT (CLOUD-2789): a pass that grows takes at least
     // one item, so `items.len()` passes and one more that takes nothing reach
@@ -4646,12 +5163,13 @@ fn common_reached(common: &str, texts: &[String]) -> String {
     // than spinning.
     for _ in 0..=items.len() {
         let mut grew = false;
-        for (at, (name, _, names)) in items.iter().enumerate() {
-            if taken[at] || name.as_ref().is_some_and(|name| !wanted.contains(name)) {
+        for (at, item) in items.iter().enumerate() {
+            if taken[at] || !item.answers(&wanted, &wanted_types) {
                 continue;
             }
             taken[at] = true;
-            wanted.extend(names.iter().cloned());
+            wanted.extend(item.mentions.iter().cloned());
+            wanted_types.extend(item.types.iter().cloned());
             grew = true;
         }
         if !grew {
@@ -4659,15 +5177,114 @@ fn common_reached(common: &str, texts: &[String]) -> String {
         }
     }
     let mut hasher = blake3::Hasher::new();
-    for ((_, text, _), _) in items.iter().zip(&taken).filter(|(_, taken)| **taken) {
-        hasher.update(text.as_bytes());
+    for (item, _) in items.iter().zip(&taken).filter(|(_, taken)| **taken) {
+        hasher.update(item.text.as_bytes());
         hasher.update(b"\x1e");
     }
     hasher.finalize().to_hex().to_string()
 }
 
-/// Every `#[test]` function in `source` by name: its own text, then the
-/// non-test functions of the module it sits in, which are its helpers.
+/// One item of a shared test module as [`common_reached`] takes it.
+struct Shared {
+    /// The names it answers to; none when it is always taken.
+    names: Option<BTreeSet<String>>,
+    /// Whether a module or type path may take it ([`Shared::types`]).
+    a_type: bool,
+    /// Its keyed text ([`keyed_text`]).
+    text: String,
+    /// The names that take any item once it is taken.
+    mentions: BTreeSet<String>,
+    /// The names that take only a module or type once it is taken: a `use`'s
+    /// path before each leaf.
+    types: BTreeSet<String>,
+}
+
+impl Shared {
+    fn of(item: &ast::Item) -> Self {
+        let a_type = matches!(
+            item,
+            ast::Item::Module(_)
+                | ast::Item::Struct(_)
+                | ast::Item::Enum(_)
+                | ast::Item::Union(_)
+                | ast::Item::Trait(_)
+                | ast::Item::TypeAlias(_)
+        );
+        let text = keyed_text(item.syntax());
+        if let ast::Item::Use(it) = item {
+            return Self::of_use(it, text);
+        }
+        let names = match item {
+            ast::Item::Impl(it) => it
+                .self_ty()
+                .and_then(|ty| names_in(ty.syntax()).into_iter().next_back())
+                .map(|name| BTreeSet::from([name])),
+            ast::Item::MacroCall(_) => None,
+            other => ast::AnyHasName::cast(other.syntax().clone())
+                .and_then(|named| ast::HasName::name(&named))
+                .map(|name| BTreeSet::from([name.text().to_string()])),
+        };
+        Self {
+            names,
+            a_type,
+            text,
+            mentions: names_in(item.syntax()),
+            types: BTreeSet::new(),
+        }
+    }
+
+    /// A `use`: it answers to the names it binds, every leaf takes any item
+    /// and every segment before a leaf a module or type only.
+    fn of_use(it: &ast::Use, text: String) -> Self {
+        let mut always = false;
+        let mut mentions = BTreeSet::new();
+        let mut types = BTreeSet::new();
+        for tree in it.syntax().descendants().filter_map(ast::UseTree::cast) {
+            if tree.use_tree_list().is_some() {
+                // The path a list hangs off names modules and types.
+                types.extend(tree.path().iter().flat_map(|path| names_in(path.syntax())));
+                continue;
+            }
+            let anonymous = tree
+                .rename()
+                .is_some_and(|rename| rename.underscore_token().is_some());
+            always |= anonymous || tree.star_token().is_some();
+            let Some(path) = tree.path() else {
+                continue;
+            };
+            let leaf = path
+                .segment()
+                .and_then(|segment| segment.name_ref())
+                .filter(|_| tree.star_token().is_none());
+            types.extend(path.qualifier().iter().flat_map(|q| names_in(q.syntax())));
+            match leaf {
+                Some(leaf) => {
+                    mentions.insert(leaf.text().to_string());
+                }
+                None => types.extend(names_in(path.syntax())),
+            }
+        }
+        Self {
+            names: (!always).then(|| use_names(it).into_iter().collect()),
+            a_type: false,
+            text,
+            mentions,
+            types,
+        }
+    }
+
+    /// Whether this item is taken while `wanted` names are wanted of any
+    /// item and `wanted_types` of a module or type.
+    fn answers(&self, wanted: &BTreeSet<String>, wanted_types: &BTreeSet<String>) -> bool {
+        self.names.as_ref().is_none_or(|names| {
+            !names.is_disjoint(wanted) || (self.a_type && !names.is_disjoint(wanted_types))
+        })
+    }
+}
+
+/// Every `#[test]` function in `source` by name: its own keyed text, then the
+/// keyed text of the non-test functions of the module it sits in, which are
+/// its helpers ([`keyed_text`]: a comment or a blank line moves no key).
 fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
     use ast::{HasAttrs as _, HasName as _};
     let is_test = |function: &ast::Fn| {
@@ -4696,12 +5313,12 @@ fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
             .into_iter()
             .flat_map(|module| module.children().filter_map(ast::Fn::cast))
             .filter(|sibling| !is_test(sibling))
-            .map(|sibling| sibling.syntax().to_string())
+            .map(|sibling| keyed_text(sibling.syntax()))
             .collect();
         texts
             .entry(name.text().to_string())
             .or_default()
-            .push(format!("{}\x1f{helpers}", function.syntax()));
+            .push(format!("{}\x1f{helpers}", keyed_text(function.syntax())));
     }
     texts
 }
@@ -4884,21 +5501,13 @@ fn judge_all(
         ..Journal::default()
     });
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let reused_count = std::sync::atomic::AtomicUsize::new(0);
-    let skipped_runs = std::sync::atomic::AtomicUsize::new(0);
+    let tally = Tally::default();
     let (sent, decided) = std::sync::mpsc::channel::<(u32, Verdict)>();
     let mut verdicts = Vec::with_capacity(todo.len());
     std::thread::scope(|scope| {
         for _ in 0..jobs.max(1) {
             let sent = sent.clone();
-            let (next, hints, journal, nobody, reused_count, skipped_runs) = (
-                &next,
-                &hints,
-                &journal,
-                &nobody,
-                &reused_count,
-                &skipped_runs,
-            );
+            let (next, hints, journal, nobody, tally) = (&next, &hints, &journal, &nobody, &tally);
             scope.spawn(move || {
                 loop {
                     let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -4920,7 +5529,9 @@ fn judge_all(
                         .and_then(|key| judging.cache.get(key))
                         .filter(|v| reusable(v));
                     if reused.is_some() {
-                        reused_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tally
+                            .reused
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     let verdict = match reused.map(String::as_str) {
                         Some("caught") => Verdict::Caught,
@@ -4929,13 +5540,12 @@ fn judge_all(
                         // over no reaching case, so the same key reaches none
                         // now, and `judge` answers it without a run.
                         _ => {
-                            let (verdict, skipped) =
-                                judge(judging, id, mutant, cases, hints, journal);
-                            skipped_runs.fetch_add(skipped, std::sync::atomic::Ordering::Relaxed);
+                            let judged = judge(judging, id, mutant, cases, hints, journal);
+                            tally.judged(judged);
                             if red.is_some() {
-                                poisoned(verdict)
+                                poisoned(judged.verdict)
                             } else {
-                                verdict
+                                judged.verdict
                             }
                         }
                     };
@@ -4967,13 +5577,7 @@ fn judge_all(
             }
         }
     });
-    let _ = writeln!(
-        out,
-        "mutate schema: reused {} of {} verdict(s), and {} case run(s) a recorded outcome decided",
-        reused_count.into_inner(),
-        todo.len(),
-        skipped_runs.into_inner()
-    );
+    let _ = writeln!(out, "{}", tally.line(todo.len()));
     let journal = journal
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -4988,6 +5592,50 @@ fn judge_all(
         );
     }
     verdicts
+}
+
+/// What a sweep's judging decided without judging afresh, counted across its
+/// workers ([`reused_line`]).
+#[derive(Debug, Default)]
+struct Tally {
+    /// Verdicts reused whole.
+    reused: std::sync::atomic::AtomicUsize,
+    /// Case runs a recorded outcome decided.
+    skipped: std::sync::atomic::AtomicUsize,
+    /// Mutants a held kill pair decided.
+    held: std::sync::atomic::AtomicUsize,
+}
+
+impl Tally {
+    /// Count what one [`judge`] decided without a run.
+    fn judged(&self, judged: Judged) {
+        self.skipped
+            .fetch_add(judged.skipped, std::sync::atomic::Ordering::Relaxed);
+        if judged.held_kill {
+            self.held.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// The [`reused_line`] over `todo` mutants.
+    fn line(self, todo: usize) -> String {
+        reused_line(
+            self.reused.into_inner(),
+            self.held.into_inner(),
+            todo,
+            self.skipped.into_inner(),
+        )
+    }
+}
+
+/// The line saying what a sweep's judging decided without judging afresh:
+/// the verdicts reused whole, beside them the mutants a held kill pair
+/// decided with no case run (CLOUD-2904), and the case runs a recorded
+/// outcome decided.
+fn reused_line(reused: usize, held: usize, todo: usize, skipped: usize) -> String {
+    format!(
+        "mutate schema: reused {reused} of {todo} verdict(s), {held} decided by a held kill \
+         pair, and {skipped} case run(s) a recorded outcome decided"
+    )
 }
 
 /// Append `lines` to the verdict journal in one write. APPEND-ONLY, never
@@ -5362,6 +6010,18 @@ fn mentioners(
     name: &str,
     mentions: &std::collections::BTreeMap<String, BTreeSet<String>>,
 ) -> BTreeSet<String> {
+    // BY SPELLING, scope and namespace dropped: a hand-back's observers err
+    // toward more, as they did before names were scoped.
+    let mentions: std::collections::BTreeMap<&str, BTreeSet<&str>> = mentions.iter().fold(
+        std::collections::BTreeMap::new(),
+        |mut bare_map, (item, mentioned)| {
+            bare_map
+                .entry(bare(item))
+                .or_insert_with(BTreeSet::new)
+                .extend(mentioned.iter().map(|name| bare(name)));
+            bare_map
+        },
+    );
     let mut found: BTreeSet<String> = [name.to_owned()].into();
     // BOUNDED BY THE ITEM COUNT (CLOUD-2789): a pass that grows adds at least
     // one item, so `mentions.len()` passes reach the fixpoint. A change that
@@ -5369,8 +6029,10 @@ fn mentioners(
     for _ in 0..mentions.len() {
         let grown: Vec<String> = mentions
             .iter()
-            .filter(|(item, mentioned)| !found.contains(*item) && !mentioned.is_disjoint(&found))
-            .map(|(item, _)| item.clone())
+            .filter(|(item, mentioned)| {
+                !found.contains(**item) && mentioned.iter().any(|name| found.contains(*name))
+            })
+            .map(|(item, _)| (*item).to_owned())
             .collect();
         if grown.is_empty() {
             break;
@@ -5434,10 +6096,9 @@ fn handback_cases(
                 direct.contains(case.rsplit("::").next().unwrap_or(case))
                     || ran.iter().any(|probe| {
                         enclosing.contains(probe)
-                            || schema
-                                .names
-                                .get(*probe)
-                                .is_some_and(|names| !names.is_disjoint(&observers))
+                            || schema.names.get(*probe).is_some_and(|names| {
+                                names.iter().any(|name| observers.contains(bare(name)))
+                            })
                     })
             })
             .map(|(case, _)| case.clone())
@@ -6634,7 +7295,14 @@ fn owner_of(token: &ra_ap_syntax::SyntaxToken, spans: &[(usize, Range<usize>)]) 
     {
         return Owner::Probe(*id);
     }
-    Owner::Names(owning_item(token).map_or_else(|| vec![String::new()], |item| item_names(&item)))
+    Owner::Names(owning_item(token).map_or_else(
+        || vec![String::new()],
+        |item| {
+            let mut names = item_names(&item);
+            names.extend(associated_names(&item));
+            names
+        },
+    ))
 }
 
 /// Whether the gate word at `token` names a feature: the attribute or macro
@@ -6792,7 +7460,9 @@ pub fn dependency_index(
         let source = crate::fsio::read_to_string(root.join(&file))?;
         let first = index.probes.len();
         let probe_from = format.probed.contains(&file).then_some(first);
-        let rendered = render(&source, &[], &none, probe_from);
+        // SELECTION MATCHES BY SPELLING, as it did before scoping: it reads the
+        // whole tree, tests included, whose modules no package source says.
+        let rendered = render_in(&source, &[], &none, probe_from, &FileScope::unscoped());
         for (offset, name) in rendered.fn_names.iter().enumerate() {
             index
                 .own_names
@@ -7019,12 +7689,16 @@ fn selection_digest(
     // What `named_closure` reaches, in name order: the graph's walk, plus each
     // start the graph does not hold (no mention names it, so it reaches only
     // itself).
-    let mut reached: Vec<&str> = graph
+    let nodes: Vec<usize> = graph
         .reach(starts.iter().filter_map(|name| graph.id(name)), walk)
-        .iter()
-        .map(|id| graph.names[*id])
-        .collect();
-    reached.extend(starts.iter().filter(|name| graph.id(name).is_none()));
+        .to_vec();
+    let mut reached: Vec<&str> = nodes.iter().map(|id| bare(graph.names[*id])).collect();
+    reached.extend(
+        starts
+            .iter()
+            .filter(|name| graph.id(name).is_none())
+            .map(|name| bare(name)),
+    );
     reached.sort_unstable();
     reached.dedup();
     let mut probes: BTreeSet<usize> = ids.clone();
@@ -7044,13 +7718,16 @@ fn selection_digest(
         if index.gated_names.contains(name) || !include(index.name_includes.get(name)) {
             return None;
         }
-        for digest in index.items.get(name).into_iter().flatten() {
-            hasher.update(format!("\x1b{name}\x1f{digest}").as_bytes());
-        }
         for id in index.own_names.get(name).into_iter().flatten() {
             probes.insert(*id);
             hasher.update(format!("\x18{name}\x1f").as_bytes());
             hasher.update(index.probes.get(*id).map_or("", String::as_str).as_bytes());
+        }
+    }
+    for definition in graph.defined(&nodes) {
+        let key = graph.definitions[definition];
+        for digest in index.items.get(key).into_iter().flatten() {
+            hasher.update(format!("\x1b{key}\x1f{digest}").as_bytes());
         }
     }
     for id in &probes {
@@ -11069,6 +11746,171 @@ mod tests {
         assert_eq!(item[&plain], held[&plain], "and no other");
     }
 
+    /// T1 (CLOUD-2904): a private item added to a module moves the cases whose
+    /// functions name it from inside that module, and none naming its
+    /// spelling from outside, where it is not visible. 1dc469d24 added a
+    /// private `const fn covered` to `resume.rs`, and every case binding a
+    /// `covered` anywhere in the workspace moved.
+    ///
+    /// Fails by: a name matched by spelling alone (the outside case moves), or
+    /// a private item scoped too narrowly (the inside case holds).
+    #[test]
+    fn an_added_private_item_moves_no_case_outside_its_module() {
+        let (outside, inside) = (case("segments"), case("lap"));
+        let cases: BTreeSet<Case> = [outside.clone(), inside.clone()].into();
+        let executed = [(outside.clone(), [0].into()), (inside.clone(), [1].into())].into();
+        let base = |added: &str| {
+            format!(
+                "pub fn segments(c: &str) -> bool {{ covered(c) }}\n\
+                 mod resume {{\n{added}    pub fn lap(held: usize) -> bool {{ covered(held, 0) }}\n}}\n"
+            )
+        };
+        let held = source_digests(&cases, &executed, &base(""));
+        let added = source_digests(
+            &cases,
+            &executed,
+            &base("    const fn covered(h: usize, p: usize) -> bool { h > p }\n"),
+        );
+        assert_eq!(
+            added[&outside], held[&outside],
+            "covered is not visible here"
+        );
+        assert_ne!(
+            added[&inside], held[&inside],
+            "lap names covered in its module"
+        );
+    }
+
+    /// T2 (CLOUD-2904): a method added moves the case that calls it and no
+    /// case that only binds a local of its name. 6a5339e58 added
+    /// `impl Host { fn here }`, and every case binding a local `here` moved.
+    ///
+    /// Fails by: an impl answering to its members' names in a free position
+    /// (`anchor_at` moves), or not in an associated one (`caller` holds).
+    #[test]
+    fn an_added_method_moves_no_case_that_only_binds_a_local_of_its_name() {
+        let (anchor, caller) = (case("anchor_at"), case("caller"));
+        let cases: BTreeSet<Case> = [anchor.clone(), caller.clone()].into();
+        let executed = [(anchor.clone(), [0].into()), (caller.clone(), [1].into())].into();
+        let base = "pub fn anchor_at(here: &str) -> usize { here.len() }\n\
+                    pub fn caller(h: &impl Here) -> usize { h.here() }\n";
+        let held = source_digests(&cases, &executed, base);
+        let added = source_digests(
+            &cases,
+            &executed,
+            &format!("{base}impl Host {{ pub fn here(&self) -> usize {{ 1 }} }}\n"),
+        );
+        assert_eq!(
+            added[&anchor], held[&anchor],
+            "a local `here` is not the method"
+        );
+        assert_ne!(added[&caller], held[&caller], "`h.here()` may call it");
+    }
+
+    /// T3 (CLOUD-2904): a comment edit in a shared helper a case reaches moves
+    /// no case, and a token edit does. 6df55d534 changed one comment in
+    /// `pin_mise` and moved all 6,524 integration cases.
+    ///
+    /// Fails by: a reached helper hashed as text (the comment edit moves the
+    /// digest), or its tokens dropped (the token edit holds).
+    #[test]
+    fn a_comment_edit_in_a_reached_shared_helper_moves_no_case() {
+        let test = [String::from("fn t() { pin_mise(dir); }")];
+        let common = |note: &str, value: &str| {
+            format!(
+                "pub fn pin_mise(dir: &Path) -> u8 {{\n    // {note}\n    let p = 1;\n    {value}\n}}\n"
+            )
+        };
+        let base = common_reached(&common("the pin", "p"), &test);
+        assert_eq!(
+            base,
+            common_reached(&common("the pinned toolchain", "p"), &test),
+            "a comment edit moves nothing"
+        );
+        assert_ne!(
+            base,
+            common_reached(&common("the pin", "p + 1"), &test),
+            "a token edit moves it"
+        );
+    }
+
+    /// T4 (CLOUD-2904): a `use` answers to the names it binds, and its path
+    /// before the leaf takes only a module or type: a case reaching only the
+    /// `ROOT` that `use batten::surface::ROOT;` binds is not keyed on
+    /// `fn batten`. `tests/it/common/mod.rs:48` pulled `fn batten`, and
+    /// through it `pin_mise`, into every integration case.
+    ///
+    /// Fails by: a `use` always taken with every name it mentions (the body
+    /// edit of `fn batten` moves the digest), or `fn batten` not taken where
+    /// a case calls it.
+    #[test]
+    fn a_use_reached_by_its_leaf_takes_no_function_its_path_spells() {
+        let common = |body: &str| {
+            format!("use batten::surface::ROOT;\npub fn batten() -> u8 {{ {body} }}\n")
+        };
+        let rooted = [String::from("fn t() { let _ = ROOT; }")];
+        assert_eq!(
+            common_reached(&common("1"), &rooted),
+            common_reached(&common("2"), &rooted),
+            "a case touching only ROOT"
+        );
+        let called = [String::from("fn t() { batten(); }")];
+        assert_ne!(
+            common_reached(&common("1"), &called),
+            common_reached(&common("2"), &called),
+            "a case calling batten"
+        );
+    }
+
+    /// T5 (CLOUD-2904): a chain through a skeleton item is followed where its
+    /// mentions are made: `pub const LIMIT = super::helper()` in one module
+    /// reaches the private `helper` of its parent, so editing `helper` moves
+    /// the case naming `LIMIT` from a third. A private `LIMIT` elsewhere,
+    /// invisible to that case, is no second definition of the name it uses.
+    ///
+    /// Fails by: a name with a definition in any module counted against every
+    /// mention (`LIMIT` is not expanded and the case holds), or a mention
+    /// scoped where the case is rather than where the item is (`helper`,
+    /// private to the root, is not reached from `LIMIT`).
+    #[test]
+    fn an_edit_crossing_modules_through_a_skeleton_item_moves_the_case() {
+        let (names, other) = (case("names_limit"), case("other"));
+        let cases: BTreeSet<Case> = [names.clone(), other.clone()].into();
+        let executed = [(names.clone(), [0].into()), (other.clone(), [1].into())].into();
+        let source = |value: &str| {
+            format!(
+                "mod limits {{ pub const LIMIT: u8 = super::helper(); }}\n\
+                 const fn helper() -> u8 {{ {value} }}\n\
+                 mod elsewhere {{ const LIMIT: u8 = 7; }}\n\
+                 mod third {{ pub fn names_limit() -> u8 {{ crate::limits::LIMIT }} }}\n\
+                 pub fn other() -> u8 {{ 3 }}\n"
+            )
+        };
+        let held = source_digests(&cases, &executed, &source("1"));
+        let edited = source_digests(&cases, &executed, &source("2"));
+        assert_ne!(edited[&names], held[&names], "LIMIT's value is helper's");
+        assert_eq!(edited[&other], held[&other], "and no other case moves");
+    }
+
+    /// T6 (CLOUD-2904): a function moved whole moves no case that runs it, and
+    /// an edit to it still does.
+    ///
+    /// Fails by: a case keyed on its probe digests in probe-id order, a
+    /// function's position (both orders differ), or on none of them.
+    #[test]
+    fn pure_code_motion_of_an_executed_function_moves_no_case() {
+        let runs = case("runs");
+        let cases: BTreeSet<Case> = [runs.clone()].into();
+        let executed = [(runs.clone(), [0, 1].into())].into();
+        let first = |value: &str| format!("pub fn first() -> u8 {{ {value} }}\n");
+        let second = "pub fn second() -> u8 { 2 }\n";
+        let held = source_digests(&cases, &executed, &format!("{}{second}", first("1")));
+        let moved = source_digests(&cases, &executed, &format!("{second}{}", first("1")));
+        assert_eq!(moved, held, "the same functions, in another order");
+        let edited = source_digests(&cases, &executed, &format!("{second}{}", first("3")));
+        assert_ne!(edited[&runs], held[&runs], "an edit to one it ran");
+    }
+
     /// An impl answers to its header's unqualified names and its members' own
     /// names; a `use` to each leaf's last segment or rename, and to the
     /// module a glob globs; an item macro to each name after an item keyword,
@@ -11094,11 +11936,16 @@ mod tests {
         assert_eq!(
             names,
             [
-                owned(&["Bound", "C", "Display", "Known", "Other", "T", "fmt"]),
+                owned(&["Bound", "Display", "Known", "Other", "T"]),
                 owned(&["D", "e", "f", "g"]),
                 owned(&["X", "Z"]),
                 owned(&["alpha", "beta", "mutants"]),
             ]
+        );
+        let associated: Vec<Vec<String>> = items_of(source).iter().map(associated_names).collect();
+        assert_eq!(
+            associated,
+            [owned(&["C", "fmt"]), owned(&[]), owned(&[]), owned(&[])]
         );
     }
 
@@ -12459,7 +13306,7 @@ pub fn repo() -> u8 {{ scratch() }}
         let digests = std::collections::BTreeMap::new();
         let pair = |case: &Case| pair_key(&base, &mutant, case, &digests).unwrap();
         let mutants = [mutant.clone()];
-        let judged = |cache: std::collections::BTreeMap<String, String>| {
+        let judged_by = |cache: std::collections::BTreeMap<String, String>| {
             let (reach, seconds) = Default::default();
             let store = base.join("verdicts");
             let judging = Judging {
@@ -12480,8 +13327,20 @@ pub fn repo() -> u8 {{ scratch() }}
             let journal = std::sync::Mutex::new(Journal::default());
             judge(&judging, ERRING, &mutant, &cases, &hints, &journal)
         };
+        let judged = |cache: std::collections::BTreeMap<String, String>| {
+            let judged = judged_by(cache);
+            (judged.verdict, judged.skipped)
+        };
         let caught = String::from("caught");
         let passed = String::from(PASSED);
+        assert!(
+            judged_by([(pair(&b), caught.clone())].into()).held_kill,
+            "a recorded kill is counted as decided by a held kill pair"
+        );
+        assert!(
+            !judged_by([(pair(&a), passed.clone()), (pair(&b), passed.clone())].into()).held_kill,
+            "every case recorded passing is no held kill"
+        );
         assert_eq!(
             judged([(pair(&b), caught)].into()),
             (Verdict::Caught, 2),
