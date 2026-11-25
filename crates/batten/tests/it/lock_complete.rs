@@ -467,7 +467,12 @@ fn host_mise() -> PathBuf {
 
 /// `mise <args>` in `project`, against the cold `home`, with every ambient
 /// `MISE_*` dropped: exit status and stdout.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the subject is how the real `mise` resolves a toolchain, so nothing in process can stand in for it"
+)]
 fn cold_mise(project: &Path, home: &Path, args: &[&str]) -> (bool, String) {
+    use batten::capture::Streamed as _;
     let mut command = std::process::Command::new(host_mise());
     for (name, _) in std::env::vars_os() {
         if name.to_string_lossy().starts_with("MISE_") {
@@ -483,7 +488,7 @@ fn cold_mise(project: &Path, home: &Path, args: &[&str]) -> (bool, String) {
         .env("MISE_CONFIG_DIR", home.join("config"))
         .env("MISE_CEILING_PATHS", home)
         .env("MISE_TRUSTED_CONFIG_PATHS", project)
-        .output()
+        .streamed_output()
         .expect("run mise");
     (
         output.status.success(),
