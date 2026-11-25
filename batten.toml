@@ -9472,7 +9472,7 @@ kind = "policy"
 scope = "tree"
 staged = ["mise.lock", "mise.toml"]
 format = "toml"
-line_sources = ["mise.lock", "mise.toml", "mise.*.toml", "batten.toml", "renovate.json5", ".github/workflows/*.yml"]
+line_sources = ["mise.lock", "mise.toml", ".github/workflows/*.yml"]
 module = "policy/lock-complete.rego"
 severity = "deny"
 
@@ -12092,6 +12092,7 @@ gates = [
   "task-verify:gated",
   "task-build:debug",
   "task-tree-clean",
+  "task-lock-complete",
   "task-alive",
   "task-mutant",
   "task-mutant:rust",

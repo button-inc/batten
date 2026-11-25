@@ -46,7 +46,7 @@ concurrency:
 permissions: {}
 
 env:
-  # Restores locked installs, which `[settings] lockfile = false` turns off along
+  # Keeps locked installs, which `[settings] lockfile = false` turned off before CLOUD-2881, along
   # with the install-time write it exists to deny (CLOUD-223).
   MISE_LOCKFILE: "true"
 

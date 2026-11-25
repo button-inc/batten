@@ -18619,11 +18619,9 @@ fn run_reach_seed(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         "reach",
         boundary_epoch(),
     );
-    let Some(runner) = provisioned_binary("cargo-mutants", &Overrides::default()) else {
-        writeln!(
-            err,
-            "::error:: mutate cargo: no [[provision]] row ships cargo-mutants, or it could not be applied; run `batten provision apply`"
-        )?;
+    // THE SAME RUNNER PROBE AS THE SWEEP (CLOUD-2881): the seed lists and builds
+    // the schema too, so a missing nextest is could-not-look before either.
+    let Some(runner) = mutate_cargo_runner(root, out, err)? else {
         return Ok(ExitCode::Internal);
     };
     let listed_over = mutate::cover::source_digest(root)?;

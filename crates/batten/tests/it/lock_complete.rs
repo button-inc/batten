@@ -393,12 +393,31 @@ fn a_partial_pin_the_lock_extends_is_untouched() {
 }
 
 #[test]
-fn a_lockfile_without_locked_mode_is_reported() {
-    // CLOUD-223 and CLOUD-2881: a lockfile that is read but not enforced lets an
-    // install write residue and resolve through the release APIs, which a cloud
-    // session's proxy refuses. Only the conjunction installs from the lock alone.
+fn re_enabled_lockfile_writes_are_reported() {
+    // CLOUD-223: the other half of the residue predicate rather than a separate
+    // concern. Every residue key this gate rejects was written by an install, so
+    // the gate is half a mechanism while any `mise install` can produce one.
     let (code, said) = judge_repo(
         "lock-complete-writes",
+        &complete_lock(),
+        "[settings]\nlockfile = true\n\n[tools]\n\"t\" = \"1.0.0\"\n",
+        &[],
+    );
+    assert_eq!(code, Some(2), "re-enabled writes are a finding\n{said}");
+    assert!(
+        said.contains("lock write unsafe"),
+        "the finding names its rule\n{said}"
+    );
+}
+
+#[test]
+fn a_lockfile_without_locked_mode_is_reported() {
+    // CLOUD-2881: a lockfile that is read but not enforced lets an install write
+    // residue and resolve through the release APIs, which a cloud session's
+    // proxy refuses. `policy/lock-complete.rego`'s `locked-mode-unread` row
+    // names this case.
+    let (code, said) = judge_repo(
+        "lock-complete-unlocked",
         &complete_lock(),
         "[settings]\nlockfile = true\n\n[tools]\n\"t\" = \"1.0.0\"\n",
         &[],
@@ -584,40 +603,21 @@ fn the_toolchain_checks_decide_as_the_job_resolves() {
     }
 }
 
-/// THE COMMITTED CONFIG INSTALLS LOCKED EVERYWHERE (CLOUD-2881): this
-/// repository's own `mise.toml`, `mise.lock`, agent overlay, `renovate.json5`
-/// and every workflow, judged by this rule. `mise.toml`'s `#MUTANT` rows flip
-/// `lockfile` and `locked` off and this case reddens on each.
+/// THE COMMITTED CONFIG INSTALLS LOCKED EVERYWHERE (CLOUD-2881): the committed
+/// rule — its module, its regex and its `line_sources` as `batten.toml` ships
+/// them — run over this repository itself. `[tasks.lock-complete]`'s `#MUTANT`
+/// rows flip `[settings]` and `session:install`'s env, and this case reddens on
+/// each.
 #[test]
 fn the_committed_config_installs_locked_everywhere() {
-    let committed = |path: &str| {
-        std::fs::read_to_string(common::at_root(path))
-            .unwrap_or_else(|why| panic!("read {path}: {why}"))
-    };
-    let mut files: Vec<(String, String)> = [
-        "mise.toml",
-        "mise.lock",
-        "mise.agent.toml",
-        "renovate.json5",
-    ]
-    .iter()
-    .map(|path| ((*path).to_owned(), committed(path)))
-    .collect();
-    let workflows = common::at_root(".github/workflows");
-    for entry in std::fs::read_dir(&workflows).expect("read the workflows") {
-        let name = entry.expect("a workflow entry").file_name();
-        let name = name.to_string_lossy();
-        if name.ends_with(".yml") {
-            let path = format!(".github/workflows/{name}");
-            files.push((path.clone(), committed(&path)));
-        }
-    }
-    let borrowed: Vec<(&str, &str)> = files
-        .iter()
-        .map(|(path, body)| (path.as_str(), body.as_str()))
-        .collect();
-    let (code, said) = judge(&fixture("lock-complete-committed", &borrowed));
-    assert_eq!(code, Some(0), "the committed config installs locked\n{said}");
+    let out = run(&common::at_root("."), &["check", "--rule", RULE]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the committed config installs locked\n{}{}",
+        stdout(&out),
+        common::stderr(&out)
+    );
 }
 
 #[test]
