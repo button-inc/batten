@@ -1201,7 +1201,13 @@ fn group_holds(_pgid: u32, _pipes: &[Option<u64>]) -> bool {
 
 /// The process group in one `/proc/<pid>/stat` line: the third field after
 /// the parenthesised command, which may itself hold spaces and parentheses.
-#[cfg(target_os = "linux")]
+#[cfg_attr(
+    all(not(target_os = "linux"), not(test)),
+    expect(
+        dead_code,
+        reason = "read only where `/proc` exists; compiled everywhere so its case is"
+    )
+)]
 fn stat_group(stat: &str) -> Option<u32> {
     let (_, after) = stat.rsplit_once(") ")?;
     after.split(' ').nth(2)?.parse().ok()
@@ -4322,7 +4328,6 @@ mod tests {
 
     /// Fails by: a stat line's group read from the wrong field, or from inside
     /// a command name that holds spaces and parentheses.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_stat_line_names_its_group_past_any_command_name() {
         assert_eq!(super::stat_group("42 (sh) S 1 4242 4242 0"), Some(4242));
