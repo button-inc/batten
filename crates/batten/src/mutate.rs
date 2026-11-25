@@ -1955,7 +1955,7 @@ impl Staged {
     /// that reads the committed rule reads the index, never the checkout, by
     /// design (`lock_complete`'s `the_index_answers_not_the_worktree_for_the_committed_rule`).
     /// A mutation written to the working copy alone was invisible to it, so
-    /// `mise.toml`'s `settings-unlocked` row survived a suite that denies the
+    /// a consumer's `settings-unlocked` row survived a suite that denies the
     /// same bytes staged. Every write to the staged tree, mutant and restore
     /// alike, is staged with it, so the index never disagrees with the copy.
     ///
