@@ -13046,6 +13046,19 @@ mod tests {
         );
     }
 
+    /// A package-wide definition is seen from any module of its own package
+    /// and from no other package.
+    ///
+    /// Fails by: the package comparison inverted (shard 7/8's survivor), so a
+    /// `pub(crate)` item is reached only from the packages that cannot see it.
+    #[test]
+    fn a_package_wide_definition_is_seen_from_its_package_only() {
+        let definition = format!("helper{DEFINED_IN}batten");
+        let from = |package: &str| format!("helper{MENTIONED_IN}{package}{MENTIONED_IN}m::n");
+        assert!(visible_from(&from("batten"), &definition));
+        assert!(!visible_from(&from("batten_core"), &definition));
+    }
+
     /// A `#[path = "…"]` attribute names its file as written; any other
     /// attribute names none.
     ///
