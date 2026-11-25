@@ -198,22 +198,25 @@ struct Hold {
 /// hold it took itself, which nothing can ever release. Another thread of the
 /// same process is a holder like any other process: its own descriptor, its own
 /// `flock`, and a release it can see, so it waits rather than being refused.
-static HELD: Mutex<Option<HashMap<Key, Vec<(std::thread::ThreadId, Mode)>>>> = Mutex::new(None);
+static HELD: Mutex<Option<Registry>> = Mutex::new(None);
+
+/// Each locked file's holders in this process: the thread and its mode.
+type Registry = HashMap<Key, Vec<(std::thread::ThreadId, Mode)>>;
 
 /// Register `key` as held in `mode` by this thread, or `None` when this thread
 /// already holds it in a conflicting mode.
 fn register(key: Key, mode: Mode) -> Option<Hold> {
     let thread = std::thread::current().id();
     let hold = Hold { key, thread, mode };
-    let Ok(mut held) = HELD.lock() else {
+    let Ok(mut registry) = HELD.lock() else {
         return Some(hold);
     };
-    let holders = held
+    let holders = registry
         .get_or_insert_with(HashMap::new)
         .entry(key)
         .or_default();
-    let conflicts = holders.iter().any(|(holder, held_mode)| {
-        *holder == thread && (*held_mode == Mode::Exclusive || mode == Mode::Exclusive)
+    let conflicts = holders.iter().any(|(holder, theirs)| {
+        *holder == thread && (*theirs == Mode::Exclusive || mode == Mode::Exclusive)
     });
     if conflicts {
         return None;
@@ -223,22 +226,22 @@ fn register(key: Key, mode: Mode) -> Option<Hold> {
 }
 
 /// Drop `hold`, wherever its guard ended up.
-fn release(hold: Hold) {
-    let Ok(mut held) = HELD.lock() else {
+fn release(gone: Hold) {
+    let Ok(mut registry) = HELD.lock() else {
         return;
     };
-    let Some(held) = held.as_mut() else {
+    let Some(registry) = registry.as_mut() else {
         return;
     };
-    if let Some(holders) = held.get_mut(&hold.key) {
+    if let Some(holders) = registry.get_mut(&gone.key) {
         if let Some(at) = holders
             .iter()
-            .position(|entry| *entry == (hold.thread, hold.mode))
+            .position(|entry| *entry == (gone.thread, gone.mode))
         {
             holders.swap_remove(at);
         }
         if holders.is_empty() {
-            held.remove(&hold.key);
+            registry.remove(&gone.key);
         }
     }
 }
@@ -297,42 +300,48 @@ pub fn acquire_announced(
     stop: Option<&Stop>,
     parked: &mut dyn FnMut(),
 ) -> std::io::Result<Taken> {
-    let hold = match key_of(&file)? {
+    let registered = match key_of(&file)? {
         Some(key) => match register(key, mode) {
-            Some(hold) => Some(hold),
+            Some(registered) => Some(registered),
             None => return Ok(Taken::Reentrant),
         },
         None => None,
     };
     // From here an early return releases the registration through the guard.
-    let held = Held { file, hold };
-    if attempt(&held.file, mode)? {
-        return Ok(Taken::Held(held));
+    let guard = Held {
+        file,
+        hold: registered,
+    };
+    if attempt(&guard.file, mode)? {
+        return Ok(Taken::Held(guard));
     }
-    if wait(&held.file, path, mode, stop, parked)? {
-        Ok(Taken::Held(held))
+    if wait(&guard.file, path, mode, stop, parked)? {
+        Ok(Taken::Held(guard))
     } else {
         Ok(Taken::Stopped)
     }
 }
 
 /// One attempt and no wait: `Some` when `file` was free, `None` when another
-/// holds it — or this process does, which a waiter would wait on itself for.
+/// holds it — or this thread does, which a waiter would wait on itself for.
 /// For a caller with a per-call budget, where losing a race is an answer.
 ///
 /// # Errors
 ///
 /// When the identity cannot be read or the lock call itself fails.
 pub fn try_acquire(file: File, mode: Mode) -> std::io::Result<Option<Held>> {
-    let hold = match key_of(&file)? {
+    let registered = match key_of(&file)? {
         Some(key) => match register(key, mode) {
-            Some(hold) => Some(hold),
+            Some(registered) => Some(registered),
             None => return Ok(None),
         },
         None => None,
     };
-    let held = Held { file, hold };
-    Ok(attempt(&held.file, mode)?.then_some(held))
+    let guard = Held {
+        file,
+        hold: registered,
+    };
+    Ok(attempt(&guard.file, mode)?.then_some(guard))
 }
 
 /// Wait for the lock, `true` once taken, `false` on the stop.

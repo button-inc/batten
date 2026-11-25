@@ -55,8 +55,13 @@ fn artifact(deps: &Path, stem: &str, hash: &str, age: u64) {
 /// lets it go at once (CLOUD-2789).
 fn released(lock: &std::path::Path) {
     let probe = std::fs::File::open(lock).unwrap();
-    let taken = batten::lock_wait::acquire(probe, lock, batten::lock_wait::Mode::Exclusive, None)
-        .expect("the lock is taken once the sibling's child execs");
+    let taken = batten_facts::lock_wait::acquire(
+        probe,
+        lock,
+        batten_facts::lock_wait::Mode::Exclusive,
+        None,
+    )
+    .expect("the lock is taken once the sibling's child execs");
     drop(taken);
 }
 

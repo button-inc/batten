@@ -1018,9 +1018,9 @@ pub(crate) fn lead_group(builder: &mut Command) {
 }
 
 /// Start a lock-wait helper (CLOUD-2789): this binary re-entered as `batten
-/// __lock-wait <mode> <path>` ([`crate::lock_wait::helped`]), stdin piped so
+/// __lock-wait <mode> <path>` ([`batten_facts::lock_wait::helped`]), stdin piped so
 /// the waiter can end it, both outputs discarded. The spawner the binary
-/// installs ([`crate::lock_wait::install`]), so the one spawn `lock_wait`
+/// installs ([`batten_facts::lock_wait::install`]), so the one spawn `lock_wait`
 /// needs is placed here, at the crate's spawn boundary, and `lock_wait` stays a
 /// leaf.
 ///
@@ -1029,7 +1029,7 @@ pub(crate) fn lead_group(builder: &mut Command) {
 /// When this program cannot be named or the helper cannot start.
 pub fn spawn_lock_helper(
     path: &Path,
-    mode: crate::lock_wait::Mode,
+    mode: batten_facts::lock_wait::Mode,
 ) -> std::io::Result<std::process::Child> {
     spawn_lock_helper_as(&std::env::current_exe()?, path, mode)
 }
@@ -1047,10 +1047,10 @@ pub fn spawn_lock_helper(
 pub fn spawn_lock_helper_as(
     program: &Path,
     path: &Path,
-    mode: crate::lock_wait::Mode,
+    mode: batten_facts::lock_wait::Mode,
 ) -> std::io::Result<std::process::Child> {
     Command::new(program)
-        .arg(crate::lock_wait::HELPER_ARG)
+        .arg(batten_facts::lock_wait::HELPER_ARG)
         .arg(mode.name())
         .arg(path)
         .stdin(std::process::Stdio::piped())

@@ -1549,17 +1549,17 @@ fn trace_file(step: &str) -> Option<std::path::PathBuf> {
 /// any other runner of the same step lets go; released when the guard drops.
 /// `None` where the git dir or the lock cannot be had.
 ///
-/// THE WAIT IS [`crate::lock_wait`]'S (CLOUD-2789): on the other runner's
+/// THE WAIT IS [`batten_facts::lock_wait`]'S (CLOUD-2789): on the other runner's
 /// release, never a blocking `flock`, and a lock this process already holds
 /// is refused as re-entry rather than waited on for ever.
-fn step_lock(step: &str) -> Option<crate::lock_wait::Held> {
+fn step_lock(step: &str) -> Option<batten_facts::lock_wait::Held> {
     let git_dir = crate::git::git_dir(Path::new(".")).ok()?;
     step_lock_at(&git_dir, step)
 }
 
 /// [`step_lock`] under an explicit git dir, for a case to hold.
-fn step_lock_at(git_dir: &Path, step: &str) -> Option<crate::lock_wait::Held> {
-    use crate::lock_wait::{Mode, Taken};
+fn step_lock_at(git_dir: &Path, step: &str) -> Option<batten_facts::lock_wait::Held> {
+    use batten_facts::lock_wait::{Mode, Taken};
     let path = git_dir.join(format!("{LOCKS}-{}", crate::tools::digest(step.as_bytes())));
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -1567,7 +1567,7 @@ fn step_lock_at(git_dir: &Path, step: &str) -> Option<crate::lock_wait::Held> {
         .write(true)
         .open(&path)
         .ok()?;
-    match crate::lock_wait::acquire(file, &path, Mode::Exclusive, None).ok()? {
+    match batten_facts::lock_wait::acquire(file, &path, Mode::Exclusive, None).ok()? {
         Taken::Held(held) => Some(held),
         Taken::Stopped | Taken::Reentrant => None,
     }

@@ -127,7 +127,6 @@ pub mod judge;
 /// The landing lap's replay half: advance the base, replay the branch onto it,
 /// and record what happened for a module to decide over (CLOUD-1335).
 pub mod land;
-pub mod lock_wait;
 /// Whether a board column is honest about what git and the forge already did —
 /// behind git in one direction, ahead of a declined key in the other
 /// (CLOUD-186, CLOUD-1127).
@@ -4135,27 +4134,39 @@ fn open_drain_lock(path: &Path) -> std::io::Result<std::fs::File> {
 /// Propagates a blocking `lock` that fails outright. A contended `try_lock` is
 /// `Ok(false)`, never an error: losing a race is an answer.
 ///
-/// The verb's wait is [`lock_wait::acquire`]'s, on the holder's release, never
+/// The verb's wait is [`batten_facts::lock_wait::acquire`]'s, on the holder's release, never
 /// a blocking `flock` (CLOUD-2789); a lock this thread already holds is an
 /// error rather than a wait on itself.
-fn take_write_lock(path: &Path, surface: facts::Surface) -> Result<Option<lock_wait::Held>> {
+fn take_write_lock(
+    path: &Path,
+    surface: facts::Surface,
+) -> Result<Option<batten_facts::lock_wait::Held>> {
     let lock = open_drain_lock(path)?;
     let may_block =
         !matches!(surface, facts::Surface::Hook) && std::env::var_os(DRAIN_MARKER).is_none();
     if may_block {
-        return match lock_wait::acquire(lock, path, lock_wait::Mode::Exclusive, None)? {
-            lock_wait::Taken::Held(held) => Ok(Some(held)),
-            lock_wait::Taken::Stopped | lock_wait::Taken::Reentrant => Err(anyhow::anyhow!(
-                "the state write lock {} is already held by this thread",
-                path.display()
-            )),
+        return match batten_facts::lock_wait::acquire(
+            lock,
+            path,
+            batten_facts::lock_wait::Mode::Exclusive,
+            None,
+        )? {
+            batten_facts::lock_wait::Taken::Held(held) => Ok(Some(held)),
+            batten_facts::lock_wait::Taken::Stopped | batten_facts::lock_wait::Taken::Reentrant => {
+                Err(anyhow::anyhow!(
+                    "the state write lock {} is already held by this thread",
+                    path.display()
+                ))
+            }
         };
     }
     // A LOCK CALL THAT ERRS IS A LOST RACE HERE, as it always was: the hook
     // has a per-call budget and writes nothing it cannot own.
-    Ok(lock_wait::try_acquire(lock, lock_wait::Mode::Exclusive)
-        .ok()
-        .flatten())
+    Ok(
+        batten_facts::lock_wait::try_acquire(lock, batten_facts::lock_wait::Mode::Exclusive)
+            .ok()
+            .flatten(),
+    )
 }
 
 /// Say which rules did not look, so a clean-looking record is not a false green.

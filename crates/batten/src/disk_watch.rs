@@ -117,7 +117,7 @@ struct Sampler<'a> {
     pending:
         std::cell::RefCell<Option<std::sync::mpsc::Receiver<Option<crate::collect::Collected>>>>,
     /// The flag every collection ends on, set once the watcher stops.
-    halt: Arc<crate::lock_wait::Stop>,
+    halt: Arc<batten_facts::lock_wait::Stop>,
     trace: bool,
     started: std::time::Instant,
     last_wake: std::cell::Cell<Option<std::time::Instant>>,
@@ -180,7 +180,7 @@ impl Sampler<'_> {
     /// Stop every collection, and wait for the running one's answer.
     ///
     /// NO GRACE AND NO CLOCK (CLOUD-2789): the pass ends because it observes the
-    /// stop — its tree locks wait through [`crate::lock_wait`] on this same
+    /// stop — its tree locks wait through [`batten_facts::lock_wait`] on this same
     /// stop, and its walks end at their next unit once it is raised — so the
     /// join needs no bound. A grace that abandoned a pass hid one that did not.
     fn settle(&self) {
@@ -296,7 +296,7 @@ pub const PERIOD: std::time::Duration = std::time::Duration::from_millis(1);
 pub fn watch<'scope>(
     scope: &'scope std::thread::Scope<'scope, '_>,
     watch: DiskWatch<'scope>,
-    stop: &'scope Arc<crate::lock_wait::Stop>,
+    stop: &'scope Arc<batten_facts::lock_wait::Stop>,
 ) -> std::thread::ScopedJoinHandle<'scope, Vec<String>> {
     watch_on(scope, watch, stop, None)
 }
@@ -306,7 +306,7 @@ pub fn watch<'scope>(
 fn watch_on<'scope>(
     scope: &'scope std::thread::Scope<'scope, '_>,
     watch: DiskWatch<'scope>,
-    stop: &'scope Arc<crate::lock_wait::Stop>,
+    stop: &'scope Arc<batten_facts::lock_wait::Stop>,
     driver: Option<compio::driver::DriverType>,
 ) -> std::thread::ScopedJoinHandle<'scope, Vec<String>> {
     scope.spawn(move || {
@@ -357,7 +357,7 @@ fn watch_on<'scope>(
 /// clock's blocking face until `stop` is set. Its own function so that the
 /// stop test is driven directly, since no kernel this suite runs on refuses
 /// the runtime.
-fn blocking_floor(stop: &crate::lock_wait::Stop, mut tick: impl FnMut()) {
+fn blocking_floor(stop: &batten_facts::lock_wait::Stop, mut tick: impl FnMut()) {
     while !stop.is_raised() {
         tick();
         crate::pr_watch::clock::hold(PERIOD, None);
@@ -371,7 +371,7 @@ fn blocking_floor(stop: &crate::lock_wait::Stop, mut tick: impl FnMut()) {
 /// synchronous pause, so the watcher is never silently off.
 fn run(
     sampler: &Sampler<'_>,
-    stop: &crate::lock_wait::Stop,
+    stop: &batten_facts::lock_wait::Stop,
     driver: Option<compio::driver::DriverType>,
 ) {
     let mut builder = compio::runtime::RuntimeBuilder::new();
@@ -459,7 +459,7 @@ async fn until_first(first: impl Future<Output = ()>, second: impl Future<Output
 #[cfg(target_os = "linux")]
 fn wake_source<'a>(
     sampler: &'a Sampler<'_>,
-    stop: &'a crate::lock_wait::Stop,
+    stop: &'a batten_facts::lock_wait::Stop,
 ) -> impl Future<Output = ()> + 'a {
     let armed = fanotify::arm(&sampler.repo).and_then(|group| {
         let group = Arc::new(group);
@@ -500,7 +500,7 @@ fn wake_source<'a>(
 #[cfg(not(target_os = "linux"))]
 fn wake_source<'a>(
     sampler: &'a Sampler<'_>,
-    _stop: &'a crate::lock_wait::Stop,
+    _stop: &'a batten_facts::lock_wait::Stop,
 ) -> impl Future<Output = ()> + 'a {
     // The same armed line as Linux's refused branch, from the same `arm`.
     let errno = fanotify::arm(&sampler.repo).err().unwrap_or_default();
@@ -598,7 +598,7 @@ fn around_on<T>(
     // A STOP NO WAIT CAN MISS (CLOUD-2789): the watcher's loops read it, and a
     // pass waiting on a held tree is woken by it. One that cannot be made
     // leaves the body unwatched rather than unstoppable.
-    let Ok(stop) = crate::lock_wait::Stop::new().map(Arc::new) else {
+    let Ok(stop) = batten_facts::lock_wait::Stop::new().map(Arc::new) else {
         return (body(), Vec::new());
     };
     std::thread::scope(|scope| {
@@ -638,7 +638,7 @@ fn around_on<T>(
 /// So the bound was never the defect; the un-stoppable watcher was.
 ///
 /// In production the same shape swallows any panic raised inside a watched step.
-struct Stop<'a>(&'a crate::lock_wait::Stop);
+struct Stop<'a>(&'a batten_facts::lock_wait::Stop);
 
 impl Drop for Stop<'_> {
     fn drop(&mut self) {
@@ -663,7 +663,7 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used)]
     fn the_blocking_floor_ticks_until_it_is_stopped() {
-        let stop = crate::lock_wait::Stop::new().expect("a stop");
+        let stop = batten_facts::lock_wait::Stop::new().expect("a stop");
         let mut ticks = 0;
         blocking_floor(&stop, || {
             ticks += 1;
@@ -767,7 +767,7 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used)]
     fn the_watcher_is_stopped_however_the_body_leaves() {
-        let stop = crate::lock_wait::Stop::new().expect("a stop");
+        let stop = batten_facts::lock_wait::Stop::new().expect("a stop");
         drop(Stop(&stop));
         assert!(
             stop.is_raised(),
