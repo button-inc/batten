@@ -1981,3 +1981,41 @@ fn a_glob_that_only_follows_a_moved_file_is_not_reported() {
         "{found:?}"
     );
 }
+
+/// Fails by: `config lint` passing a config whose committed module this engine
+/// cannot evaluate — a call to a function it does not carry — so `engine gate`,
+/// which asks this verb under the pinned release, passes a tree where every
+/// mediated call is then refused `engine-cannot-adjudicate` (CLOUD-2840: the
+/// install gate calling `data.batten.library.read_only` ahead of the release
+/// that carries it). A module that loads still passes.
+#[test]
+fn a_module_this_engine_cannot_evaluate_is_refused_not_dropped() {
+    let rule = "version = 1\n\n[[rule]]\nid = \"m\"\nkind = \"policy\"\n\
+                scope = \"mediated_call\"\nmodule = \"policy/m.rego\"\nseverity = \"deny\"\n";
+    let module = |body: &str| {
+        format!(
+            "package batten.m\nimport rego.v1\n\nrules contains \"m\"\n\n\
+             violation contains {{\"rule\": \"m\", \"verdict\": \"call name refused\"}} if {{\n\t{body}\n}}\n"
+        )
+    };
+    let dir = Fixture::new("config-lint-unevaluable")
+        .config(rule)
+        .file(
+            "policy/m.rego",
+            &module("data.batten.nothing.here(input.call)"),
+        )
+        .build();
+    let output = lint(&dir, &[]);
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    let said = common::stderr(&output);
+    assert!(
+        said.contains("policy/m.rego") && said.contains("data.batten.nothing.here"),
+        "the refusal names the module and the call it cannot evaluate: {output:?}"
+    );
+    let dir = Fixture::new("config-lint-evaluable")
+        .config(rule)
+        .file("policy/m.rego", &module("input.call.go"))
+        .build();
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+}

@@ -7857,14 +7857,19 @@ pub(crate) fn comparable(value: &str) -> String {
         .collect()
 }
 
+/// Is `token` a shell assignment, `NAME=VALUE` or the append `NAME+=VALUE`?
+///
+/// THE APPEND IS AN ASSIGNMENT TOO (CLOUD-2840): `TOUCHED+=(a b)` in a sourced
+/// script was read as a program named `TOUCHED+=(a`, and the install gate held
+/// the call on it.
 pub(crate) fn is_env_assignment(token: &str) -> bool {
-    let mut chars = token.chars();
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    let name = name.strip_suffix('+').unwrap_or(name);
+    let mut chars = name.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
-        && token
-            .chars()
-            .take_while(|&c| c != '=')
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && token.contains('=')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// The record this module writes, and the one `record::VERB_WRITTEN` names so a
