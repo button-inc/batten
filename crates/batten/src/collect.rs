@@ -1991,6 +1991,19 @@ mod tests {
             .expect("date the file");
     }
 
+    /// An age `age` seconds before the earliest build alive on the box, or before
+    /// now where none is: what a fixture must be dated by for a pass over the real
+    /// process table to read it as unused (CLOUD-2789). The clock is the case's
+    /// input here, as in [`aged`], never what it asserts.
+    fn before_builds(age: u64) -> u64 {
+        let builds = super::live_since(&[]).unwrap_or_else(SystemTime::now);
+        let back = SystemTime::now()
+            .duration_since(builds)
+            .unwrap_or_default()
+            .as_secs();
+        back + age
+    }
+
     /// One cargo unit in `profile`: a fingerprint file read `age` seconds ago and
     /// a `deps/<file>` artifact of `bytes` bytes, whose path it returns.
     fn unit(profile: &Path, name: &str, hash: &str, age: u64, file: &str, bytes: usize) -> PathBuf {
@@ -2509,16 +2522,11 @@ mod tests {
     fn a_collection_frees_toward_max_in_mebibytes() {
         let repo = scratch("toward-max");
         let profile = repo.join("target/debug");
-        let builds = super::live_since(&[]).unwrap_or_else(SystemTime::now);
-        let back = SystemTime::now()
-            .duration_since(builds)
-            .unwrap_or_default()
-            .as_secs();
         let older = unit(
             &profile,
             "older",
             "8888888888888888",
-            back + 7200,
+            before_builds(7200),
             "libolder-8888888888888888.rlib",
             600 * 1024,
         );
@@ -2526,7 +2534,7 @@ mod tests {
             &profile,
             "newer",
             "9999999999999999",
-            back + 3600,
+            before_builds(3600),
             "libnewer-9999999999999999.rlib",
             600 * 1024,
         );
