@@ -4086,7 +4086,7 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # `env -u GH_TOKEN -u GITHUB_TOKEN`: the [env] block renders both as "" when no token is
 # set, and zizmor refuses an empty --gh-token even under --offline, where it
 # never uses one (measured 2026-10-06). Unset, an offline run asks for nothing.
-run = "{% if get_env(name='BATTEN_BIN', default='') %}{{vars.batten}} step run zizmor -- {% endif %}env -u GH_TOKEN -u GITHUB_TOKEN zizmor --offline --min-severity high .github/ action.yml"
+run = "{% if env.BATTEN_BIN %}{{vars.batten}} step run zizmor -- {% endif %}env -u GH_TOKEN -u GITHUB_TOKEN zizmor --offline --min-severity high .github/ action.yml"
 
 [tasks.zizmor-advisories]
 description = "Currency only: is any pinned action the subject of a published advisory? Runs on a schedule, never on the landing path — it needs the network"
