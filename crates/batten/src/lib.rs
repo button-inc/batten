@@ -27906,12 +27906,7 @@ fn collect_before_admitting(
     };
     let band = pruning.filter(|prune| prune.free_band().is_some());
     let root = pruning.map_or("target", |prune| prune.root.as_str());
-    let trees = || {
-        std::iter::once(repo.clone())
-            .chain(git::linked_worktree_dirs(&repo))
-            .map(|dir| dir.join(root))
-            .filter(|tree| tree.is_dir())
-    };
+    let trees = || collect::worktree_trees(&repo, root);
     if envelope.event == crate::config_model::Event::SessionStart {
         if band.is_some() {
             for tree in trees() {
