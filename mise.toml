@@ -1234,7 +1234,7 @@ env = { MISE_LOCKED_SCOPES = "project" }
 run = [
   "{{vars.batten}} exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l",
   "{{vars.batten}} exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l --fail",
-  "mise exec -- opa check -s schema/ policy/ crates/batten/src/policy/presets/shell-hygiene/",
+  "mise exec -- opa check -s schema/ policy/ crates/batten/src/policy/presets/shell-hygiene/ crates/batten/src/policy/library/",
 ]
 
 [tasks."fmt:rego"]

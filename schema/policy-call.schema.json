@@ -234,6 +234,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "assigns": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "construct": {
                 "additionalProperties": false,
                 "properties": {

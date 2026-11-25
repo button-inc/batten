@@ -886,24 +886,25 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
     // reading the working file and the base ref, so it owns this too.
     //
     // A bundle that will not LOAD is a different fault from one that will not
-    // RESOLVE, and it is already refused with its own message by
-    // `policy::load` — an unreadable module, an undeclared id, a colliding one.
-    // Reaching that refusal here would replace a specific diagnostic with a
-    // generic smell, so a load failure yields no bundles and the set analysis
-    // reports nothing about a set it never saw.
-    let bundles = config::parse(&text, &path.display().to_string())
-        .ok()
-        .map(|config| {
-            crate::policy::load(
-                dir,
-                &config.rules,
-                crate::policy::Vocabulary::from(&config),
-                crate::policy::ModuleChecks::Run,
-                base_ref,
-            )
-        })
-        .and_then(std::result::Result::ok)
-        .unwrap_or_default();
+    // RESOLVE, and `policy::load` names it with its own message — an
+    // unreadable module, an undeclared id, a colliding one, a call to a
+    // function this engine does not carry. THAT MESSAGE IS THE VERDICT, never a
+    // generic smell and never silence (CLOUD-2840): `engine gate` asks this verb
+    // under the pinned release, and a swallowed load error passed a module the
+    // pinned engine could not evaluate — `data.batten.library.read_only`
+    // under v0.0.221 — so every mediated call in that tree was then refused
+    // `engine-cannot-adjudicate`. A config that will not PARSE has no bundles
+    // to load; `smells` refuses it below with its own message.
+    let bundles = match config::parse(&text, &path.display().to_string()) {
+        Err(_) => Vec::new(),
+        Ok(config) => crate::policy::load(
+            dir,
+            &config.rules,
+            crate::policy::Vocabulary::from(&config),
+            crate::policy::ModuleChecks::Run,
+            base_ref,
+        )?,
+    };
     let found = smells(
         &text,
         &path.display().to_string(),

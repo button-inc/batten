@@ -9866,7 +9866,16 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                         // AND WHETHER IT SENDS OUTPUT INTO A FILE (CLOUD-1949),
                         // per segment for the same reason: `ls; > f` truncates
                         // `f` in a segment that runs no program at all.
+                        // THE PARSE'S REDIRECTS, NEVER THE WORDS (CLOUD-2840): a
+                        // quoted `'>&'` is an argument, and read off the words
+                        // it made the next word a write target.
                         "output-redirect": redirects_to_a_file(
+                            &segment.redirects.iter().map(String::as_str).collect::<Vec<_>>(),
+                        ),
+                        // THE NAMES ASSIGNED BEFORE THE PROGRAM (CLOUD-2840):
+                        // `GIT_EXTERNAL_DIFF=x git diff` runs `x`, so a reading
+                        // of `git diff` alone is not a reading of the call.
+                        "assigns": prefix_assignments(
                             &segment.words.iter().map(String::as_str).collect::<Vec<_>>(),
                         ),
                         // AND WHERE (#1276): the targets themselves, for a
@@ -11573,7 +11582,8 @@ fn program_entry(
         // declared effect for `batten`. The redirect that turns any
         // reader into a writer is a SEGMENT key, because a bare `> f`
         // runs no program and so has no entry here.
-        "reads-only": reads_its_operands(program_name(program)),
+        "reads-only": reads_its_operands(program_name(program))
+            && !acts_through_a_flag(program_name(program), arguments),
         // THE RAW TOKENS, NEVER `arguments`: `program_token` strips a
         // leading `{` the shell passes through literally, so
         // `batten lease acquire {--help` would read as `--help` here
@@ -12323,7 +12333,10 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
             }
             // A redirect is a pseudo-program with no argv of its own, so it carries
             // no qualifier and is looked up by name.
-            for (operator, path) in redirect_targets(&tokens) {
+            // THE LINE'S REDIRECTS, NEVER ITS WORDS (CLOUD-2840): a quoted
+            // operator is an argument, not a write.
+            let redirects: Vec<&str> = line.redirects.iter().map(String::as_str).collect();
+            for (operator, path) in redirect_targets(&redirects) {
                 if let Some(verb) = crate::verbs::classify(&policy.verbs, operator) {
                     candidates.push(Target {
                         program: operator,
@@ -12694,33 +12707,66 @@ fn operands<'a>(tokens: &[&'a str], start: usize) -> Vec<&'a str> {
 
 /// The `(operator, target)` pairs a segment's shell redirects name.
 ///
-/// Handles the glued form (`>p`) and the separated one (`> p`), and normalises a
-/// numbered descriptor (`2>p`). **Not** `&>`: [`segments`] splits on an unquoted
-/// `&`, so that form never arrives here as one token — the `> p` remainder
-/// becomes its own segment and is caught there instead.
+/// Handles the glued form (`>p`) and the separated one (`> p`), normalises a
+/// numbered descriptor (`2>p`), and reads `&>`, `>&FILE` and `<>` as the writes
+/// they are (CLOUD-2840). Handed a parse's REDIRECT tokens only, never its
+/// words: a quoted `'>&'` is an argument, and read here it would make the next
+/// word a write target.
 fn redirect_targets<'a>(tokens: &[&'a str]) -> Vec<(&'static str, &'a str)> {
     let mut out = Vec::new();
     for (index, token) in tokens.iter().enumerate() {
         // A leading descriptor is shell syntax, not part of the operator.
         let bare = token.trim_start_matches(|c: char| c.is_ascii_digit());
-        // Longest first, so `>>` is never read as `>` with a stray `>` target.
-        let Some(op) = REDIRECT_VERBS
-            .iter()
-            .find(|op| bare.starts_with(**op))
-            .copied()
-        else {
-            continue;
+        // `&>` and `&>>` send both streams to their target: still a write, so
+        // the `&` is read as the descriptor it stands for (CLOUD-2840).
+        let bare = bare
+            .strip_prefix('&')
+            .filter(|rest| rest.starts_with('>'))
+            .unwrap_or(bare);
+        // `<>` OPENS ITS TARGET FOR WRITING (CLOUD-2840): `1<>FILE` creates the
+        // file and overwrites it in place, so it is reported as the truncating
+        // operator, the stronger claim, rather than as no redirect at all.
+        let (op, rest) = if let Some(rest) = bare.strip_prefix("<>") {
+            (REDIRECT_VERBS[0], rest)
+        } else {
+            // Longest first, so `>>` is never read as `>` with a stray `>` target.
+            let Some(op) = REDIRECT_VERBS
+                .iter()
+                .find(|op| bare.starts_with(**op))
+                .copied()
+            else {
+                continue;
+            };
+            (op, bare.trim_start_matches('>'))
         };
-        let target = bare.trim_start_matches('>').trim();
-        if target.is_empty() {
-            if let Some(next) = tokens.get(index + 1) {
-                out.push((op, *next));
+        // `>&FILE` IS A FILE, `>&2` IS A DESCRIPTOR (CLOUD-2840): bash sends both
+        // streams to a `>&` operand that is not a number or `-`, so only the
+        // duplication keeps its `&`, which `redirect_writes` drops.
+        let written = rest.trim();
+        let (duplicates, named) = match written.strip_prefix('&') {
+            Some(named) => (true, named),
+            None => (false, written),
+        };
+        let named = if named.is_empty() {
+            match tokens.get(index + 1) {
+                Some(next) => *next,
+                None => continue,
             }
         } else {
-            out.push((op, target));
+            named
+        };
+        if duplicates && is_descriptor(named) {
+            out.push((op, written));
+        } else {
+            out.push((op, named));
         }
     }
     out
+}
+
+/// Is this `>&` operand a descriptor (`1`, `2`, `-`) rather than a file name?
+fn is_descriptor(operand: &str) -> bool {
+    operand == "-" || (!operand.is_empty() && operand.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Strip a leading `./`, which names the same path.
@@ -13352,6 +13398,39 @@ fn reads_its_operands(program: &str) -> bool {
     READ_ONLY_PROGRAMS.contains(&program)
 }
 
+/// Does this reader's argv make it run a program or write a file (CLOUD-2840)?
+/// The name alone is not the bound: `rg --pre CMD` and `rg --hostname-bin CMD`
+/// run `CMD`, and `file -C` compiles a magic file beside its input. A flag after
+/// `--` is an operand, and stays one.
+#[must_use]
+fn acts_through_a_flag(program: &str, arguments: &[&str]) -> bool {
+    let flags = arguments.iter().take_while(|argument| **argument != "--");
+    match program {
+        "rg" => flags
+            .into_iter()
+            .any(|argument| names_long_option(argument, &["pre", "hostname-bin"])),
+        "file" => flags.into_iter().any(|argument| {
+            names_long_option(argument, &["compile"])
+                || (argument.starts_with('-')
+                    && !argument.starts_with("--")
+                    && argument.contains('C'))
+        }),
+        _ => false,
+    }
+}
+
+/// Does `argument` spell one of `options` as a long option, by any prefix
+/// (`--comp` for `--compile`), with or without `=VALUE`? GNU `getopt_long`
+/// accepts an unambiguous prefix, so the full name alone is one spelling of
+/// several; an ambiguous prefix is read as the option too, which fails closed.
+fn names_long_option(argument: &str, options: &[&str]) -> bool {
+    let Some(spelled) = argument.strip_prefix("--") else {
+        return false;
+    };
+    let name = spelled.split('=').next().unwrap_or_default();
+    !name.is_empty() && options.iter().any(|option| option.starts_with(name))
+}
+
 /// Git's global options that CONSUME the next argument, so a subcommand scan
 /// does not mistake their value for the verb.
 ///
@@ -13899,6 +13978,23 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
         }
     }
     None
+}
+
+/// The variable names a line assigns before its effective program, wrappers
+/// included (`env GIT_PAGER=x git log`): what the program runs under, which a
+/// reading of its argv cannot see (CLOUD-2840).
+fn prefix_assignments(tokens: &[&str]) -> Vec<String> {
+    let end = effective_program(tokens).unwrap_or(tokens.len());
+    tokens[..end]
+        .iter()
+        .map(|token| program_token(token))
+        .filter(|token| is_env_assignment(token))
+        .filter_map(|token| {
+            token
+                .split_once('=')
+                .map(|(name, _)| name.trim_end_matches('+').to_owned())
+        })
+        .collect()
 }
 
 /// Claude Code's verdict payload: the `hookSpecificOutput.permissionDecision`
@@ -16895,6 +16991,121 @@ mod tests {
         assert_eq!(super::redirect_writes(&[">>log"]), ["log"]);
         assert!(super::redirect_writes(&["2>&1"]).is_empty());
         assert!(super::redirect_writes(&["<", "in.txt"]).is_empty());
+    }
+
+    /// A sourced script's function definitions, calls to them, and array
+    /// assignments and appends are no programs (CLOUD-2840): read as programs,
+    /// the install gate held the run on `TOUCHED+=(a` and on a function name
+    /// nothing on `PATH` provides.
+    ///
+    /// Fails by: an append, an array assignment, a function's name or a call
+    /// to it extracted as a program; or a real program in the script missed.
+    #[test]
+    fn a_sourced_scripts_functions_and_assignments_are_no_programs() {
+        let dir = crate::scratch::scratch("hook-sourced-functions");
+        let script = dir.join("s.sh");
+        std::fs::write(
+            &script,
+            "touched() {\n  echo x\n}\nTOUCHED+=(a b)\nTOUCHED=(c)\nCOUNT+=1\ntouched\ncargo build\n",
+        )
+        .unwrap_or_default();
+        let programs = super::command_programs(&format!("source {}", script.display()));
+        assert!(
+            programs.iter().any(|program| program == "cargo"),
+            "{programs:?}"
+        );
+        assert!(
+            !programs
+                .iter()
+                .any(|program| program.starts_with("TOUCHED") || program.starts_with("COUNT")),
+            "{programs:?}"
+        );
+        assert!(
+            !programs
+                .iter()
+                .any(|program| program.starts_with("touched")),
+            "{programs:?}"
+        );
+        assert_eq!(
+            super::prefix_assignments(&["COUNT+=1", "git", "log"]),
+            ["COUNT"]
+        );
+    }
+
+    /// The names a line assigns before its program, through wrappers, and
+    /// nothing after it (CLOUD-2840).
+    ///
+    /// Fails by: an assignment behind `env` missed, a program's own `X=Y`
+    /// argument read as an assignment, or the value kept with the name.
+    #[test]
+    fn the_assignments_before_the_program_are_named() {
+        assert_eq!(
+            super::prefix_assignments(&["GIT_PAGER=x", "LC_ALL=C", "git", "log", "A=b"]),
+            ["GIT_PAGER", "LC_ALL"]
+        );
+        assert_eq!(
+            super::prefix_assignments(&["env", "GIT_EXTERNAL_DIFF=./x", "git", "diff"]),
+            ["GIT_EXTERNAL_DIFF"]
+        );
+        assert!(super::prefix_assignments(&["git", "status"]).is_empty());
+    }
+
+    /// A redirect that writes a FILE under a spelling the first reading missed
+    /// (CLOUD-2840): `>&FILE` and `&>FILE` send both streams there, and `<>`
+    /// opens its target for writing.
+    ///
+    /// Fails by: a `>&` file dropped as a duplication, `<>` or `&>` read as no
+    /// redirect, or a real duplication (`>&2`, `>&-`, `>& 1`) read as a file.
+    #[test]
+    fn a_file_behind_a_duplicating_spelling_is_a_write() {
+        assert_eq!(super::redirect_writes(&[">&out.txt"]), ["out.txt"]);
+        assert_eq!(super::redirect_writes(&[">&", "out.txt"]), ["out.txt"]);
+        assert_eq!(super::redirect_writes(&["&>out.txt"]), ["out.txt"]);
+        assert_eq!(super::redirect_writes(&["&>>log"]), ["log"]);
+        assert_eq!(super::redirect_writes(&["1<>out.txt"]), ["out.txt"]);
+        assert_eq!(super::redirect_writes(&["<>", "out.txt"]), ["out.txt"]);
+        assert!(super::redirect_writes(&[">&2"]).is_empty());
+        assert!(super::redirect_writes(&[">&-"]).is_empty());
+        assert!(super::redirect_writes(&[">&", "1"]).is_empty());
+    }
+
+    /// A floor reader that runs a program or writes a file through a flag
+    /// (CLOUD-2840): `rg --pre CMD`, `rg --hostname-bin CMD`, `file -C`.
+    ///
+    /// Fails by: any of those flags, in any prefix or cluster spelling, read as
+    /// a reader's; a plain `rg` or `file` refused; or a flag after `--` (an
+    /// operand) refused.
+    #[test]
+    fn a_reader_handed_a_program_is_not_a_reader() {
+        assert!(super::acts_through_a_flag(
+            "rg",
+            &["--hostname-bin=./x", "y"]
+        ));
+        assert!(super::acts_through_a_flag(
+            "rg",
+            &["--hostname-bin", "./x", "y"]
+        ));
+        assert!(super::acts_through_a_flag(
+            "rg",
+            &["--hostname", "./x", "y"]
+        ));
+        assert!(super::acts_through_a_flag("file", &["-C", "-m", "magic"]));
+        assert!(super::acts_through_a_flag("file", &["-zC", "-m", "magic"]));
+        assert!(super::acts_through_a_flag(
+            "file",
+            &["--comp", "-m", "magic"]
+        ));
+        assert!(!super::acts_through_a_flag("file", &["-b", "README"]));
+        assert!(!super::acts_through_a_flag("file", &["--", "-C"]));
+        assert!(super::acts_through_a_flag("rg", &["--pre", "sh", "x"]));
+        assert!(super::acts_through_a_flag("rg", &["--pre=./run", "x"]));
+        assert!(!super::acts_through_a_flag(
+            "rg",
+            &["--pre-glob", "*.gz", "x"]
+        ));
+        assert!(!super::acts_through_a_flag("rg", &["x", "src/"]));
+        assert!(!super::acts_through_a_flag("rg", &["--", "--pre", "src/"]));
+        assert!(!super::acts_through_a_flag("grep", &["--pre", "x"]));
     }
 
     #[test]
