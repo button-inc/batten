@@ -94,7 +94,7 @@ impl Store {
     fn call(self, tool: &str, payload: &str) -> Self {
         let event = serde_json::json!({
             "hook_event_name": "PostToolUse",
-            "session_id": "board-payloads",
+            "session_id": common::session_id("board-payloads"),
             "tool_name": tool,
             "tool_input": {},
             "tool_response": [{ "type": "text", "text": payload }],

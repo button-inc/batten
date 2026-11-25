@@ -62,7 +62,7 @@ fn post_tool(dir: &Path, result: &serde_json::Value) -> std::process::Output {
 fn post_tool_on(dir: &Path, harness: &str, result: &serde_json::Value) -> std::process::Output {
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "bound",
+        "session_id": common::session_id("bound"),
         "tool_name": "Read",
         "tool_input": { "file_path": "big.log" },
         "tool_response": result,
@@ -185,7 +185,7 @@ fn a_result_too_large_to_hold_reaches_the_model_as_a_pointer() {
 fn post_tool_as_subagent(dir: &Path, result: &serde_json::Value) -> std::process::Output {
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "bound",
+        "session_id": common::session_id("bound"),
         "agent_id": "a1",
         "tool_name": "Read",
         "tool_input": { "file_path": "big.log" },
@@ -267,7 +267,7 @@ fn following_the_pointer_returns_text_not_another_pointer() {
     let text = std::fs::read_to_string(&view).expect("the view exists");
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "bound",
+        "session_id": common::session_id("bound"),
         "tool_name": "Read",
         "tool_input": { "file_path": view },
         "tool_response": read_result(&text),
@@ -303,7 +303,7 @@ fn a_shell_read_of_the_view_returns_text_not_another_pointer() {
     let shell = |command: String| {
         serde_json::json!({
             "hook_event_name": "PostToolUse",
-            "session_id": "bound",
+            "session_id": common::session_id("bound"),
             "tool_name": "Bash",
             "tool_input": { "command": command },
             "tool_response": { "stdout": text, "stderr": "", "interrupted": false },
@@ -350,7 +350,7 @@ fn a_built_in_result_is_evicted_before_a_tracker_read() {
         .build();
     let tracker = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "bound",
+        "session_id": common::session_id("bound"),
         "tool_name": "mcp__tracker__get_issue",
         "tool_input": {},
         "tool_response": [{ "type": "text", "text": "{\"id\":\"CLOUD-9\",\"statusType\":\"duplicate\"}" }],
@@ -560,7 +560,7 @@ fn a_spilled_leaf_does_not_outlive_the_mcp_response_stored_after_it() {
         &["adjudicate", "--harness", "claude-code"],
         &serde_json::json!({
             "hook_event_name": "PostToolUse",
-            "session_id": "bound",
+            "session_id": common::session_id("bound"),
             "tool_name": tool,
             "tool_input": { "id": "CLOUD-1" },
             "tool_response": [{ "type": "text", "text": issue }],
@@ -884,7 +884,7 @@ fn post_call(
         &["adjudicate", "--harness", "claude-code"],
         &serde_json::json!({
             "hook_event_name": "PostToolUse",
-            "session_id": "bound",
+            "session_id": common::session_id("bound"),
             "tool_name": tool,
             "tool_input": input,
             "tool_response": response,

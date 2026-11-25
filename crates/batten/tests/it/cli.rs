@@ -6179,7 +6179,7 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
     });
     let envelope = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "census",
+        "session_id": common::session_id("census"),
         "tool_name": "mcp__census__get_issue",
         "tool_input": {},
         "tool_response": [{ "type": "text", "text": document.to_string() }],
@@ -10483,7 +10483,8 @@ fn action_repo(name: &str, on: &str, run: &str) -> PathBuf {
 
 /// A Claude Code payload for an arbitrary event, carrying no tool input.
 fn claude_event_payload(event: &str) -> String {
-    serde_json::json!({ "hook_event_name": event, "session_id": "s-1" }).to_string()
+    serde_json::json!({ "hook_event_name": event, "session_id": common::session_id("s-1") })
+        .to_string()
 }
 
 #[test]
@@ -10506,7 +10507,7 @@ fn a_declared_action_fires_on_its_event_with_the_substituted_argv() {
     let output = run_hook_in(
         &dir,
         "claude-code",
-        &serde_json::json!({ "hook_event_name": "TaskCompleted", "session_id": "s-1" }).to_string(),
+        &serde_json::json!({ "hook_event_name": "TaskCompleted", "session_id": common::session_id("s-1") }).to_string(),
     );
     assert_eq!(output.status.code(), Some(0), "the answer is unchanged");
     assert_eq!(
@@ -10815,7 +10816,8 @@ fn stop_repo(name: &str) -> PathBuf {
 
 /// A Claude Code `Stop` payload — the end-of-turn event.
 fn stop_payload() -> String {
-    serde_json::json!({ "hook_event_name": "Stop", "session_id": "s-1" }).to_string()
+    serde_json::json!({ "hook_event_name": "Stop", "session_id": common::session_id("s-1") })
+        .to_string()
 }
 
 #[test]
@@ -10977,13 +10979,13 @@ fn handler_repo(name: &str, event: &str, run: &str) -> PathBuf {
 
 /// A Claude Code `UserPromptSubmit` payload.
 fn prompt_payload() -> String {
-    serde_json::json!({ "hook_event_name": "UserPromptSubmit", "session_id": "h-1" }).to_string()
+    serde_json::json!({ "hook_event_name": "UserPromptSubmit", "session_id": common::session_id("h-1") }).to_string()
 }
 
 /// A Claude Code `PostToolBatch` payload — the batch boundary, and the one event
 /// where this host delivers an advisory to the MODEL.
 fn batch_payload() -> String {
-    serde_json::json!({ "hook_event_name": "PostToolBatch", "session_id": "h-1" }).to_string()
+    serde_json::json!({ "hook_event_name": "PostToolBatch", "session_id": common::session_id("h-1") }).to_string()
 }
 
 /// A repository whose one handler is narrowed by `matcher` (CLOUD-312 row 5).
@@ -10999,7 +11001,7 @@ fn narrowed_handler_repo(name: &str, matcher: &str, run: &str) -> PathBuf {
 fn pre_tool_payload(tool: &str) -> String {
     serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": "h-1",
+        "session_id": common::session_id("h-1"),
         "tool_name": tool,
         "tool_input": { "command": "echo hi" }
     })
@@ -12300,7 +12302,7 @@ reason = "unused: an agent-sourced check builds its fix from the declared comman
 fn post_tool(command: &str, rows: &str) -> String {
     serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "sess-agent-fact",
+        "session_id": common::session_id("sess-agent-fact"),
         "cwd": "/repo",
         "tool_name": "Bash",
         "tool_input": { "command": command },
@@ -12440,7 +12442,7 @@ fn a_buffer_that_breaks_the_declared_shape_records_nothing() {
 fn post_tool_commandless(response: &str) -> String {
     serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "sess-commandless",
+        "session_id": common::session_id("sess-commandless"),
         "cwd": "/repo",
         "tool_name": "Write",
         "tool_input": { "file_path": "/repo/notes.md" },
@@ -12692,7 +12694,7 @@ fn a_response_from_a_tool_that_carries_no_command_is_still_captured() {
 fn post_tool_aliased(alias: &str, response: &str) -> String {
     serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "sess-aliased",
+        "session_id": common::session_id("sess-aliased"),
         "cwd": "/repo",
         "tool_name": "Bash",
         "tool_input": { "command": "true" },
@@ -13275,7 +13277,7 @@ fn a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary() {
 fn post_tool_result(tool: &str, document: &serde_json::Value) -> String {
     serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "find-session",
+        "session_id": common::session_id("find-session"),
         "tool_name": tool,
         "tool_input": {},
         "tool_response": [{ "type": "text", "text": document.to_string() }],

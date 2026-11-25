@@ -388,7 +388,7 @@ fn record_shell(dir: &Path, command: &str, stdout: &str) {
 fn post(dir: &Path, tool: &str, input: &serde_json::Value, response: &serde_json::Value) {
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "sess-review",
+        "session_id": common::session_id("sess-review"),
         "cwd": "/repo",
         "tool_name": tool,
         "tool_input": input,

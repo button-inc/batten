@@ -63,7 +63,7 @@ fn crash_as(repo: &Path, task: &str, pid: &str, started: u64, last: u64) {
 fn stop(repo: &Path, home: &Path, active: bool) -> Output {
     let payload = serde_json::json!({
         "hook_event_name": "Stop",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "stop_hook_active": active,
         "last_assistant_message": "Done.",
     });
@@ -75,7 +75,7 @@ fn stop(repo: &Path, home: &Path, active: bool) -> Output {
 fn dispatch_land(repo: &Path, home: &Path) {
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "tool_name": "Bash",
         "tool_input": {"command": "mise run land", "run_in_background": true},
         "tool_response": {"backgroundTaskId": "b-1"},

@@ -85,7 +85,8 @@ fn payload_in(session: Option<&str>, agent: Option<&str>, command: &str) -> Stri
         "tool_input": {"command": command},
     });
     if let Some(session) = session {
-        value["session_id"] = serde_json::Value::from(session);
+        // A NAME, qualified by the running case (`common::session_id`).
+        value["session_id"] = serde_json::Value::from(common::session_id(session));
     }
     if let Some(agent) = agent {
         value["agent_id"] = serde_json::Value::from(agent);
@@ -441,7 +442,7 @@ fn starts(repo: &Path, source: &str) {
         repo,
         &serde_json::json!({
             "hook_event_name": "SessionStart",
-            "session_id": "A",
+            "session_id": common::session_id("A"),
             "source": source,
         }),
     );
@@ -754,7 +755,7 @@ fn a_session_start_forgets_only_that_contexts_sightings() {
         &repo,
         &serde_json::json!({
             "hook_event_name": "SessionStart",
-            "session_id": "A",
+            "session_id": common::session_id("A"),
             "source": "startup",
         }),
     );
@@ -783,7 +784,7 @@ fn a_compaction_forgets_and_the_next_firing_is_full() {
         &repo,
         &serde_json::json!({
             "hook_event_name": "SessionStart",
-            "session_id": "A",
+            "session_id": common::session_id("A"),
             "source": "compact",
         }),
     );
@@ -844,7 +845,7 @@ fn a_capture_notice_is_a_classed_finding() {
     };
     let unreadable = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "cap",
+        "session_id": common::session_id("cap"),
         "tool_name": "Read",
         "tool_input": { "file_path": "README.md" },
         "tool_response": [{ "not-text": 1 }],
@@ -1047,7 +1048,7 @@ fn the_boundary_marks_and_collapses_a_full_arm_in_tool_output() {
         &repo,
         &serde_json::json!({
             "hook_event_name": "PostToolUse",
-            "session_id": "A",
+            "session_id": common::session_id("A"),
             "tool_name": "Bash",
             "tool_input": {"command": "batten check"},
             "tool_response": {"stdout": output, "stderr": "", "interrupted": false},
