@@ -69,6 +69,17 @@ const BEGAN: &str = "began";
 /// running"; these files answer "did it finish, for this session".
 const DONE: &str = "done";
 
+/// `<session>\t<ok|failed>`: how the INSTALL phase ended for a session, apart
+/// from the task's overall outcome.
+///
+/// THE GATE HOLDS ON THIS, NEVER ON `DONE` (CLOUD-2840, #1276): the install
+/// gate's phase (b) holds a program that may still be installing, and once the
+/// preset's install has ended `ok` nothing is. A handler, repair or health row
+/// failing AFTER it (the container preflight's `doctor egress`, measured) is a
+/// finding said once, and read through `DONE` it held `mise`, `cargo` and every
+/// installed tool for the rest of the session.
+const INSTALLED: &str = "installed";
+
 /// The one install task, as the agent dispatches it (CLOUD-2840).
 pub const DISPATCH: &str = "batten startup --session";
 
@@ -243,6 +254,17 @@ pub fn state(git_dir: &Path) -> State {
     State::Undispatched
 }
 
+/// Whether this session's setup task finished its INSTALL phase `ok`, whatever
+/// came after it: the one reading the install gate's hold keys on.
+#[must_use]
+pub fn installed(git_dir: &Path) -> bool {
+    let session = crate::fsio::read_to_string(dir(git_dir).join(SESSION)).unwrap_or_default();
+    matches!(
+        fields(git_dir, INSTALLED).as_deref(),
+        Some([ran_for, outcome]) if *ran_for == session && outcome == task::OK
+    )
+}
+
 /// What one finding is, recorded as the inputs its refusal is built from.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -301,6 +323,7 @@ pub fn run(
     // THE SESSION THIS TASK RUNS FOR: the one `SessionStart` last prepared.
     let session = crate::fsio::read_to_string(dir(git_dir).join(SESSION)).unwrap_or_default();
     let _ = std::fs::remove_file(dir(git_dir).join(DONE));
+    let _ = std::fs::remove_file(dir(git_dir).join(INSTALLED));
     let _ = crate::durable::replace(dir(git_dir).join(BEGAN), format!("{session}\t{pid}"));
     let mut findings = Vec::new();
 
@@ -317,7 +340,18 @@ pub fn run(
         "install",
         crate::clock::now_unix(),
     );
-    let _ = crate::startup::repair(root, &installs);
+    let install = if crate::startup::repair(root, &installs)
+        .iter()
+        .all(|outcome| outcome.ok)
+    {
+        task::OK
+    } else {
+        task::FAILED
+    };
+    let _ = crate::durable::replace(
+        dir(git_dir).join(INSTALLED),
+        format!("{session}\t{install}"),
+    );
 
     task::push(
         git_dir,
@@ -613,6 +647,22 @@ mod tests {
             )
             .unwrap_or_default();
         }
+    }
+
+    /// Fails by: the install outcome read from another session's record, a
+    /// `failed` install read as installed, or its absence read as installed —
+    /// each makes the gate admit a program the install has not provided.
+    #[test]
+    fn the_install_outcome_is_this_sessions() {
+        let git_dir = crate::scratch::scratch("session-setup-installed");
+        left(&git_dir, "s1", "1", Some("failed"));
+        assert!(!installed(&git_dir), "no install recorded");
+        std::fs::write(dir(&git_dir).join(INSTALLED), "s1\tok").unwrap_or_default();
+        assert!(installed(&git_dir), "this session's install ended ok");
+        std::fs::write(dir(&git_dir).join(SESSION), "s2").unwrap_or_default();
+        assert!(!installed(&git_dir), "another session's install");
+        std::fs::write(dir(&git_dir).join(INSTALLED), "s2\tfailed").unwrap_or_default();
+        assert!(!installed(&git_dir), "a failed install");
     }
 
     /// Fails by: a finished task read from the registry alone, so `land`'s reap

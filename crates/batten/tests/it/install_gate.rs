@@ -384,6 +384,50 @@ fn a_finished_setup_survives_the_reap() {
     assert!(!held(&said), "and the manager with it: {said}");
 }
 
+/// Record how the install phase ended for the session `setup` left (#1276).
+fn installed(dir: &Path, outcome: &str) {
+    let git_dir = batten::git::git_dir(dir).expect("the bench has a git dir");
+    let setup = git_dir.join("batten-session-setup");
+    std::fs::write(setup.join("installed"), format!("\t{outcome}")).expect("the install outcome");
+}
+
+/// Fails by: a failure AFTER a clean install — the container preflight's
+/// `doctor egress`, measured on #1276 — holding `mise` and `cargo` for the
+/// whole session with every tool installed, or its finding said on every call
+/// or never; or a failed install admitted.
+#[test]
+fn a_handler_failure_after_a_clean_install_holds_nothing() {
+    let dir = bench("install-gate-handler-failed");
+    setup(&dir, NO_SUCH_PID, "failed");
+    installed(&dir, "ok");
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    std::fs::write(
+        git_dir.join("batten-session-setup/outcome"),
+        "{\"report\":{\"id\":\"session-container-preflight\",\"text\":\"egress failed\"}}\n",
+    )
+    .expect("the outcome");
+    let env = shimmed(&dir);
+    let env: Vec<(&str, &std::ffi::OsStr)> = env
+        .iter()
+        .map(|(key, value)| (*key, value.as_os_str()))
+        .collect();
+    let said = call_with(&dir, "cargo build", &env);
+    assert!(!held(&said), "cargo is installed: {said}");
+    assert!(
+        said.contains("session-container-preflight"),
+        "the handler's failure is said: {said}"
+    );
+    let said = call_with(&dir, "mise run x", &env);
+    assert!(!held(&said), "and the manager with it: {said}");
+    assert!(
+        !said.contains("session-container-preflight"),
+        "once: {said}"
+    );
+    installed(&dir, "failed");
+    let said = call(&dir, &format!("{ABSENT} --version"));
+    assert!(held(&said), "a failed install still holds: {said}");
+}
+
 /// Fails by: a failed or dead install admitted, so its absent program runs and
 /// fails as if the work were wrong; or refused without saying which.
 #[test]

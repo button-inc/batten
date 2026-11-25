@@ -20502,10 +20502,14 @@ fn install_pending_for(
     let dispatching = session_setup::is_dispatch(&envelope.command);
     let setup = session_setup::state(&git_dir);
     let state = setup.token();
+    // NOTHING IS PENDING ONCE THE INSTALL PHASE ENDED `ok` (#1276): a handler or
+    // health row failing after it is a finding said once, not a hold on
+    // programs it has already installed.
     let pending: Vec<String> = if matches!(
         setup,
         session_setup::State::Undispatched | session_setup::State::Ok(_)
-    ) {
+    ) || session_setup::installed(&git_dir)
+    {
         Vec::new()
     } else {
         let roots = install_roots();
