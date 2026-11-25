@@ -16890,6 +16890,263 @@ pub fn repo() -> u8 {{ scratch() }}
         assert_eq!(seal_leftovers(&held).unwrap(), 1, "the snapshot held");
     }
 
+    /// A file's compile-time inputs fold under its probes' sweep-wide ids:
+    /// each local id offset by the file's first.
+    ///
+    /// Fails by: an include, a position or an observer charged to another
+    /// file's probe (CLOUD-2904).
+    #[test]
+    fn a_folded_files_probe_ids_are_offset_by_its_first() {
+        let rendered = Compiled {
+            probe_includes: [(1, [String::from("x.rs")].into())].into(),
+            positions: [(1, String::from("2:1"))].into(),
+            observers: [1].into(),
+            ..Compiled::default()
+        };
+        let mut all = Compiled::default();
+        all.fold(&rendered, 3);
+        assert_eq!(all.probe_includes.keys().copied().collect::<Vec<_>>(), [4]);
+        assert_eq!(all.positions.keys().copied().collect::<Vec<_>>(), [4]);
+        assert_eq!(all.observers, [4].into());
+    }
+
+    /// Each marker alone makes its holder observe a position: `line!` in a
+    /// skeleton item, `#[track_caller]` on a probed function.
+    ///
+    /// Fails by: an observer recognised only when it carries every marker
+    /// (CLOUD-2904).
+    #[test]
+    fn one_position_marker_alone_makes_an_observer() {
+        let rendered = render_in(
+            "const N: u32 = line!();\n#[track_caller]\npub fn f() {}\n",
+            &[],
+            &BTreeSet::new(),
+            Some(0),
+            &FileScope::of("src/lib.rs"),
+        );
+        assert!(!rendered.compiled.observing.is_empty(), "line! alone");
+        assert_eq!(
+            rendered.compiled.observers,
+            [0].into(),
+            "track_caller alone"
+        );
+    }
+
+    /// An include is charged to the innermost probed function holding it,
+    /// and one starting where a function ends is not that function's.
+    ///
+    /// Fails by: an include charged to its enclosing function over the nested
+    /// one, or to the function it follows (CLOUD-2904).
+    #[test]
+    fn an_include_is_charged_to_the_innermost_function_holding_it() {
+        let after = render_in(
+            "fn a() {}include!(\"x.rs\");\n",
+            &[],
+            &BTreeSet::new(),
+            Some(0),
+            &FileScope::of("src/lib.rs"),
+        );
+        assert!(after.compiled.probe_includes.is_empty(), "{after:?}");
+        assert!(!after.compiled.item_includes.is_empty());
+        let nested = render_in(
+            "fn outer() {\n    let _a = 0;\n    let _b = 0;\n    let _c = 0;\n    \
+             fn inner() -> &'static str { include_str!(\"x.txt\") }\n}\n",
+            &[],
+            &BTreeSet::new(),
+            Some(0),
+            &FileScope::of("src/lib.rs"),
+        );
+        assert_eq!(
+            nested.compiled.probe_includes,
+            [(1, [String::from("src/x.txt")].into())].into()
+        );
+    }
+
+    /// A module's `use`s key only the cases calling methods in that module:
+    /// an import edited in `a` moves no case that ran only `b`'s function,
+    /// named or glob.
+    ///
+    /// Fails by: every module's `use` scope sharing one key, or a glob keyed
+    /// under the item every case carries (CLOUD-2904).
+    #[test]
+    fn a_modules_use_moves_only_the_cases_calling_in_it() {
+        let run = case("rb");
+        let cases: BTreeSet<Case> = [run.clone()].into();
+        let executed = [(run.clone(), [1].into())].into();
+        let source = |a: &str, b: &str| {
+            format!(
+                "mod a {{ use {a}; pub fn ra(x: u8) -> u8 {{ x.go() }} }}\n\
+                 mod b {{ use {b}; pub fn rb(x: u8) -> u8 {{ x.go() }} }}\n\
+                 pub mod t1 {{ pub trait Ext {{ fn go(&self) -> u8; }} pub trait Other {{}} }}\n\
+                 pub mod t2 {{ pub trait Ext {{ fn go(&self) -> u8; }} }}\n"
+            )
+        };
+        let held = source_digests(
+            &cases,
+            &executed,
+            &source("crate::t1::Ext", "crate::t1::Ext"),
+        );
+        assert_eq!(
+            source_digests(
+                &cases,
+                &executed,
+                &source("crate::t1::{Ext, Other}", "crate::t1::Ext")
+            )[&run],
+            held[&run],
+            "a named use"
+        );
+        let globbed = source_digests(&cases, &executed, &source("crate::t1::*", "crate::t1::*"));
+        assert_eq!(
+            source_digests(&cases, &executed, &source("crate::t2::*", "crate::t1::*"))[&run],
+            globbed[&run],
+            "a glob use"
+        );
+    }
+
+    /// A package's custom target roots are its non-default `[lib]` path's
+    /// and its `[[bin]]` paths' outside `src/`, read as their Rust files.
+    ///
+    /// Fails by: the default `src/lib.rs` taken, a `src/` bin walked, or a
+    /// non-Rust file kept (CLOUD-2904).
+    #[test]
+    fn a_packages_custom_roots_are_its_moved_targets_rust_files() {
+        let root = crate::scratch::scratch("schema-custom-roots");
+        let files = [
+            (
+                "pkg/Cargo.toml",
+                "[lib]\npath = \"lib/lib.rs\"\n[[bin]]\nname = \"x\"\npath = \"bin/x.rs\"\n\
+                 [[bin]]\nname = \"y\"\npath = \"src/bin/y.rs\"\n",
+            ),
+            ("pkg/lib/lib.rs", ""),
+            ("pkg/lib/notes.txt", ""),
+            ("pkg/bin/x.rs", ""),
+            ("pkg/src/bin/y.rs", ""),
+        ];
+        for (path, text) in files {
+            std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.join(path), text).unwrap();
+        }
+        assert_eq!(
+            custom_root_sources(&root, "pkg"),
+            [String::from("pkg/bin/x.rs"), String::from("pkg/lib/lib.rs")].into()
+        );
+    }
+
+    /// Fails by: a binary with no target, or a nested one, walked as a test
+    /// crate (CLOUD-2904).
+    #[test]
+    fn a_binary_without_a_plain_target_has_no_crate_sources() {
+        let root = crate::scratch::scratch("schema-crate-sources-none");
+        let dirs = [(String::from("p"), String::new())].into();
+        assert_eq!(crate_sources(&root, &dirs, "t", "p::"), None);
+        assert_eq!(crate_sources(&root, &dirs, "t", "p::a/b"), None);
+    }
+
+    /// An edit to a sibling module's function no case reaches moves no case:
+    /// a file that parses is keyed by what is reached in it, not whole.
+    ///
+    /// Fails by: every parsed file of the test crate keyed whole (CLOUD-2904).
+    #[test]
+    fn an_unreached_sibling_function_moves_no_case() {
+        let plans = (String::from("plan::plans"), String::from("fix::it"));
+        let cases: BTreeSet<Case> = [plans.clone()].into();
+        let executed = [(plans.clone(), BTreeSet::new())].into();
+        let none = std::collections::BTreeMap::new();
+        let tree = |label: &str, unused: &str| {
+            let claim =
+                format!("pub fn check() -> u8 {{ 1 }}\npub fn unused() -> u8 {{ {unused} }}\n");
+            tree_digests(
+                label,
+                &cases,
+                &executed,
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    ("tests/it/main.rs", "mod claim;\nmod plan;\n"),
+                    ("tests/it/claim.rs", &claim),
+                    (
+                        "tests/it/plan.rs",
+                        "#[test]\nfn plans() { assert_eq!(crate::claim::check(), 1); }\n",
+                    ),
+                ],
+                &none,
+            )[&plans]
+                .clone()
+        };
+        assert_eq!(
+            tree("schema-unreached-a", "0"),
+            tree("schema-unreached-b", "2")
+        );
+    }
+
+    /// An impl in a shared module that nothing reached names is not taken:
+    /// it answers to its self type, trait and methods only.
+    ///
+    /// Fails by: an impl taken whatever a case names (CLOUD-2904).
+    #[test]
+    fn an_impl_nothing_names_is_not_taken() {
+        let text = [String::from("fn t() { other(); }")];
+        let common = |value: &str| {
+            format!(
+                "pub struct Foo;\npub trait Tr {{ fn go(&self) -> u8; }}\n\
+                 impl Tr for Foo {{ fn go(&self) -> u8 {{ {value} }} }}\npub fn other() {{}}\n"
+            )
+        };
+        assert_eq!(
+            common_reached(&common("1"), &text),
+            common_reached(&common("2"), &text)
+        );
+    }
+
+    /// A test's text carries the items of its own module as well as those of
+    /// the modules enclosing it.
+    ///
+    /// Fails by: only the enclosing modules' items read (CLOUD-2904).
+    #[test]
+    fn a_tests_text_carries_its_own_modules_items() {
+        let source = |value: &str| {
+            format!(
+                "mod tests {{\n    const N: u8 = {value};\n    #[test]\n    \
+                 fn t() {{ assert_eq!(N, 1); }}\n}}\n"
+            )
+        };
+        assert_ne!(test_texts(&source("1"))["t"], test_texts(&source("2"))["t"]);
+    }
+
+    /// What a test names in another rendered file starts the walk: a `const`
+    /// another module's file defines, which the test's own file only declares
+    /// as `mod`, moves the case naming it.
+    ///
+    /// Fails by: a case's own text starting no walk (CLOUD-2904).
+    #[test]
+    fn a_const_another_file_defines_keys_the_case_naming_it() {
+        let t = (String::from("tests::t"), String::from("fix"));
+        let cases: BTreeSet<Case> = [t.clone()].into();
+        let executed = [(t.clone(), BTreeSet::new())].into();
+        let none = std::collections::BTreeMap::new();
+        let digest = |label: &str, value: &str| {
+            let config = format!("pub const LIMIT: u8 = {value};\n");
+            tree_digests(
+                label,
+                &cases,
+                &executed,
+                &[
+                    ("src/config.rs", &config),
+                    (
+                        "src/lib.rs",
+                        "pub mod config;\n#[cfg(test)]\nmod tests {\n    #[test]\n    \
+                         fn t() { assert_eq!(crate::config::LIMIT, 1); }\n}\n",
+                    ),
+                ],
+                &none,
+            )[&t]
+                .clone()
+        };
+        assert_ne!(
+            digest("schema-outside-a", "1"),
+            digest("schema-outside-b", "2")
+        );
+    }
+
     /// Fails by: a run that left nothing to seal saying it sealed some.
     #[test]
     fn a_run_that_left_nothing_says_nothing() {
