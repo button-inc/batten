@@ -13092,6 +13092,57 @@ mod tests {
         assert_eq!(reach.sites.keys().copied().collect::<Vec<_>>(), [3]);
     }
 
+    /// CLOUD-2789: a case directory's `read` listing and its `trace` are never
+    /// read as reach lines, whatever they hold, while a recorder file beside
+    /// them is.
+    ///
+    /// Fails by: either name dropped from the skip list (shard 1/8's
+    /// `collect_dirs` survivor joins the two), so a listed path or a traced
+    /// line spelled in digits reaches a site the case never ran.
+    #[test]
+    fn a_case_read_listing_and_trace_are_never_read_as_reach() {
+        let dir = crate::scratch::scratch("schema-read-trace-not-reach").join("k");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("case"), "k\tbin").unwrap();
+        std::fs::write(dir.join(DONE), "0").unwrap();
+        std::fs::write(dir.join(READ), "5\nf6\n").unwrap();
+        std::fs::write(dir.join(TRACE), "7\nf8\n").unwrap();
+        std::fs::write(dir.join("probes"), "3\n").unwrap();
+        let identity = Identity {
+            probes: &[],
+            sites: &[],
+            mutant_fns: &std::collections::BTreeMap::new(),
+            file_fns: &std::collections::BTreeMap::new(),
+            classic: &BTreeSet::new(),
+        };
+        let reach = collect_dirs([dir], &identity).unwrap();
+        assert_eq!(reach.sites.keys().copied().collect::<Vec<_>>(), [3]);
+        assert!(
+            reach.executed.is_empty(),
+            "no `f` line is a recorder's here"
+        );
+    }
+
+    /// CLOUD-2789: an unscoped file keys even a private item under its bare
+    /// name, as before scoping, since its module is unknown.
+    ///
+    /// Fails by: [`FileScope::unscoped`] built without its flag (shard 1/8's
+    /// field-deletion survivor), so the item is keyed at the root module of
+    /// an empty package and a mention from the file's real module misses it.
+    #[test]
+    fn an_unscoped_file_keys_a_private_item_by_its_bare_name() {
+        let helper = first_item("fn helper() {}\n");
+        assert_eq!(
+            definitions(&helper, &FileScope::unscoped(), &BTreeSet::new()),
+            ["helper"]
+        );
+        assert_ne!(
+            definitions(&helper, &FileScope::default(), &BTreeSet::new()),
+            ["helper"],
+            "the default scope is a module's, not unscoped"
+        );
+    }
+
     /// CLOUD-2789: a case directory's `untraced` file names why the case was
     /// not traced and is never read as a reach line, whatever it holds, while
     /// a recorder file beside it is.
