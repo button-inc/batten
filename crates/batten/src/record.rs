@@ -2111,7 +2111,7 @@ const DECIDE_LOCK: &str = "batten-record-decide.lock";
 ///
 /// IT WAITS, AND SAYS SO FIRST. Losing the race and abstaining would be the
 /// same fail-open by another route, so a contended caller waits — on the
-/// holder's release, through [`crate::lock_wait`], never a blocking `flock`
+/// holder's release, through [`batten_facts::lock_wait`], never a blocking `flock`
 /// (CLOUD-2789). The line it writes before waiting is a pointer and the only
 /// output contention ever produces, and it is what lets a case observe the
 /// wait without timing it. A decide this thread already holds is refused
@@ -2124,8 +2124,8 @@ const DECIDE_LOCK: &str = "batten-record-decide.lock";
 pub(crate) fn hold_decide(
     family: &str,
     err: &mut dyn Write,
-) -> Result<Option<crate::lock_wait::Held>> {
-    use crate::lock_wait::{Mode, Taken};
+) -> Result<Option<batten_facts::lock_wait::Held>> {
+    use batten_facts::lock_wait::{Mode, Taken};
 
     let Ok(git_dir) = git::git_dir(Path::new(".")) else {
         return Ok(None);
@@ -2149,9 +2149,14 @@ pub(crate) fn hold_decide(
             ));
         }
     };
-    let taken =
-        crate::lock_wait::acquire_announced(open()?, &path, Mode::Exclusive, None, &mut announce)
-            .with_context(|| format!("take the decide lock {}", path.display()))?;
+    let taken = batten_facts::lock_wait::acquire_announced(
+        open()?,
+        &path,
+        Mode::Exclusive,
+        None,
+        &mut announce,
+    )
+    .with_context(|| format!("take the decide lock {}", path.display()))?;
     said.transpose()?;
     match taken {
         Taken::Held(held) => Ok(Some(held)),

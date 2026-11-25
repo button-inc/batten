@@ -19,7 +19,7 @@ use crate::common;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use batten::lock_wait::{Mode, Stop, wait_with_helper};
+use batten_facts::lock_wait::{Mode, Stop, wait_with_helper};
 
 /// The helper spawner, run as the real batten binary: `exec`'s placed spawn,
 /// the one the binary itself installs.

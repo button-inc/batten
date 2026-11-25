@@ -1160,14 +1160,14 @@ fn is_kept(path: &Path, kept: &[Kept]) -> bool {
 /// The stop a pass ends on (CLOUD-2789): the disk watcher's, raised when the
 /// run it watches returns, and the one its lock waits wake on. `None` is a
 /// pass no one stops.
-pub(crate) type Halt<'a> = Option<&'a crate::lock_wait::Stop>;
+pub(crate) type Halt<'a> = Option<&'a batten_facts::lock_wait::Stop>;
 
 /// Whether `halt` has been raised.
 fn halted(halt: Halt<'_>) -> bool {
-    halt.is_some_and(crate::lock_wait::Stop::is_raised)
+    halt.is_some_and(batten_facts::lock_wait::Stop::is_raised)
 }
 
-impl crate::prune::Raised for crate::lock_wait::Stop {
+impl crate::prune::Raised for batten_facts::lock_wait::Stop {
     fn raised(&self) -> bool {
         self.is_raised()
     }
@@ -1181,7 +1181,7 @@ fn walk(halt: Halt<'_>) -> crate::prune::Halt<'_> {
 /// One tree's collector lock as a pass holds it: the lock itself, or `None`
 /// where the platform could not lock the directory and the pass collects it
 /// without exclusion.
-type TreeLock = Option<crate::lock_wait::Held>;
+type TreeLock = Option<batten_facts::lock_wait::Held>;
 
 /// Take the collector's lock on `tree`: an exclusive `flock` on the directory
 /// itself, an existing inode, so taking it writes nothing at 0 bytes free.
@@ -1197,12 +1197,12 @@ type TreeLock = Option<crate::lock_wait::Held>;
 /// NEVER A BLOCKING `flock` (CLOUD-2789). A blocked call has no way back: the
 /// watcher's pass waited on a second handle to a tree it already held, and on
 /// any other holder, and the step it watched printed its result and never
-/// exited. A waiting pass waits through [`crate::lock_wait`], on the holder's
+/// exited. A waiting pass waits through [`batten_facts::lock_wait`], on the holder's
 /// release or its `stop`, and a tree this process already holds is
-/// [`crate::lock_wait::Taken::Reentrant`] — held, never waited on. Each park is
+/// [`batten_facts::lock_wait::Taken::Reentrant`] — held, never waited on. Each park is
 /// traced `disk-wait <tree>`, the event a case releases its holder on.
 fn lock_tree(tree: &Path, wait: bool, stop: Halt<'_>) -> Option<TreeLock> {
-    use crate::lock_wait::{Mode, Taken};
+    use batten_facts::lock_wait::{Mode, Taken};
     let dir = crate::durable::open_handle(tree).ok()?;
     let taken = if wait {
         let mut parked = || {
@@ -1213,14 +1213,13 @@ fn lock_tree(tree: &Path, wait: bool, stop: Halt<'_>) -> Option<TreeLock> {
                 );
             }
         };
-        crate::lock_wait::acquire_announced(dir, tree, Mode::Exclusive, stop, &mut parked).map(
-            |taken| match taken {
+        batten_facts::lock_wait::acquire_announced(dir, tree, Mode::Exclusive, stop, &mut parked)
+            .map(|taken| match taken {
                 Taken::Held(held) => Some(held),
                 Taken::Stopped | Taken::Reentrant => None,
-            },
-        )
+            })
     } else {
-        crate::lock_wait::try_acquire(dir, Mode::Exclusive)
+        batten_facts::lock_wait::try_acquire(dir, Mode::Exclusive)
     };
     match taken {
         Ok(Some(held)) => Some(Some(held)),
@@ -1706,7 +1705,7 @@ pub(crate) fn collect_toward_max_in(
 /// pass may reach what the first passed over.
 ///
 /// THE WAIT IS THE LOCK ITSELF, NEVER A TIMER (CLOUD-1177, CLOUD-2789): it
-/// waits through [`crate::lock_wait`] on each holder's release, on the
+/// waits through [`batten_facts::lock_wait`] on each holder's release, on the
 /// caller's thread, and lets go at once. A collector lock among `held` is
 /// another pass, not a build, and is not waited on.
 #[must_use]
@@ -1745,14 +1744,14 @@ fn await_locks(held: &[PathBuf], which: impl Fn(&Path) -> bool, parked: &mut dyn
     locks.into_iter().all(|lock| {
         crate::durable::open_handle(lock).is_ok_and(|file| {
             matches!(
-                crate::lock_wait::acquire_announced(
+                batten_facts::lock_wait::acquire_announced(
                     file,
                     lock,
-                    crate::lock_wait::Mode::Exclusive,
+                    batten_facts::lock_wait::Mode::Exclusive,
                     None,
                     &mut *parked
                 ),
-                Ok(crate::lock_wait::Taken::Held(_))
+                Ok(batten_facts::lock_wait::Taken::Held(_))
             )
         })
     })
@@ -2212,7 +2211,7 @@ mod tests {
     fn a_pass_stopped_short_of_its_need_says_so() {
         let tree = scratch("stopped-short");
         let trees = vec![tree];
-        let flag = crate::lock_wait::Stop::new().expect("a stop");
+        let flag = batten_facts::lock_wait::Stop::new().expect("a stop");
         flag.raise();
         let mut met = ask(&trees, &[], 0);
         met.stop = Some(&flag);
