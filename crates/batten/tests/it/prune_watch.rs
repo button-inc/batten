@@ -50,15 +50,14 @@ fn artifact(deps: &Path, stem: &str, hash: &str, age: u64) {
 /// `lock()` and here shares the open file description, and with it the `flock`,
 /// until its child execs. Measured on #1132: the released reclaim found the lock
 /// still held and kept all three copies, while the case alone passed every time.
-/// So this takes the lock BLOCKING, which waits on the event itself — the
-/// sibling's exec closing the shared description — and lets it go at once
-/// (CLOUD-2789).
+/// So this takes the lock through `lock_wait::acquire`, which waits on the
+/// event itself — the sibling's exec releasing the shared description — and
+/// lets it go at once (CLOUD-2789).
 fn released(lock: &std::path::Path) {
     let probe = std::fs::File::open(lock).unwrap();
-    probe
-        .lock()
+    let taken = batten::lock_wait::acquire(probe, lock, batten::lock_wait::Mode::Exclusive, None)
         .expect("the lock is taken once the sibling's child execs");
-    probe.unlock().expect("and let go at once");
+    drop(taken);
 }
 
 // --- the disk collector (CLOUD-2197) -----------------------------------------
@@ -816,14 +815,12 @@ fn the_arm_watches_past_the_gate() {
         samples.wait_until(|taken| taken >= 1);
         // A LATER STEP: the volume falls now, and the watcher must still be there.
         fallen.store(true, std::sync::atomic::Ordering::SeqCst);
-        // Every read from here on is the fallen volume. Two more mean a whole
-        // pass has run over it: the sample that started it and the reading it
-        // takes once it has removed what it will. So the wait ends on the
-        // unit going or on a pass that did not take it, never on a clock.
-        let fell_at = samples.count();
-        samples.wait_until(|taken| {
-            !present(&profile, "stale", "eeeeeeeeeeeeeeee") || taken >= fell_at + 2
-        });
+        // Every read from here on is the fallen volume, and the wait ends on
+        // THE EVENT, the unit going (CLOUD-2789). Not on a count of samples:
+        // the watcher samples every millisecond, so two more say nothing about
+        // a pass having finished. A watcher that left with the gate never takes
+        // it, and the case hangs for the judge's cut to file as a timeout.
+        samples.wait_until(|_| !present(&profile, "stale", "eeeeeeeeeeeeeeee"));
     });
     assert!(!present(&profile, "stale", "eeeeeeeeeeeeeeee"), "LRU went");
     assert!(
@@ -933,7 +930,9 @@ fn the_first_sample_below_the_minimum_collects() {
         &repo,
         &config,
         |taken| if taken == 0 { 9 } else { 50 },
-        move |taken| !present(&gone, "stale", STALE) || taken >= 3,
+        // THE EVENT, the unit going: the watcher samples every millisecond, so a
+        // count of samples says nothing about a pass having finished.
+        move |_| !present(&gone, "stale", STALE),
     );
     assert!(!present(&profile, "stale", STALE), "{lines:?}");
     assert!(
@@ -967,11 +966,6 @@ impl Samples {
         drop(taken);
         self.bell.notify_all();
         before
-    }
-
-    /// How many samples have been taken.
-    fn count(&self) -> usize {
-        *self.taken.lock().expect("the samples lock")
     }
 
     /// Wait until `done` holds over the samples taken, re-asked at every
@@ -1012,9 +1006,17 @@ fn an_undeclared_band_watches_at_the_default() {
             copies: own_copies(&repo),
             record: None,
         };
+        // A floor the volume is under waits for THE EVENT, the unit going; one it
+        // is above waits for two samples, which is all "watched and kept" can be.
+        let collects = free < 100;
         let ((), lines) = batten::disk_watch::around(Some(watch), || {
-            samples
-                .wait_until(|taken| taken >= 2 || !present(&profile, "stale", "eeeeeeeeeeeeeeee"));
+            samples.wait_until(|taken| {
+                if collects {
+                    !present(&profile, "stale", "eeeeeeeeeeeeeeee")
+                } else {
+                    taken >= 2
+                }
+            });
         });
         (present(&profile, "stale", "eeeeeeeeeeeeeeee"), lines)
     };

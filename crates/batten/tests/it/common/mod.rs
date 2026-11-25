@@ -3476,24 +3476,29 @@ pub(crate) fn schema_leaf<'a>(
 )]
 pub(crate) fn spawn_copy(command: &mut std::process::Command) -> std::process::Child {
     loop {
+        // The copy as the spawn will resolve it: a relative program is relative
+        // to the command's own directory, when it sets one.
         #[cfg(target_os = "linux")]
         let closed = {
             use rustix::fs::inotify;
+            let program = Path::new(command.get_program());
+            let copy = match command.get_current_dir() {
+                Some(dir) if program.is_relative() => dir.join(program),
+                _ => program.to_path_buf(),
+            };
+            // BEST EFFORT: a program that is not there yet has no write handle
+            // to wait out, and the spawn below reports its own absence.
             let watch = inotify::init(inotify::CreateFlags::CLOEXEC).expect("an inotify instance");
-            inotify::add_watch(
-                &watch,
-                Path::new(command.get_program()),
-                inotify::WatchFlags::CLOSE_WRITE,
-            )
-            .expect("watch the copy for its last write handle closing");
-            watch
+            inotify::add_watch(&watch, &copy, inotify::WatchFlags::CLOSE_WRITE)
+                .ok()
+                .map(|_| watch)
         };
         match command.spawn() {
             Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy => {
                 #[cfg(target_os = "linux")]
-                {
+                if let Some(closed) = &closed {
                     let mut event = [0_u8; 256];
-                    let _ = rustix::io::read(&closed, &mut event);
+                    let _ = rustix::io::read(closed, &mut event);
                 }
             }
             spawned => return spawned.expect("run batten"),
