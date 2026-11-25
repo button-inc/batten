@@ -471,7 +471,19 @@ CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutant
 # `mutant:changed` stands for `mutants (n)`. `mutants (reach)` has no entry:
 # it is off the roster, and `step cover` refuses a mapped check the roster does
 # not hold (CLOUD-2851).
-CI_LOCAL_PROOF = "ci=ci-suite,mutants (0)=ci-suite,mutants (1)=ci-suite,mutants (2)=ci-suite,mutants (3)=ci-suite,mutants (4)=ci-suite,mutants (5)=ci-suite,mutants (6)=ci-suite,mutants (7)=ci-suite,mutants (8)=ci-suite,mutants (9)=ci-suite,mutants (10)=ci-suite,mutants (11)=ci-suite,mutants (12)=ci-suite,mutants (13)=ci-suite,mutants (14)=ci-suite,mutants (15)=ci-suite,batten-check=gate:batten-check,commit-lint=gate:commit-lint,zizmor=gate:zizmor,semver=gate:semver,cross=gate:cross-check,darwin-link (aarch64-apple-darwin)=gate:darwin-link,darwin-link (x86_64-apple-darwin)=gate:darwin-link,perf=perf-gate"
+#
+# EVERY ID HERE IS ONE A `step run` IN THE LAP FILES TODAY (CLOUD-2789). The
+# `gate:*` ids this named are filed only by `step graph run`, whose rows are
+# withheld until the pin bump that restores them (step 14), so `step cover`
+# found no pass for seven checks and refused every lap, green or not. Until
+# then each check names a step its task runs: `batten-check` runs
+# `enforce-tree`, `commit-lint` runs `commit-attribution`, `cross-check`,
+# `darwin-link` and `semver` their own rows, and `zizmor` its own row wherever
+# an engine is built (`[tasks.zizmor]`). A sub-step stands for its whole task
+# soundly here because the gate set's `run` array stops at the first failing
+# tier, so `step cover` reads an id only once every step of its tier passed.
+# Step 14 restores the `gate:*` mapping with the rows.
+CI_LOCAL_PROOF = "ci=ci-suite,mutants (0)=ci-suite,mutants (1)=ci-suite,mutants (2)=ci-suite,mutants (3)=ci-suite,mutants (4)=ci-suite,mutants (5)=ci-suite,mutants (6)=ci-suite,mutants (7)=ci-suite,mutants (8)=ci-suite,mutants (9)=ci-suite,mutants (10)=ci-suite,mutants (11)=ci-suite,mutants (12)=ci-suite,mutants (13)=ci-suite,mutants (14)=ci-suite,mutants (15)=ci-suite,batten-check=enforce-tree,commit-lint=commit-attribution,zizmor=zizmor,semver=semver,cross=cross-check,darwin-link (aarch64-apple-darwin)=darwin-link,darwin-link (x86_64-apple-darwin)=darwin-link,perf=perf-gate"
 # Each exemption's reason; a `*` entry covers every check it prefixes. `musl`:
 # a link target CI builds, with no local toolchain declared. `windows`, `macos`:
 # the suite on another OS's runtime. `final`: the fan-in of the others, covered
@@ -4049,9 +4061,16 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # `action.yml` is named alongside `.github/` because the shipped Action (CLOUD-68)
 # is a workflow surface with the same injection and unpinned-uses hazards, and
 # zizmor's directory walk does not reach a repository-root action definition.
-# NOT receipt-gated any more (CLOUD-843): the cache is an engine verb, and the
-# CI job this task runs in compiles nothing (`zizmor.yml`), so gating it would
-# put a full engine build in front of a seconds-long offline analysis.
+# NOT receipt-gated WHERE NO ENGINE IS BUILT (CLOUD-843): the cache is an engine
+# verb, and the CI job this task runs in compiles nothing (`zizmor.yml`), so
+# gating it there would put a full engine build in front of a seconds-long
+# offline analysis.
+#
+# RECEIPT-GATED WHERE ONE IS (CLOUD-2789): `verify:gated` builds the engine
+# first and names it in `BATTEN_BIN`, and there the audit runs through its
+# `[[step]] zizmor` row. That row's pass is what `step cover` reads for CI's
+# `zizmor` check (`CI_LOCAL_PROOF`), and a lap whose workflows did not move hits
+# it instead of auditing them again. The command is the same words either way.
 #
 # `--offline` is load-bearing, and it is the lock-check split applied here
 # (CLOUD-410). GH_TOKEN in [env] used to enable zizmor's ONLINE audits, which
@@ -4067,7 +4086,7 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # `env -u GH_TOKEN -u GITHUB_TOKEN`: the [env] block renders both as "" when no token is
 # set, and zizmor refuses an empty --gh-token even under --offline, where it
 # never uses one (measured 2026-10-06). Unset, an offline run asks for nothing.
-run = "env -u GH_TOKEN -u GITHUB_TOKEN zizmor --offline --min-severity high .github/ action.yml"
+run = "{% if get_env(name='BATTEN_BIN', default='') %}{{vars.batten}} step run zizmor -- {% endif %}env -u GH_TOKEN -u GITHUB_TOKEN zizmor --offline --min-severity high .github/ action.yml"
 
 [tasks.zizmor-advisories]
 description = "Currency only: is any pinned action the subject of a published advisory? Runs on a schedule, never on the landing path — it needs the network"
