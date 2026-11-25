@@ -4358,9 +4358,8 @@ fn profile_cut(doc: &toml_edit::DocumentMut) -> Option<f64> {
     [JUDGE_PROFILE, "default"].iter().find_map(|profile| {
         let held = doc.get("profile")?.get(profile)?.get("slow-timeout")?;
         let period = period_seconds(held.get("period")?.as_str()?)?;
-        let after = held.get("terminate-after")?.as_integer()?;
-        #[allow(clippy::cast_precision_loss)]
-        Some(period * after as f64)
+        let after = u32::try_from(held.get("terminate-after")?.as_integer()?).ok()?;
+        Some(period * f64::from(after))
     })
 }
 
