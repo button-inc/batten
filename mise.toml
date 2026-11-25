@@ -3797,6 +3797,15 @@ run = "batten engine outdated --notice --record engine-fresh --max-releases 3 --
 [tasks.lock-complete]
 description = "Gate: mise.lock has no partial or bogus platform entry — a pure function of the committed lockfile, no network, no write"
 run = "{{vars.batten}} check --rule 'lock cover partial'"
+# THE COMMITTED LOCKED INSTALL, mutated in place (CLOUD-2881). These rows flip
+# `[settings]` and `session:install`'s env elsewhere in this file; they live in
+# this block because a `task-` gate reads only its own block, so `[settings]`,
+# which no task owns, would leave them swept by nothing.
+#MUTANT-SUITE crates/batten/tests/it/lock_complete.rs
+#MUTANT settings-lockfile-off|s@^lockfile = true$@lockfile = false@|the_committed_config_installs_locked_everywhere
+#MUTANT settings-unlocked|s@^locked = true$@locked = false@|the_committed_config_installs_locked_everywhere
+#MUTANT settings-split-verdicts|s@^lockfile = true$@lockfile = false@|the_toolchain_checks_decide_as_the_job_resolves
+#MUTANT task-env-unlocked|s@^env = { MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent"@env = { MISE_LOCKFILE = "true", MISE_LOCKED = "false", MISE_ENV = "agent"@|the_committed_config_installs_locked_everywhere
 
 # CLOUD-1833. The engine, with the arguments the caller gives — the half of
 # `batten-check` that is not the consumer-#1 gate.
@@ -5412,12 +5421,19 @@ run = "release-plz release-pr"
 # The one writer opts out, by name: `[tasks.lock-check]` (`mise lock`, run by
 # `lock-currency.yml`) sets `MISE_LOCKED=false` in its own env. Nothing else may,
 # and `lock-complete` refuses a tree where `lockfile` or `locked` is off, or where
-# any other task, handler, startup row or workflow turns either off.
-#MUTANT-SUITE crates/batten/tests/it/lock_complete.rs
-#MUTANT settings-lockfile-off|s@^lockfile = true$@lockfile = false@|the_committed_config_installs_locked_everywhere
-#MUTANT settings-unlocked|s@^locked = true$@locked = false@|the_committed_config_installs_locked_everywhere
-#MUTANT settings-split-verdicts|s@^lockfile = true$@lockfile = false@|the_toolchain_checks_decide_as_the_job_resolves
-#MUTANT task-env-unlocked|s@^env = { MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent"@env = { MISE_LOCKFILE = "true", MISE_LOCKED = "false", MISE_ENV = "agent"@|the_committed_config_installs_locked_everywhere
+# any other task, handler, startup row or workflow turns either off. Its
+# `#MUTANT` rows over these two lines sit in `[tasks.lock-complete]`, whose gate
+# owns them.
+#
+# THE ONE COST, AND ITS REMEDY. Locked mode is invocation-wide and covers the
+# user-global scope too (`locked_scopes`, which mise makes global-only so a
+# project cannot narrow it). Measured: with a tool pinned in
+# `~/.config/mise/config.toml` and absent from this lock, `mise run
+# toolchain-check` exits 1 ("not in the lockfile") whether or not that tool is
+# installed; `MISE_LOCKED_SCOPES=project` in the user's environment clears it
+# (exit 0). `[tool_config] locked = true` locks only this root but does not stop
+# install-time writes (mise gates them on `locked` alone): measured cold, it
+# rewrote 122 lines of `mise.lock` and made 63 api.github.com requests.
 lockfile = true
 locked = true
 # EVERY TASK REPORTS ITS OWN WALL CLOCK (CLOUD-1891). A 38-minute `verify` had no

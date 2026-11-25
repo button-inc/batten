@@ -690,7 +690,7 @@ fn a_step_run_on_ci_seeds_nothing() {
 /// The `[[provision]]` row `batten mutate cargo` resolves cargo-mutants by,
 /// as the repository's own `batten.toml` pins it: the reach seed lists the
 /// workspace with it.
-const MUTANTS_PROVISION: &str = "\n[[provision]]\nname = \"cargo-mutants\"\nversion = \"27.1.0\"\n\
+pub(crate) const MUTANTS_PROVISION: &str = "\n[[provision]]\nname = \"cargo-mutants\"\nversion = \"27.1.0\"\n\
 unpack = \"tar_gz\"\nbinary = \"cargo-mutants\"\n\n\
 [provision.platforms.linux-x86_64]\n\
 url = \"https://github.com/cargo-bins/cargo-quickinstall/releases/download/cargo-mutants-27.1.0/cargo-mutants-27.1.0-x86_64-unknown-linux-gnu.tar.gz\"\n\

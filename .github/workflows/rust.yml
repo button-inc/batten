@@ -81,8 +81,10 @@ permissions:
 # `mise install --locked` needs it, and set workflow-wide it also let every later
 # mise call write the checkout's lock: on the macos runner one filled zizmor's
 # empty `linux-*-musl` tables with attestation provenance mid-suite, which
-# `lock_installable` then read as a committed regression. Off everywhere else,
-# as `mise.toml`'s `[settings] lockfile = false` intends.
+# `lock_installable` then read as a committed regression. Since CLOUD-2881
+# `mise.toml`'s `[settings] lockfile = true` with `locked = true` makes every
+# install locked and no install write the lock, so that hazard is closed at the
+# root; the step-scoped assignment stays as the belt it now is.
 env:
   MISE_TASK_RUN_AUTO_INSTALL: "false"
   MISE_EXEC_AUTO_INSTALL: "false"

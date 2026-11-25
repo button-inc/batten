@@ -83,8 +83,9 @@
 //!   suite. What covers it instead is the session itself: a failed step now
 //!   reports on the advisory channel at the moment it fails.
 //! * `"running the hook leaves the tracked lockfile untouched"` was the
-//!   end-to-end half of the CLOUD-223 residue check. `[settings] lockfile = false`
-//!   in `mise.toml` is the authority and `mise run lock-complete` is the standing
+//!   end-to-end half of the CLOUD-223 residue check. `[settings] lockfile = true`
+//!   with `locked = true` in `mise.toml` (CLOUD-2881: locked installs never
+//!   write) is the authority and `mise run lock-complete` is the standing
 //!   gate; what is lost is the observation that THIS provisioning path honours it,
 //!   and `session:install` carrying `MISE_LOCKED=true` and `MISE_LOCKFILE=true` (a
 //!   locked install reads the lock and never writes it, CLOUD-2688) is asserted
