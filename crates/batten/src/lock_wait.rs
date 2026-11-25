@@ -30,17 +30,30 @@
 //! this crate holds its lock for exactly the life of its descriptor ([`Held`]),
 //! so release and close are one moment.
 //!
-//! # Off Linux
+//! # Off Linux: a helper process does the blocking
 //!
-//! No other platform reports a close: kqueue's `NOTE_CLOSE` is FreeBSD's, not
-//! macOS's, and Windows has no `flock`. There the wait retries `try_lock` on the
-//! crate's one clock, still ending on the same [`Stop`] and re-entry refusal.
+//! No other platform reports a close that safe code can wait on: kqueue's
+//! `NOTE_CLOSE` is FreeBSD's, not macOS's; Windows' overlapped `LockFileEx` is
+//! raw FFI under `unsafe_code = "forbid"`; and a signal cannot interrupt a
+//! blocked `flock` on a thread, because `signal-hook` installs every handler
+//! with `SA_RESTART`. So the blocking call moves to a process the waiter can
+//! end ([`wait_with_helper`]): this binary re-entered as `batten __lock-wait
+//! <mode> <path>` ([`helped`]) blocks on its OWN descriptor and exits 0 the
+//! moment it holds the lock, which releases it, and the waiter, woken by that
+//! exit, takes `try_lock` again. Losing that race to a third process spawns
+//! another helper; nothing waits on a clock.
+//!
+//! The helper ends on its STDIN closing, read on a thread of its own, and the
+//! waiter holds the only write end: [`Stop::raise`] drops it, and so does every
+//! return or unwind of the waiter, and so does the waiter's own death. Each
+//! helper is reaped before the wait returns, so none outlives its caller.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs::{File, TryLockError};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Whether the lock excludes every other holder or only exclusive ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +105,10 @@ pub struct Stop {
     raised: AtomicBool,
     #[cfg(target_os = "linux")]
     wake: std::os::fd::OwnedFd,
+    /// The stdin of each helper waiting on this stop's behalf, by its id:
+    /// dropping one ends that helper ([`wait_with_helper`]).
+    helpers: Mutex<HashMap<u64, std::process::ChildStdin>>,
+    next: AtomicU64,
 }
 
 impl Stop {
@@ -105,6 +122,8 @@ impl Stop {
             raised: AtomicBool::new(false),
             #[cfg(target_os = "linux")]
             wake: rustix::event::eventfd(0, rustix::event::EventfdFlags::CLOEXEC)?,
+            helpers: Mutex::new(HashMap::new()),
+            next: AtomicU64::new(0),
         })
     }
 
@@ -117,6 +136,40 @@ impl Stop {
             // counter is still readable, which is all a waiter asks.
             let _ = rustix::io::write(&self.wake, &1_u64.to_ne_bytes());
         }
+        // Every helper waiting for this stop ends on its stdin closing.
+        let ending: Vec<_> = self
+            .helpers
+            .lock()
+            .map(|mut helpers| helpers.drain().collect())
+            .unwrap_or_default();
+        drop(ending);
+    }
+
+    /// Hold `stdin` for a helper until the stop or its release, returning the
+    /// id to release it by; already raised, it is dropped at once.
+    fn adopt(&self, stdin: std::process::ChildStdin) -> u64 {
+        let id = self.next.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut helpers) = self.helpers.lock() {
+            helpers.insert(id, stdin);
+        }
+        // RAISED BETWEEN THE CHECK AND THE ADOPTION: the drain above ran
+        // before this insert, so end it here instead.
+        if self.is_raised()
+            && let Ok(mut helpers) = self.helpers.lock()
+        {
+            helpers.remove(&id);
+        }
+        id
+    }
+
+    /// Drop the helper `id`'s stdin, ending it if it still runs.
+    fn release(&self, id: u64) {
+        let stdin = self
+            .helpers
+            .lock()
+            .ok()
+            .and_then(|mut helpers| helpers.remove(&id));
+        drop(stdin);
     }
 
     /// Whether it was raised.
@@ -311,14 +364,179 @@ fn wait(
     }
 }
 
-/// Off Linux nothing reports a close: retry on the crate's one clock.
+/// Off Linux: wait through a helper process ([`wait_with_helper`]) of this
+/// binary, resolved by [`helper_program`].
 #[cfg(not(target_os = "linux"))]
 fn wait(
     file: &File,
-    _path: &Path,
+    path: &Path,
     mode: Mode,
     stop: Option<&Stop>,
     parked: &mut dyn FnMut(),
+) -> std::io::Result<bool> {
+    wait_with_helper(file, path, mode, stop, &helper_program()?, &mut |_| {
+        parked()
+    })
+}
+
+/// The argv marker a helper is re-entered on: `batten __lock-wait <mode> <path>`.
+pub const HELPER_ARG: &str = "__lock-wait";
+
+impl Mode {
+    /// The helper argv's spelling of the mode.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Exclusive => "exclusive",
+            Self::Shared => "shared",
+        }
+    }
+}
+
+/// The program a helper is: this binary, when it IS batten.
+///
+/// THE TEST HARNESS IS REFUSED BY NAME. A unit test calling a wait in process
+/// runs as the harness (`batten-<hash>`), which has no [`helped`] entry, so
+/// spawning it would run the suite, not a helper.
+///
+/// # Errors
+///
+/// When the running program cannot be named, or is not batten.
+pub fn helper_program() -> std::io::Result<PathBuf> {
+    let program = std::env::current_exe()?;
+    let stem = program.file_stem().and_then(|stem| stem.to_str());
+    if stem == Some("batten") {
+        Ok(program)
+    } else {
+        Err(std::io::Error::other(format!(
+            "lock_wait: `{}` is not batten, so it cannot wait through a helper of itself",
+            program.display()
+        )))
+    }
+}
+
+/// As the helper: block for the lock named by the argv, exit 0 once held, and
+/// exit 3 the moment stdin closes. `None` when this process is not a helper.
+pub fn helped(args: impl Iterator<Item = OsString>) -> Option<std::process::ExitCode> {
+    let args: Vec<OsString> = args.skip(1).collect();
+    if args.first().and_then(|arg| arg.to_str()) != Some(HELPER_ARG) {
+        return None;
+    }
+    let mode = match args.get(1).and_then(|arg| arg.to_str()) {
+        Some("exclusive") => Mode::Exclusive,
+        Some("shared") => Mode::Shared,
+        _ => return Some(std::process::ExitCode::from(2)),
+    };
+    let Some(Ok(file)) = args.get(2).map(File::open) else {
+        return Some(std::process::ExitCode::from(2));
+    };
+    // THE WAITER'S HAND ON THIS PROCESS: it holds the only write end of this
+    // stdin, and closing it is its stop, its return or its death.
+    drop(std::thread::spawn(|| {
+        use std::io::Read as _;
+        let mut stdin = std::io::stdin();
+        let mut byte = [0_u8; 1];
+        while matches!(stdin.read(&mut byte), Ok(read) if read > 0) {}
+        std::process::exit(3);
+    }));
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the helper's whole job, and its wait is bounded by an event: the holder's \
+                  release, or `stdin` closing, which is its waiter's `Stop`, return or death"
+    )]
+    let locked = match mode {
+        Mode::Exclusive => file.lock(),
+        Mode::Shared => file.lock_shared(),
+    };
+    Some(std::process::ExitCode::from(if locked.is_ok() {
+        0
+    } else {
+        2
+    }))
+}
+
+/// One running helper: reaped, and its stdin closed, on every way out.
+struct Helper<'stop> {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    adopted: Option<(&'stop Stop, u64)>,
+    reaped: bool,
+}
+
+impl<'stop> Helper<'stop> {
+    /// Start `program` as a helper for `path` in `mode`, its stdin held by
+    /// `stop` when there is one.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the lock-wait helper (CLOUD-2789): this binary re-entered to block on a lock \
+                  so the waiter can end it, reaped by `Helper`'s drop on every path"
+    )]
+    fn spawn(
+        program: &Path,
+        path: &Path,
+        mode: Mode,
+        stop: Option<&'stop Stop>,
+    ) -> std::io::Result<Self> {
+        let mut child = std::process::Command::new(program)
+            .arg(HELPER_ARG)
+            .arg(mode.name())
+            .arg(path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        let stdin = child.stdin.take();
+        let mut helper = Self {
+            child,
+            stdin: None,
+            adopted: None,
+            reaped: false,
+        };
+        match (stop, stdin) {
+            (Some(stop), Some(stdin)) => helper.adopted = Some((stop, stop.adopt(stdin))),
+            (None, stdin) => helper.stdin = stdin,
+            (Some(_), None) => {}
+        }
+        Ok(helper)
+    }
+
+    /// Wait for the helper to exit: it holds the lock and let go, or it was
+    /// ended through its stdin.
+    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        let status = self.child.wait()?;
+        self.reaped = true;
+        Ok(status)
+    }
+}
+
+impl Drop for Helper<'_> {
+    fn drop(&mut self) {
+        // Closing stdin ends a helper still blocked, so the wait below is
+        // bounded by that exit.
+        drop(self.stdin.take());
+        if let Some((stop, id)) = self.adopted {
+            stop.release(id);
+        }
+        if !self.reaped {
+            let _ = self.child.wait();
+        }
+    }
+}
+
+/// Wait for the lock on `file` (opened at `path`) through helpers run as
+/// `program`: `true` once taken, `false` on the stop. `parked` is called with
+/// each helper's pid as the wait parks on it.
+///
+/// # Errors
+///
+/// When the lock call itself fails, a helper cannot start, or one ends without
+/// the lock while no stop was raised.
+pub fn wait_with_helper(
+    file: &File,
+    path: &Path,
+    mode: Mode,
+    stop: Option<&Stop>,
+    program: &Path,
+    parked: &mut dyn FnMut(u32),
 ) -> std::io::Result<bool> {
     loop {
         if attempt(file, mode)? {
@@ -327,8 +545,19 @@ fn wait(
         if stop.is_some_and(Stop::is_raised) {
             return Ok(false);
         }
-        parked();
-        crate::pr_watch::clock::hold(std::time::Duration::from_millis(5), None);
+        let mut helper = Helper::spawn(program, path, mode, stop)?;
+        parked(helper.child.id());
+        let status = helper.wait()?;
+        drop(helper);
+        if stop.is_some_and(Stop::is_raised) {
+            return Ok(false);
+        }
+        if !status.success() {
+            return Err(std::io::Error::other(format!(
+                "lock_wait: the helper for {} ended without the lock ({status})",
+                path.display()
+            )));
+        }
     }
 }
 
@@ -473,6 +702,26 @@ mod tests {
             try_acquire(reopen(&path), Mode::Exclusive)
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    /// Fails by: the test harness taken for batten, so a wait off Linux would
+    /// spawn the suite as its helper.
+    #[test]
+    fn the_test_harness_is_refused_as_a_helper_by_name() {
+        let refused = helper_program().expect_err("this process is the harness");
+        assert!(refused.to_string().contains("is not batten"), "{refused}");
+    }
+
+    /// Fails by: a process that is not a helper taken for one.
+    #[test]
+    fn only_the_marker_makes_a_helper() {
+        let argv = |words: &[&str]| words.iter().map(OsString::from).collect::<Vec<_>>();
+        assert!(helped(argv(&["batten", "check"]).into_iter()).is_none());
+        assert_eq!(
+            helped(argv(&["batten", HELPER_ARG, "sideways", "/x"]).into_iter()),
+            Some(std::process::ExitCode::from(2)),
+            "an unknown mode is refused, not waited on"
         );
     }
 
