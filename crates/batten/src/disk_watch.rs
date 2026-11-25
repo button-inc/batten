@@ -201,7 +201,7 @@ impl Sampler<'_> {
             Ok(done) => self.finish(done),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                self.emit(&[format!("disk-abandoned {}", PASS_GRACE.as_millis())])
+                self.emit(&[format!("disk-abandoned {}", PASS_GRACE.as_millis())]);
             }
         }
     }
