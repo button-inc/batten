@@ -12230,6 +12230,31 @@ mod tests {
         );
     }
 
+    /// CLOUD-2789: only a module held in ANOTHER file at a `#[path]` widens the
+    /// module declaring it. A plain `mod other;` is the ordinary module tree,
+    /// and an inline `#[path]` module holds its own items: neither compiles
+    /// foreign code into the declaring module, so neither widens it.
+    ///
+    /// Fails by: either half of the `pathed` test alone widening, so every
+    /// file declaring a child module keys its private items package-wide.
+    #[test]
+    fn only_an_out_of_line_path_module_widens_its_declaring_module() {
+        let place = FileScope::of("crates/p/src/m.rs");
+        let widened = |source: &str| {
+            let root = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+                .tree()
+                .syntax()
+                .clone();
+            widened_modules(&root, &place)
+        };
+        assert!(widened("mod other;\nfn helper() {}\n").is_empty());
+        assert!(widened("#[path = \"x.rs\"]\nmod inner {}\n").is_empty());
+        assert_eq!(
+            widened("#[path = \"x.rs\"]\nmod other;\n"),
+            BTreeSet::from([String::from("src::m")])
+        );
+    }
+
     /// CLOUD-2789: a file directly in `tests/`, `examples/` or `benches/` is a
     /// crate root, scoped at that directory: the parent of the scope of a
     /// `common/mod.rs` beside it, as a `src/` file's own module is its stem.
@@ -12303,6 +12328,32 @@ mod tests {
         };
         let reach = collect_dirs([dir], &identity).unwrap();
         assert_eq!(reach.sites.keys().copied().collect::<Vec<_>>(), [3]);
+    }
+
+    /// CLOUD-2789: a case directory's `untraced` file names why the case was
+    /// not traced and is never read as a reach line, whatever it holds, while
+    /// a recorder file beside it is.
+    ///
+    /// Fails by: `untraced` read as reach, so a reason spelled as a site or a
+    /// probe reaches what the case never ran.
+    #[test]
+    fn a_case_untraced_file_is_never_read_as_reach() {
+        let dir = crate::scratch::scratch("schema-untraced-not-reach").join("k");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("case"), "k\tbin").unwrap();
+        std::fs::write(dir.join(DONE), "0").unwrap();
+        std::fs::write(dir.join(UNTRACED), "7\nf9\n").unwrap();
+        std::fs::write(dir.join("probes"), "3\n").unwrap();
+        let identity = Identity {
+            probes: &[],
+            sites: &[],
+            mutant_fns: &std::collections::BTreeMap::new(),
+            file_fns: &std::collections::BTreeMap::new(),
+            classic: &BTreeSet::new(),
+        };
+        let reach = collect_dirs([dir], &identity).unwrap();
+        assert_eq!(reach.sites.keys().copied().collect::<Vec<_>>(), [3]);
+        assert!(reach.executed.is_empty());
     }
 
     /// K1 (CLOUD-2904's key fix): a private item added to a module moves the cases whose
