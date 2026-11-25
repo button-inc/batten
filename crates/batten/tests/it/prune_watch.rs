@@ -1181,35 +1181,6 @@ fn a_step_run_build_is_watched() {
     assert!(said.contains("step run probe: disk-collected "), "{said}");
 }
 
-/// How long a case lets a watched engine run before it is killed: six
-/// [`batten::collect::HELD_TREE_PATIENCE`]s, far past every bound the engine
-/// keeps, so a kill is a hang and never a slow pass.
-const HANG_SECONDS: u64 = 60;
-
-/// `command` under coreutils `timeout`, so a run that never exits fails its
-/// case with 124 instead of hanging the suite (CLOUD-2789).
-#[expect(
-    clippy::disallowed_types,
-    reason = "test-only: the engine's own spawn door cannot put `timeout` in front of the binary it runs"
-)]
-fn bounded(command: &std::process::Command) -> std::process::Command {
-    let mut bounded = std::process::Command::new("timeout");
-    bounded
-        .args(["-k", "5", &HANG_SECONDS.to_string()])
-        .arg(command.get_program())
-        .args(command.get_args());
-    for (key, value) in command.get_envs() {
-        match value {
-            Some(value) => bounded.env(key, value),
-            None => bounded.env_remove(key),
-        };
-    }
-    if let Some(dir) = command.get_current_dir() {
-        bounded.current_dir(dir);
-    }
-    bounded
-}
-
 /// [`hooked`]'s checkout with a linked worktree beside it, holding an aged
 /// unit of its own; the worktree.
 fn linked(name: &str) -> PathBuf {
@@ -1229,22 +1200,69 @@ fn linked(name: &str) -> PathBuf {
     linked
 }
 
-/// `batten step run probe -- sleep 2` in `dir` below the floor, bounded.
-fn step_under_pressure(dir: &Path) -> std::process::Output {
-    use batten::capture::Streamed as _;
+/// `batten step run probe` in `dir` below the floor, its command blocked on a
+/// FIFO until the watcher has STARTED A PASS: the test reads the engine's
+/// trace as it is written and releases the step at the first `disk-sample`,
+/// which the watcher writes on the wake that spawns the pass. No clock decides
+/// when the step ends, and none bounds it (CLOUD-2789): the case waits on the
+/// engine's own exit, and a hang is the runner's to report.
+///
+/// The exit code and everything the engine wrote to stderr.
+#[expect(
+    clippy::disallowed_types,
+    reason = "test-only: the step's command waits on a FIFO `mkfifo` makes, and the engine is read as it writes"
+)]
+fn step_released_at_the_pass(case: &str, dir: &Path) -> (Option<i32>, String) {
+    use std::io::{BufRead as _, Write as _};
+    // THE CASE'S OWN temp directory: `own_temp` names one after the fixture's
+    // last component, `repo` for every hooked fixture, and a case running
+    // beside this one remade it with the FIFO in it.
+    let temp = common::scratch(&format!("{case}-tmp"));
+    let fifo = temp.join("release");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "mkfifo {}", fifo.display());
     let mut step = common::batten();
     step.current_dir(dir)
-        .env("TMPDIR", own_temp(dir))
+        .env("TMPDIR", &temp)
         .env("TARGET_PRUNE_FREE_MB", "50")
-        .args(["step", "run", "probe", "--", "sleep", "2"]);
-    bounded(&step)
+        .env("BATTEN_DISK_TRACE", "1")
+        .args(["step", "run", "probe", "--", "sh", "-c"])
+        // The command lets go of the engine's pipes first, so the engine's
+        // stderr reaches EOF when the engine exits, whatever the command does.
+        .arg("exec >/dev/null 2>&1; read _ < \"$1\"")
+        .arg("sh")
+        .arg(&fifo);
+    let mut child = step
         .stdin(std::process::Stdio::null())
-        .streamed_output_keeping(batten::capture::Keep {
-            stdin: true,
-            stdout: false,
-            stderr: false,
-        })
-        .expect("the binary runs")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    let mut lines = std::io::BufReader::new(child.stderr.take().expect("stderr is piped")).lines();
+    let mut said = String::new();
+    for line in lines.by_ref() {
+        let line = line.expect("read the engine's stderr");
+        said.push_str(&line);
+        said.push('\n');
+        if line.starts_with("disk-sample ") {
+            // The pass is spawned: let the step's command return.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&fifo)
+                .and_then(|mut release| release.write_all(b"\n"))
+                .expect("release the step");
+            break;
+        }
+    }
+    for line in lines {
+        said.push_str(&line.expect("read the engine's stderr"));
+        said.push('\n');
+    }
+    let status = child.wait().expect("wait for the engine");
+    (status.code(), said)
 }
 
 /// FROM A LINKED WORKTREE, EACH TREE ONCE (CLOUD-2789): git lists the worktree
@@ -1282,14 +1300,8 @@ fn a_step_run_in_a_linked_worktree_exits_under_pressure() {
         return;
     }
     let linked = linked("step-run-linked");
-    let ran = step_under_pressure(&linked);
-    let said = common::stderr(&ran);
-    assert_ne!(
-        ran.status.code(),
-        Some(124),
-        "the step never exited: {said}"
-    );
-    assert_eq!(ran.status.code(), Some(0), "{said}");
+    let (code, said) = step_released_at_the_pass("step-run-linked", &linked);
+    assert_eq!(code, Some(0), "{said}");
     assert!(said.contains("step run probe: disk-watch-armed "), "{said}");
 }
 
@@ -1298,7 +1310,7 @@ fn a_step_run_in_a_linked_worktree_exits_under_pressure() {
 /// so, and the step exits.
 ///
 /// Fails by: a blocking wait on the tree's lock, a pass that ignores its stop
-/// flag, or a stopped pass that reports nothing.
+/// flag, a stopped pass that reports nothing, or one left to the grace.
 #[test]
 fn a_held_tree_does_not_hold_a_watched_step_open() {
     if !cfg!(target_os = "linux") {
@@ -1309,19 +1321,14 @@ fn a_held_tree_does_not_hold_a_watched_step_open() {
     holder
         .lock()
         .expect("hold the tree as another collector would");
-    let ran = step_under_pressure(&dir);
+    let (code, said) = step_released_at_the_pass("step-run-held", &dir);
     drop(holder);
-    let said = common::stderr(&ran);
-    assert_ne!(
-        ran.status.code(),
-        Some(124),
-        "the step never exited: {said}"
-    );
-    assert_eq!(ran.status.code(), Some(0), "{said}");
+    assert_eq!(code, Some(0), "{said}");
+    // STOPPED, NEVER ABANDONED: the pass ends because it observed the stop,
+    // and the grace that abandons one is a last resort no case should reach.
     assert!(
-        said.contains("step run probe: disk-stopped ")
-            || said.contains("step run probe: disk-abandoned "),
-        "the pass says why it ended: {said}"
+        said.contains("step run probe: disk-stopped "),
+        "the pass observed the stop and said so: {said}"
     );
     assert!(
         present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
@@ -1336,7 +1343,6 @@ fn a_held_tree_does_not_hold_a_watched_step_open() {
 /// Fails by: a duplicated tree, or a blocking wait on a held one.
 #[test]
 fn a_forced_collection_exits_from_a_worktree_and_past_a_held_tree() {
-    use batten::capture::Streamed as _;
     if !cfg!(target_os = "linux") {
         return;
     }
@@ -1346,7 +1352,7 @@ fn a_forced_collection_exits_from_a_worktree_and_past_a_held_tree() {
             .current_dir(dir)
             .env("TARGET_PRUNE_FREE_MB", "50")
             .args(["target", "prune", "-y"]);
-        bounded(&prune)
+        prune
             .stdin(std::process::Stdio::null())
             .streamed_output_keeping(batten::capture::Keep {
                 stdin: true,
@@ -1358,11 +1364,6 @@ fn a_forced_collection_exits_from_a_worktree_and_past_a_held_tree() {
     let linked = linked("prune-linked");
     let ran = forced(&linked);
     let said = format!("{}{}", common::stdout(&ran), common::stderr(&ran));
-    assert_ne!(
-        ran.status.code(),
-        Some(124),
-        "the prune never exited: {said}"
-    );
     assert_eq!(ran.status.code(), Some(0), "{said}");
     assert!(
         !present(&linked.join("target/debug"), "aged", "eeeeeeeeeeeeeeee"),
@@ -1377,11 +1378,6 @@ fn a_forced_collection_exits_from_a_worktree_and_past_a_held_tree() {
     let ran = forced(&dir);
     drop(holder);
     let said = format!("{}{}", common::stdout(&ran), common::stderr(&ran));
-    assert_ne!(
-        ran.status.code(),
-        Some(124),
-        "the prune never exited: {said}"
-    );
     assert_eq!(ran.status.code(), Some(0), "{said}");
     assert!(
         said.contains("disk-held "),
