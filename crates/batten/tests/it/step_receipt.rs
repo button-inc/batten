@@ -967,26 +967,84 @@ fn stage_seconds(err: &str, step: &str, how: &str) -> Option<f64> {
         .find_map(|line| line.strip_prefix(&prefix)?.trim().parse().ok())
 }
 
+/// A step command held open on an EVENT rather than a clock (CLOUD-2789), and
+/// the span this test itself saw it held for: a lower bound on its wall time.
+///
+/// The command `cat`s a FIFO this side fills. Opening the write end returns
+/// only once the command has opened the read end, so the span starts with the
+/// command running; it ends when the last byte is written and the end closed,
+/// and the command cannot exit before the EOF that close sends. So the
+/// command's own wall time is at least the span, whatever the host's speed, and
+/// nothing here waits on a duration.
+fn held_step(repo: &Repo) -> (Output, u64) {
+    use batten::capture::Streamed as _;
+    // BESIDE the repository, never in it: a read of the tree that opened a
+    // FIFO would block on it, and that is no subject of this case.
+    let gate = repo.dir.with_extension("gate");
+    let _ = std::fs::remove_file(&gate);
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, test-only: a FIFO is made by `mkfifo`, and no door in `common` makes one"
+    )]
+    let made = std::process::Command::new("mkfifo")
+        .arg(&gate)
+        .streamed_output()
+        .expect("mkfifo runs");
+    assert!(made.status.success(), "{}", common::stderr(&made));
+    let fill = gate.clone();
+    let filler = std::thread::spawn(move || {
+        use std::io::Write as _;
+        let mut end = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&fill)
+            .expect("the step opens the gate's read end");
+        let opened = std::time::Instant::now();
+        // Enough bytes that the span is milliseconds on any host: a pipe
+        // moves them only as fast as the command drains them.
+        let chunk = vec![0_u8; 1 << 20];
+        for _ in 0..64 {
+            end.write_all(&chunk).expect("the step drains the gate");
+        }
+        drop(end);
+        u64::try_from(opened.elapsed().as_millis()).expect("a span in u64 millis")
+    });
+    let gate = gate.to_str().expect("a UTF-8 temp path");
+    let script = format!("cat '{gate}' > /dev/null");
+    let out = repo.run_step(&["mystep"], &["sh", "-c", &script], &[]);
+    let held = filler.join().expect("the filler thread");
+    (out, held)
+}
+
+/// The `stage` line's seconds as the whole milliseconds it renders exactly.
+fn stage_millis(err: &str, step: &str, how: &str) -> Option<u64> {
+    let prefix = format!("stage {step} {how} ");
+    err.lines().find_map(|line| {
+        let (whole, frac) = line.strip_prefix(&prefix)?.trim().split_once('.')?;
+        Some(whole.parse::<u64>().ok()? * 1000 + frac.parse::<u64>().ok()?)
+    })
+}
+
 /// Fails by: a run's wall time not written onto its receipt, or the `stage`
 /// line reporting something other than the time the command took (CLOUD-2776).
 #[test]
 fn a_step_record_carries_its_wall_time() {
-    // `sh` and `sleep`: a unix contract, compiled everywhere.
+    // `sh`, `cat` and `mkfifo`: a unix contract, compiled everywhere.
     if !cfg!(unix) {
         return;
     }
     let repo = Repo::new("wall-time");
-    let out = repo.run_step(&["mystep"], &["sh", "-c", "sleep 0.3"], &[]);
+    let (out, held) = held_step(&repo);
     assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert!(held > 0, "the gate held the step for a measurable span");
     let body = read(&repo.receipts()[0]);
     let millis: u64 = body
         .split_whitespace()
         .find_map(|field| field.strip_suffix("ms")?.parse().ok())
         .unwrap_or_else(|| panic!("the receipt carries its run's time: {body}"));
-    assert!(millis >= 300, "the run slept 300ms: {body}");
-    let said = stage_seconds(&common::stderr(&out), "mystep", "ran")
+    assert!(millis >= held, "the run was held {held}ms: {body}");
+    let said = stage_millis(&common::stderr(&out), "mystep", "ran")
         .unwrap_or_else(|| panic!("a stage line: {}", common::stderr(&out)));
-    assert!(said >= 0.3, "{said}");
+    assert!(said >= held, "{said}ms against a {held}ms hold");
 }
 
 /// Fails by: a hit reporting its own few milliseconds, which makes a resumed
@@ -997,17 +1055,22 @@ fn a_hit_reports_the_recorded_runs_time_not_its_own() {
         return;
     }
     let repo = Repo::new("hit-time");
-    let first = repo.run_step(&["mystep"], &["sh", "-c", "sleep 0.3"], &[]);
+    let (first, held) = held_step(&repo);
     assert_eq!(first.status.code(), Some(0), "{}", common::stderr(&first));
-    let hit = repo.run_step(&["mystep"], &["sh", "-c", "sleep 0.3"], &[]);
+    assert!(held > 0, "the gate held the step for a measurable span");
+    // The same argv, so the same key: a hit, which opens no gate and runs
+    // nothing, so it cannot block on the FIFO left behind.
+    let gate = repo.dir.with_extension("gate");
+    let script = format!("cat '{}' > /dev/null", gate.to_str().expect("UTF-8"));
+    let hit = repo.run_step(&["mystep"], &["sh", "-c", &script], &[]);
     let err = common::stderr(&hit);
     assert!(
         stage_seconds(&err, "mystep", "ran").is_none(),
         "a hit runs nothing: {err}"
     );
     let said =
-        stage_seconds(&err, "mystep", "hit").unwrap_or_else(|| panic!("a hit's stage line: {err}"));
-    assert!(said >= 0.3, "the hit reports the recorded run: {err}");
+        stage_millis(&err, "mystep", "hit").unwrap_or_else(|| panic!("a hit's stage line: {err}"));
+    assert!(said >= held, "the hit reports the recorded run: {err}");
 }
 
 // ---- the trace lint (CLOUD-2784) -------------------------------------------

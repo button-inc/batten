@@ -386,37 +386,36 @@ fn listing() -> (Vec<Pull>, Vec<String>) {
 /// because it catches a future refactor that makes the width a soft target,
 /// but the bound itself is held by construction, not by this case.
 ///
-/// **Nothing here asserts on the clock.** The ten-second deadline is an input:
-/// it turns a serial implementation's hang into a failure instead of a hung
-/// suite. A passing run never reaches it. A regression pays it TWICE — once at
-/// the barrier, which the first waiter then opens for everyone, and once at
-/// `"2"`'s order wait, whose condition a sequential fill never satisfies either
-/// — so expect roughly twenty seconds, not ten, when this case is failing.
+/// **Nothing here waits on the clock** (CLOUD-2789). Both waits are on the
+/// EVENT their condition names — the barrier opening, another fetch finishing
+/// — so a serial implementation hangs at the barrier, and the mutation judge's
+/// per-case cut files that as the timeout it is rather than this case racing a
+/// deadline of its own.
 #[test]
 fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_order() {
     let (pulls, eligible) = listing();
     let seen = std::sync::Mutex::new(Seen::default());
     let bell = std::sync::Condvar::new();
-    let deadline = std::time::Duration::from_secs(10);
     let fetch = |number: &str| -> Option<String> {
         {
             // THE WIDTH BARRIER. Every call parks until `FETCH_WIDTH` of them
             // are inside at once, so the peak the case asserts is reached
             // deliberately rather than observed by luck. With the width honoured
             // exactly that many workers exist, all arrive, and the barrier
-            // opens; with a narrower pool nobody ever arrives and the first
-            // waiter gives up, leaving a peak below the width.
+            // opens; with a narrower pool nobody ever arrives, the case hangs
+            // on the barrier, and the mutation judge's per-case cut files that
+            // as the timeout it is (CLOUD-2789). A wait on the EVENT, never on
+            // a clock.
             let mut state = seen.lock().expect("the fixture lock");
             state.asked.push(number.to_owned());
             state.in_flight += 1;
             state.peak = state.peak.max(state.in_flight);
             state.opened |= state.in_flight >= race::FETCH_WIDTH;
             if !state.opened {
-                let (reopened, timeout) = bell
-                    .wait_timeout_while(state, deadline, |state| !state.opened)
-                    .expect("the fixture lock");
-                state = reopened;
-                state.opened |= timeout.timed_out();
+                drop(
+                    bell.wait_while(state, |state| !state.opened)
+                        .expect("the fixture lock"),
+                );
             }
         }
         bell.notify_all();
@@ -426,7 +425,7 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
         if number == "2" {
             let waiting = seen.lock().expect("the fixture lock");
             drop(
-                bell.wait_timeout_while(waiting, deadline, |state| state.done == 0)
+                bell.wait_while(waiting, |state| state.done == 0)
                     .expect("the fixture lock"),
             );
         }

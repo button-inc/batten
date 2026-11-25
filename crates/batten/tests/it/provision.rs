@@ -1022,59 +1022,27 @@ fn a_server_that_accepts_and_never_answers_times_out_rather_than_hanging() {
     );
 }
 
-/// What the case's own deadline allows a `provision apply` under a shrunk
-/// fetch bound: many times the largest override a case sets, and far short of
-/// the shipped minute.
-const OVERRIDE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// `provision apply` in `env` with the fetch bound shrunk to `millis`, killed
-/// by a watchdog past [`OVERRIDE_DEADLINE`], and red if the watchdog had to
-/// (CLOUD-2789). Without one, an override the fetch IGNORED waited out the
-/// shipped minute and still ended `timed out`, so this case passed late and
-/// the mutant read as a hang rather than a kill.
+/// `provision apply` in `env` with the fetch bound shrunk to `millis`, and the
+/// bound that ended it read off the CAUSE (CLOUD-2789). An override the fetch
+/// IGNORED waits out the shipped minute and still ends `timed out`, so the
+/// verdict is not the wall clock: the cause names the bound that fired, and
+/// one naming anything but `millis` fails here. Waited on the child's exit,
+/// never on a deadline of the case's own.
 fn apply_within_its_bound(env: &Env, millis: &str) -> Output {
-    use std::process::Stdio;
-    let child = batten()
+    let output = batten()
         .state_home(&env.home)
         .args(["provision", "apply"])
         .current_dir(&env.repo)
         .env("BATTEN_FETCH_TIMEOUT_MS", millis)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .streamed_output()
         .expect("run batten");
-    let pid = child.id();
-    let (done, finished) = std::sync::mpsc::channel::<()>();
-    let watchdog = std::thread::spawn(move || {
-        let late = finished.recv_timeout(OVERRIDE_DEADLINE).is_err();
-        if late {
-            kill_late(pid);
-        }
-        late
-    });
-    let output = child.streamed_wait().expect("wait for batten");
-    let _ = done.send(());
+    let said = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !watchdog.join().expect("the watchdog"),
-        "`BATTEN_FETCH_TIMEOUT_MS={millis}` did not end the fetch inside the case's deadline"
+        said.contains(&format!("fetch: timed out after {millis}ms")),
+        "`BATTEN_FETCH_TIMEOUT_MS={millis}` is the bound that ended the fetch: {said}"
     );
     output
 }
-
-/// Kill the child the watchdog found still running, best effort: it may have
-/// exited since. Off unix the case only reports it late.
-#[cfg(unix)]
-fn kill_late(pid: u32) {
-    if let Some(pid) = i32::try_from(pid)
-        .ok()
-        .and_then(rustix::process::Pid::from_raw)
-    {
-        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
-    }
-}
-
-#[cfg(not(unix))]
-fn kill_late(_pid: u32) {}
 
 /// The same listener, judged the other way round.
 ///
@@ -1195,31 +1163,35 @@ fn host_ca_configuration_reaches_the_fetch() {
             "-key",
             "key.pem",
             "-WWW",
-            "-quiet",
         ])
         .current_dir(&tls)
-        .stdout(Stdio::null())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("start the local TLS listener");
 
-    // Wait for the listener rather than sleeping a guessed interval.
+    // WAIT FOR THE LISTENER ON ITS OWN WORD, never on a clock (CLOUD-2789):
+    // `s_server` says `ACCEPT` on stdout once it is listening, which is the
+    // event, so this blocks on that line. An EOF before it is a listener that
+    // never came up. Without `-quiet`, because that is what silences it.
+    let mut said = std::io::BufReader::new(server.stdout.take().expect("piped stdout"));
+    let mut line = String::new();
     let mut ready = false;
-    for _ in 0..100 {
-        if TcpListener::bind(("127.0.0.1", port)).is_err() {
+    while std::io::BufRead::read_line(&mut said, &mut line).unwrap_or(0) > 0 {
+        if line.trim() == "ACCEPT" {
             ready = true;
             break;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of the poll the comment above names: the exit condition is \
-                      `TcpListener::bind` failing because the listener took the `port`, and the \
-                      100-iteration bound is what turns a listener that never came up into a \
-                      failed assertion rather than a hang (CLOUD-1177)"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        line.clear();
     }
     assert!(ready, "the TLS listener never came up");
+    // Drained to its end, so a chatty listener never blocks on a full pipe;
+    // the thread ends with the listener's EOF when the case stops it.
+    std::thread::spawn(move || {
+        let mut rest = [0_u8; 4096];
+        while std::io::Read::read(&mut said, &mut rest).unwrap_or(0) > 0 {}
+    });
 
     // The CA is passed as an environment value rather than a flag, because that
     // is the surface under test: `fetch.rs` reads `SSL_CERT_FILE`, and a case
