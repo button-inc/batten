@@ -1990,8 +1990,10 @@ fn a_glob_that_only_follows_a_moved_file_is_not_reported() {
 /// that carries it). A module that loads still passes.
 #[test]
 fn a_module_this_engine_cannot_evaluate_is_refused_not_dropped() {
-    let rule = "version = 1\n\n[[rule]]\nid = \"m\"\nkind = \"policy\"\n\
-                scope = \"mediated_call\"\nmodule = \"policy/m.rego\"\nseverity = \"deny\"\n";
+    let rule = "version = 1\n\n[[rule]]\nid = \"m\"\n\
+                no_fix_reason = \"class 3 (a call rewrite): nothing persists to repair\"\n\
+                kind = \"policy\"\nscope = \"mediated_call\"\nmodule = \"policy/m.rego\"\n\
+                severity = \"deny\"\n";
     let module = |body: &str| {
         format!(
             "package batten.m\nimport rego.v1\n\nrules contains \"m\"\n\n\
