@@ -1575,9 +1575,12 @@ pub(crate) fn credential_health() -> Credential {
 }
 
 /// [`credential_health`] without its could-not-look reports (#1276): `doctor
-/// egress` asks only whether a live credential would go direct, and its piped
-/// run prints nothing but its verdict line. The same decision, so the two
-/// never disagree about whether the fence is owed.
+/// egress` asks only whether a live credential would go direct, so a repository
+/// declaring no credential, or none in the environment, says nothing beyond
+/// the verdict line. A DECLARED credential that fails its probe is still
+/// reported (`credential_usable`), because that is the state where the session
+/// silently degrades. The same decision, so the two never disagree about
+/// whether the fence is owed.
 pub(crate) fn credential_quiet() -> Credential {
     credential_check(false)
 }
