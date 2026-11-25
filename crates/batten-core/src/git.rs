@@ -9019,6 +9019,58 @@ mod tests {
         );
     }
 
+    /// A remote ref whose every reflog entry is at or after `at` counts at its
+    /// oldest entry's previous value, and a ref that oldest entry created
+    /// (previous null) counts as no tip at all.
+    ///
+    /// Fails by: the null filter inverted in `tip_before`, which reports the
+    /// created ref as the all-zero id and drops the moved ref's prior tip.
+    #[test]
+    fn a_ref_moved_after_the_instant_counts_at_its_prior_tip_and_a_created_one_at_none() {
+        let repo = scratch("tips-before");
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "chore: a"]);
+        let first = head_commit(&repo).unwrap();
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "chore: b"]);
+        let second = head_commit(&repo).unwrap();
+        // Set without a reflog, then moved with one: the only entry's previous
+        // value is `first`, not null.
+        git(
+            &repo,
+            &[
+                "-c",
+                "core.logAllRefUpdates=false",
+                "update-ref",
+                "refs/remotes/origin/moved",
+                &first,
+            ],
+        );
+        git(
+            &repo,
+            &[
+                "update-ref",
+                "--create-reflog",
+                "-m",
+                "move",
+                "refs/remotes/origin/moved",
+                &second,
+            ],
+        );
+        // Created with a reflog: its only entry's previous value is null.
+        git(
+            &repo,
+            &[
+                "update-ref",
+                "--create-reflog",
+                "-m",
+                "create",
+                "refs/remotes/origin/created",
+                &second,
+            ],
+        );
+        assert_eq!(remote_tips_before(&repo, 0), vec![first]);
+    }
+
     #[test]
     fn resolves_the_root_from_a_nested_subdirectory() {
         let repo = scratch("nested");
