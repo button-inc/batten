@@ -19731,8 +19731,11 @@ tools = [
 id = "darwin-link"
 # `.cargo` for `lint:clippy`'s reason, and `build.zig`, which the zig linker
 # looks for in the directory it runs in (CLOUD-2835): with the trace read
-# whole, the lint refused both as undeclared reads.
-inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", ".cargo", "build.zig"]
+# whole, the lint refused both as undeclared reads. `.gitignore` for the same
+# reason (CLOUD-2789): `cargo zigbuild` reads the root one on a one-triple run
+# too, measured at 5241db48d with 11 GB free, so it is the step's own read,
+# not the rustc wrapper's collector (CLOUD-2925).
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", ".cargo", "build.zig", ".gitignore"]
 tools = [
   ["cargo-zigbuild", "--version"],
   ["zig", "version"],
