@@ -5174,7 +5174,6 @@ impl<'g> Graph<'g> {
                 found
                     .iter()
                     .filter(|id| count <= 1 || !definitions[**id].ends_with(IMPL_DEFINED))
-                    .iter()
                     .filter_map(|id| depends.mentions.get(definitions[*id]))
                     .flatten()
                     .filter_map(|next| ids.get(next.as_str()).copied())
