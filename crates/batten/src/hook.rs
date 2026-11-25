@@ -9872,12 +9872,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                         "output-redirect": redirects_to_a_file(
                             &segment.redirects.iter().map(String::as_str).collect::<Vec<_>>(),
                         ),
-                        // THE NAMES ASSIGNED BEFORE THE PROGRAM (CLOUD-2840):
-                        // `GIT_EXTERNAL_DIFF=x git diff` runs `x`, so a reading
-                        // of `git diff` alone is not a reading of the call.
-                        "assigns": prefix_assignments(
-                            &segment.words.iter().map(String::as_str).collect::<Vec<_>>(),
-                        ),
+                        // THE ASSIGNMENTS BEFORE EACH PROGRAM, as `NAME=value`
+                        // (CLOUD-2840): `GIT_EXTERNAL_DIFF=x git diff` runs `x`,
+                        // so a reading of `git diff` alone is not a reading of
+                        // the call. Per LINE and through `env -S`, as the
+                        // programs are (review M3).
+                        "assigns": segment_assignments(segment),
                         // AND WHERE (#1276): the targets themselves, for a
                         // module that judges where a write lands.
                         "redirect-writes": redirect_writes(
@@ -10483,15 +10483,6 @@ fn reach_into(
     // it is unplaced, and the stages outside keep their directory.
     let mut enclosed_unplaced = false;
     let mut reached: Vec<serde_json::Value> = Vec::new();
-    // A CALL TO A FUNCTION THE TEXT DEFINES RUNS NOTHING ON `PATH` (CLOUD-2840):
-    // its body is reached as segments of its own, and read as a program its
-    // name held a sourced script's run on a "tool" no install provides. The
-    // second parse is paid only where a definition can be written.
-    let functions = if command.contains("()") || command.contains("function ") {
-        crate::shell::function_names(command)
-    } else {
-        Vec::new()
-    };
     for segment in &parsed {
         let enclosed = segment.grouped || segment.nested;
         let last = segment.lines.len().saturating_sub(1);
@@ -10512,16 +10503,20 @@ fn reach_into(
                 dir: here.as_deref(),
                 written: &written,
             };
-            reached.extend(
-                effective_program(argv)
-                    .filter(|&index| {
-                        !functions
-                            .iter()
-                            .any(|function| function == program_token(argv[index]))
-                    })
-                    .map(|index| reach_argv(argv, index, outer_mediated, via, false, depth, stage))
-                    .unwrap_or_default(),
-            );
+            // A CALL TO A FUNCTION THE TEXT DEFINES BEFORE IT runs nothing on
+            // `PATH` (CLOUD-2840): its body is reached as segments of its own.
+            // The parse decides which calls those are, in order and unwrapped
+            // (`SegmentLine::function_call`); a name alone hid a forced push
+            // behind `git() { :; }` written after it.
+            if !line.function_call {
+                reached.extend(
+                    effective_program(argv)
+                        .map(|index| {
+                            reach_argv(argv, index, outer_mediated, via, false, depth, stage)
+                        })
+                        .unwrap_or_default(),
+                );
+            }
             // `env -S '<words>'` SPLITS ITS VALUE INTO THE COMMAND, so the
             // program is inside that one word, where the wrapper look-through
             // steps past it as an option value.
@@ -13997,17 +13992,61 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
 /// The variable names a line assigns before its effective program, wrappers
 /// included (`env GIT_PAGER=x git log`): what the program runs under, which a
 /// reading of its argv cannot see (CLOUD-2840).
+/// Every assignment a segment's programs run under, as `NAME=value` with
+/// quotes resolved (CLOUD-2840 review M3).
+///
+/// PER LINE, NEVER THE FUSED WORDS: a newline can join two commands into one
+/// segment, and the first line's program then ended the prefix, so `git status`
+/// on one line hid `GIT_EXTERNAL_DIFF=./x git diff` on the next. AND THROUGH
+/// `env -S`, whose string is split into the command, so its assignments are the
+/// command's too. The value rides with the name because an inert name can carry
+/// a value that is not (`GIT_PAGER=./x`).
+fn segment_assignments(segment: &crate::shell::Segment) -> Vec<String> {
+    let mut found = Vec::new();
+    for line in &segment.lines {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = tokens.len().saturating_sub(line.redirects.len());
+        line_assignments(&tokens[..handed], REACH_DEPTH, &mut found);
+    }
+    found
+}
+
+/// [`segment_assignments`] for one line's argv, `depth` bounding the `env -S`
+/// strings it follows.
+fn line_assignments(argv: &[&str], depth: usize, found: &mut Vec<String>) {
+    found.extend(prefix_assignment_words(argv).into_iter().map(str::to_owned));
+    let Some(depth) = depth.checked_sub(1) else {
+        return;
+    };
+    for script in split_strings(argv) {
+        if let crate::facts::Look::Is(parsed) = segments(&script) {
+            for line in parsed.iter().flat_map(|segment| &segment.lines) {
+                let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+                let handed = tokens.len().saturating_sub(line.redirects.len());
+                line_assignments(&tokens[..handed], depth, found);
+            }
+        }
+    }
+}
+
 fn prefix_assignments(tokens: &[&str]) -> Vec<String> {
-    let end = effective_program(tokens).unwrap_or(tokens.len());
-    tokens[..end]
-        .iter()
-        .map(|token| program_token(token))
-        .filter(|token| is_env_assignment(token))
+    prefix_assignment_words(tokens)
+        .into_iter()
         .filter_map(|token| {
             token
                 .split_once('=')
                 .map(|(name, _)| name.trim_end_matches('+').to_owned())
         })
+        .collect()
+}
+
+/// The `NAME=value` words before `tokens`' program, through wrappers.
+fn prefix_assignment_words<'a>(tokens: &[&'a str]) -> Vec<&'a str> {
+    let end = effective_program(tokens).unwrap_or(tokens.len());
+    tokens[..end]
+        .iter()
+        .map(|token| program_token(token))
+        .filter(|token| is_env_assignment(token))
         .collect()
 }
 
@@ -17061,6 +17100,52 @@ mod tests {
             super::prefix_assignments(&["COUNT+=1", "git", "log"]),
             ["COUNT"]
         );
+    }
+
+    /// A NAME IS A FUNCTION ONLY FOR AN UNWRAPPED CALL AFTER ITS DEFINITION, in
+    /// the same or an enclosing list (CLOUD-2840 review B2). A definition after
+    /// the call, one in a branch or a subshell that may not run, or a call
+    /// through a wrapper that execs the `PATH` program each leave the program
+    /// a program, and a function's body is always judged.
+    ///
+    /// Fails by: any of those calls dropped from the reach, so a forced push or
+    /// an install behind a same-named function reaches no module.
+    #[test]
+    fn a_function_name_hides_only_a_later_unwrapped_call() {
+        let programs = |text: &str| super::command_programs(text);
+        for (text, program) in [
+            ("git push --force origin main; git() { :; }", "git"),
+            ("mise() { :; }; env mise install", "mise"),
+            ("git() { :; }; command git push --force origin main", "git"),
+            ("git() { :; }; sudo git push --force origin main", "git"),
+            ("git() { :; }; xargs git push < f", "git"),
+            (
+                "git() { :; }; timeout 5 git push --force origin main",
+                "git",
+            ),
+            ("git() { :; }; nohup git push --force origin main", "git"),
+            ("git() { :; }; exec git push --force origin main", "git"),
+            ("if false; then mise() { :; }; fi; mise install", "mise"),
+            ("( mise() { :; } ); mise install", "mise"),
+            ("git() { command git \"$@\"; }", "git"),
+        ] {
+            assert!(
+                programs(text).iter().any(|found| found == program),
+                "`{program}` must be reached in `{text}`: {:?}",
+                programs(text)
+            );
+        }
+        for text in [
+            "touched() { echo x; }; touched",
+            "touched() { echo x; }\ntouched",
+            "{ touched() { echo x; }; touched; }",
+        ] {
+            assert!(
+                !programs(text).iter().any(|found| found == "touched"),
+                "a call after the definition runs the function: `{text}` {:?}",
+                programs(text)
+            );
+        }
     }
 
     /// The names a line assigns before its program, through wrappers, and
