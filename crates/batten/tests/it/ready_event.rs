@@ -254,3 +254,20 @@ fn an_on_row_refuses_argv_and_projection_modifiers_at_load() {
     let out = run(&loads, &["check"]);
     assert_ne!(out.status.code(), Some(1), "{}", stderr(&out));
 }
+
+/// CLOUD-2789: an `on` row is owed only where its modifiers admit the call. A
+/// `while_marker` absent from the branch spares the shell `gh pr ready`, and
+/// the same row with the marker planted refuses it.
+///
+/// Fails by: the event selection's modifier test joined by `&&` (shard 3/8's
+/// survivor at `matching_receipt_rows`), so an unmarked branch owes the row.
+#[test]
+fn an_on_row_whose_marker_is_absent_owes_nothing() {
+    let row = RECEIPT_ROW.replace("reason =", "while_marker = \"pr-open\"\nreason =");
+    let dir = repo("ready-event-unmarked", &row);
+    allowed(&dir, &shell("gh pr ready"));
+    let receipts = dir.join(".git").join("batten-receipts");
+    std::fs::create_dir_all(&receipts).unwrap();
+    std::fs::write(receipts.join("pr-open.user-some-slug"), "").unwrap();
+    refused(&dir, &shell("gh pr ready"));
+}
