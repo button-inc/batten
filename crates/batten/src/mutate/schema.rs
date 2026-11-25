@@ -17216,14 +17216,26 @@ pub fn repo() -> u8 {{ scratch() }}
     /// (CLOUD-2904).
     #[test]
     fn one_position_marker_alone_makes_an_observer() {
+        for item in [
+            "const N: u32 = line!();\n",
+            "const N: fn() -> u32 = || Location::caller().line();\n",
+        ] {
+            let alone = render_in(
+                item,
+                &[],
+                &BTreeSet::new(),
+                Some(0),
+                &FileScope::of("src/lib.rs"),
+            );
+            assert!(!alone.compiled.observing.is_empty(), "{item}");
+        }
         let rendered = render_in(
-            "const N: u32 = line!();\n#[track_caller]\npub fn f() {}\n",
+            "#[track_caller]\npub fn f() {}\n",
             &[],
             &BTreeSet::new(),
             Some(0),
             &FileScope::of("src/lib.rs"),
         );
-        assert!(!rendered.compiled.observing.is_empty(), "line! alone");
         assert_eq!(
             rendered.compiled.observers,
             [0].into(),
