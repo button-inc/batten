@@ -38,6 +38,11 @@ fn main() -> ExitCode {
     if let Some(code) = batten::lock_wait::helped(std::env::args_os()) {
         return code;
     }
+    // AND AS ITS WAITER: a held lock off Linux is waited on through such a
+    // helper, started by `exec`'s placed spawn. Installed once, here, because
+    // only this binary has the helper entry above; a library or a test harness
+    // installs none and is refused by name instead of spawning itself.
+    let _installed = batten::lock_wait::install(batten::exec::spawn_lock_helper);
     // A SCHEMA SWEEP OVER A LISTING FILE (CLOUD-2253), and AS NEXTEST'S
     // `run-wrapper` while the sweep records reach: everything after the marker
     // is the listing, or the case's argv.

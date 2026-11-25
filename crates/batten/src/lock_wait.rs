@@ -38,7 +38,8 @@
 //! blocked `flock` on a thread, because `signal-hook` installs every handler
 //! with `SA_RESTART`. So the blocking call moves to a process the waiter can
 //! end ([`wait_with_helper`]): this binary re-entered as `batten __lock-wait
-//! <mode> <path>` ([`helped`]) blocks on its OWN descriptor and exits 0 the
+//! <mode> <path>` ([`helped`]), started by the spawner the binary installs
+//! ([`install`], `exec`'s placed spawn), blocks on its OWN descriptor and exits 0 the
 //! moment it holds the lock, which releases it, and the waiter, woken by that
 //! exit, takes `try_lock` again. Losing that race to a third process spawns
 //! another helper; nothing waits on a clock.
@@ -51,7 +52,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{File, TryLockError};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -364,8 +365,8 @@ fn wait(
     }
 }
 
-/// Off Linux: wait through a helper process ([`wait_with_helper`]) of this
-/// binary, resolved by [`helper_program`].
+/// Off Linux: wait through helper processes ([`wait_with_helper`]) started
+/// by the spawner the binary installed ([`install`]).
 #[cfg(not(target_os = "linux"))]
 fn wait(
     file: &File,
@@ -374,9 +375,8 @@ fn wait(
     stop: Option<&Stop>,
     parked: &mut dyn FnMut(),
 ) -> std::io::Result<bool> {
-    wait_with_helper(file, path, mode, stop, &helper_program()?, &mut |_| {
-        parked()
-    })
+    let spawn = installed()?;
+    wait_with_helper(file, path, mode, stop, &spawn, &mut |_| parked())
 }
 
 /// The argv marker a helper is re-entered on: `batten __lock-wait <mode> <path>`.
@@ -384,7 +384,8 @@ pub const HELPER_ARG: &str = "__lock-wait";
 
 impl Mode {
     /// The helper argv's spelling of the mode.
-    const fn name(self) -> &'static str {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Exclusive => "exclusive",
             Self::Shared => "shared",
@@ -392,26 +393,57 @@ impl Mode {
     }
 }
 
-/// The program a helper is: this binary, when it IS batten.
+/// What starts a helper: given the lock's path and the waiter's mode, a
+/// running `batten __lock-wait <mode> <path>` with its stdin piped.
 ///
-/// THE TEST HARNESS IS REFUSED BY NAME. A unit test calling a wait in process
-/// runs as the harness (`batten-<hash>`), which has no [`helped`] entry, so
-/// spawning it would run the suite, not a helper.
+/// THIS MODULE SPAWNS NOTHING. The binary installs the spawner at startup
+/// ([`install`]) and `exec`, the crate's placed spawn boundary, is what it
+/// calls, so the spawn census places it where every other spawn is placed and
+/// this module stays a leaf.
+pub type Spawner = fn(&Path, Mode) -> std::io::Result<std::process::Child>;
+
+/// The spawner this process waits through, set once by the binary.
+static SPAWNER: std::sync::OnceLock<Spawner> = std::sync::OnceLock::new();
+
+/// Install the process's helper spawner. A second install is refused: the
+/// spawner is a property of the binary, not of a caller.
 ///
 /// # Errors
 ///
-/// When the running program cannot be named, or is not batten.
-pub fn helper_program() -> std::io::Result<PathBuf> {
-    let program = std::env::current_exe()?;
-    let stem = program.file_stem().and_then(|stem| stem.to_str());
-    if stem == Some("batten") {
-        Ok(program)
-    } else {
-        Err(std::io::Error::other(format!(
-            "lock_wait: `{}` is not batten, so it cannot wait through a helper of itself",
-            program.display()
-        )))
-    }
+/// When a spawner was already installed.
+pub fn install(spawner: Spawner) -> std::io::Result<()> {
+    install_into(&SPAWNER, spawner)
+}
+
+/// [`install`] over `slot`.
+fn install_into(slot: &std::sync::OnceLock<Spawner>, spawner: Spawner) -> std::io::Result<()> {
+    slot.set(spawner).map_err(|_| {
+        std::io::Error::other("lock_wait: a helper spawner is already installed in this process")
+    })
+}
+
+/// The installed spawner, or a NAMED refusal where none was: a library or a
+/// test harness, which is not batten and has no helper entry, so it must never
+/// spawn itself in batten's place.
+#[cfg_attr(
+    all(target_os = "linux", not(test)),
+    expect(
+        dead_code,
+        reason = "Linux waits on inotify; compiled everywhere so its case is"
+    )
+)]
+fn installed() -> std::io::Result<Spawner> {
+    installed_from(&SPAWNER)
+}
+
+/// [`installed`] over `slot`.
+fn installed_from(slot: &std::sync::OnceLock<Spawner>) -> std::io::Result<Spawner> {
+    slot.get().copied().ok_or_else(|| {
+        std::io::Error::other(
+            "lock_wait: no helper spawner is installed in this process, so a held lock cannot \
+             be waited on here",
+        )
+    })
 }
 
 /// As the helper: block for the lock named by the argv, exit 0 once held, and
@@ -463,27 +495,15 @@ struct Helper<'stop> {
 }
 
 impl<'stop> Helper<'stop> {
-    /// Start `program` as a helper for `path` in `mode`, its stdin held by
+    /// Start a helper for `path` in `mode` through `spawn`, its stdin held by
     /// `stop` when there is one.
-    #[expect(
-        clippy::disallowed_types,
-        reason = "the lock-wait helper (CLOUD-2789): this binary re-entered to block on a lock \
-                  so the waiter can end it, reaped by `Helper`'s drop on every path"
-    )]
     fn spawn(
-        program: &Path,
+        spawn: &dyn Fn(&Path, Mode) -> std::io::Result<std::process::Child>,
         path: &Path,
         mode: Mode,
         stop: Option<&'stop Stop>,
     ) -> std::io::Result<Self> {
-        let mut child = std::process::Command::new(program)
-            .arg(HELPER_ARG)
-            .arg(mode.name())
-            .arg(path)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
+        let mut child = spawn(path, mode)?;
         let stdin = child.stdin.take();
         let mut helper = Self {
             child,
@@ -522,8 +542,8 @@ impl Drop for Helper<'_> {
     }
 }
 
-/// Wait for the lock on `file` (opened at `path`) through helpers run as
-/// `program`: `true` once taken, `false` on the stop. `parked` is called with
+/// Wait for the lock on `file` (opened at `path`) through helpers started by
+/// `spawn`: `true` once taken, `false` on the stop. `parked` is called with
 /// each helper's pid as the wait parks on it.
 ///
 /// # Errors
@@ -535,7 +555,7 @@ pub fn wait_with_helper(
     path: &Path,
     mode: Mode,
     stop: Option<&Stop>,
-    program: &Path,
+    spawn: &dyn Fn(&Path, Mode) -> std::io::Result<std::process::Child>,
     parked: &mut dyn FnMut(u32),
 ) -> std::io::Result<bool> {
     loop {
@@ -545,7 +565,7 @@ pub fn wait_with_helper(
         if stop.is_some_and(Stop::is_raised) {
             return Ok(false);
         }
-        let mut helper = Helper::spawn(program, path, mode, stop)?;
+        let mut helper = Helper::spawn(spawn, path, mode, stop)?;
         parked(helper.child.id());
         let status = helper.wait()?;
         drop(helper);
@@ -705,12 +725,41 @@ mod tests {
         );
     }
 
-    /// Fails by: the test harness taken for batten, so a wait off Linux would
-    /// spawn the suite as its helper.
+    /// Fails by: a process with no spawner installed (a library, this test
+    /// harness) spawning something anyway rather than refusing by name.
     #[test]
-    fn the_test_harness_is_refused_as_a_helper_by_name() {
-        let refused = helper_program().expect_err("this process is the harness");
-        assert!(refused.to_string().contains("is not batten"), "{refused}");
+    fn with_no_spawner_installed_a_wait_is_refused_by_name() {
+        let refused = installed_from(&std::sync::OnceLock::new())
+            .expect_err("nothing was installed in this slot");
+        assert!(
+            refused
+                .to_string()
+                .contains("no helper spawner is installed"),
+            "{refused}"
+        );
+        assert!(installed().is_err(), "the test harness installs none");
+    }
+
+    /// Fails by: a second spawner replacing the first.
+    #[test]
+    fn a_second_spawner_is_refused() {
+        fn first(_: &Path, _: Mode) -> std::io::Result<std::process::Child> {
+            Err(std::io::Error::other("first"))
+        }
+        fn second(_: &Path, _: Mode) -> std::io::Result<std::process::Child> {
+            Err(std::io::Error::other("second"))
+        }
+        let slot = std::sync::OnceLock::new();
+        install_into(&slot, first).expect("the first install");
+        assert!(install_into(&slot, second).is_err());
+        let kept = installed_from(&slot).expect("installed");
+        assert_eq!(
+            kept(Path::new("/x"), Mode::Exclusive)
+                .unwrap_err()
+                .to_string(),
+            "first",
+            "the first spawner stands"
+        );
     }
 
     /// Fails by: a process that is not a helper taken for one.
