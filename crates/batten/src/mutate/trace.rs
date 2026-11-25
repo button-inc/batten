@@ -945,6 +945,75 @@ mod tests {
         }
     }
 
+    /// Set by [`a_process_a_tracer_holds_reads_as_traced`] on the run of
+    /// [`traced_probe`] it puts under `strace`.
+    const TRACED_PROBE: &str = "BATTEN_TEST_TRACED_PROBE";
+
+    // Fails by: `traced_already` answering `false` under a tracer, so a sweep
+    // run inside another sweep's reach spawns a second tracer that cannot
+    // attach. The comparison above holds that constant on an untraced run, so
+    // this case runs its own binary's probe under `strace`, whose process a
+    // tracer then holds. Off Linux, with no `strace`, or already traced (a
+    // second tracer cannot attach), the probe cannot be traced: the
+    // `test:traced` lane refuses such a host (CLOUD-2789).
+    #[test]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: test-only, re-running this binary under `strace` is the one way to put a tracer on a process (CLOUD-2789)"
+    )]
+    fn a_process_a_tracer_holds_reads_as_traced() {
+        use crate::capture::Streamed as _;
+        let strace = std::env::var_os("PATH")
+            .and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|dir| dir.join("strace"))
+                    .find(|candidate| candidate.is_file())
+            })
+            .filter(|_| cfg!(target_os = "linux") && !super::traced_already());
+        traceable_where_required(strace.is_some());
+        match strace {
+            Some(strace) => {
+                let probe = std::process::Command::new(strace)
+                    .args(["-f", "-o", "/dev/null"])
+                    .arg(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "mutate::trace::tests::traced_probe",
+                        "--nocapture",
+                    ])
+                    .env(TRACED_PROBE, "1")
+                    .streamed_output()
+                    .unwrap();
+                assert!(
+                    probe.status.success(),
+                    "a probe under `strace` did not read as traced"
+                );
+                // A renamed probe matches no case and exits 0 having asserted nothing.
+                assert!(
+                    String::from_utf8_lossy(&probe.stdout).contains("1 passed"),
+                    "the probe under `strace` did not run"
+                );
+            }
+            // No tracer can be put on the probe here, so this process's own
+            // answer is the one checked: untraced on a host without `/proc`.
+            None => assert!(
+                cfg!(target_os = "linux") || !super::traced_already(),
+                "a host without `/proc` read as traced"
+            ),
+        }
+    }
+
+    // Fails by: a process a tracer holds read as untraced. Under
+    // [`TRACED_PROBE`] a tracer holds it by construction; otherwise it
+    // answers as its own status says, so a plain run still asserts.
+    #[test]
+    fn traced_probe() {
+        let expected = std::env::var_os(TRACED_PROBE).is_some()
+            || (cfg!(target_os = "linux")
+                && super::traced_in(&crate::fsio::read_to_string("/proc/self/status").unwrap()));
+        assert_eq!(super::traced_already(), expected);
+    }
+
     // Fails by: an escaped quote or backslash refused (the path cut short as
     // unreadable), or kept with its backslash.
     #[test]
