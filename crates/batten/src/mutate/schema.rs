@@ -1025,6 +1025,11 @@ pub struct Compiled {
     /// The skeleton items that observe a position, by each key: a macro
     /// expanding `line!` or `column!` reads its caller's.
     pub observing: BTreeSet<String>,
+    /// The bare names of the [`Compiled::observers`] and the
+    /// [`Compiled::observing`] items: a function mentioning one is a caller
+    /// whose position it reports.
+    #[serde(default)]
+    pub observer_names: BTreeSet<String>,
 }
 
 /// No compile-time input: what a test's [`Depends`] carries where none is
@@ -1036,6 +1041,7 @@ static NO_COMPILED: Compiled = Compiled {
     positions: std::collections::BTreeMap::new(),
     observers: BTreeSet::new(),
     observing: BTreeSet::new(),
+    observer_names: BTreeSet::new(),
 };
 
 impl Compiled {
@@ -1062,6 +1068,8 @@ impl Compiled {
         self.observers
             .extend(rendered.observers.iter().map(|id| first + id));
         self.observing.extend(rendered.observing.iter().cloned());
+        self.observer_names
+            .extend(rendered.observer_names.iter().cloned());
     }
 }
 
@@ -1216,6 +1224,10 @@ fn probe_sites(
             || own.contains("Location::caller")
         {
             probed.compiled.observing.extend(names.iter().cloned());
+            probed
+                .compiled
+                .observer_names
+                .extend(names.iter().map(|name| bare(name).to_owned()));
         }
         let digest = hasher.finalize().to_hex().to_string();
         probed
@@ -1239,7 +1251,6 @@ fn probe_one(
     place: &FileScope,
     probed: &mut Probed,
 ) -> Range<usize> {
-    let mut text = function.syntax().to_string();
     let code = code_text(function.syntax());
     let start = usize::from(function.syntax().text_range().start());
     let local = probed.probes.len();
@@ -1249,14 +1260,22 @@ fn probe_one(
         .insert(local, position_in(whole, start));
     if code.contains("track_caller") || code.contains("Location::caller") {
         probed.compiled.observers.insert(local);
+        if let Some(name) = ast::HasName::name(function) {
+            probed
+                .compiled
+                .observer_names
+                .insert(name.text().to_string());
+        }
     }
-    if position_sensitive(&code) {
-        text.push('\x1f');
-        text.push_str(&position_in(whole, start));
-    }
-    probed
-        .probes
-        .push(blake3::hash(text.as_bytes()).to_hex().to_string());
+    // ITS KEYED TEXT, NEVER ITS RAW TEXT (CLOUD-2904): a `//` comment
+    // re-keyed every case that ran the function and dropped its reach
+    // records. Keyed whole at its position where it observes it
+    // ([`keyed_text`]).
+    probed.probes.push(
+        blake3::hash(keyed_text(function.syntax()).as_bytes())
+            .to_hex()
+            .to_string(),
+    );
     probed.names.push(mentions_in(function.syntax(), place));
     probed.keyed.push(
         blake3::hash(keyed_text(function.syntax()).as_bytes())
@@ -6180,7 +6199,21 @@ pub fn case_digests<'c>(
             .clone();
         hasher.update(b"\x1b");
         hasher.update(named.as_bytes());
-        compiled_part(&mut hasher, depends, &graph, ran, &defined);
+        // AND WHERE ITS OWN UNPROBED TEXT CALLS AN OBSERVER FROM (CLOUD-2904):
+        // a test's files are keyed by their text, which a line above the call
+        // leaves alone while the location the observer reports moves.
+        if compiled_part(&mut hasher, depends, &graph, ran, &defined) {
+            for file in case_sources(package_dirs, name, binary) {
+                if let Ok(bytes) = crate::fsio::read(root.join(&file)) {
+                    hasher.update(format!("\x14{file}\x1f").as_bytes());
+                    hasher.update(&bytes);
+                }
+            }
+            if let Some(test_crate) = shared.get(binary) {
+                hasher.update(b"\x14");
+                hasher.update(test_crate.raw.as_bytes());
+            }
+        }
         if let Some(paths) = depends.read.get(case) {
             for path in paths {
                 hasher.update(format!("\x1a{path}\x1f").as_bytes());
@@ -6206,6 +6239,8 @@ struct TestCrate {
     includes: BTreeSet<String>,
     /// Every name its sources mention.
     mentions: BTreeSet<String>,
+    /// Every source's raw bytes, digested: where an observer's caller sits.
+    raw: blake3::Hash,
 }
 
 impl TestCrate {
@@ -6215,11 +6250,14 @@ impl TestCrate {
         let mut items = Vec::new();
         let mut includes = BTreeSet::new();
         let mut mentions = BTreeSet::new();
+        let mut raw = blake3::Hasher::new();
         for file in files {
             let Ok(source) = crate::fsio::read_to_string(root.join(file)) else {
                 continue;
             };
             whole.extend(format!("\x1d{file}\x1f").as_bytes());
+            raw.update(format!("\x1d{file}\x1f").as_bytes());
+            raw.update(source.as_bytes());
             let parse =
                 batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024);
             let tree = parse.syntax_node();
@@ -6273,6 +6311,7 @@ impl TestCrate {
             items,
             includes,
             mentions,
+            raw: raw.finalize(),
         }
     }
 }
@@ -6396,15 +6435,16 @@ fn named_part(
 
 /// What a case's key reads at compile time ([`Compiled`]): each include
 /// target of a function it ran or an item it reached, by content (`?` keys
-/// every non-Rust file), and the position of every function it ran when one
-/// of them, or an item it reached, observes where it is called from.
+/// every non-Rust file), and the position of each function it ran that calls
+/// an observer. Returns whether it ran an observer, whose report names a
+/// position in an unprobed caller too.
 fn compiled_part(
     hasher: &mut blake3::Hasher,
     depends: &Depends<'_>,
     graph: &Graph<'_>,
     ran: Option<&BTreeSet<usize>>,
     defined: &[usize],
-) {
+) -> bool {
     let compiled = depends.compiled;
     let keys: Vec<&str> = defined.iter().map(|id| graph.definitions[*id]).collect();
     let mut targets: BTreeSet<&str> = BTreeSet::new();
@@ -6444,6 +6484,11 @@ fn compiled_part(
             hasher.update(resource_id(depends.resources, target).as_bytes());
         }
     }
+    // A POSITION ONLY WHERE AN OBSERVER REPORTS IT (CLOUD-2904): keyed for
+    // every function a case ran once one observer ran, a line above any of
+    // them re-keyed every CLI-spawning case. An observer reports where it is
+    // called from, so the functions keyed are those naming one; an item's
+    // own `line!` is in its digest already, at its position.
     let observed = ran
         .into_iter()
         .flatten()
@@ -6453,6 +6498,16 @@ fn compiled_part(
         let positions: BTreeSet<String> = ran
             .into_iter()
             .flatten()
+            .filter(|probe| {
+                depends.names.get(**probe).is_some_and(|names| {
+                    names.iter().any(|name| {
+                        let name = bare(name);
+                        compiled
+                            .observer_names
+                            .contains(name.rsplit("::").next().unwrap_or(name))
+                    })
+                })
+            })
             .map(|probe| {
                 format!(
                     "{}@{}",
@@ -6466,6 +6521,7 @@ fn compiled_part(
             hasher.update(position.as_bytes());
         }
     }
+    observed
 }
 
 /// Every source of an integration case's test crate: the files its module
@@ -14735,6 +14791,129 @@ mod tests {
             held,
             "the global allocator"
         );
+    }
+
+    /// R4-13 (CLOUD-2904, round 4): a case that runs a `#[track_caller]`
+    /// function keys the position of the functions that call it, and no
+    /// other function's.
+    ///
+    /// Fails by: every function the case ran keyed at its position once one
+    /// observer ran, so a line above any of them re-keyed the case.
+    #[test]
+    fn only_a_callers_position_is_keyed_for_an_observer() {
+        let case = case("observed");
+        let cases: BTreeSet<Case> = [case.clone()].into();
+        let executed = [(case.clone(), [0, 1, 2].into())].into();
+        let none = std::collections::BTreeMap::new();
+        let lib = |above_caller: &str, above_other: &str| {
+            format!(
+                "#[track_caller]\npub fn check() {{}}\n{above_caller}pub fn caller() {{ check() }}\n\
+                 {above_other}pub fn other() {{}}\n"
+            )
+        };
+        let digest = |label: &str, source: &str| {
+            tree_digests(label, &cases, &executed, &[("src/lib.rs", source)], &none)[&case].clone()
+        };
+        let held = digest("schema-r4-13-a", &lib("", ""));
+        assert_eq!(
+            digest("schema-r4-13-b", &lib("", "\n")),
+            held,
+            "a function calling no observer"
+        );
+        assert_ne!(
+            digest("schema-r4-13-c", &lib("\n", "")),
+            held,
+            "the observer's caller"
+        );
+        let expanded = |above_caller: &str, above_other: &str| {
+            format!(
+                "macro_rules! here {{ () => {{ line!() }} }}\n{above_caller}\
+                 pub fn caller() -> u32 {{ here!() }}\n{above_other}pub fn other() {{}}\n"
+            )
+        };
+        let two: BTreeSet<Case> = cases.clone();
+        let ran = [(case.clone(), [0, 1].into())].into();
+        let by_macro = |label: &str, source: &str| {
+            tree_digests(label, &two, &ran, &[("src/lib.rs", source)], &none)[&case].clone()
+        };
+        let held = by_macro("schema-r4-13-d", &expanded("", ""));
+        assert_eq!(
+            by_macro("schema-r4-13-e", &expanded("", "\n")),
+            held,
+            "a function expanding no position macro"
+        );
+        assert_ne!(
+            by_macro("schema-r4-13-f", &expanded("\n", "")),
+            held,
+            "a caller of a macro expanding line!"
+        );
+    }
+
+    /// R4-14 (CLOUD-2904, round 4): a function's probe digest is its keyed
+    /// text, so a `//` comment in a function a case ran moves neither.
+    ///
+    /// Fails by: the probe digest taken over the function's raw text.
+    #[test]
+    fn a_comment_in_a_ran_function_moves_no_probe_and_no_case() {
+        let case = case("ran");
+        let cases: BTreeSet<Case> = [case.clone()].into();
+        let executed = [(case.clone(), [0].into())].into();
+        let none = std::collections::BTreeMap::new();
+        let lib = |note: &str| format!("pub fn f() -> u8 {{\n    // {note}\n    1\n}}\n");
+        let render = |source: &str| {
+            render_in(
+                source,
+                &[],
+                &BTreeSet::new(),
+                Some(0),
+                &FileScope::of("src/lib.rs"),
+            )
+        };
+        assert_eq!(render(&lib("one")).probes, render(&lib("two")).probes);
+        let digest = |label: &str, note: &str| {
+            tree_digests(
+                label,
+                &cases,
+                &executed,
+                &[("src/lib.rs", &lib(note))],
+                &none,
+            )[&case]
+                .clone()
+        };
+        assert_eq!(
+            digest("schema-r4-14-a", "one"),
+            digest("schema-r4-14-b", "two")
+        );
+    }
+
+    /// R4-8 (CLOUD-2904, round 4): an integration case that runs a
+    /// `#[track_caller]` function keys where its own text calls it from.
+    ///
+    /// Fails by: caller positions keyed only for probed callers, so a line
+    /// added above the test in its unprobed file moves no key while the
+    /// location the observer reports moved.
+    #[test]
+    fn an_unprobed_caller_of_an_observer_keys_its_position() {
+        let case = (String::from("o::t"), String::from("fix::it"));
+        let cases: BTreeSet<Case> = [case.clone()].into();
+        let executed = [(case.clone(), [0].into())].into();
+        let none = std::collections::BTreeMap::new();
+        let digest = |label: &str, above: &str| {
+            let test = format!("{above}#[test]\nfn t() {{ fix::check(); }}\n");
+            tree_digests(
+                label,
+                &cases,
+                &executed,
+                &[
+                    ("src/lib.rs", "#[track_caller]\npub fn check() {}\n"),
+                    ("tests/it/main.rs", "mod o;\n"),
+                    ("tests/it/o.rs", &test),
+                ],
+                &none,
+            )[&case]
+                .clone()
+        };
+        assert_ne!(digest("schema-r4-8-a", ""), digest("schema-r4-8-b", "\n"));
     }
 
     /// One integration case's digest over `files`, with `src/lib.rs` the
