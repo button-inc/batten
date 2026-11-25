@@ -857,4 +857,27 @@ mod tests {
         ));
         assert!(named(&findings, "fails"));
     }
+
+    /// A failing `[[startup]]` row fails the run even when every handler
+    /// passed: the task's verdict is the conjunction of both phases.
+    ///
+    /// Fails by: `handlers_passed && rows_passed` read as `||`, so a session
+    /// with no handlers reported setup passed over a failing row.
+    #[test]
+    fn a_failing_row_fails_the_run_though_no_handler_failed() {
+        let row = |id: &str, check: &str| crate::config_model::Startup {
+            id: id.to_owned(),
+            gloss: "a fixture row".to_owned(),
+            check: vec![check.to_owned()],
+            decided_by: crate::config_model::Decided::ExitStatus,
+            repair: None,
+            preset: None,
+        };
+        let root = crate::scratch::scratch("session-setup-run-passes");
+        let git_dir = root.join(".git");
+        assert!(run(&root, &git_dir, &[], &[], &[row("passes", "true")]));
+        let root = crate::scratch::scratch("session-setup-run-fails");
+        let git_dir = root.join(".git");
+        assert!(!run(&root, &git_dir, &[], &[], &[row("fails", "false")]));
+    }
 }
