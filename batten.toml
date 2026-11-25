@@ -8128,11 +8128,13 @@ scope = "mediated_call"
 module = "policy/lap-tree-held.rego"
 severity = "deny"
 
-# A PROGRAM THE SESSION'S SETUP MAY STILL BE INSTALLING (CLOUD-2840). Setup runs
-# as one detached task so the agent loop is available at once; a call naming a
-# program that resolves to nothing, or to a shim under the environment manager's
-# install root, is held (could-not-look, pointing at the task) until the task
-# says `ok`, and refused naming the failure after `failed` or a crash.
+# A SESSION WHOSE SETUP IS NOT DISPATCHED, OR STILL INSTALLING (CLOUD-2840). The
+# hook spawns nothing: it tells the agent to dispatch one background install
+# task. Until it does, every call but a read and the dispatch is held, naming the
+# dispatch; while it runs, a call naming a program that resolves to nothing, to a
+# shim under the environment manager's install root, or to the manager itself is
+# held (could-not-look, pointing at the task) until the task says `ok`, and
+# refused naming the failure after `failed` or a crash.
 [[rule]]
 id = "tool install pending"
 no_fix_reason = "class 3 (a call rewrite): the subject is a tool call held before it runs, so nothing persists for a command to repair; the refusal's route names the task to watch"
@@ -15273,7 +15275,7 @@ target = "rules/toolchain.md"
 id = "tool install pending"
 gloss = "a program this call runs may still be installing, so it was not run"
 class = """
-A session's setup runs as one background task (`batten startup --session`, CLOUD-2840), so the session can act before it finishes. While it runs, a program the call names that resolves to nothing on PATH, or resolves under the environment manager's install root, may be a shim with nothing behind it yet: run now, it would fail as if the work were wrong. That is could-not-look, not a verdict on the call. Once the task records `ok` the program runs. If it recorded `failed`, or died without a word, the install is what failed, and the last subject names the task, its state and its pid. `git status` is admitted throughout.
+A session's setup runs as one background task the agent dispatches (`batten startup --session`, CLOUD-2840); the hook only tells it to. Until it is dispatched, every call but a read and the dispatch itself is held: the subjects say `session-setup undispatched` and name the dispatch, which runs as a background task with the harness's own facility, never inline. While it runs, a program the call names that resolves to nothing on PATH, or resolves under the environment manager's install root, may be a shim with nothing behind it yet: run now, it would fail as if the work were wrong. That is could-not-look, not a verdict on the call. Once the task records `ok` the program runs. If it recorded `failed`, or died without a word, the install is what failed, and the last subject names the task, its state and its pid. `git status` is admitted throughout.
 """
 
 [[verdict.route]]

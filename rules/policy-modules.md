@@ -415,10 +415,13 @@ receipt store could not be located.
 stop wrote — each failed run with whether its log was read, and each check still
 running — or `null` when the branch has none (CLOUD-2270).
 `input.facts["install-pending"]` is the session setup task's `{state, task,
-pid, pending}`: its state from the task registry, and the call's
-command-position programs that resolve to nothing or under the environment
-manager's install root, empty once the task said `ok`; `null` where no setup
-task is recorded (CLOUD-2840).
+pid, pending, dispatch, dispatching}`: its state from the task registry
+(`undispatched` where `SessionStart` prepared setup and the agent has not
+dispatched it yet, with `pid` null), the call's command-position programs that
+resolve to nothing, under the environment manager's install root, or are the
+manager itself, empty once the task said `ok`, the one dispatch command, and
+whether this call is that dispatch; `null` where no setup was prepared
+(CLOUD-2840).
 `input.facts["shell-introduced"]` is `{look, reason}` for a write: whether it
 authors shell (`is`, `is-not`, `could-not-look`) and, when `is`, by `shell-path`
 or `shebang` — decided in Rust by `shell.rs`, never the content (CLOUD-2335).

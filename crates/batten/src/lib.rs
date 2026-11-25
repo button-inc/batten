@@ -20447,9 +20447,14 @@ fn live_lap_outside_its_gate(holder: Option<String>, ours: Option<&str>) -> Opti
 /// command-position programs it may still be installing (CLOUD-2840):
 /// [`facts::Fact::InstallPending`].
 ///
+/// TWO PHASES. Before the agent dispatched [`session_setup::DISPATCH`] (setup
+/// prepared at `SessionStart`, no record in the registry) the state is
+/// `undispatched` and nothing is resolved: the module holds every call but a
+/// read and the dispatch. Once a record exists, its state is the registry's,
+/// and while it is not `ok` each program is resolved against `PATH`.
+///
 /// NO MODULE, NO READ, and NO RECORD, NO WALK: the common call opens nothing,
-/// and once the task said `ok` no program is resolved at all. Only while it
-/// runs, or after it failed, is each program resolved against `PATH`.
+/// and once the task said `ok` no program is resolved at all.
 fn install_pending_for(
     rules: &hook::Policy,
     envelope: &hook::Envelope,
@@ -20461,11 +20466,17 @@ fn install_pending_for(
     if !session_setup::started(&git_dir) {
         return None;
     }
-    let (running, gone) = task::partition(&git_dir);
-    let entry = running
-        .into_iter()
-        .chain(gone)
-        .find(|entry| entry.task == session_setup::TASK)?;
+    let dispatching = session_setup::is_dispatch(&envelope.command);
+    let Some(entry) = session_setup::record(&git_dir) else {
+        return Some(serde_json::json!({
+            "state": "undispatched",
+            "task": session_setup::TASK,
+            "pid": null,
+            "pending": [],
+            "dispatch": session_setup::DISPATCH,
+            "dispatching": dispatching,
+        }));
+    };
     let state = match task::state(&entry) {
         task::State::Running => "running",
         task::State::Ok => "ok",
@@ -20482,9 +20493,14 @@ fn install_pending_for(
             // `$T …` names what the shell expands at run time, not a file this
             // gate can resolve now; holding it would hold every such call.
             .filter(|program| !program.contains('$'))
-            .filter(|program| match resolve_on_path(program) {
-                None => true,
-                Some(found) => roots.iter().any(|root| found.starts_with(root)),
+            .filter(|program| {
+                // THE MANAGER ITSELF, wherever it resolves: its auto-install
+                // resolves versions unlocked, which is CLOUD-2881's 403.
+                program.rsplit('/').next() == Some("mise")
+                    || match resolve_on_path(program) {
+                        None => true,
+                        Some(found) => roots.iter().any(|root| found.starts_with(root)),
+                    }
             })
             .collect()
     };
@@ -20493,6 +20509,8 @@ fn install_pending_for(
         "task": session_setup::TASK,
         "pid": entry.pid,
         "pending": pending,
+        "dispatch": session_setup::DISPATCH,
+        "dispatching": dispatching,
     }))
 }
 
@@ -24059,19 +24077,42 @@ fn mediated_payload(raw: &str, tool: &str, params: &serde_json::Value) -> Option
     Some(value.to_string())
 }
 
-/// Start this session's setup task (CLOUD-2840), where a consumer declares one.
+/// Prepare this session's setup (CLOUD-2840), where a consumer declares one,
+/// and tell the agent to dispatch it.
 ///
-/// Fails open and silently, like every side effect at this boundary: a session
-/// whose setup cannot start is one where `batten doctor` names what is missing.
-fn start_session_setup(raw: &str) {
+/// IN PROCESS ONLY: the payload is spooled and the instruction is pushed on the
+/// advisory channel every hook's advice uses. Nothing is spawned; the agent runs
+/// [`session_setup::DISPATCH`] with its harness's background facility, and the
+/// install gate holds its calls until it does. Silent on failure, like every
+/// side effect at this boundary.
+fn prepare_session_setup(raw: &str, overrides: &Overrides, advice: &mut Vec<advisory::Advice>) {
     let here = hook_authority_root();
     if !here.join(crate::config_model::CONFIG_FILE).exists() {
+        return;
+    }
+    let Ok(resolved) = HookLoads::resolve(here, overrides) else {
+        return;
+    };
+    // NOTHING DECLARED, NOTHING OWED: a consumer with no session-start row and
+    // no `[[startup]]` row is never told to dispatch, and never held for it.
+    let declared = resolved.hook.as_ref().is_some_and(|table| {
+        table
+            .handlers
+            .iter()
+            .any(|row| handler::HandlerExt::event(row) == Some(crate::config_model::Event::SessionStart))
+    });
+    if !declared && resolved.startup.is_empty() {
         return;
     }
     let Some(git_dir) = session_setup::git_dir_of(here) else {
         return;
     };
-    let _ = session_setup::start(here, &git_dir, raw, boundary_epoch());
+    if session_setup::prepare(&git_dir, raw) {
+        advice.push(advisory::Advice::rendered(
+            severity::AdvisoryTier::Warning,
+            session_setup::instruction(),
+        ));
+    }
 }
 
 /// Say what the setup task found, once, on the first call after it finished
@@ -24117,12 +24158,13 @@ fn dispatch_handlers(
     if envelope.event == crate::config_model::Event::Stop {
         return None;
     }
-    // NOT INLINE AT `SessionStart` (CLOUD-2840): every declared session-start
-    // row runs in the setup task, under its own bound, and what it says reaches
-    // the session on the next call. Started here because this is where the
-    // host's bytes are in hand, and they are what each row reads on stdin.
+    // NOT INLINE AT `SessionStart`, AND NOT SPAWNED HERE EITHER (CLOUD-2840):
+    // every declared session-start row runs in the setup task the AGENT
+    // dispatches, under its own bound, and what it says reaches the session on
+    // the next call. The host's bytes are spooled here because this is where
+    // they are in hand, and they are what each row reads on stdin.
     if session_setup::detaches(envelope.event) {
-        start_session_setup(raw);
+        prepare_session_setup(raw, overrides, advice);
         return None;
     }
     let hook_config = hook_table(overrides)?;
