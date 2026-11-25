@@ -1218,6 +1218,9 @@ fn probe_sites(
             hasher.update(format!("\x1c{}", position_in(&whole, at)).as_bytes());
             hasher.update(whole.get(range.clone()).unwrap_or_default().as_bytes());
         }
+        if reads_place(&own) {
+            hasher.update(format!("\x1f{}", place.file).as_bytes());
+        }
         if own.contains("line!")
             || own.contains("column!")
             || own.contains("track_caller")
@@ -1278,11 +1281,20 @@ fn probe_one(
     // re-keyed every case that ran the function and dropped its reach
     // records. Keyed whole at its position where it observes it
     // ([`keyed_text`]).
-    probed.probes.push(
-        blake3::hash(keyed_text(function.syntax()).as_bytes())
-            .to_hex()
-            .to_string(),
-    );
+    let mut keyed = keyed_text(function.syntax());
+    // WITH ITS FILE AND MODULE WHERE IT READS THEM (round 4 #9): moved whole,
+    // text calling `file!`, `module_path!` or `type_name` keeps its tokens
+    // and says something else.
+    if reads_place(&code) {
+        keyed.push_str(&format!(
+            "\x1f{}\x1f{}",
+            place.file,
+            place.module_at(function.syntax().parent().as_ref())
+        ));
+    }
+    probed
+        .probes
+        .push(blake3::hash(keyed.as_bytes()).to_hex().to_string());
     probed.names.push(mentions_in(function.syntax(), place));
     probed.keyed.push(
         blake3::hash(keyed_text(function.syntax()).as_bytes())
@@ -1452,10 +1464,77 @@ fn grouped(owner: Option<&ast::Item>, place: &FileScope, widened: &BTreeSet<Stri
     (
         definitions(item, place, widened),
         hasher,
-        BTreeSet::new(),
+        glob_targets(item, place),
         String::new(),
         usize::from(range.start())..usize::from(range.end()),
     )
+}
+
+/// What a glob `use` reaches beyond its own text: the `use`s and globs of the
+/// module it imports from, which decide what its names resolve to.
+///
+/// THROUGH THE GLOB (round 4 #7): `use super::*` brings the parent's trait
+/// imports into scope and `use crate::prelude::*` the prelude's `pub use`s,
+/// and a call they decide reached neither.
+fn glob_targets(item: &ast::Item, place: &FileScope) -> BTreeSet<String> {
+    let mut targets = BTreeSet::new();
+    let ast::Item::Use(it) = item else {
+        return targets;
+    };
+    if place.unscoped {
+        return targets;
+    }
+    let module = place.module_at(item.syntax().parent().as_ref());
+    for tree in it
+        .syntax()
+        .descendants()
+        .filter_map(ast::UseTree::cast)
+        .filter(|tree| tree.star_token().is_some())
+    {
+        let mut segments: Vec<String> = Vec::new();
+        for enclosing in tree.syntax().ancestors().filter_map(ast::UseTree::cast) {
+            if let Some(path) = enclosing.path() {
+                let mut own: Vec<String> = path
+                    .syntax()
+                    .to_string()
+                    .split("::")
+                    .map(|segment| segment.trim().to_owned())
+                    .filter(|segment| !segment.is_empty())
+                    .collect();
+                own.append(&mut segments);
+                segments = own;
+            }
+        }
+        let target = glob_module(&module, &segments);
+        targets.insert(use_scope(place, &target));
+        targets.insert(use_globs(place, &target));
+    }
+    targets
+}
+
+/// The module a `use` path `segments` names from `module`: `crate` its
+/// crate's root, `super` its parent, `self` itself, any other segment a
+/// module inside.
+fn glob_module(module: &str, segments: &[String]) -> String {
+    let mut path: Vec<&str> = module.split("::").filter(|part| !part.is_empty()).collect();
+    for (at, segment) in segments.iter().enumerate() {
+        match segment.as_str() {
+            "crate" if at == 0 => {
+                let root = if path.starts_with(&["src", "bin"]) {
+                    2
+                } else {
+                    1
+                };
+                path.truncate(root);
+            }
+            "super" => {
+                path.pop();
+            }
+            "self" => {}
+            other => path.push(other),
+        }
+    }
+    path.join("::")
 }
 
 /// Whether a token of `kind` changes no compiled behaviour, so no skeleton
@@ -2082,6 +2161,14 @@ fn code_text(node: &SyntaxNode) -> String {
         .collect()
 }
 
+/// Whether code text `text` reads where it is compiled: its file, its module
+/// or a type's path ([`probe_one`]).
+fn reads_place(text: &str) -> bool {
+    ["file!", "module_path!", "type_name"]
+        .iter()
+        .any(|marker| text.contains(marker))
+}
+
 /// Whether code text `text` names a position marker.
 fn observes(text: &str) -> bool {
     ["line!", "column!", "track_caller", "Location::caller"]
@@ -2182,7 +2269,9 @@ fn token_mentions(
         // dispatches to, and a glob what an unqualified name resolves to,
         // with no name of the `use` written.
         mentions.insert(use_globs(place, &module));
-        if method_call(token) {
+        // AND A MACRO CALL ITS `use`S (round 4 #7): a `macro_rules!` body's
+        // method call dispatches through the traits in scope where it expands.
+        if method_call(token) || macro_called(token) {
             mentions.insert(use_scope(place, &module));
         }
         format!("{MENTIONED_IN}{}{MENTIONED_IN}{module}", place.package)
@@ -2196,6 +2285,19 @@ fn token_mentions(
             None => mentions.insert(name),
         };
     }
+}
+
+/// Whether `token` names the macro a macro call invokes.
+fn macro_called(token: &ra_ap_syntax::SyntaxToken) -> bool {
+    token
+        .parent()
+        .filter(|node| node.kind() == SyntaxKind::NAME_REF)
+        .and_then(|name| name.parent())
+        .filter(|node| node.kind() == SyntaxKind::PATH_SEGMENT)
+        .and_then(|segment| segment.parent())
+        .filter(|node| node.kind() == SyntaxKind::PATH)
+        .and_then(|path| path.parent())
+        .is_some_and(|node| node.kind() == SyntaxKind::MACRO_CALL)
 }
 
 /// Whether `token` is in a position an associated item can be named from: a
@@ -5329,10 +5431,18 @@ fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
         return Ok(0);
     }
     let identity = context.identity();
+    // AND ONLY A RECORD MADE OVER THAT TREE (round 4 #11): one an earlier
+    // run left names another tree in its `OVER`, and sealed under this
+    // context it would key a run it never made.
+    let tree = crate::fsio::read_to_string(base.join(TREE)).ok();
     let mut dirs = Vec::new();
     for entry in std::fs::read_dir(base)? {
         let dir = entry?.path();
-        if dir.is_dir() && finished_passing(&dir) && !dir.join(DEPENDS).exists() {
+        if dir.is_dir()
+            && finished_passing(&dir)
+            && !dir.join(DEPENDS).exists()
+            && crate::fsio::read_to_string(dir.join(OVER)).ok() == tree
+        {
             dirs.push(dir);
         }
     }
@@ -5633,7 +5743,11 @@ fn resource_id(resources: &std::collections::BTreeMap<String, String>, path: &st
 pub fn tree_digest(work: &std::path::Path) -> anyhow::Result<String> {
     let mut files: Vec<std::path::PathBuf> = ignore::WalkBuilder::new(work)
         .standard_filters(false)
-        .filter_entry(|entry| !matches!(entry.file_name().to_str(), Some("target" | ".git")))
+        // THE ROOT'S BUILD OUTPUT AND HISTORY ONLY (round 4 #11): a source
+        // directory named `target` deeper down is the tree's.
+        .filter_entry(|entry| {
+            entry.depth() != 1 || !matches!(entry.file_name().to_str(), Some("target" | ".git"))
+        })
         .build()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
@@ -5938,7 +6052,10 @@ impl<'g> Graph<'g> {
             .iter()
             .zip(&resolves)
             .map(|(name, found)| {
-                if name.starts_with(USE_SCOPE) {
+                // A GLOB IS FOLLOWED (round 4 #7): what it imports from is in
+                // scope as surely as its own text, and its mentions name that
+                // module's `use`s and globs ([`glob_targets`]).
+                if name.starts_with(USE_SCOPE) && !name[USE_SCOPE.len_utf8()..].starts_with('*') {
                     return Vec::new();
                 }
                 followed(found, &definitions, depends.items)
@@ -6912,10 +7029,19 @@ impl Shared {
 /// beside a test moved no key (CLOUD-2904).
 fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
     use ast::{HasAttrs as _, HasName as _};
+    // A TEST ATTRIBUTE BY ITS PATH'S LAST SEGMENT (round 4 #10): `test`,
+    // `tokio::test`, `rstest`, `test_case`; never `cfg(test)` or
+    // `rstest::fixture`, whose functions are helpers.
     let is_test = |function: &ast::Fn| {
-        function
-            .attrs()
-            .any(|attr| attr.syntax().text().to_string().contains("test"))
+        function.attrs().any(|attr| {
+            attr.path()
+                .and_then(|path| path.segment())
+                .and_then(|segment| segment.name_ref())
+                .is_some_and(|name| {
+                    let name = name.text();
+                    name == "test" || name == "rstest" || name.starts_with("test_")
+                })
+        })
     };
     let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
     let mut texts: std::collections::BTreeMap<String, Vec<String>> =
@@ -9141,7 +9267,11 @@ fn tree_rust_files(root: &std::path::Path) -> anyhow::Result<Vec<String>> {
     }
     let mut files: Vec<String> = ignore::WalkBuilder::new(root)
         .standard_filters(false)
-        .filter_entry(|entry| !matches!(entry.file_name().to_str(), Some("target" | ".git")))
+        // THE ROOT'S BUILD OUTPUT AND HISTORY ONLY (round 4 #11): a source
+        // directory named `target` deeper down is the tree's.
+        .filter_entry(|entry| {
+            entry.depth() != 1 || !matches!(entry.file_name().to_str(), Some("target" | ".git"))
+        })
         .build()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
@@ -10534,9 +10664,13 @@ mod tests {
         );
     }
 
-    /// A two-probe, one-site context over an empty root, as a sweep writes it.
-    fn seal_context() -> SealContext {
-        let root = crate::scratch::scratch("schema-seal-case-root");
+    /// A two-probe, one-site context over an empty root of its own, as a
+    /// sweep writes it.
+    ///
+    /// A ROOT PER CALLER (round 4 #23): one shared root, which a caller
+    /// writes into, raced its siblings under the test threads.
+    fn seal_context(label: &str) -> SealContext {
+        let root = crate::scratch::scratch(label);
         SealContext {
             snapshot: Some(tree_digest(&root).unwrap()),
             root,
@@ -10567,7 +10701,7 @@ mod tests {
     /// seal written with no context.
     #[test]
     fn a_stopped_runs_records_are_sealed_as_its_own_seal_would_and_carry() {
-        let context = seal_context();
+        let context = seal_context("schema-seal-case-root");
         let by_recorder = crate::scratch::scratch("schema-seal-case-recorder");
         let by_sweep = crate::scratch::scratch("schema-seal-case-sweep");
         for base in [&by_recorder, &by_sweep] {
@@ -15335,6 +15469,139 @@ mod tests {
             common_reached(&shout("2"), &text),
             "impl Shout for str"
         );
+        // BY ITS TRAIT'S NAME ALONE (round 4 #22): a foreign trait's impl for
+        // `()`, named by no method the text calls and no self-type name.
+        let named = [String::from(
+            "fn t() { let _ = <() as Display>::to_string(&()); }",
+        )];
+        let display = |value: &str| {
+            format!(
+                "impl Display for () {{ fn fmt(&self, f: &mut F) -> R {{ write!(f, \"{value}\") }} }}\n"
+            )
+        };
+        assert_ne!(
+            common_reached(&display("a"), &named),
+            common_reached(&display("b"), &named),
+            "impl Display for (), named by its trait"
+        );
+    }
+
+    /// R4-9 (CLOUD-2904, round 4): a function or an item that reads where it
+    /// is (`file!`, `module_path!`, `type_name`) is keyed with its file, so
+    /// one moved whole to another file moves.
+    ///
+    /// Fails by: such text keyed on its tokens alone, which a move keeps.
+    #[test]
+    fn text_reading_its_file_or_module_is_keyed_with_it() {
+        let source = "pub fn f() -> &'static str { module_path!() }\n\
+                      pub const P: &str = file!();\n";
+        let render =
+            |file: &str| render_in(source, &[], &BTreeSet::new(), Some(0), &FileScope::of(file));
+        let (a, b) = (render("src/a.rs"), render("src/b.rs"));
+        assert_ne!(a.probes, b.probes, "module_path! in a function");
+        let digests = |rendered: &Rendered| -> BTreeSet<String> {
+            rendered
+                .items
+                .iter()
+                .filter(|(name, _)| bare(name) == "P")
+                .map(|(_, digest)| digest.clone())
+                .collect()
+        };
+        assert_ne!(digests(&a), digests(&b), "file! in a const");
+    }
+
+    /// R4-7 (CLOUD-2904, round 4): a method call's trait in scope is keyed
+    /// through `use super::*`, through a glob of another module's `pub use`,
+    /// and from a `macro_rules!` body expanded in the caller's module.
+    ///
+    /// Fails by: a call reaching only its own module's `use`s, so swapping
+    /// the trait an imported glob or a macro's expansion brings into scope
+    /// moved no case.
+    #[test]
+    fn a_trait_brought_into_scope_by_a_glob_or_a_macro_keys_the_call() {
+        let run = case("scoped");
+        let cases: BTreeSet<Case> = [run.clone()].into();
+        let executed = [(run.clone(), [2].into())].into();
+        let none = std::collections::BTreeMap::new();
+        let traits = "mod t1 { pub trait Tr { fn go(&self) -> u8; } impl Tr for u8 { fn go(&self) -> u8 { 1 } } }\n\
+                      mod t2 { pub trait Tr { fn go(&self) -> u8; } impl Tr for u8 { fn go(&self) -> u8 { 2 } } }\n";
+        let digest = |label: &str, scoped: &str| {
+            let lib = format!("{traits}{scoped}");
+            tree_digests(label, &cases, &executed, &[("src/lib.rs", &lib)], &none)[&run].clone()
+        };
+        for (shape, scoped) in [
+            (
+                "use super::*",
+                "mod m {{ use crate::{T}::Tr; pub mod child {{ use super::*; \
+                 pub fn f() -> u8 {{ 0u8.go() }} }} }}\n",
+            ),
+            (
+                "a prelude glob",
+                "mod prelude {{ pub use crate::{T}::Tr; }}\n\
+                 mod m {{ use crate::prelude::*; pub fn f() -> u8 {{ 0u8.go() }} }}\n",
+            ),
+            (
+                "a macro body",
+                "mod m {{ use crate::{T}::Tr; macro_rules! call {{ () => {{ 0u8.go() }} }} \
+                 pub fn f() -> u8 {{ call!() }} }}\n",
+            ),
+        ] {
+            let render = |which: &str| {
+                scoped
+                    .replace("{T}", which)
+                    .replace("{{", "{")
+                    .replace("}}", "}")
+            };
+            assert_ne!(
+                digest(&format!("schema-r4-7-{}-a", shape.len()), &render("t1")),
+                digest(&format!("schema-r4-7-{}-b", shape.len()), &render("t2")),
+                "{shape}"
+            );
+        }
+    }
+
+    /// R4-21 (CLOUD-2904, round 4): a glob `use` a function's module holds is
+    /// reached by every mention the function makes, so a case that ran it
+    /// moves when the glob changes what a name resolves to.
+    ///
+    /// Fails by: a mention not reaching its module's glob `use`s.
+    #[test]
+    fn a_modules_glob_use_keys_a_case_that_ran_its_function() {
+        let run = case("glob");
+        let cases: BTreeSet<Case> = [run.clone()].into();
+        let executed = [(run.clone(), [2].into())].into();
+        let none = std::collections::BTreeMap::new();
+        let digest = |label: &str, from: &str| {
+            let lib = format!(
+                "mod a {{ pub fn helper() -> u8 {{ 1 }} }}\nmod b {{ pub fn helper() -> u8 {{ 2 }} }}\n\
+                 mod m {{ use crate::{from}::*; pub fn f() -> u8 {{ helper() }} }}\n"
+            );
+            tree_digests(label, &cases, &executed, &[("src/lib.rs", &lib)], &none)[&run].clone()
+        };
+        assert_ne!(digest("schema-r4-21-a", "a"), digest("schema-r4-21-b", "b"));
+    }
+
+    /// R4-10 (CLOUD-2904, round 4): a function under `#[cfg(test)]` or an
+    /// `rstest` fixture is a helper of the test beside it, not a test.
+    ///
+    /// Fails by: any attribute naming `test` read as a test's, so such a
+    /// helper was dropped from the text of the test calling it.
+    #[test]
+    fn a_cfg_test_helper_or_fixture_is_its_tests_helper() {
+        let texts = |value: &str| {
+            test_texts(&format!(
+                "mod tests {{\n    #[cfg(test)]\n    fn helper() -> u8 {{ {value} }}\n    \
+                 #[rstest::fixture]\n    fn fx() -> u8 {{ 0 }}\n    #[test]\n    \
+                 fn t() {{ assert_eq!(helper(), fx()); }}\n    #[tokio::test]\n    async fn u() {{}}\n}}\n"
+            ))
+        };
+        let held = texts("1");
+        assert!(held.contains_key("t") && held.contains_key("u"), "{held:?}");
+        assert!(
+            !held.contains_key("helper") && !held.contains_key("fx"),
+            "{held:?}"
+        );
+        assert_ne!(held["t"], texts("2")["t"], "the cfg(test) helper");
     }
 
     /// S7 (CLOUD-2904, round 3): what a test module's own items name reaches
@@ -17987,7 +18254,7 @@ pub fn repo() -> u8 {{ scratch() }}
     /// which a later sweep would carry for that tree (CLOUD-2904).
     #[test]
     fn a_leftover_is_sealed_only_over_the_snapshot_it_ran_on() {
-        let mut context = seal_context();
+        let mut context = seal_context("schema-seal-snapshot-root");
         let moved = crate::scratch::scratch("schema-seal-snapshot-moved");
         record(&moved, "one", "one", Some("0"), &[("100", "0\nf1\n")]);
         std::fs::write(
@@ -18012,6 +18279,52 @@ pub fn repo() -> u8 {{ scratch() }}
         record(&held, "one", "one", Some("0"), &[("100", "0\nf1\n")]);
         std::fs::write(held.join(CONTEXT), serde_json::to_string(&context).unwrap()).unwrap();
         assert_eq!(seal_leftovers(&held).unwrap(), 1, "the snapshot held");
+        let stale = crate::scratch::scratch("schema-seal-snapshot-stale");
+        record(
+            &stale,
+            "one",
+            "one",
+            Some("0"),
+            &[("100", "0\nf1\n"), (OVER, "t-old")],
+        );
+        std::fs::write(stale.join(TREE), "t-new").unwrap();
+        std::fs::write(
+            stale.join(CONTEXT),
+            serde_json::to_string(&context).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            seal_leftovers(&stale).unwrap(),
+            0,
+            "a record made over another tree than the context's"
+        );
+        std::fs::write(stale.join(TREE), "t-old").unwrap();
+        assert_eq!(
+            seal_leftovers(&stale).unwrap(),
+            1,
+            "over the context's tree"
+        );
+    }
+
+    /// Fails by: a source directory named `target` below the root skipped,
+    /// so an edit in it moved no tree digest (round 4 #11); or the build's
+    /// own `target` at the root read.
+    #[test]
+    fn only_the_roots_target_is_left_out_of_a_tree_digest() {
+        let root = crate::scratch::scratch("schema-tree-digest-target");
+        for (path, text) in [("src/target/a.rs", "1"), ("target/out", "1")] {
+            std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.join(path), text).unwrap();
+        }
+        let held = tree_digest(&root).unwrap();
+        std::fs::write(root.join("target/out"), "2").unwrap();
+        assert_eq!(tree_digest(&root).unwrap(), held, "the build's target");
+        std::fs::write(root.join("src/target/a.rs"), "2").unwrap();
+        assert_ne!(
+            tree_digest(&root).unwrap(),
+            held,
+            "a source dir named target"
+        );
     }
 
     /// A file's compile-time inputs fold under its probes' sweep-wide ids:
