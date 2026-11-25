@@ -1216,6 +1216,13 @@ pub struct Request<'a> {
     /// any live cargo, the `cargo run` that hosts a whole lap included — kept
     /// every fixture a lap's finished suites wrote until the lap ended.
     pub fixtures_since: Option<SystemTime>,
+    /// The git directory whose killed steps' traces a pass sweeps first
+    /// (CLOUD-2783), or `None` to sweep none. THE REPOSITORY THE PASS IS FOR,
+    /// NEVER THE PROCESS'S CWD (CLOUD-2789): read off `.`, a pass over a
+    /// scratch repository reached the checkout it ran in, counted that
+    /// checkout's orphaned trace as freed, met its need from it and removed
+    /// none of the units it was asked about.
+    pub traces: Option<&'a Path>,
 }
 
 impl Request<'_> {
@@ -1309,8 +1316,8 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
     let mut removed = 0usize;
     // A KILLED STEP'S TRACE FIRST (CLOUD-2783): it is no build output, so no
     // tree walk below reaches it, and it can be the largest thing on the disk.
-    if let Ok(git_dir) = crate::git::git_dir(Path::new(".")) {
-        let (traces, bytes) = crate::step::sweep_orphaned_traces(&git_dir);
+    if let Some(git_dir) = request.traces {
+        let (traces, bytes) = crate::step::sweep_orphaned_traces(git_dir);
         removed += traces;
         freed += bytes;
     }
@@ -1527,7 +1534,9 @@ pub(crate) fn collect_toward_max_in(
     // table said: a window of `None` (no writer alive at the scan) let a pass
     // remove a fixture a suite created after it looked.
     let scanned = std::time::SystemTime::now();
+    let git_dir = crate::git::git_dir(repo).ok();
     let pass = collect(&Request {
+        traces: git_dir.as_deref(),
         copies: deadline.is_none().then_some(temp),
         trees: &trees,
         keep_generations: prune.keep,
@@ -2038,6 +2047,7 @@ mod tests {
             live_since: None,
             copies: None,
             fixtures_since: None,
+            traces: None,
         }
     }
 
@@ -2336,19 +2346,20 @@ mod tests {
     }
 
     /// Fails by: a killed step's swept trace subtracted from the bytes freed
-    /// rather than added. nextest runs each case in its own process, so the
-    /// move into the fixture repository is this case's.
+    /// rather than added. The fixture repository's git directory is HANDED to
+    /// the pass, as `collect_toward_max_in` hands its repository's (CLOUD-2789).
     #[test]
     fn a_swept_trace_counts_toward_the_bytes_freed() {
         let repo = scratch("pass-trace").join("repo");
         std::fs::create_dir_all(&repo).expect("mkdir");
         std::fs::write(repo.join("f"), b"f").expect("write");
         crate::gitwrite::commit_paths(&repo, &["f".to_owned()], "fixture").expect("commit");
-        std::env::set_current_dir(&repo).expect("enter the fixture");
-        let git_dir = crate::git::git_dir(Path::new(".")).expect("the fixture's git dir");
+        let git_dir = crate::git::git_dir(&repo).expect("the fixture's git dir");
         std::fs::write(git_dir.join("batten-step-trace-killed.trace"), b"orphaned")
             .expect("write the trace");
-        let (pass, _) = super::pass_of(&ask(&[], &[], u64::MAX));
+        let mut request = ask(&[], &[], u64::MAX);
+        request.traces = Some(&git_dir);
+        let (pass, _) = super::pass_of(&request);
         assert_eq!((pass.removed, pass.freed_bytes), (1, 8));
     }
 
@@ -2511,13 +2522,41 @@ mod tests {
     /// sees — without a deadline read off the clock, which `wall_clock`
     /// refuses in anything an assertion reads.
     ///
+    /// Fails by: a pass sweeping a git directory it was not handed — the CWD's,
+    /// as it did — or ignoring the one it was (CLOUD-2789, CLOUD-2783).
+    #[test]
+    fn a_pass_sweeps_only_the_traces_it_is_handed() {
+        let git = scratch("traces-handed");
+        // `step`'s own spelling of a killed step's trace: no runner holds its
+        // lock, so a sweep over `git` takes it.
+        let trace = git.join("batten-step-trace-killed.trace");
+        std::fs::write(&trace, vec![0_u8; 4096]).expect("write the trace");
+        let trees: Vec<PathBuf> = Vec::new();
+
+        let unhanded = super::collect(&ask(&trees, &[], 1));
+        assert!(trace.exists(), "a pass handed no git directory sweeps none");
+        assert_eq!(unhanded.removed, 0, "nothing else was there to remove");
+
+        let mut handed = ask(&trees, &[], 1);
+        handed.traces = Some(&git);
+        let swept = super::collect(&handed);
+        assert!(
+            !trace.exists(),
+            "the handed directory's killed trace is swept"
+        );
+        assert_eq!((swept.removed, swept.freed_bytes), (1, 4096));
+    }
+
     /// DATED BEFORE THE BOX'S EARLIEST LIVE BUILD, NOT BEFORE NOW (CLOUD-2789).
     /// The pass reads the real process table, and a unit read since the earliest
-    /// running `cargo` or `rustc` anywhere is live. Measured on 2e25bee46: a lap
-    /// killed an hour earlier orphaned builds that were still alive, so "newer"
-    /// (read an hour ago) was live and the case freed one unit where two were
-    /// needed. Dating both units before that start leaves the arithmetic all
-    /// the case reads, whatever else the box is running.
+    /// running `cargo` or `rustc` anywhere is live, so a build older than the
+    /// fixture's dates would keep one of them.
+    ///
+    /// AND OVER NO CHECKOUT'S TRACES. Measured twice during `test:cargo`, each
+    /// time after a step was killed: the pass swept the CWD's `.git` — the
+    /// checkout the suite ran in — met its 1 MiB from that killed step's trace,
+    /// and stopped with one removal and both units in place. The scratch repo
+    /// has no git directory, so its pass now sweeps none.
     #[test]
     fn a_collection_frees_toward_max_in_mebibytes() {
         let repo = scratch("toward-max");
