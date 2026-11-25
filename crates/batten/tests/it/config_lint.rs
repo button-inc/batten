@@ -2052,3 +2052,92 @@ fn a_module_the_base_lacks_is_no_load_failure() {
         "absence at the base is no refusal: {output:?}"
     );
 }
+
+/// A policy row registering `policy/{name}.rego`, raising a declared verdict.
+fn module_rule(name: &str) -> String {
+    format!(
+        "[[rule]]\nid = \"{name}\"\n\
+         no_fix_reason = \"class 3 (a call rewrite): nothing persists to repair\"\n\
+         kind = \"policy\"\nscope = \"mediated_call\"\nmodule = \"policy/{name}.rego\"\n\
+         severity = \"deny\"\n\n"
+    )
+}
+
+/// A module for [`module_rule`] whose one condition is `body`.
+fn module_text(name: &str, body: &str) -> String {
+    format!(
+        "package batten.{name}\nimport rego.v1\n\nrules contains \"{name}\"\n\n\
+         violation contains {{\"rule\": \"{name}\", \"verdict\": \"call name refused\"}} if {{\n\t{body}\n}}\n"
+    )
+}
+
+/// A claimed branch whose work commit adds `name`'s module, its condition `body`.
+fn claimed_branch_adding(fixture: &str, name: &str, body: &str) -> PathBuf {
+    // `must_land_on` because a fixture has no remote default branch: without a
+    // declared target the claimed run finds no fork point and stays unarmed,
+    // and the case would read the tree and prove nothing (as `weakening_pr`).
+    let head = "version = 1\nmust_land_on = \"origin/main\"\n";
+    let dir = Fixture::new(fixture)
+        .config(head)
+        .git()
+        .undeclared_trunk()
+        .base_commit()
+        .config(&format!("{head}\n{}", module_rule(name)))
+        .file(&format!("policy/{name}.rego"), &module_text(name, body))
+        .work_commit()
+        .build();
+    claim(&dir);
+    dir
+}
+
+/// Fails by: a module the branch ADDS skipped because the fork point lacks it,
+/// so under claimed arming a bare `config lint` (what `engine gate` runs with
+/// the pinned release) passes a module that release cannot evaluate — B1's
+/// own shape, `install-gate.rego` being absent on main (CLOUD-2840).
+#[test]
+fn a_claimed_branch_adding_an_unevaluable_module_is_refused() {
+    let dir = claimed_branch_adding(
+        "config-lint-claimed-unevaluable",
+        "m",
+        "data.batten.nothing.here(input.call)",
+    );
+    let output = lint(&dir, &[]);
+    let said = common::stderr(&output);
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        said.contains("policy/m.rego") && said.contains("data.batten.nothing.here"),
+        "the added module is judged from the tree: {output:?}"
+    );
+}
+
+/// The anti-vacuity half: an added module that loads passes, so the case
+/// above refuses the call and not the addition.
+#[test]
+fn a_claimed_branch_adding_an_evaluable_module_passes() {
+    let dir = claimed_branch_adding("config-lint-claimed-evaluable", "m", "input.call.go");
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+}
+
+/// Fails by: one module absent everywhere disarming the load check for every
+/// other rule, so an unevaluable module beside it passes.
+#[test]
+fn one_absent_module_never_disarms_the_load_check() {
+    let dir = Fixture::new("config-lint-one-absent")
+        .config(&format!(
+            "version = 1\n\n{}{}",
+            module_rule("m"),
+            module_rule("gone")
+        ))
+        .file(
+            "policy/m.rego",
+            &module_text("m", "data.batten.nothing.here(input.call)"),
+        )
+        .build();
+    let output = lint(&dir, &[]);
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        common::stderr(&output).contains("data.batten.nothing.here"),
+        "the present module is still judged: {output:?}"
+    );
+}
