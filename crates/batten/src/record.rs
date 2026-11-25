@@ -2114,13 +2114,13 @@ const DECIDE_LOCK: &str = "batten-record-decide.lock";
 /// holder's release, through [`crate::lock_wait`], never a blocking `flock`
 /// (CLOUD-2789). The line it writes before waiting is a pointer and the only
 /// output contention ever produces, and it is what lets a case observe the
-/// wait without timing it. A decide this process already holds is refused
+/// wait without timing it. A decide this thread already holds is refused
 /// rather than waited on: the holder would be the waiter.
 ///
 /// # Errors
 ///
 /// An internal error when the lock file cannot be opened, the lock call
-/// fails, or this process already holds it.
+/// fails, or this thread already holds it.
 pub(crate) fn hold_decide(
     family: &str,
     err: &mut dyn Write,
@@ -2156,7 +2156,7 @@ pub(crate) fn hold_decide(
     match taken {
         Taken::Held(held) => Ok(Some(held)),
         Taken::Stopped | Taken::Reentrant => Err(anyhow::anyhow!(
-            "the decide lock {} is already held by this process",
+            "the decide lock {} is already held by this thread",
             path.display()
         )),
     }

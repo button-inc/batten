@@ -4136,7 +4136,7 @@ fn open_drain_lock(path: &Path) -> std::io::Result<std::fs::File> {
 /// `Ok(false)`, never an error: losing a race is an answer.
 ///
 /// The verb's wait is [`lock_wait::acquire`]'s, on the holder's release, never
-/// a blocking `flock` (CLOUD-2789); a lock this process already holds is an
+/// a blocking `flock` (CLOUD-2789); a lock this thread already holds is an
 /// error rather than a wait on itself.
 fn take_write_lock(path: &Path, surface: facts::Surface) -> Result<Option<lock_wait::Held>> {
     let lock = open_drain_lock(path)?;
@@ -4146,7 +4146,7 @@ fn take_write_lock(path: &Path, surface: facts::Surface) -> Result<Option<lock_w
         return match lock_wait::acquire(lock, path, lock_wait::Mode::Exclusive, None)? {
             lock_wait::Taken::Held(held) => Ok(Some(held)),
             lock_wait::Taken::Stopped | lock_wait::Taken::Reentrant => Err(anyhow::anyhow!(
-                "the state write lock {} is already held by this process",
+                "the state write lock {} is already held by this thread",
                 path.display()
             )),
         };

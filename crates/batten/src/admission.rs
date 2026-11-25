@@ -741,7 +741,7 @@ fn lock(dir: &Path) -> Result<crate::lock_wait::Held> {
     // claim is that exactly one concurrent consumer wins — and a `WouldBlock`
     // treated as a refusal would make the loser's verdict depend on scheduling.
     // The wait is on the holder's release ([`crate::lock_wait`]), never a
-    // blocking `flock` (CLOUD-2789), and a store this process already holds is
+    // blocking `flock` (CLOUD-2789), and a store this thread already holds is
     // an error rather than a wait on itself.
     match crate::lock_wait::acquire(file, &path, crate::lock_wait::Mode::Exclusive, None)
         .with_context(|| format!("lock the override store in {}", dir.display()))?
@@ -749,7 +749,7 @@ fn lock(dir: &Path) -> Result<crate::lock_wait::Held> {
         crate::lock_wait::Taken::Held(held) => Ok(held),
         crate::lock_wait::Taken::Stopped | crate::lock_wait::Taken::Reentrant => {
             Err(anyhow::anyhow!(
-                "the override store in {} is already locked by this process",
+                "the override store in {} is already locked by this thread",
                 dir.display()
             ))
         }

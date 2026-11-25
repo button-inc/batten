@@ -1041,7 +1041,7 @@ pub fn spawn_lock_helper(
 /// When the helper cannot start.
 #[expect(
     clippy::disallowed_types,
-    reason = "the lock-wait helper (CLOUD-2789): batten re-entered to block on a lock its waiter \
+    reason = "stays: the lock-wait helper (CLOUD-2789): batten re-entered to block on a lock its waiter \
               can end by closing stdin; `lock_wait`'s `Helper` reaps it on every path"
 )]
 pub fn spawn_lock_helper_as(
