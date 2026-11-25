@@ -401,12 +401,16 @@ fn the_session_start_writes_the_pin() {
         "source": "startup",
     })
     .to_string();
-    let output = following(
+    let _ = following(
         &dir,
         &["adjudicate", "--harness", "claude-code"],
         &served_env(&served),
         Some(&payload),
     );
+    // THE SETUP TASK WRITES IT, NEVER THE HOOK (CLOUD-2840): `SessionStart`
+    // does in-process work only and advises the dispatch, and the task the
+    // agent dispatches adopts the engine key.
+    let output = following(&dir, &["startup", "--session"], &served_env(&served), None);
     let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
     assert_eq!(
         pinned(&config).as_deref(),
