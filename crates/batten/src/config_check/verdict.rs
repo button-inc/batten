@@ -75,8 +75,8 @@ refusal names when one exists.",
             admit(
                 "articulate the write",
                 "the surface this class names cannot express the change, so writing the \
-protected path directly is the only route left, the diff shows the write, and the owner \
-said yes to a question naming the rule and path",
+protected path directly is the only route left, the diff shows it, and the owner's later \
+Admit answer names the rule, verdict and path",
             ),
         ],
         applicability: Applicability::Advice,
