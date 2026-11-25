@@ -5842,10 +5842,10 @@ pub fn case_digests<'c>(
     let mut shared: std::collections::HashMap<String, (Vec<u8>, Vec<Shared>)> =
         std::collections::HashMap::new();
     let mut digests = std::collections::BTreeMap::new();
-    let mut named_parts: std::collections::HashMap<
-        (Vec<usize>, BTreeSet<String>),
-        (blake3::Hash, Vec<usize>),
-    > = std::collections::HashMap::new();
+    /// What a case ran and its own text names, to the named part it keys.
+    type Named =
+        std::collections::HashMap<(Vec<usize>, BTreeSet<String>), (blake3::Hash, Vec<usize>)>;
+    let mut named_parts: Named = std::collections::HashMap::new();
     let graph = Graph::new(depends);
     let mut walk = Walk::default();
     for case in cases {
