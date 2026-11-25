@@ -1362,7 +1362,8 @@ mod tests {
     fn building(profile: &Path) -> std::fs::File {
         mkdir(profile);
         let lock = profile.join(BUILD_LOCK);
-        let held = std::fs::File::create(&lock).and_then(|file| file.lock().map(|()| file));
+        let held = std::fs::File::create(&lock)
+            .and_then(|file| file.try_lock().map(|()| file).map_err(std::io::Error::from));
         match held {
             Ok(file) => file,
             Err(why) => panic!("fixture: could not lock {}: {why}", lock.display()),

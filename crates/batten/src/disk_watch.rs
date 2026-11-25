@@ -803,7 +803,7 @@ mod tests {
             )
             .expect("date the fixture");
         let held = crate::durable::open_handle(&tree).expect("open the tree");
-        held.lock()
+        held.try_lock()
             .expect("hold the tree as another collector would");
         let held = Arc::new(std::sync::Mutex::new(Some(held)));
         let config = crate::config_model::Prune {
