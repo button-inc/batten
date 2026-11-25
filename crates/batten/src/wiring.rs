@@ -1247,8 +1247,8 @@ mod tests {
     }
 
     /// THE COMMITTED WIRING MAY NOT BOUND AN ENGINE THAT INSTALLS INLINE
-    /// (CLOUD-2840). Fails by: `.claude/settings.json` declaring a `timeout` on
-    /// batten's `SessionStart` entry while `batten.toml` pins a release whose
+    /// (CLOUD-2840). Fails by: this repository's committed Claude Code surface
+    /// declaring a `timeout` on batten's `SessionStart` entry while `batten.toml` pins a release whose
     /// `SessionStart` runs the locked install inline (v0.0.221): the bound
     /// killed that install on a cold container, and the next `mise` call
     /// auto-installed unlocked into a 403 (CLOUD-2881).
@@ -1259,9 +1259,13 @@ mod tests {
             &crate::fsio::read_to_string(root.join("batten.toml")).expect("the authority"),
         )
         .expect("the authority parses");
+        // THE HARNESS'S OWN DECLARED SURFACE, never a spelled path: the core
+        // names no consumer artifact (non-negotiable rule 1).
+        let surface = match claude() {
+            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
+        };
         let settings: serde_json::Value = serde_json::from_str(
-            &crate::fsio::read_to_string(root.join(".claude/settings.json"))
-                .expect("the committed surface"),
+            &crate::fsio::read_to_string(root.join(surface)).expect("the committed surface"),
         )
         .expect("the surface parses");
         let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);

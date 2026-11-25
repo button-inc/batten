@@ -2077,7 +2077,14 @@ pub(crate) const BOUNDED_SINCE: Option<&str> = None;
 /// and the other nested hosts do not share that unit, so a number planted
 /// there would mean something else.
 pub(crate) fn entry_timeout(harness: Harness, spelling: &str) -> Option<u64> {
-    (BOUNDED_SINCE.is_some() && harness == Harness::ClaudeCode && spelling == "SessionStart")
+    bound_since(BOUNDED_SINCE, harness, spelling)
+}
+
+/// [`entry_timeout`] for an engine first bounded at `since`: the decision
+/// apart from the constant, so each of its terms is shown able to fail while
+/// no release is bounded yet.
+fn bound_since(since: Option<&str>, harness: Harness, spelling: &str) -> Option<u64> {
+    (since.is_some() && harness == Harness::ClaudeCode && spelling == "SessionStart")
         .then_some(10)
 }
 
