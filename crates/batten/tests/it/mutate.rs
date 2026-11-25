@@ -1589,6 +1589,56 @@ fn the_copy_is_a_repository_so_a_suite_that_resolves_its_own_root_answers_about_
     assert_eq!(code, 0, "{out}{err}");
 }
 
+/// The tier [`a_suite_reading_the_index_judges_the_mutant`] runs: the gate's
+/// STAGED bytes, `git show :path`, as a gate judging the committed rule reads
+/// them, never the checkout's.
+const INDEX_GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
+    std::process::Command::new("bash")
+        .args(["-c", "git show :mise-tasks/toy.sh | bash -s -- \"$0\"", input])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .status()
+        .expect("run the toy gate from the index")
+        .code()
+}
+"#;
+
+#[cfg(unix)]
+#[test]
+fn a_suite_reading_the_index_judges_the_mutant() {
+    // CLOUD-2789: `mise.toml`'s `settings-unlocked` row survived because the
+    // mutant reached the staged checkout and not its index, which is what
+    // `batten check` reads for a committed rule. A suite that reads the index
+    // must see the mutant, and the restore must put the index back, or the
+    // control case after it reads the last row's corruption.
+    let root = toy("index");
+    let mut gate = String::from(TOY_GATE);
+    gate.push_str(CAUGHT);
+    gate.push('\n');
+    write_program(&root, "mise-tasks/toy.sh", &gate);
+    write(
+        &root,
+        "tests/toy.rs",
+        &format!(
+            "{}{}{}",
+            INDEX_GATE_HELPER,
+            case(
+                "over_the_limit_is_refused",
+                "assert_eq!(gate(\"99\"), Some(1));"
+            ),
+            case(
+                "under_the_limit_passes",
+                "assert_eq!(gate(\"1\"), Some(0));"
+            ),
+        ),
+    );
+    cargo_package(&root);
+    track(&root);
+    let (code, out, err) = sweep(&root, "toy");
+    assert!(!out.contains("SURVIVED"), "{out}{err}");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+}
+
 #[cfg(unix)]
 #[test]
 fn anti_vacuity_a_listed_gate_with_no_declaration_fails_rather_than_being_skipped() {

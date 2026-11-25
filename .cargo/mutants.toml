@@ -197,4 +197,10 @@ exclude_re = [
   # is the positive pid strace prints, so `walk_back` never looks one up, and a
   # positive result is inserted either way (CLOUD-2789).
   'trace\.rs:\d+:\d+: replace match guard result\.parse::<u32>\(\)\.is_ok_and\(\|child\| child > 0\) with true in Cwds::read$',
+  # `entry_timeout` is `bound_since(BOUNDED_SINCE, ..)`, and while no release is
+  # bounded `BOUNDED_SINCE` is `None`, so the function answers `None` for every
+  # input and its `None` mutant is the function itself. `bound_since`'s own
+  # terms are judged apart. `hook::tests::entry_timeout_is_excluded_only_while_unbounded`
+  # fails the day a bound ships with this line still here (CLOUD-2789).
+  'hook\.rs:\d+:\d+: replace entry_timeout -> Option<u64> with None$',
 ]
