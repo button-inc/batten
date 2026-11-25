@@ -669,6 +669,7 @@ mod tests {
     /// Fails by: the floor's stop test inverted, so a watcher with no runtime
     /// never samples until it is stopped, and then never ends.
     #[test]
+    #[allow(clippy::expect_used)]
     fn the_blocking_floor_ticks_until_it_is_stopped() {
         let stop = crate::lock_wait::Stop::new().expect("a stop");
         let mut ticks = 0;
@@ -774,6 +775,7 @@ mod tests {
     ///
     /// Fails by: a `drop` that does not store, or stores `false`.
     #[test]
+    #[allow(clippy::expect_used)]
     fn the_watcher_is_stopped_however_the_body_leaves() {
         let stop = crate::lock_wait::Stop::new().expect("a stop");
         drop(Stop(&stop));
