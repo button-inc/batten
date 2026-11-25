@@ -842,6 +842,55 @@ fn a_surviving_grandchild_cannot_hang_exec() {
     );
 }
 
+/// An owned tree ends WITH its child on the clean path too (CLOUD-2789): a
+/// child that exits 0 leaving a grandchild on its stdout is followed by its
+/// group, so the drain reaches EOF on the grandchild's death and the
+/// grandchild does not outlive the `exec` that dispatched it.
+///
+/// Fails by: the clean path reaping the direct child only, as the
+/// interrupted paths alone used to signal the group — the drain then waits out
+/// its budget on the held pipe and reports it, and the grandchild lives on.
+#[test]
+fn an_owned_tree_ends_with_its_child_on_a_clean_exit() {
+    let dir = repo("pgroup-clean-exit", true);
+    let home = scratch("pgroup-clean-exit-home");
+    let note = dir.join("holder.pid");
+    let child = script(
+        &dir,
+        &format!(
+            "sleep 300 &\nprintf '%s' \"$!\" > {note}\n",
+            note = note.display()
+        ),
+    );
+
+    let output = exec_command(&dir, &home, &child, &[])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn batten exec")
+        .streamed_wait()
+        .expect("batten exits");
+    let holder: i32 = await_file(&note).parse().expect("a pid");
+
+    let said = String::from_utf8_lossy(&output.stderr);
+    let ended = await_death(holder);
+    if !ended {
+        signal(u32::try_from(holder).expect("a positive pid"), "KILL");
+    }
+    assert!(
+        output.status.success(),
+        "the wrapped command exited 0: {said}"
+    );
+    assert!(
+        !said.contains("did not reach EOF"),
+        "the grandchild was ended with its group, so both pipes closed: {said}"
+    );
+    assert!(
+        ended,
+        "the grandchild at {holder} outlived the clean exit of its owned group"
+    );
+}
+
 /// A group whose leader and registrant are both gone, with a member that began
 /// before the record's last stamp, is the orphan a reap may signal
 /// (CLOUD-2366); the same group against a stamp no member predates is not.
