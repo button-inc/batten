@@ -14501,6 +14501,19 @@ mod tests {
     }
     use super::*;
 
+    /// Fails by: a bound planted while no release is bounded (CLOUD-2881's
+    /// killed install), on any harness but Claude Code, or on any event but
+    /// `SessionStart`; or no bound once a release is (CLOUD-2840).
+    #[test]
+    fn only_a_bounded_engines_claude_session_start_carries_a_bound() {
+        assert_eq!(entry_timeout(Harness::ClaudeCode, "SessionStart"), None);
+        assert_eq!(bound_since(None, Harness::ClaudeCode, "SessionStart"), None);
+        let since = Some("v0.0.222");
+        assert_eq!(bound_since(since, Harness::ClaudeCode, "SessionStart"), Some(10));
+        assert_eq!(bound_since(since, Harness::ClaudeCode, "PreToolUse"), None);
+        assert_eq!(bound_since(since, Harness::GeminiCli, "SessionStart"), None);
+    }
+
     /// CLOUD-2509: a leading `/` is absolute on every host, and the host flag
     /// alone never makes a relative word absolute. Fails by: either operator
     /// flipped between `||` and `&&`.
