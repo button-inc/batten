@@ -3128,8 +3128,15 @@ pub struct Identity<'a> {
     /// probed function in its file ([`file_fns`]); absent where the file has
     /// no probe.
     pub file_fns: &'a std::collections::BTreeMap<u32, BTreeSet<String>>,
-    /// The mutants handed back, which no reach run switches.
+    /// The mutants this rendering does not switch, handed back or unviable
+    /// ([`unswitched`]): no reach run reaches them, so none is ever listed.
     pub classic: &'a BTreeSet<u32>,
+}
+
+/// The mutants a rendering leaves unswitched: those handed back (`classic`)
+/// and those its build refused (`unviable`), which [`render`] skips.
+fn unswitched(classic: &BTreeSet<u32>, unviable: &BTreeSet<u32>) -> BTreeSet<u32> {
+    classic.union(unviable).copied().collect()
 }
 
 /// [`Identity::file_fns`] for `mutants` over `schema`: each mutant with no
@@ -3593,6 +3600,13 @@ pub fn seal_reach(
 /// the end was absent after a kill, so every mutant read as new and every
 /// recorder-sealed record was dropped — the crash it exists for.
 ///
+/// ONLY THE SWITCHED MUTANTS (CLOUD-2911): a listed key is one no record need be
+/// made again for, which holds only where this rendering switched it. A handed
+/// back or unviable mutant's key, listed, made a later sweep that switched it
+/// carry every record that ran its function without it, and judge it on the
+/// cases recorded fresh alone: the tip census read `declared_in`'s `&&` MISSED
+/// while six `item_index` cases kill it.
+///
 /// # Errors
 ///
 /// The file cannot be written.
@@ -3600,7 +3614,9 @@ fn write_listed(base: &std::path::Path, identity: &Identity<'_>) -> anyhow::Resu
     let listing = identity
         .sites
         .iter()
-        .flatten()
+        .enumerate()
+        .filter(|(id, _)| u32::try_from(*id).is_ok_and(|id| !identity.classic.contains(&id)))
+        .filter_map(|(_, key)| key.as_ref())
         .fold(String::new(), |mut listing, key| {
             listing.push_str(key);
             listing.push('\n');
@@ -5863,11 +5879,12 @@ pub fn sweep(
     let trees = (work.as_path(), target.as_path(), state.as_path());
     let ids = (&resource_ids, resources.as_str());
     let format = sweep_format(live, mutants, &schema, unprobed);
+    let skipped = unswitched(&classic, &unviable);
     let (reach, digests, seconds, red) = reached(
         trees,
         &root,
         mutants,
-        (&schema, &site_keys, &classic, &format),
+        (&schema, &site_keys, &skipped, &format),
         ids,
         out,
     )?;
@@ -7828,6 +7845,81 @@ mod tests {
         assert_eq!(reach.executed.get(&kept), Some(&BTreeSet::from([1])));
         assert_eq!(reach.sites.get(&0), Some(&BTreeSet::from([kept.clone()])));
         assert_eq!(reach.seconds.get(&kept), Some(&2.5));
+    }
+
+    /// A mutant the recording rendering did not switch (handed back, or
+    /// unviable) is never listed, since no case could reach it: once a later
+    /// rendering switches it, every record that ran its function is new to it
+    /// and is recorded again.
+    ///
+    /// Fails by: an unswitched mutant's key listed, so the next sweep carries
+    /// records that never saw it and judges it on the fresh cases alone, as the
+    /// tip census judged `declared_in`'s `&&` MISSED while six carried
+    /// `item_index` cases kill it (CLOUD-2911); or a still-unswitched mutant
+    /// clearing the records of the function it sits in.
+    #[test]
+    fn a_mutant_its_record_did_not_switch_is_new_once_switched() {
+        let probes = [String::from("fa")];
+        let sites = [Some(String::from("key-0"))];
+        let fns: std::collections::BTreeMap<u32, String> = [(0, String::from("fa"))].into();
+        let handed = unswitched(&BTreeSet::from([0]), &BTreeSet::new());
+        let unviable = unswitched(&BTreeSet::new(), &BTreeSet::from([0]));
+        let switched = BTreeSet::new();
+        let same = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+                    _: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+            executed
+                .keys()
+                .map(|case| (case.clone(), String::from("same")))
+                .collect()
+        };
+        for (then, label) in [(&handed, "handed back"), (&unviable, "unviable")] {
+            let base = crate::scratch::scratch("schema-reach-unswitched");
+            record(&base, "ran", "ran", Some("0"), &[("100", "f0\n")]);
+            let recorded = Identity {
+                probes: &probes,
+                sites: &sites,
+                mutant_fns: &fns,
+                file_fns: &std::collections::BTreeMap::new(),
+                classic: then,
+            };
+            let mut reach = collect_reach(&base, &recorded).unwrap();
+            reach.tree = String::from("tree-1");
+            let ran = (String::from("ran"), String::from("bin"));
+            let digests = [(ran, String::from("same"))].into();
+            seal_reach(
+                &base,
+                &reach,
+                &digests,
+                &recorded,
+                &std::collections::BTreeMap::new(),
+                true,
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(base.join(LISTED)).unwrap(),
+                "",
+                "{label}: no record could reach it, so it is not listed"
+            );
+            assert_eq!(
+                carry_forward(&base, "tree-2", &recorded, (&same, None)).unwrap(),
+                (1, 0),
+                "{label} still: the record of its function carries"
+            );
+            let now = Identity {
+                classic: &switched,
+                ..recorded
+            };
+            assert_eq!(
+                carry_forward(&base, "tree-3", &now, (&same, None)).unwrap(),
+                (0, 0),
+                "{label} then switched: the record never saw it"
+            );
+            assert!(!base.join("ran").exists(), "{label}: recorded again");
+        }
+        assert_eq!(
+            unswitched(&BTreeSet::from([2]), &BTreeSet::from([5])),
+            BTreeSet::from([2, 5])
+        );
     }
 
     /// A new mutant no probed function encloses clears only the records that
