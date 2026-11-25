@@ -115,9 +115,11 @@ fn traced() -> bool {
     common::traced()
 }
 
-/// The verdict counts every sweep of the fixture reaches.
-const COUNTS: &str =
-    "{\"caught\": 2, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 2 classic";
+/// The verdict counts every sweep of the fixture reaches. The hang is CAUGHT,
+/// not a timeout (CLOUD-2904's hang-as-caught): its case is cut at its own
+/// limit while its control passes inside a fifth of it, so the mutant's run is
+/// what ran long, and a run that cannot end is a kill.
+const COUNTS: &str = "{\"caught\": 3, \"missed\": 1, \"uncovered\": 1}, 1 unviable, 2 classic";
 
 /// Every verdict a sweep can reach, each from its own mutant: a kill, a
 /// survivor a case reaches, a site no case reaches, a hang, and a mutant that
@@ -150,14 +152,15 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     let (code, said, err) = sweep();
     assert_eq!(
         code,
-        Some(3),
-        "the fixture's hang is a timeout, and a timeout decides nothing, so the sweep exits 3 (W1, could-not-look outranks a survivor's 2)\n{said}\n{err}"
+        Some(2),
+        "the fixture's hang is caught (its control passes inside a fifth of the cut), so \
+         nothing is left undecided and the survivor's 2 is the exit\n{said}\n{err}"
     );
     assert!(said.contains(COUNTS), "{said}\n{err}");
     for line in [
         "missed\tsurvive\n",
         "uncovered\tunreached\n",
-        "timeout\thang\n",
+        "1 mutant(s) caught by a hang",
         "build 1 refused 1 mutant(s), handed back 1 for a const caller",
         "classic\tconst-caller\n",
         "classic\tfield\n",
@@ -165,7 +168,7 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
         assert!(said.contains(line), "{line:?} in {said}");
     }
     let (code, again, err) = sweep();
-    assert_eq!(code, Some(3), "{again}\n{err}");
+    assert_eq!(code, Some(2), "{again}\n{err}");
     // NO BUILD ROUND REDISCOVERS WHAT THE FIRST SWEEP FOUND: the unviable
     // mutant and the const-caller hand-back are both journaled, so the second
     // sweep's first build is clean — once, the hand-back cost a refused build
@@ -173,9 +176,10 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     for line in [
         "1 unviable, 1 handed back and 0 unprobed file(s) known from earlier runs",
         "build 1 clean, 1 unviable",
-        // FOUR, NOT FIVE (W1): the hang's stored timeout decided nothing, so
-        // it is judged again on every sweep and never reused.
-        "reused 4 of 5 verdict(s)",
+        // ALL FIVE: the hang is caught (CLOUD-2904), a decision, so it is
+        // stored and reused like any kill. A timeout would decide nothing and
+        // be judged again on every sweep (W1).
+        "reused 5 of 5 verdict(s)",
         COUNTS,
     ] {
         assert!(again.contains(line), "{line:?} in {again}\n{err}");
@@ -187,7 +191,7 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     let edited = LIB.replace("    5\n}", "    4 + 1\n}");
     common::write(&repo, "src/lib.rs", &edited);
     let (code, third, err) = sweep();
-    assert_eq!(code, Some(3), "{third}\n{err}");
+    assert_eq!(code, Some(2), "{third}\n{err}");
     assert!(third.contains("reused 3 of 5 verdict(s)"), "{third}\n{err}");
     assert!(
         third.contains("reach carried 2 case(s) across the change"),
@@ -203,13 +207,14 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     );
     common::write(&repo, "src/lib.rs", &grown);
     let (code, fourth, err) = sweep();
-    assert_eq!(code, Some(3), "{fourth}\n{err}");
+    assert_eq!(code, Some(2), "{fourth}\n{err}");
     assert!(
         fourth.contains("reach carried 3 case(s) across the change"),
         "an added item re-records no case: {fourth}"
     );
+    // Every verdict, the caught hang's included (CLOUD-2904): nothing moved.
     assert!(
-        fourth.contains("reused 4 of 5 verdict(s)"),
+        fourth.contains("reused 5 of 5 verdict(s)"),
         "{fourth}\n{err}"
     );
     // AND ITS SOUNDNESS HALF: what leaves the skeleton is in the item's probe,
@@ -217,7 +222,7 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     let inlined = grown.replace("pub fn five()", "#[inline(never)]\npub fn five()");
     common::write(&repo, "src/lib.rs", &inlined);
     let (code, fifth, err) = sweep();
-    assert_eq!(code, Some(3), "{fifth}\n{err}");
+    assert_eq!(code, Some(2), "{fifth}\n{err}");
     assert!(fifth.contains("reused 3 of 5 verdict(s)"), "{fifth}\n{err}");
     assert!(
         fifth.contains("reach carried 2 case(s) across the change"),
@@ -228,9 +233,9 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     // untraced, every case keys on every non-Rust file and is judged again.
     common::write(&repo, "notes.txt", "a note no case reads\n");
     let (code, sixth, err) = sweep();
-    assert_eq!(code, Some(3), "{sixth}\n{err}");
+    assert_eq!(code, Some(2), "{sixth}\n{err}");
     assert_eq!(
-        sixth.contains("reused 4 of 5 verdict(s)"),
+        sixth.contains("reused 5 of 5 verdict(s)"),
         traced(),
         "traced: {}\n{sixth}\n{err}",
         traced()
@@ -311,7 +316,7 @@ fn a_sweep_under_a_supervising_task_moves_its_signal() {
     let said = common::stdout(&output);
     assert_eq!(
         output.status.code(),
-        Some(3),
+        Some(2),
         "{said}\n{}",
         common::stderr(&output)
     );
@@ -546,7 +551,7 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
         (output.status.code(), said, common::stderr(&output))
     };
     let (code, first, err) = sweep(false);
-    assert_eq!(code, Some(3), "{first}\n{err}");
+    assert_eq!(code, Some(2), "{first}\n{err}");
     assert!(first.contains(COUNTS), "{first}\n{err}");
     // The head moves under `adds` (it runs `five`), and the stopper fires once
     // `adds` has re-recorded and the two carried cases have been skipped.
@@ -558,7 +563,7 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
         "the cases ran side by side: {killed}\n{err}"
     );
     assert_ne!(code, Some(0), "{killed}\n{err}");
-    assert_ne!(code, Some(3), "the sweep never reported: {killed}\n{err}");
+    assert_ne!(code, Some(2), "the sweep never reported: {killed}\n{err}");
     assert!(
         !killed.contains(COUNTS),
         "killed before any verdict: {killed}"
@@ -567,7 +572,7 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
     let grown = format!("{edited}pub fn helper(x: u8) -> u8 {{\n    x\n}}\n");
     common::write(&repo, "src/lib.rs", &grown);
     let (code, third, err) = sweep(false);
-    assert_eq!(code, Some(3), "{third}\n{err}");
+    assert_eq!(code, Some(2), "{third}\n{err}");
     for line in [
         "sealed 1 case(s) a stopped run finished",
         "reach carried 3 case(s)",
