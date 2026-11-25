@@ -171,6 +171,19 @@ pub struct SegmentLine {
     pub redirects: Vec<String>,
     /// This command's own span, exactly as written.
     pub raw: String,
+    /// Whether this command CALLS A SHELL FUNCTION the text defines before it
+    /// (CLOUD-2840): its first word, unwrapped, names a definition written
+    /// earlier in the same list or one enclosing it. Such a call runs the
+    /// function's body, which is judged as segments of its own, and nothing on
+    /// `PATH`.
+    ///
+    /// Decided by the walk, in order, never by name alone. A definition after
+    /// the call, inside a branch, loop, group or subshell that may not run, or
+    /// in another pipeline stage does not count, and a call through `env`,
+    /// `command`, `sudo` or any other wrapper runs the `PATH` program, so its
+    /// first word is the wrapper's and this stays `false`. Each of those was a
+    /// way to hide a real program behind a name.
+    pub function_call: bool,
 }
 
 /// The shell operator between two segments — what happens to the first one's
@@ -233,53 +246,6 @@ pub fn runnable_prefix(command: &str) -> crate::facts::Look<Vec<Segment>> {
         }
     }
     crate::facts::Look::CouldNotLook
-}
-
-/// The names of the shell functions `command` defines (CLOUD-2840): a call to
-/// one runs the function's body, which the reach already reads, and nothing on
-/// `PATH`. Empty where `command` does not parse.
-#[must_use]
-pub fn function_names(command: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    if let Ok(nodes) = rable::parse(command, false) {
-        for node in &nodes {
-            defined_in(node, &mut names);
-        }
-    }
-    names
-}
-
-/// The functions `node` defines, at any depth a definition is written in
-/// practice: the top level, a list, and a compound command's bodies.
-fn defined_in(node: &rable::Node, names: &mut Vec<String>) {
-    match &node.kind {
-        rable::NodeKind::Function { name, body } => {
-            names.push(name.clone());
-            defined_in(body, names);
-        }
-        rable::NodeKind::List { items, .. } => {
-            for item in items {
-                defined_in(&item.command, names);
-            }
-        }
-        rable::NodeKind::BraceGroup { body, .. }
-        | rable::NodeKind::Subshell { body, .. }
-        | rable::NodeKind::While { body, .. }
-        | rable::NodeKind::Until { body, .. }
-        | rable::NodeKind::For { body, .. }
-        | rable::NodeKind::Select { body, .. } => defined_in(body, names),
-        rable::NodeKind::If {
-            then_body,
-            else_body,
-            ..
-        } => {
-            defined_in(then_body, names);
-            if let Some(body) = else_body {
-                defined_in(body, names);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// Split a command into shell-separated segments, over a real bash PARSE.
@@ -395,9 +361,12 @@ pub fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
         .as_ref()
         .map_or((&nodes, command), |(text, parsed)| (parsed, text.as_str()));
     let mut out: Vec<Segment> = Vec::new();
+    // ONE SCOPE ACROSS THE TOP-LEVEL NODES: a definition on one line is visible
+    // to a call on the next (CLOUD-2840).
+    let mut defined: Vec<String> = Vec::new();
     for (position, node) in reading.iter().enumerate() {
         let first = out.len();
-        flatten(node, source, None, &mut out);
+        flatten_scoped(node, source, None, None, &mut defined, &mut out);
         // A NEWLINE BETWEEN TWO TOP-LEVEL COMMANDS IS A `;` (CLOUD-2234). The
         // joined reading folds such lines into one segment, but a heredoc keeps
         // the parse as written, and there the next command is its own node: the
@@ -439,15 +408,18 @@ pub fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
         // every walk reads this through — a local shadowing that name reads as the
         // function to anybody scanning for it.
         let mut line_readings: Vec<SegmentLine> = Vec::new();
+        let mut defined: Vec<String> = Vec::new();
         for node in &nodes {
             let mut produced: Vec<Segment> = Vec::new();
-            flatten(node, command, None, &mut produced);
+            flatten_scoped(node, command, None, None, &mut defined, &mut produced);
             for segment in produced {
                 if !segment.nested {
+                    let function_call = segment.lines.iter().any(|line| line.function_call);
                     line_readings.push(SegmentLine {
                         words: segment.words,
                         redirects: segment.redirects,
                         raw: segment.raw,
+                        function_call,
                     });
                 }
             }
@@ -726,6 +698,7 @@ pub fn flatten_command(
     source: &str,
     after: Option<Separator>,
     construct: Option<(&'static str, &'static str)>,
+    defined: &[String],
     out: &mut Vec<Segment>,
 ) {
     let rable::NodeKind::Command {
@@ -773,10 +746,16 @@ pub fn flatten_command(
     if segment.words.iter().any(String::is_empty) {
         segment.words.retain(|word| !word.is_empty());
     }
+    // THE FIRST WORD UNWRAPPED, against the definitions visible here: a
+    // wrapper's call (`env f`, `command f`) has the wrapper as its first word.
+    let function_call = words
+        .first()
+        .is_some_and(|word| defined.contains(&unquote(&word_text(word))));
     segment.lines = vec![SegmentLine {
         words: segment.words.clone(),
         redirects: segment.redirects.clone(),
         raw: segment.raw.clone(),
+        function_call,
     }];
     // Everything the descent produced is nested, however deep: an inner `$(…)`
     // inside an outer one is still not a line of the command that contains them.
@@ -795,8 +774,62 @@ pub fn flatten_in(
     construct: Option<(&'static str, &'static str)>,
     out: &mut Vec<Segment>,
 ) {
+    flatten_scoped(node, source, after, construct, &mut Vec::new(), out);
+}
+
+/// A REDIRECTION WRITTEN ON A COMPOUND COMMAND applies to every command inside
+/// it (CLOUD-2840 review M5): `{ cat f; } > out` and `for …; done > all` write
+/// the file exactly as `cat f > out` does. `rable` keeps such a redirection on
+/// the `BraceGroup`, `Subshell`, loop, `If` or `Case` node, so a walk that read
+/// only the body dropped it, and the reads inside were granted as reads.
+///
+/// The tokens are appended to each command's words, redirections and lines, so
+/// they stay the suffix of its words; a command substitution inside runs with
+/// its output captured, so a nested segment takes none.
+fn redirected(out: &mut [Segment], first: usize, redirects: &[rable::Node], source: &str) {
+    if redirects.is_empty() {
+        return;
+    }
+    let tokens: Vec<String> = redirects
+        .iter()
+        .flat_map(|redirect| redirect_words(redirect, source))
+        .collect();
+    let binds = redirects.iter().any(binds_stdin);
+    let bodies: Vec<String> = redirects.iter().filter_map(stdin_text).collect();
+    for segment in out.iter_mut().skip(first).filter(|segment| !segment.nested) {
+        segment.words.extend(tokens.iter().cloned());
+        segment.redirects.extend(tokens.iter().cloned());
+        segment.input_redirect |= binds;
+        segment.stdin_text.extend(bodies.iter().cloned());
+        for line in &mut segment.lines {
+            line.words.extend(tokens.iter().cloned());
+            line.redirects.extend(tokens.iter().cloned());
+        }
+    }
+}
+
+/// [`flatten_in`], over the shell functions `defined` before `node` runs
+/// (CLOUD-2840 review B2).
+///
+/// A definition is visible to the LATER items of the list it is written in, and
+/// to everything nested in them. It does not escape a compound command, a
+/// subshell or a pipeline stage — a branch may not run, a subshell's
+/// definitions die with it — so those walk a copy. That reads fewer calls as
+/// functions than bash might, which reports a program where there may be none:
+/// the safe direction, where the other hid a real one.
+pub fn flatten_scoped(
+    node: &rable::Node,
+    source: &str,
+    after: Option<Separator>,
+    construct: Option<(&'static str, &'static str)>,
+    defined: &mut Vec<String>,
+    out: &mut Vec<Segment>,
+) {
+    let first = out.len();
     match &node.kind {
-        rable::NodeKind::Command { .. } => flatten_command(node, source, after, construct, out),
+        rable::NodeKind::Command { .. } => {
+            flatten_command(node, source, after, construct, defined, out);
+        }
         rable::NodeKind::Pipeline { commands, .. } => {
             for (index, command) in commands.iter().enumerate() {
                 // A stage's terminator is the pipe that FOLLOWS it; the last
@@ -820,7 +853,14 @@ pub fn flatten_in(
                 } else {
                     after
                 };
-                flatten_in(command, source, follows, construct, out);
+                flatten_scoped(
+                    command,
+                    source,
+                    follows,
+                    construct,
+                    &mut defined.clone(),
+                    out,
+                );
             }
         }
         rable::NodeKind::List { items } => {
@@ -834,21 +874,22 @@ pub fn flatten_in(
                     // it is the only one `rable` leaves without an operator.
                     None => after,
                 };
-                flatten_in(&item.command, source, follows, construct, out);
+                flatten_scoped(&item.command, source, follows, construct, defined, out);
             }
         }
         // A GROUPING runs its body in this call's own right, so it is walked.
         // A SUBSHELL's body is also marked, because its `cd` dies with it; a
         // brace group runs in this shell, so its `cd` does not.
-        rable::NodeKind::Subshell { body, .. } => {
-            let first = out.len();
-            flatten_in(body, source, after, construct, out);
+        rable::NodeKind::Subshell { body, redirects } => {
+            flatten_scoped(body, source, after, construct, &mut defined.clone(), out);
             for segment in &mut out[first..] {
                 segment.grouped = true;
             }
+            redirected(out, first, redirects, source);
         }
-        rable::NodeKind::BraceGroup { body, .. } => {
-            flatten_in(body, source, after, construct, out);
+        rable::NodeKind::BraceGroup { body, redirects } => {
+            flatten_scoped(body, source, after, construct, &mut defined.clone(), out);
+            redirected(out, first, redirects, source);
         }
         // **A CONTROL-FLOW BODY IS WALKED AND TAGGED**, which is what makes a
         // module able to decide from structure (CLOUD-1381).
@@ -870,49 +911,148 @@ pub fn flatten_in(
         // condition is where a process probe lives, the body is where a sleep
         // does.
         rable::NodeKind::While {
-            condition, body, ..
+            condition,
+            body,
+            redirects,
         } => {
-            flatten_in(condition, source, None, Some(("while", "condition")), out);
-            flatten_in(body, source, after, Some(("while", "body")), out);
+            let mut inner = defined.clone();
+            flatten_scoped(
+                condition,
+                source,
+                None,
+                Some(("while", "condition")),
+                &mut inner,
+                out,
+            );
+            flatten_scoped(
+                body,
+                source,
+                after,
+                Some(("while", "body")),
+                &mut inner,
+                out,
+            );
+            redirected(out, first, redirects, source);
         }
         rable::NodeKind::Until {
-            condition, body, ..
+            condition,
+            body,
+            redirects,
         } => {
-            flatten_in(condition, source, None, Some(("until", "condition")), out);
-            flatten_in(body, source, after, Some(("until", "body")), out);
+            let mut inner = defined.clone();
+            flatten_scoped(
+                condition,
+                source,
+                None,
+                Some(("until", "condition")),
+                &mut inner,
+                out,
+            );
+            flatten_scoped(
+                body,
+                source,
+                after,
+                Some(("until", "body")),
+                &mut inner,
+                out,
+            );
+            redirected(out, first, redirects, source);
         }
         rable::NodeKind::If {
             condition,
             then_body,
             else_body,
-            ..
+            redirects,
         } => {
-            flatten_in(condition, source, None, Some(("if", "condition")), out);
-            flatten_in(then_body, source, None, Some(("if", "body")), out);
+            let mut inner = defined.clone();
+            flatten_scoped(
+                condition,
+                source,
+                None,
+                Some(("if", "condition")),
+                &mut inner,
+                out,
+            );
+            flatten_scoped(
+                then_body,
+                source,
+                None,
+                Some(("if", "body")),
+                &mut inner.clone(),
+                out,
+            );
             if let Some(body) = else_body {
-                flatten_in(body, source, after, Some(("if", "body")), out);
+                flatten_scoped(body, source, after, Some(("if", "body")), &mut inner, out);
             }
+            redirected(out, first, redirects, source);
         }
         // `for` COUNTS rather than tests, so it is a different node and a
         // different answer: `for i in $(seq 60); do sleep 10; done` exits on the
         // clock like any timer. The bash guard named that a deliberate
         // non-catch "because narrowing that costs a real parser"; it costs none
         // now, and the narrowing is that this is not a `while`.
-        rable::NodeKind::For { body, .. } | rable::NodeKind::ForArith { body, .. } => {
-            flatten_in(body, source, after, Some(("for", "body")), out);
+        rable::NodeKind::For {
+            body, redirects, ..
         }
-        rable::NodeKind::Select { body, .. } => {
-            flatten_in(body, source, after, Some(("select", "body")), out);
+        | rable::NodeKind::ForArith {
+            body, redirects, ..
+        } => {
+            flatten_scoped(
+                body,
+                source,
+                after,
+                Some(("for", "body")),
+                &mut defined.clone(),
+                out,
+            );
+            redirected(out, first, redirects, source);
         }
-        rable::NodeKind::Case { patterns, .. } => {
+        rable::NodeKind::Select {
+            body, redirects, ..
+        } => {
+            flatten_scoped(
+                body,
+                source,
+                after,
+                Some(("select", "body")),
+                &mut defined.clone(),
+                out,
+            );
+            redirected(out, first, redirects, source);
+        }
+        rable::NodeKind::Case {
+            patterns,
+            redirects,
+            ..
+        } => {
             for arm in patterns {
                 if let Some(body) = arm.body.as_ref() {
-                    flatten_in(body, source, None, Some(("case", "body")), out);
+                    flatten_scoped(
+                        body,
+                        source,
+                        None,
+                        Some(("case", "body")),
+                        &mut defined.clone(),
+                        out,
+                    );
                 }
             }
+            redirected(out, first, redirects, source);
         }
-        rable::NodeKind::Function { body, .. } => {
-            flatten_in(body, source, after, Some(("function", "body")), out);
+        // A DEFINITION is visible to the items after it, and to its own body
+        // (recursion); the body is walked and judged where it is written.
+        rable::NodeKind::Function { name, body } => {
+            let mut inner = defined.clone();
+            inner.push(name.clone());
+            flatten_scoped(
+                body,
+                source,
+                after,
+                Some(("function", "body")),
+                &mut inner,
+                out,
+            );
+            defined.push(name.clone());
         }
         // `! cmd` and `time cmd` WRAP a pipeline rather than being one, so the
         // command is one level down. Missing these is an under-deny and was
@@ -921,10 +1061,17 @@ pub fn flatten_in(
         // with the negation unwalked its `pgrep` reached no segment at all, so
         // the guard allowed the exact command it was written for.
         rable::NodeKind::Negation { pipeline } | rable::NodeKind::Time { pipeline, .. } => {
-            flatten_in(pipeline, source, after, construct, out);
+            flatten_scoped(
+                pipeline,
+                source,
+                after,
+                construct,
+                &mut defined.clone(),
+                out,
+            );
         }
         rable::NodeKind::Coproc { command, .. } => {
-            flatten_in(command, source, after, construct, out);
+            flatten_scoped(command, source, after, construct, &mut defined.clone(), out);
         }
         // Anything else contains no command position.
         //
