@@ -22,7 +22,7 @@
 //!   wake and costs one `try_lock`.
 //! - **A [`Stop`].** A caller that must be able to give up passes one; raising
 //!   it from any thread wakes the wait at once through an `eventfd`.
-//! - **Re-entry.** A lock this process already holds through [`acquire`] is
+//! - **Re-entry.** A lock this THREAD already holds through [`acquire`] is
 //!   refused as [`Taken::Reentrant`] instead of waited on, because the holder is
 //!   the waiter and the release can never come — the `step run` deadlock.
 //!
@@ -72,7 +72,7 @@ pub enum Taken {
     Held(Held),
     /// The [`Stop`] was raised before the lock came free.
     Stopped,
-    /// This process already holds the lock in a conflicting mode, so waiting
+    /// This THREAD already holds the lock in a conflicting mode, so waiting
     /// would wait on itself.
     Reentrant,
 }
@@ -81,7 +81,7 @@ pub enum Taken {
 #[derive(Debug)]
 pub struct Held {
     file: File,
-    key: Option<Key>,
+    hold: Option<Hold>,
 }
 
 impl Held {
@@ -94,8 +94,8 @@ impl Held {
 
 impl Drop for Held {
     fn drop(&mut self) {
-        if let Some(key) = self.key {
-            release(key);
+        if let Some(hold) = self.hold {
+            release(hold);
         }
     }
 }
@@ -183,41 +183,62 @@ impl Stop {
 /// A file's identity, so two handles to one file are one lock.
 type Key = (u64, u64);
 
-/// The locks this process holds through [`acquire`]: mode and holder count.
-static HELD: Mutex<Option<HashMap<Key, (Mode, usize)>>> = Mutex::new(None);
-
-/// Register `key` as held in `mode`, or `false` when that conflicts with a
-/// hold this process already has.
-fn register(key: Key, mode: Mode) -> bool {
-    let Ok(mut held) = HELD.lock() else {
-        return true;
-    };
-    let held = held.get_or_insert_with(HashMap::new);
-    match held.get_mut(&key) {
-        None => {
-            held.insert(key, (mode, 1));
-            true
-        }
-        Some((Mode::Shared, count)) if mode == Mode::Shared => {
-            *count += 1;
-            true
-        }
-        Some(_) => false,
-    }
+/// One registered hold: which file, which thread took it, in which mode.
+#[derive(Debug, Clone, Copy)]
+struct Hold {
+    key: Key,
+    thread: std::thread::ThreadId,
+    mode: Mode,
 }
 
-/// Drop one holder of `key`.
-fn release(key: Key) {
+/// The locks this process holds through [`acquire`], each with the threads
+/// that hold it and their modes.
+///
+/// RE-ENTRY IS PER THREAD. The deadlock this refuses is a thread waiting on a
+/// hold it took itself, which nothing can ever release. Another thread of the
+/// same process is a holder like any other process: its own descriptor, its own
+/// `flock`, and a release it can see, so it waits rather than being refused.
+static HELD: Mutex<Option<HashMap<Key, Vec<(std::thread::ThreadId, Mode)>>>> = Mutex::new(None);
+
+/// Register `key` as held in `mode` by this thread, or `None` when this thread
+/// already holds it in a conflicting mode.
+fn register(key: Key, mode: Mode) -> Option<Hold> {
+    let thread = std::thread::current().id();
+    let hold = Hold { key, thread, mode };
+    let Ok(mut held) = HELD.lock() else {
+        return Some(hold);
+    };
+    let holders = held
+        .get_or_insert_with(HashMap::new)
+        .entry(key)
+        .or_default();
+    let conflicts = holders.iter().any(|(holder, held_mode)| {
+        *holder == thread && (*held_mode == Mode::Exclusive || mode == Mode::Exclusive)
+    });
+    if conflicts {
+        return None;
+    }
+    holders.push((thread, mode));
+    Some(hold)
+}
+
+/// Drop `hold`, wherever its guard ended up.
+fn release(hold: Hold) {
     let Ok(mut held) = HELD.lock() else {
         return;
     };
     let Some(held) = held.as_mut() else {
         return;
     };
-    if let Some((_, count)) = held.get_mut(&key) {
-        *count -= 1;
-        if *count == 0 {
-            held.remove(&key);
+    if let Some(holders) = held.get_mut(&hold.key) {
+        if let Some(at) = holders
+            .iter()
+            .position(|entry| *entry == (hold.thread, hold.mode))
+        {
+            holders.swap_remove(at);
+        }
+        if holders.is_empty() {
+            held.remove(&hold.key);
         }
     }
 }
@@ -276,14 +297,15 @@ pub fn acquire_announced(
     stop: Option<&Stop>,
     parked: &mut dyn FnMut(),
 ) -> std::io::Result<Taken> {
-    let key = key_of(&file)?;
-    if let Some(key) = key
-        && !register(key, mode)
-    {
-        return Ok(Taken::Reentrant);
-    }
+    let hold = match key_of(&file)? {
+        Some(key) => match register(key, mode) {
+            Some(hold) => Some(hold),
+            None => return Ok(Taken::Reentrant),
+        },
+        None => None,
+    };
     // From here an early return releases the registration through the guard.
-    let held = Held { file, key };
+    let held = Held { file, hold };
     if attempt(&held.file, mode)? {
         return Ok(Taken::Held(held));
     }
@@ -302,13 +324,14 @@ pub fn acquire_announced(
 ///
 /// When the identity cannot be read or the lock call itself fails.
 pub fn try_acquire(file: File, mode: Mode) -> std::io::Result<Option<Held>> {
-    let key = key_of(&file)?;
-    if let Some(key) = key
-        && !register(key, mode)
-    {
-        return Ok(None);
-    }
-    let held = Held { file, key };
+    let hold = match key_of(&file)? {
+        Some(key) => match register(key, mode) {
+            Some(hold) => Some(hold),
+            None => return Ok(None),
+        },
+        None => None,
+    };
+    let held = Held { file, hold };
     Ok(attempt(&held.file, mode)?.then_some(held))
 }
 
@@ -772,6 +795,31 @@ mod tests {
             Some(std::process::ExitCode::from(2)),
             "an unknown mode is refused, not waited on"
         );
+    }
+
+    /// Fails by: a second THREAD of the process refused as re-entry, when it is
+    /// a holder like any other and can wait for the first one's release
+    /// (admission's two concurrent consumers). The first thread's hold is
+    /// dropped on the second's park event.
+    #[test]
+    fn a_second_thread_waits_for_the_first_rather_than_being_refused() {
+        let (path, file) = lock_file("second-thread");
+        let Taken::Held(first) = acquire(file, &path, Mode::Exclusive, None).unwrap() else {
+            panic!("the first thread takes it");
+        };
+        let (ready, parked) = std::sync::mpsc::channel();
+        let waiter = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                let mut park = move || {
+                    let _ = ready.send(());
+                };
+                acquire_announced(reopen(&path), &path, Mode::Exclusive, None, &mut park)
+            })
+        };
+        parked.recv().unwrap();
+        drop(first);
+        assert!(matches!(waiter.join().unwrap().unwrap(), Taken::Held(_)));
     }
 
     /// Fails by: two shared holds in one process refused as re-entry.

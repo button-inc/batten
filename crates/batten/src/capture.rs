@@ -780,7 +780,7 @@ impl Index {
         {
             crate::lock_wait::Taken::Held(held) => held,
             crate::lock_wait::Taken::Stopped | crate::lock_wait::Taken::Reentrant => {
-                anyhow::bail!("the locator index lock is already held by this process")
+                anyhow::bail!("the locator index lock is already held by this thread")
             }
         };
 
