@@ -455,6 +455,18 @@ fn the_declared_lock_writer_may_switch_it_off() {
     assert_eq!(code, Some(0), "the declared writer is clean\n{said}");
 }
 
+/// Mark `path` executable where the platform has the bit.
+fn make_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the tool executable");
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 /// The `mise` the suite runs under.
 fn host_mise() -> PathBuf {
     std::env::var_os("PATH")
@@ -506,10 +518,14 @@ fn cold_mise(project: &Path, home: &Path, args: &[&str]) -> (bool, String) {
 /// restated, the two checks must agree with the job for the bare dir and the
 /// registered one alike. `mise.toml`'s `settings-lockfile-off` and
 /// `settings-unlocked` rows reopen the split, and this case reddens.
-#[cfg(unix)]
 #[test]
 fn the_toolchain_checks_decide_as_the_job_resolves() {
-    use std::os::unix::fs::PermissionsExt as _;
+    // THE FIXTURE TOOL IS AN `sh` SCRIPT: off unix there is no tool for the job
+    // to run, and the case compiles everywhere so the other target type-checks
+    // it.
+    if !cfg!(unix) {
+        return;
+    }
     let committed: toml::Table = std::fs::read_to_string(common::at_root("mise.toml"))
         .expect("read mise.toml")
         .parse()
@@ -547,9 +563,7 @@ fn the_toolchain_checks_decide_as_the_job_resolves() {
         write(&project, "mise.lock", &lock);
         let installs = home.join("data/installs/github-example-org-example-tool");
         write(&installs, "1.0.0/example-tool", "#!/bin/sh\nexit 0\n");
-        let binary = installs.join("1.0.0/example-tool");
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
-            .expect("make the tool executable");
+        make_executable(&installs.join("1.0.0/example-tool"));
         if registered {
             write(
                 &installs,
