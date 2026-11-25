@@ -1310,9 +1310,30 @@ fn record_includes(
 }
 
 /// The key of the `use` scope of `module` in `place`'s package
-/// ([`USE_SCOPE`]).
+/// ([`USE_SCOPE`]): every module-level `use` is defined under it, and a
+/// method call made in the module reaches it, since which trait is in scope
+/// decides what the call dispatches to.
 fn use_scope(place: &FileScope, module: &str) -> String {
-    format!("{USE_SCOPE}{}{DEFINED_IN}{module}", place.package)
+    format!("{USE_SCOPE}{}\u{7}{module}", place.package)
+}
+
+/// The key of the glob `use`s of `module` in `place`'s package: every
+/// mention made in the module reaches it, since a glob shadows the prelude.
+fn use_globs(place: &FileScope, module: &str) -> String {
+    format!("{USE_SCOPE}*{}\u{7}{module}", place.package)
+}
+
+/// Whether `token` is a method call's name, or may be one inside a macro's
+/// token tree: what a trait in scope dispatches.
+fn method_call(token: &ra_ap_syntax::SyntaxToken) -> bool {
+    token
+        .parent()
+        .and_then(ast::NameRef::cast)
+        .and_then(|name| name.syntax().parent())
+        .is_some_and(|parent| parent.kind() == SyntaxKind::METHOD_CALL_EXPR)
+        || token
+            .parent_ancestors()
+            .any(|node| node.kind() == SyntaxKind::TOKEN_TREE)
 }
 
 /// A new skeleton item's group ([`probe_sites`]): the keys it is defined
@@ -1873,8 +1894,19 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
             linked_names.push(String::new());
         }
     }
-    if matches!(item, ast::Item::Use(_)) && !place.unscoped && !is_member(item) {
+    if let ast::Item::Use(it) = item
+        && !place.unscoped
+        && !is_member(item)
+    {
         linked_names.push(use_scope(place, &module));
+        if it
+            .syntax()
+            .descendants()
+            .filter_map(ast::UseTree::cast)
+            .any(|tree| tree.star_token().is_some())
+        {
+            linked_names.push(use_globs(place, &module));
+        }
     }
     let impl_mark = if matches!(item, ast::Item::Impl(_)) {
         IMPL_DEFINED.to_string()
@@ -2026,10 +2058,14 @@ fn token_mentions(
             .any(|node| matches!(node.kind(), SyntaxKind::MACRO_RULES | SyntaxKind::MACRO_DEF));
     let module = place.module_at(token.parent().as_ref());
     let scope = (!unscoped).then(|| {
-        // EVERY MENTION REACHES ITS MODULE'S `use`S (CLOUD-2904): swapping the
-        // trait or glob in scope changes what a call dispatches to with no
-        // name of the `use` written.
-        mentions.insert(use_scope(place, &module));
+        // A METHOD CALL REACHES ITS MODULE'S `use`S, AND EVERY MENTION ITS
+        // GLOBS (CLOUD-2904): swapping the trait in scope changes what a call
+        // dispatches to, and a glob what an unqualified name resolves to,
+        // with no name of the `use` written.
+        mentions.insert(use_globs(place, &module));
+        if method_call(token) {
+            mentions.insert(use_scope(place, &module));
+        }
         format!("{MENTIONED_IN}{}{MENTIONED_IN}{module}", place.package)
     });
     for name in names {
@@ -6337,9 +6373,9 @@ fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
         let Some(module) = function.syntax().parent() else {
             continue;
         };
-        // EVERY ENCLOSING MODULE'S HELPERS AND ITEMS, NOT ONLY ITS OWN
-        // (CLOUD-2904): a test in `mod tests` calls the file's top-level
-        // helpers too.
+        // EVERY ENCLOSING MODULE'S ITEMS, NOT ONLY ITS OWN (CLOUD-2904): a
+        // test in `mod tests` names the file's top-level consts and statics
+        // too.
         let (helpers, helper_names, items) = modules
             .entry(usize::from(module.text_range().start()))
             .or_insert_with(|| {
@@ -6350,9 +6386,11 @@ fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
                             || node.kind() == SyntaxKind::SOURCE_FILE
                     })
                     .collect();
-                let siblings: Vec<ast::Fn> = enclosing
-                    .iter()
-                    .flat_map(SyntaxNode::children)
+                // A HELPER IS A FUNCTION OF THE TEST'S OWN MODULE: an enclosing
+                // module's functions are the code under test, keyed by what a
+                // case runs.
+                let siblings: Vec<ast::Fn> = module
+                    .children()
                     .filter_map(ast::Fn::cast)
                     .filter(|sibling| !is_test(sibling))
                     .collect();
@@ -14089,20 +14127,29 @@ mod tests {
         );
     }
 
-    /// S3 (CLOUD-2904, round 3): a test's text carries the helpers of every
-    /// module enclosing it, so an edit to a top-level helper a test in `mod
-    /// tests` calls moves the test's text.
+    /// S3 (CLOUD-2904, round 3): a test's text carries the items of every
+    /// module enclosing it that it reaches, so an edit to a top-level `const`
+    /// a test in `mod tests` names moves the test's text, while an edit to a
+    /// top-level function, the code under test, does not.
     ///
-    /// Fails by: only the test's own module's helpers keyed.
+    /// Fails by: only the test's own module's items keyed, or an enclosing
+    /// module's functions keyed as helpers (an edit to the code under test
+    /// moves every case in the file).
     #[test]
-    fn a_tests_text_carries_its_enclosing_modules_helpers() {
-        let source = |value: &str| {
+    fn a_tests_text_carries_its_enclosing_modules_items() {
+        let source = |value: &str, code: &str| {
             format!(
-                "fn top() -> u8 {{ {value} }}\nmod tests {{\n    #[test]\n    \
-                 fn t() {{ assert_eq!(super::top(), 1); }}\n}}\n"
+                "const TOP: u8 = {value};\nfn code() -> u8 {{ {code} }}\nmod tests {{\n    \
+                 #[test]\n    fn t() {{ assert_eq!(super::TOP, super::code()); }}\n}}\n"
             )
         };
-        assert_ne!(test_texts(&source("1"))["t"], test_texts(&source("2"))["t"]);
+        let held = test_texts(&source("1", "1"));
+        assert_ne!(test_texts(&source("2", "1"))["t"], held["t"], "TOP");
+        assert_eq!(
+            test_texts(&source("1", "2"))["t"],
+            held["t"],
+            "the code under test"
+        );
     }
 
     /// S4 (CLOUD-2904, round 3): what a case's own test text names starts the
@@ -14322,14 +14369,16 @@ mod tests {
     fn the_schema_scopes_a_moved_package_flat() {
         let root = crate::scratch::scratch("schema-flat-write");
         let work = crate::scratch::scratch("schema-flat-work");
-        std::fs::create_dir_all(root.join("p/src")).unwrap();
-        std::fs::write(root.join("p/Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
-        std::fs::write(
-            root.join("p/src/lib.rs"),
-            "#[path = \"x.rs\"]\nmod x;\nconst fn helper() -> u8 { 1 }\npub fn f() -> bool { helper() == 1 }\n",
-        )
-        .unwrap();
-        std::fs::write(root.join("p/src/x.rs"), "pub fn g() {}\n").unwrap();
+        for tree in [&root, &work] {
+            std::fs::create_dir_all(tree.join("p/src")).unwrap();
+            std::fs::write(tree.join("p/Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+            std::fs::write(
+                tree.join("p/src/lib.rs"),
+                "#[path = \"x.rs\"]\nmod x;\nconst fn helper() -> u8 { 1 }\npub fn f() -> bool { helper() == 1 }\n",
+            )
+            .unwrap();
+            std::fs::write(tree.join("p/src/x.rs"), "pub fn g() {}\n").unwrap();
+        }
         let mutant = Listed {
             file: String::from("p/src/lib.rs"),
             ..listed("BinaryOperator", "!=", (4, 32), (4, 34))
