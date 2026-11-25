@@ -2544,7 +2544,10 @@ fn a_cargo_sweep_without_nextest_refuses_before_it_builds() {
         1,
         "{out}{err}"
     );
-    assert!(!out.contains("mutant(s) of"), "nothing was listed: {out}{err}");
+    assert!(
+        !out.contains("mutant(s) of"),
+        "nothing was listed: {out}{err}"
+    );
 }
 
 /// [`rust_gate_repo`] with cargo-mutants provisioned, so only nextest can be
@@ -2587,12 +2590,26 @@ fn a_provisioned_sweep_without_nextest_refuses_before_it_lists() {
     let (path, home) = without_nextest("cargo-sweep-provisioned-no-nextest-home");
     let (code, out, err) = mutate_cargo(
         &root,
-        &[("MUTANT_WHOLE_TREE", "1"), ("PATH", &path), ("CARGO_HOME", &home)],
+        &[
+            ("MUTANT_WHOLE_TREE", "1"),
+            ("PATH", &path),
+            ("CARGO_HOME", &home),
+        ],
     );
     assert_eq!(code, Some(3), "{out}{err}");
-    assert_eq!(out.matches("cargo-nextest runner-absent").count(), 1, "{out}{err}");
-    assert!(!out.contains("cargo-mutants runner-absent"), "provisioned: {out}{err}");
-    assert!(!out.contains("mutant(s) of"), "nothing was listed: {out}{err}");
+    assert_eq!(
+        out.matches("cargo-nextest runner-absent").count(),
+        1,
+        "{out}{err}"
+    );
+    assert!(
+        !out.contains("cargo-mutants runner-absent"),
+        "provisioned: {out}{err}"
+    );
+    assert!(
+        !out.contains("mutant(s) of"),
+        "nothing was listed: {out}{err}"
+    );
 }
 
 /// THE REACH SEED ASKS TOO (CLOUD-2881): the detached seed lists and builds the
@@ -2612,8 +2629,15 @@ fn a_reach_seed_without_nextest_refuses_before_it_lists() {
         ],
     );
     assert_eq!(code, Some(3), "{out}{err}");
-    assert_eq!(out.matches("cargo-nextest runner-absent").count(), 1, "{out}{err}");
-    assert!(!out.contains("reach seed over"), "nothing was listed: {out}{err}");
+    assert_eq!(
+        out.matches("cargo-nextest runner-absent").count(),
+        1,
+        "{out}{err}"
+    );
+    assert!(
+        !out.contains("reach seed over"),
+        "nothing was listed: {out}{err}"
+    );
 }
 
 /// A CHANGE OR THE WHOLE WORKSPACE, NEVER BOTH (CLOUD-2849): a schedule that

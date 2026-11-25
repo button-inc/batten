@@ -195,9 +195,10 @@ fn setup_process_in(repo: &Path) -> bool {
         }
         let cmdline = std::fs::read(entry.path().join("cmdline")).unwrap_or_default();
         let words: Vec<&[u8]> = cmdline.split(|byte| *byte == 0).collect();
-        let dispatched = words.windows(2).any(|pair| pair == [&b"startup"[..], &b"--session"[..]]);
-        dispatched
-            && std::fs::read_link(entry.path().join("cwd")).is_ok_and(|cwd| cwd == repo)
+        let dispatched = words
+            .windows(2)
+            .any(|pair| pair == [&b"startup"[..], &b"--session"[..]]);
+        dispatched && std::fs::read_link(entry.path().join("cwd")).is_ok_and(|cwd| cwd == repo)
     })
 }
 
@@ -251,11 +252,16 @@ fn blocking_bench(name: &str) -> (PathBuf, PathBuf) {
 #[test]
 fn a_session_start_spawns_nothing_and_names_the_dispatch() {
     let (repo, gate) = blocking_bench("session-start-spawns-nothing");
-    let (out, err) = door(&repo, "SessionStart", &serde_json::json!({}));
-    let said = format!("{out}{err}");
+    let (out, _) = door(&repo, "SessionStart", &serde_json::json!({}));
+    // ON THE ADVISORY CHANNEL every hook's advice uses: Claude Code's
+    // `additionalContext`, the document the model reads at session start.
+    let document: serde_json::Value = serde_json::from_str(&out).expect("one JSON document");
+    let advised = document["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
     assert!(
-        said.contains("batten startup --session") && said.contains("run_in_background"),
-        "the door names the dispatch and how to run it: {said}"
+        advised.contains("batten startup --session") && advised.contains("run_in_background"),
+        "the door names the dispatch and how to run it: {out}"
     );
     assert_eq!(setup_phase(&repo), None, "the registry names no task");
     assert!(!setup_process_in(&repo), "no setup process runs");
@@ -264,10 +270,13 @@ fn a_session_start_spawns_nothing_and_names_the_dispatch() {
     let mut child = dispatch(&repo, common::batten())
         .spawn()
         .expect("the task starts");
-    write_gate(reader(&mut child, &repo, &gate), "released\n");
+    let held = reader(&mut child, &repo, &gate);
+    // ANTI-VACUITY: the probe sees the task once it holds the gate.
+    assert!(setup_process_in(&repo), "the probe sees a running task");
+    write_gate(held, "released\n");
     let ended = child.streamed_wait().expect("the task ends");
-    assert_eq!(ended.status.code(), Some(1), "a speaking handler is a finding");
-    assert_eq!(setup_phase(&repo).as_deref(), Some("failed"));
+    assert_eq!(ended.status.code(), Some(0), "advice is not failure");
+    assert_eq!(setup_phase(&repo).as_deref(), Some("ok"));
 }
 
 /// Fails by: a dispatched task the registry cannot name while it runs; a
@@ -302,7 +311,11 @@ fn a_blocking_handler_holds_nothing_and_is_said_once() {
         .streamed_output()
         .expect("the second dispatch runs");
     assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
-    assert_eq!(setup_field(&repo, "pid"), first_pid, "one record, the first's");
+    assert_eq!(
+        setup_field(&repo, "pid"),
+        first_pid,
+        "one record, the first's"
+    );
     assert!(
         !pre_tool(&repo).contains("step finished"),
         "nothing is said while the task runs"
@@ -310,8 +323,10 @@ fn a_blocking_handler_holds_nothing_and_is_said_once() {
 
     write_gate(held, "released\n");
     let ended = child.streamed_wait().expect("the task ends");
-    assert_eq!(ended.status.code(), Some(1), "a speaking handler is a finding");
-    assert_eq!(setup_phase(&repo).as_deref(), Some("failed"));
+    // ADVICE IS NOT FAILURE (review of 076a19082): the handler exits `0` and
+    // speaks, so the task ends `ok` and its words are said once, below.
+    assert_eq!(ended.status.code(), Some(0), "advice is not failure");
+    assert_eq!(setup_phase(&repo).as_deref(), Some("ok"));
     let first = pre_tool(&repo);
     assert!(
         first.contains("step finished: released"),
@@ -321,6 +336,31 @@ fn a_blocking_handler_holds_nothing_and_is_said_once() {
     assert!(
         !second.contains("step finished"),
         "and only the first: {second}"
+    );
+}
+
+/// Fails by: the dispatch owed once per CLONE, so a new session in it is never
+/// told to install and an old `ok` opens the gate for a session that never
+/// dispatched (review of 076a19082); or owed again on a resume of a session
+/// whose task finished.
+#[test]
+fn the_dispatch_is_owed_once_per_session() {
+    let repo = bench("session-start-per-session", "exit 0", 5000);
+    let advised = |session: &str, source: &str| {
+        let (out, _) = door(
+            &repo,
+            "SessionStart",
+            &serde_json::json!({"session_id": session, "source": source}),
+        );
+        out.contains("batten startup --session")
+    };
+    assert!(advised("one", "startup"), "a new session owes a dispatch");
+    assert_eq!(settle(&repo), "ok");
+    assert!(!advised("one", "resume"), "its resume owes nothing");
+    assert!(!advised("one", "compact"), "nor its compaction");
+    assert!(
+        advised("two", "startup"),
+        "a new session in the clone owes its own"
     );
 }
 
