@@ -656,6 +656,90 @@ pub fn relocated_items(before: &Index, after: &Index) -> BTreeMap<Key, Key> {
         .collect()
 }
 
+/// Functions HEAD turned into FORWARDERS, each paired with the item it
+/// forwards to (CLOUD-2789). FOR SPLICING, NEVER FOR COMPARISON.
+///
+/// A crate cut can leave an item where it was and move its work: HEAD's
+/// `batten::engine::make_executable` became one call to
+/// `crate::durable::make_executable`, which now lives in `batten-facts`. A test
+/// body that moved out of `batten` along with its file cannot name `batten` any
+/// more, so its base form, spliced as written, failed to compile, and the
+/// replay read that as an expectation change. HEAD's own form of the test calls
+/// the forwarder's target, and so does the base form once it is spelled there:
+/// the forwarder adds nothing but an error type, so what the body asserts is
+/// unchanged.
+///
+/// A forwarder is a top-level `fn` declared in the same file on both sides,
+/// whose HEAD body makes exactly one call to a path ending in its own name
+/// (other calls only `Ok`, `Some` or `Err`), and whose callee resolves in
+/// HEAD, from that file, to an item of the same name in a different file.
+#[must_use]
+pub fn forwarded_items(
+    before: &Index,
+    after: &Index,
+    files: &BTreeMap<String, String>,
+) -> BTreeMap<Key, Key> {
+    const WRAPPERS: [&str; 3] = ["Ok", "Some", "Err"];
+    let mut forwarded = BTreeMap::new();
+    for (file, text) in files {
+        let Some((krate, _)) = after.files.get(file) else {
+            continue;
+        };
+        let declared_at_base = before.declared_in(file);
+        let Some(at_base) = declared_at_base.get(&Vec::new()) else {
+            continue;
+        };
+        let parsed = ast::SourceFile::parse(text, Edition::Edition2024).tree();
+        for item in parsed.items() {
+            let ast::Item::Fn(function) = item else {
+                continue;
+            };
+            let (Some(name), Some(body)) = (function.name(), function.body()) else {
+                continue;
+            };
+            let name = name.text().to_string();
+            if !at_base.contains(&name) {
+                continue;
+            }
+            let mut callee = None;
+            let mut others = false;
+            for call in body.syntax().descendants().filter_map(ast::CallExpr::cast) {
+                let Some(ast::Expr::PathExpr(path)) = call.expr() else {
+                    others = true;
+                    continue;
+                };
+                let written = path.syntax().text().to_string();
+                let segments: Vec<String> = written
+                    .split("::")
+                    .map(|segment| segment.trim().to_owned())
+                    .collect();
+                if segments.len() >= 2 && segments.last() == Some(&name) && callee.is_none() {
+                    callee = Some(segments);
+                } else if !WRAPPERS.contains(&written.trim()) {
+                    others = true;
+                }
+            }
+            let Some(callee) = callee.filter(|_| !others) else {
+                continue;
+            };
+            let absolute: Vec<String> = match callee.split_first() {
+                Some((first, rest)) if first == "crate" => std::iter::once(krate.clone())
+                    .chain(rest.iter().cloned())
+                    .collect(),
+                _ => callee,
+            };
+            if let Some((site, used)) = after.resolve_through(&absolute, 8, false)
+                && used == absolute.len()
+                && site.0 != *file
+                && site.1 == name
+            {
+                forwarded.insert((file.clone(), name), site);
+            }
+        }
+    }
+    forwarded
+}
+
 /// Items that LEFT their base file, each paired with the item HEAD's own code
 /// binds the old path to (CLOUD-2789).
 ///
@@ -1868,6 +1952,74 @@ mod tests {
             "{ two::error::Native::A; }"
         );
         Ok(())
+    }
+
+    /// Fails by: an item that stayed put but became one call to an item in
+    /// another file pairs with nothing, so a base body that moved out of the
+    /// forwarder's crate is spliced naming a crate it cannot reach, and fails to
+    /// compile (CLOUD-2789: `crate::engine::make_executable`, now a forwarder to
+    /// `crate::durable::make_executable`). One that does other work is no
+    /// forwarder, and pairs with nothing.
+    #[test]
+    fn a_function_that_became_a_forwarder_is_spelled_at_its_target() {
+        let lib = ("src/lib.rs", "pub mod engine;\npub mod durable;\n");
+        let base = index(&[
+            ROOT,
+            lib,
+            (
+                "src/engine.rs",
+                "pub fn make_executable(p: u8) -> u8 { p + 1 }\n",
+            ),
+            ("src/durable.rs", ""),
+        ]);
+        let durable = (
+            "src/durable.rs",
+            "pub fn make_executable(p: u8) -> u8 { p + 1 }\n",
+        );
+        let forwarder = (
+            "src/engine.rs",
+            "pub fn make_executable(p: u8) -> Option<u8> {\n    \
+             Some(crate::durable::make_executable(p))\n}\n",
+        );
+        let head = index(&[ROOT, lib, forwarder, durable]);
+        let texts: BTreeMap<String, String> = [lib, forwarder, durable]
+            .into_iter()
+            .map(|(path, text)| (path.to_owned(), text.to_owned()))
+            .collect();
+        assert_eq!(
+            forwarded_items(&base, &head, &texts)
+                .get(&("src/engine.rs".to_owned(), "make_executable".to_owned())),
+            Some(&("src/durable.rs".to_owned(), "make_executable".to_owned()))
+        );
+        // A CALLEE SPELLED THROUGH A CRATE'S NAME, as a forwarder into another
+        // crate is (`batten_facts::durable::…`), is already absolute: it is
+        // resolved as written, never rooted at the forwarder's own crate.
+        let named = (
+            "src/engine.rs",
+            "pub fn make_executable(p: u8) -> Option<u8> {\n    \
+             Some(app::durable::make_executable(p))\n}\n",
+        );
+        let head = index(&[ROOT, lib, named, durable]);
+        let texts: BTreeMap<String, String> = [lib, named, durable]
+            .into_iter()
+            .map(|(path, text)| (path.to_owned(), text.to_owned()))
+            .collect();
+        assert_eq!(
+            forwarded_items(&base, &head, &texts)
+                .get(&("src/engine.rs".to_owned(), "make_executable".to_owned())),
+            Some(&("src/durable.rs".to_owned(), "make_executable".to_owned()))
+        );
+        let working = (
+            "src/engine.rs",
+            "pub fn make_executable(p: u8) -> u8 {\n    \
+             log(p);\n    crate::durable::make_executable(p)\n}\nfn log(_: u8) {}\n",
+        );
+        let head = index(&[ROOT, lib, working, durable]);
+        let texts: BTreeMap<String, String> = [lib, working, durable]
+            .into_iter()
+            .map(|(path, text)| (path.to_owned(), text.to_owned()))
+            .collect();
+        assert!(forwarded_items(&base, &head, &texts).is_empty());
     }
 
     /// Fails by: an item edited as it moved, with nothing left at its old home,
