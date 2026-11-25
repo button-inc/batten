@@ -14657,7 +14657,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             "and the mediator is not reached at all on this path: {attempts:?}"
         );
 
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir).expect("remove the case's scratch directory");
     }
 
     /// A program only the pin provides, named so no `PATH` resolves it.
@@ -14901,7 +14901,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             "the image is tried once and never retried: {walked:?}"
         );
 
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir).expect("remove the case's scratch directory");
     }
 
     /// Rung -1 spawns only an image named `batten`, and answers with any spawn
@@ -14975,7 +14975,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         );
         assert!(tried.len() > 1, "and the ladder is walked on it: {tried:?}");
 
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir).expect("remove the case's scratch directory");
     }
 
     /// An unparseable `key_shape` is a LOAD error, never a per-call discard.
