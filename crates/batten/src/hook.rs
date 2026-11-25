@@ -17321,6 +17321,9 @@ mod tests {
             "git() { :; }; true && unset -f git; git push --force origin main",
             "git() { :; }; if true; then unset -f git; fi; git push --force origin main",
             "git() { :; }; f() { unset -f git; }; f; git push --force origin main",
+            "git() { :; }; f() { :; }; true && unset -f git; git push --force origin main",
+            "f() { :; }; false && git() { :; }; git push --force origin main",
+            "f() { :; }; true && f() { \"$@\"; }; f git push --force origin main",
         ] {
             assert!(
                 programs(text).iter().any(|found| found == "git"),
@@ -17332,6 +17335,8 @@ mod tests {
             "touched() { echo x; } && touched",
             "touched() { echo x; }; true && touched",
             "touched() { echo x; }; unset -v touched; touched",
+            "touched() { echo x; }; f() { touched; }; f",
+            "touched() { echo x; }; f() { :; }; true && f() { :; }; touched",
         ] {
             assert!(
                 !programs(text).iter().any(|found| found == "touched"),
