@@ -2218,6 +2218,30 @@ mod tests {
         assert_eq!(unset(&["builtin"]), None);
     }
 
+    /// CLOUD-2789: a branch that MAY redefine a function adds its body beside
+    /// the one before it, since a call may run either; a body both sides hold
+    /// is kept once, and a name the branch did not keep is dropped.
+    ///
+    /// Fails by: the branch's new body dropped, or a body already kept pushed
+    /// again.
+    #[test]
+    fn an_uncertain_redefinition_keeps_both_bodies_once() {
+        let def = |name: &str, program: &str| super::Definition {
+            name: name.to_owned(),
+            lines: vec![words(&[program])],
+            unsets: Vec::new(),
+        };
+        let mut defined = vec![def("f", "old"), def("g", "kept"), def("h", "gone")];
+        super::merge_uncertain(
+            &mut defined,
+            &[def("f", "new"), def("g", "kept"), def("i", "fresh")],
+        );
+        assert_eq!(
+            defined,
+            [def("f", "old"), def("g", "kept"), def("f", "new")]
+        );
+    }
+
     /// Fails by: an assignment's name misread, so a program is taken for an
     /// assignment or an assignment for a program.
     #[test]
