@@ -721,7 +721,7 @@ test_a_required_platform_missing_entirely_is_a_finding if {
 test_a_backend_that_cannot_lock_is_exempt_from_locking_nothing if {
 	count(violation) == 0 with input as fixture_input(
 		{"tools": {"rust": [{"version": "1.85.0", "backend": "core:rust"}]}},
-		{"settings": fixture_locked, "tools":{"rust": "1.85.0"}},
+		{"settings": fixture_locked, "tools": {"rust": "1.85.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
 }
@@ -734,7 +734,7 @@ test_an_asset_backend_that_locks_nothing_is_a_finding if {
 			"version": "0.23.0",
 			"backend": "ubi:rust-cross/cargo-zigbuild",
 		}]}},
-		{"settings": fixture_locked, "tools":{}},
+		{"settings": fixture_locked, "tools": {}},
 	)
 		with data.batten.patterns as fixture_patterns
 	v.rule == "tool pin partial"
@@ -743,7 +743,7 @@ test_an_asset_backend_that_locks_nothing_is_a_finding if {
 test_a_tool_declaring_no_backend_is_a_finding if {
 	some v in violation with input as fixture_input(
 		{"tools": {"mystery": [{"version": "1"}]}},
-		{"settings": fixture_locked, "tools":{}},
+		{"settings": fixture_locked, "tools": {}},
 	)
 		with data.batten.patterns as fixture_patterns
 	v.verdict == "tool declare missing"
@@ -752,7 +752,7 @@ test_a_tool_declaring_no_backend_is_a_finding if {
 test_a_declared_tool_with_no_lock_entry_is_a_finding if {
 	some v in violation with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools":{
+		{"settings": fixture_locked, "tools": {
 			"t": "1.0.0",
 			"aqua:foresterre/cargo-msrv": "0.18.0",
 		}},
@@ -766,7 +766,7 @@ test_a_declared_tool_with_no_lock_entry_is_a_finding if {
 test_a_bare_name_other_than_rust_must_lock if {
 	some v in violation with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools":{"t": "1.0.0", "node": "24"}},
+		{"settings": fixture_locked, "tools": {"t": "1.0.0", "node": "24"}},
 	)
 		with data.batten.patterns as fixture_patterns
 	v.rule == "tool pin absent"
@@ -775,7 +775,7 @@ test_a_bare_name_other_than_rust_must_lock if {
 test_a_pin_its_entry_does_not_name_is_a_finding if {
 	some v in violation with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools":{"t": "2.0.0"}},
+		{"settings": fixture_locked, "tools": {"t": "2.0.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
 	v.rule == "pin read stale"
@@ -784,7 +784,7 @@ test_a_pin_its_entry_does_not_name_is_a_finding if {
 test_a_partial_pin_the_lock_extends_is_not if {
 	count({v | some v in violation; v.rule == "pin read stale"}) == 0 with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools":{"t": "1.0"}},
+		{"settings": fixture_locked, "tools": {"t": "1.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
 }
@@ -801,7 +801,7 @@ test_the_extension_must_be_at_a_component_boundary if {
 			"platforms.linux-arm64": {"url": "https://e/x"},
 			"platforms.macos-arm64": {"url": "https://e/x"},
 		}]}},
-		{"settings": fixture_locked, "tools":{"t": "1.9"}},
+		{"settings": fixture_locked, "tools": {"t": "1.9"}},
 	)
 		with data.batten.patterns as fixture_patterns
 	v.rule == "pin read stale"
@@ -812,7 +812,7 @@ test_the_extension_must_be_at_a_component_boundary if {
 test_an_inline_table_pin_is_read if {
 	some v in violation with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools":{"t": {
+		{"settings": fixture_locked, "tools": {"t": {
 			"version": "2.0.0",
 			"components": "clippy",
 		}}},
@@ -824,7 +824,7 @@ test_an_inline_table_pin_is_read if {
 test_a_pin_that_is_not_a_dotted_version_is_skipped if {
 	count({v | some v in violation; v.rule == "pin read stale"}) == 0 with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools":{"t": "latest"}},
+		{"settings": fixture_locked, "tools": {"t": "latest"}},
 	)
 		with data.batten.patterns as fixture_patterns
 }
