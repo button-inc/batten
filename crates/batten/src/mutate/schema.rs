@@ -5049,6 +5049,14 @@ struct SealContext {
     /// so its leftovers are recorded again rather than carried.
     #[serde(default)]
     build: Option<String>,
+    /// The [`tree_digest`] of `root` when the context was written. A seal is
+    /// taken only while `root` still holds it: a run stopped after copying its
+    /// own snapshot but before writing its own context leaves the previous
+    /// run's context naming a tree that is no longer there, and its leftovers
+    /// sealed over that tree would stand for the wrong one. A context written
+    /// before it existed seals nothing, so its leftovers are recorded again.
+    #[serde(default)]
+    snapshot: Option<String>,
 }
 
 impl SealContext {
@@ -5094,6 +5102,12 @@ fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
         return Ok(0);
     };
     let context: SealContext = serde_json::from_str(&text)?;
+    // SEALED OVER THE TREE IT NAMES OR NOT AT ALL (CLOUD-2904): a digest
+    // taken over a snapshot another run has since replaced keys the record to
+    // a tree it never ran on.
+    if context.snapshot.is_none() || context.snapshot != tree_digest(&context.root).ok() {
+        return Ok(0);
+    }
     let identity = context.identity();
     let mut dirs = Vec::new();
     for entry in std::fs::read_dir(base)? {
@@ -8208,6 +8222,7 @@ fn reached(
             classic: classic.clone(),
             format: Some(format.clone()),
             build: Some(build.clone()),
+            snapshot: Some(tree_digest(root)?),
         })?,
     )?;
     let (reach, passed) = record_reach(
@@ -10003,8 +10018,10 @@ mod tests {
 
     /// A two-probe, one-site context over an empty root, as a sweep writes it.
     fn seal_context() -> SealContext {
+        let root = crate::scratch::scratch("schema-seal-case-root");
         SealContext {
-            root: crate::scratch::scratch("schema-seal-case-root"),
+            snapshot: Some(tree_digest(&root).unwrap()),
+            root,
             dirs: std::collections::BTreeMap::new(),
             compiled: Compiled::default(),
             probes: vec![String::from("fa"), String::from("fb")],
@@ -16836,6 +16853,41 @@ pub fn repo() -> u8 {{ scratch() }}
         .map(|(k, v)| (std::ffi::OsString::from(k), std::ffi::OsString::from(v)));
         let kept: Vec<String> = build_flags_in(vars.into_iter()).into_keys().collect();
         assert_eq!(kept, ["CARGO_PROFILE_TEST_OPT_LEVEL", "RUSTFLAGS"]);
+    }
+
+    /// A leftover is sealed only over the snapshot its context was written
+    /// for: once that snapshot is replaced, or where the context never said
+    /// which it was, the record is left to be recorded again.
+    ///
+    /// Fails by: a leftover sealed with digests of a tree it never ran on,
+    /// which a later sweep would carry for that tree (CLOUD-2904).
+    #[test]
+    fn a_leftover_is_sealed_only_over_the_snapshot_it_ran_on() {
+        let mut context = seal_context();
+        let moved = crate::scratch::scratch("schema-seal-snapshot-moved");
+        record(&moved, "one", "one", Some("0"), &[("100", "0\nf1\n")]);
+        std::fs::write(
+            moved.join(CONTEXT),
+            serde_json::to_string(&context).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(context.root.join("lib.rs"), "fn replaced() {}").unwrap();
+        assert_eq!(seal_leftovers(&moved).unwrap(), 0, "the snapshot moved");
+        assert!(!moved.join("one").join(DEPENDS).exists());
+        context.snapshot = None;
+        let unnamed = crate::scratch::scratch("schema-seal-snapshot-unnamed");
+        record(&unnamed, "one", "one", Some("0"), &[("100", "0\nf1\n")]);
+        std::fs::write(
+            unnamed.join(CONTEXT),
+            serde_json::to_string(&context).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(seal_leftovers(&unnamed).unwrap(), 0, "no snapshot named");
+        let held = crate::scratch::scratch("schema-seal-snapshot-held");
+        context.snapshot = Some(tree_digest(&context.root).unwrap());
+        record(&held, "one", "one", Some("0"), &[("100", "0\nf1\n")]);
+        std::fs::write(held.join(CONTEXT), serde_json::to_string(&context).unwrap()).unwrap();
+        assert_eq!(seal_leftovers(&held).unwrap(), 1, "the snapshot held");
     }
 
     /// Fails by: a run that left nothing to seal saying it sealed some.
