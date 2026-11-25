@@ -206,9 +206,23 @@ impl Bench {
     fn session_start(&self) -> Door {
         use std::io::Write as _;
 
+        // THE BENCH'S OWN SESSION (CLOUD-2840): every case in one process
+        // shares the suite's state root, where a session's home is recorded by
+        // its id. One fixed id was one session across every bench, so a later
+        // bench's start was judged in the first bench's repository, already
+        // prepared, and said nothing. The bench's scratch directory names it
+        // (its repository is always `repo`).
+        let session = format!(
+            "session-provisioning-{}",
+            self.repo
+                .parent()
+                .and_then(Path::file_name)
+                .unwrap_or_default()
+                .to_string_lossy()
+        );
         let payload = serde_json::json!({
             "hook_event_name": "SessionStart",
-            "session_id": "session-provisioning-fixture",
+            "session_id": session,
             "source": "startup",
         })
         .to_string();
@@ -428,6 +442,23 @@ fn a_session_start_writes_the_stamp_before_any_row_runs() {
     );
 }
 
+/// Fails by: a handler that reports a failure leaving the setup task's outcome
+/// `ok` — the surviving mutant `failed_any -> false` — so the task records a
+/// clean setup over a step that failed, and the gate and the next session read
+/// it as done. A passing handler still ends `ok`, so the failure is the step's.
+#[test]
+fn a_failing_handler_ends_the_setup_task_failed() {
+    let failing = bench("session-phase-failed", &[("failing", 5000)]);
+    failing.step("failing", "echo '::error:: failing failed' >&2\nexit 1");
+    let _ = failing.session_start();
+    assert_eq!(crate::session_start::settle(&failing.repo), "failed");
+
+    let passing = bench("session-phase-ok", &[("quiet", 5000)]);
+    passing.step("quiet", "exit 0");
+    let _ = passing.session_start();
+    assert_eq!(crate::session_start::settle(&passing.repo), "ok");
+}
+
 #[test]
 fn a_failed_step_is_reported_rather_than_silent() {
     // CARRIES `"a failed step exits non-zero — absence must never be silent"`.
@@ -479,8 +510,14 @@ fn a_step_that_passes_says_nothing() {
     // THE DISPATCH NOTICE IS THE DOOR'S ONE LINE (CLOUD-2840, admitted by the
     // owner): setup is owed, so the hook tells the agent what to dispatch, and
     // a passing step adds nothing to it.
-    assert!(
-        door.out.contains(&batten::session_setup::instruction()) && !door.out.contains("quiet"),
+    let document: serde_json::Value =
+        serde_json::from_str(&door.out).expect("the door says one document");
+    assert_eq!(
+        document,
+        serde_json::json!({"hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": batten::session_setup::instruction(),
+        }}),
         "a passing step announces nothing beside the dispatch notice: {}",
         door.out
     );

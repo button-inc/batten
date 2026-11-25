@@ -27,9 +27,12 @@ const SETTLE: Duration = Duration::from_secs(120);
 /// One hook call through the door: `event`, with `extra` merged into the payload.
 pub(crate) fn door(repo: &Path, event: &str, extra: &serde_json::Value) -> (String, String) {
     use std::io::Write as _;
+    // THE REPOSITORY'S OWN SESSION (CLOUD-2840): a session's home is recorded
+    // in the suite's shared state root by its id, so one fixed id judged every
+    // fixture's call in the first fixture's repository under `cargo test`.
     let mut payload = serde_json::json!({
         "hook_event_name": event,
-        "session_id": "session-start-fixture",
+        "session_id": format!("session-start-fixture@{}", repo.display()),
         "source": "startup",
         "cwd": repo,
     });

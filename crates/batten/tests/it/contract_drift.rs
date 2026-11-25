@@ -67,7 +67,13 @@ fn drift(dir: &Path, session: &str) -> Output {
 /// is how the engine's own hatch is reached. Defaulted away above so the twelve
 /// call sites that care about neither still read as one statement.
 fn drift_on(dir: &Path, session: &str, event: &str, env: &[(&str, &str)]) -> Output {
-    let payload = format!(r#"{{"hook_event_name":"{event}","session_id":"{session}","cwd":"/w"}}"#);
+    // THE FIXTURE'S OWN SESSION (CLOUD-2840): every case in one process shares
+    // the suite's state root, so `s1` in two fixtures was one session's record
+    // and a case read another's seed. Qualified by the fixture, a case's
+    // sessions are its own under `cargo test` as under nextest.
+    let fixture = dir.file_name().unwrap_or_default().to_string_lossy();
+    let payload =
+        format!(r#"{{"hook_event_name":"{event}","session_id":"{session}@{fixture}","cwd":"/w"}}"#);
     let mut command = batten();
     command
         .current_dir(dir)
