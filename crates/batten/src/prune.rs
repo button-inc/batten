@@ -213,11 +213,11 @@ impl Readings {
 /// The flag a stoppable walk ends on (CLOUD-2789): the disk watcher's, set when
 /// the run it watches returns. `None` is a walk no one stops — the hook's and
 /// `target prune`'s, which a deadline or the verb's own end bounds.
-pub(crate) type Halt<'a> = Option<&'a std::sync::atomic::AtomicBool>;
+pub(crate) type Halt<'a> = Option<&'a crate::lock_wait::Stop>;
 
 /// Whether `halt` has been set.
 pub(crate) fn halted(halt: Halt<'_>) -> bool {
-    halt.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+    halt.is_some_and(crate::lock_wait::Stop::is_raised)
 }
 
 ///
