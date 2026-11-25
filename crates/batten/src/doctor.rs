@@ -547,7 +547,19 @@ pub enum Egress {
     /// A proxy is set and the GitHub hosts are not fenced out of it.
     ///
     /// `mise install` fails on the first third-party tool and blames the tool.
+    ///
+    /// ONLY WHILE A LIVE CREDENTIAL IS THERE TO GO DIRECT WITH: the fence
+    /// belonged to the PAT design (CLOUD-2122), and with none the proxy is the
+    /// route ([`Egress::Routed`]).
     Unfenced,
+    /// A proxy is set, the GitHub hosts are not fenced out of it, and no live
+    /// credential would go direct, so the proxy IS the route (CLOUD-2688:
+    /// "there is no PAT here; the proxy is the route"). Decided by the
+    /// credential exactly as provision decides a removal
+    /// (`removals_allowed = credential == Credential::Live`), so the two never
+    /// disagree about whether the fence is owed (#1276, where every cloud
+    /// container failed its preflight on it).
+    Routed,
 }
 
 impl Egress {
@@ -555,7 +567,7 @@ impl Egress {
     #[must_use]
     pub const fn line(&self) -> &'static str {
         match self {
-            Egress::Unproxied => "egress ok",
+            Egress::Unproxied | Egress::Routed => "egress ok",
             Egress::Partial => "egress failed egress-partial",
             Egress::Unfenced => "egress failed egress-unfenced",
         }
@@ -571,7 +583,7 @@ impl Egress {
     #[must_use]
     pub const fn code(&self) -> ExitCode {
         match self {
-            Egress::Unproxied => ExitCode::Success,
+            Egress::Unproxied | Egress::Routed => ExitCode::Success,
             Egress::Partial | Egress::Unfenced => ExitCode::Usage,
         }
     }
@@ -1033,13 +1045,31 @@ const EGRESS_NEVER_FENCED_HOST: &str = "egress-probe.invalid";
 /// partially fenced.
 #[must_use]
 pub fn diagnose_egress() -> Egress {
-    if crate::fetch::is_direct(EGRESS_NEVER_FENCED_HOST) {
+    egress_of(
+        crate::fetch::is_direct(EGRESS_NEVER_FENCED_HOST),
+        crate::fetch::is_direct(EGRESS_RESOLVER_HOST),
+        crate::provision::credential_health,
+    )
+}
+
+/// [`diagnose_egress`] over its three readings. The credential is asked LAST
+/// and only for an unfenced proxy, because asking may probe the forge.
+fn egress_of(
+    everything_direct: bool,
+    resolver_direct: bool,
+    credential: impl FnOnce() -> crate::provision::Credential,
+) -> Egress {
+    if everything_direct {
         return Egress::Unproxied;
     }
-    if crate::fetch::is_direct(EGRESS_RESOLVER_HOST) {
+    if resolver_direct {
         return Egress::Partial;
     }
-    Egress::Unfenced
+    if credential() == crate::provision::Credential::Live {
+        Egress::Unfenced
+    } else {
+        Egress::Routed
+    }
 }
 
 /// Whether every tool the manifest DECLARES is actually installed (CLOUD-1683).
@@ -4719,6 +4749,28 @@ mod probe_tests {
         );
     }
 
+    /// Fails by: an unfenced proxy failed with no live credential, which is
+    /// every cloud container since CLOUD-2688 retired the PAT (#1276's preflight
+    /// failure); or passed WITH one, where the fence is owed; or the credential
+    /// asked before the cheap readings decide.
+    #[test]
+    fn an_unfenced_proxy_is_the_route_unless_a_live_credential_would_go_direct() {
+        use crate::provision::Credential;
+        assert_eq!(
+            egress_of(false, false, || Credential::Unusable),
+            Egress::Routed
+        );
+        assert_eq!(
+            egress_of(false, false, || Credential::Live),
+            Egress::Unfenced
+        );
+        let unasked = || -> Credential { panic!("asked the credential") };
+        assert_eq!(egress_of(true, false, unasked), Egress::Unproxied);
+        assert_eq!(egress_of(false, true, unasked), Egress::Partial);
+        assert_eq!(Egress::Routed.code(), ExitCode::Success);
+        assert_eq!(Egress::Unfenced.code(), ExitCode::Usage);
+    }
+
     #[test]
     fn each_state_renders_its_own_pointer_line_on_both_surfaces() {
         let mediators = [
@@ -4743,6 +4795,7 @@ mod probe_tests {
             (Egress::Unproxied, "egress ok"),
             (Egress::Partial, "egress failed egress-partial"),
             (Egress::Unfenced, "egress failed egress-unfenced"),
+            (Egress::Routed, "egress ok"),
         ];
         for (state, line) in egresses {
             assert_eq!(state.line(), line);
