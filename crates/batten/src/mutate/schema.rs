@@ -1003,7 +1003,9 @@ pub struct Compiled {
     pub observing: BTreeSet<String>,
 }
 
-/// No compile-time input: what a [`Depends`] carries where none is known.
+/// No compile-time input: what a test's [`Depends`] carries where none is
+/// known.
+#[cfg(test)]
 static NO_COMPILED: Compiled = Compiled {
     probe_includes: std::collections::BTreeMap::new(),
     item_includes: std::collections::BTreeMap::new(),
@@ -1112,39 +1114,7 @@ fn probe_sites(
                 wraps: vec![Wrap::Probe(format!("crate::__batten_fn({next});"))],
                 children: Vec::new(),
             });
-            let mut text = function.syntax().to_string();
-            let start = usize::from(function.syntax().text_range().start());
-            let local = probed.probes.len();
-            probed
-                .compiled
-                .positions
-                .insert(local, position_in(&whole, start));
-            if text.contains("track_caller") || text.contains("Location::caller") {
-                probed.compiled.observers.insert(local);
-            }
-            if position_sensitive(&text) {
-                text.push('\x1f');
-                text.push_str(&position_in(&whole, start));
-            }
-            probed
-                .probes
-                .push(blake3::hash(text.as_bytes()).to_hex().to_string());
-            probed.names.push(mentions_in(function.syntax(), place));
-            probed.keyed.push(
-                blake3::hash(keyed_text(function.syntax()).as_bytes())
-                    .to_hex()
-                    .to_string(),
-            );
-            probed.fn_names.push(
-                ast::HasName::name(&function)
-                    .map_or_else(String::new, |name| name.text().to_string()),
-            );
-            let item = function.syntax().text_range();
-            cuts.push(usize::from(item.start())..usize::from(item.end()));
-            probed.functions.push((
-                usize::from(item.start())..usize::from(item.end()),
-                probed.probes.last().cloned().unwrap_or_default(),
-            ));
+            cuts.push(probe_one(&function, &whole, place, &mut probed));
             next += 1;
         }
     }
@@ -1227,6 +1197,51 @@ fn probe_sites(
     }
     probed.skeleton = skeleton.finalize().to_hex().to_string();
     probed
+}
+
+/// Record one probed function into `probed` ([`probe_sites`]): its digest,
+/// keyed at its position where it observes it; what it mentions; its keyed
+/// text; its name; and where it sits, whether its callers' positions are
+/// observed. Returns its range, which the skeleton cuts.
+fn probe_one(
+    function: &ast::Fn,
+    whole: &str,
+    place: &FileScope,
+    probed: &mut Probed,
+) -> Range<usize> {
+    let mut text = function.syntax().to_string();
+    let start = usize::from(function.syntax().text_range().start());
+    let local = probed.probes.len();
+    probed
+        .compiled
+        .positions
+        .insert(local, position_in(whole, start));
+    if text.contains("track_caller") || text.contains("Location::caller") {
+        probed.compiled.observers.insert(local);
+    }
+    if position_sensitive(&text) {
+        text.push('\x1f');
+        text.push_str(&position_in(whole, start));
+    }
+    probed
+        .probes
+        .push(blake3::hash(text.as_bytes()).to_hex().to_string());
+    probed.names.push(mentions_in(function.syntax(), place));
+    probed.keyed.push(
+        blake3::hash(keyed_text(function.syntax()).as_bytes())
+            .to_hex()
+            .to_string(),
+    );
+    probed.fn_names.push(
+        ast::HasName::name(function).map_or_else(String::new, |name| name.text().to_string()),
+    );
+    let item = function.syntax().text_range();
+    let range = usize::from(item.start())..usize::from(item.end());
+    probed.functions.push((
+        range.clone(),
+        probed.probes.last().cloned().unwrap_or_default(),
+    ));
+    range
 }
 
 /// Each include in the file at `root` into `probed`'s compile-time inputs
@@ -2676,7 +2691,7 @@ pub fn write_schema(
         let script = std::path::Path::new(dir).join("build.rs");
         let mut files = vec![script.to_string_lossy().replace('\\', "/")];
         files.extend(
-            build_script_includes(root, &mutants[..])
+            build_script_includes(root, mutants)
                 .into_iter()
                 .filter(|file| file.starts_with(dir.as_str())),
         );
@@ -5880,50 +5895,14 @@ pub fn case_digests<'c>(
                 }
             }
         }
-        // EVERY OTHER FILE OF THE TEST'S CRATE, BY WHAT IT REACHES (CLOUD-2904):
-        // `common/mod.rs` alone left a sibling module a case calls into, the
-        // crate root's `#[global_allocator]` and `common`'s own submodules
-        // unkeyed. Without a text to reach from, every such file stands whole.
-        let wanted: BTreeSet<String> = own
-            .iter()
-            .flatten()
-            .flat_map(|text| {
-                names_in(
-                    &batten_facts::source::rust_parse(text, ra_ap_syntax::Edition::Edition2024)
-                        .syntax_node(),
-                )
-            })
-            .collect();
-        if let Some(files) = crate_sources(root, package_dirs, name, binary) {
-            let (bytes, items) = shared.entry(binary.clone()).or_insert_with(|| {
-                let mut bytes = Vec::new();
-                let mut items = Vec::new();
-                for file in &files {
-                    let Ok(source) = crate::fsio::read_to_string(root.join(file)) else {
-                        continue;
-                    };
-                    bytes.extend(format!("\x1d{file}\x1f").as_bytes());
-                    bytes.extend(source.as_bytes());
-                    use ra_ap_syntax::ast::HasModuleItem as _;
-                    let parse = batten_facts::source::rust_parse(
-                        &source,
-                        ra_ap_syntax::Edition::Edition2024,
-                    );
-                    if !parse.errors().is_empty() {
-                        items.push(Shared::whole(file, &source));
-                        continue;
-                    }
-                    items.extend(parse.tree().items().map(|item| Shared::of(&item)));
-                }
-                (bytes, items)
-            });
-            hasher.update(b"\x17");
-            if own.is_some() {
-                hasher.update(reached_digest(items, wanted.clone()).as_bytes());
-            } else {
-                hasher.update(bytes);
-            }
-        }
+        crate_part(
+            &mut hasher,
+            root,
+            package_dirs,
+            case,
+            own.as_ref(),
+            &mut shared,
+        );
         // ONCE PER DISTINCT PROBE SET AND OWN-TEXT NAMES, OVER A GRAPH INDEXED
         // ONCE PER SWEEP (#1276). Measured: the union of every reached name's
         // items, built and sorted per case, held one core for 20 minutes over
@@ -5946,36 +5925,7 @@ pub fn case_digests<'c>(
         let key: Vec<usize> = ran.into_iter().flatten().copied().collect();
         let (named, defined) = named_parts
             .entry((key, outside.clone()))
-            .or_insert_with(|| {
-                let mut direct: Vec<usize> = Vec::new();
-                let mut starts: Vec<usize> = ran
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|probe| depends.names.get(*probe))
-                    .flatten()
-                    .filter_map(|name| graph.id(name))
-                    .collect();
-                for mention in &outside {
-                    let (found, nodes) = graph.outside(mention, depends.items);
-                    direct.extend(found);
-                    starts.extend(nodes);
-                }
-                let reached = graph.reach(starts.into_iter(), &mut walk);
-                let mut defined = graph.defined(reached);
-                defined.extend(direct);
-                defined.sort_unstable();
-                defined.dedup();
-                let mut part = blake3::Hasher::new();
-                if let Some(token) = depends.items.get("").map(|items| name_token("", items)) {
-                    part.update(token.as_bytes());
-                }
-                for id in &defined {
-                    if let Some(token) = graph.token_of(*id) {
-                        part.update(token.as_bytes());
-                    }
-                }
-                (part.finalize(), defined)
-            })
+            .or_insert_with(|| named_part(&graph, &mut walk, depends, ran, &outside))
             .clone();
         hasher.update(b"\x1b");
         hasher.update(named.as_bytes());
@@ -5992,6 +5942,106 @@ pub fn case_digests<'c>(
         digests.insert(case.clone(), hasher.finalize().to_hex().to_string());
     }
     digests
+}
+
+/// The shared crate part of a case's digest ([`case_digests`]): every other
+/// file of its test crate ([`crate_sources`]), by what its own text `own`
+/// reaches, or whole where it has none; each crate's files read and parsed
+/// once into `shared`.
+///
+/// EVERY OTHER FILE OF THE TEST'S CRATE, BY WHAT IT REACHES (CLOUD-2904):
+/// `common/mod.rs` alone left a sibling module a case calls into, the crate
+/// root's `#[global_allocator]` and `common`'s own submodules unkeyed.
+fn crate_part(
+    hasher: &mut blake3::Hasher,
+    root: &std::path::Path,
+    package_dirs: &std::collections::BTreeMap<String, String>,
+    (name, binary): &Case,
+    own: Option<&Vec<String>>,
+    shared: &mut std::collections::HashMap<String, (Vec<u8>, Vec<Shared>)>,
+) {
+    use ra_ap_syntax::ast::HasModuleItem as _;
+    let Some(files) = crate_sources(root, package_dirs, name, binary) else {
+        return;
+    };
+    let (bytes, items) = shared.entry(binary.clone()).or_insert_with(|| {
+        let mut bytes = Vec::new();
+        let mut items = Vec::new();
+        for file in &files {
+            let Ok(source) = crate::fsio::read_to_string(root.join(file)) else {
+                continue;
+            };
+            bytes.extend(format!("\x1d{file}\x1f").as_bytes());
+            bytes.extend(source.as_bytes());
+            let parse =
+                batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024);
+            if !parse.errors().is_empty() {
+                items.push(Shared::whole(file, &source));
+                continue;
+            }
+            items.extend(parse.tree().items().map(|item| Shared::of(&item)));
+        }
+        (bytes, items)
+    });
+    hasher.update(b"\x17");
+    match own {
+        Some(texts) => {
+            let wanted: BTreeSet<String> = texts
+                .iter()
+                .flat_map(|text| {
+                    names_in(
+                        &batten_facts::source::rust_parse(text, ra_ap_syntax::Edition::Edition2024)
+                            .syntax_node(),
+                    )
+                })
+                .collect();
+            hasher.update(reached_digest(items, wanted).as_bytes());
+        }
+        None => {
+            hasher.update(bytes);
+        }
+    }
+}
+
+/// The named part of a case's digest ([`case_digests`]): the `""` item every
+/// case carries and each definition reached from what the case ran and from
+/// what its own text names, `outside` ([`Graph::outside`]); with those
+/// definitions' ids.
+fn named_part(
+    graph: &Graph<'_>,
+    walk: &mut Walk,
+    depends: &Depends<'_>,
+    ran: Option<&BTreeSet<usize>>,
+    outside: &BTreeSet<String>,
+) -> (blake3::Hash, Vec<usize>) {
+    let mut direct: Vec<usize> = Vec::new();
+    let mut starts: Vec<usize> = ran
+        .into_iter()
+        .flatten()
+        .filter_map(|probe| depends.names.get(*probe))
+        .flatten()
+        .filter_map(|name| graph.id(name))
+        .collect();
+    for mention in outside {
+        let (found, nodes) = graph.outside(mention, depends.items);
+        direct.extend(found);
+        starts.extend(nodes);
+    }
+    let reached = graph.reach(starts.into_iter(), walk);
+    let mut defined = graph.defined(reached);
+    defined.extend(direct);
+    defined.sort_unstable();
+    defined.dedup();
+    let mut part = blake3::Hasher::new();
+    if let Some(token) = depends.items.get("").map(|items| name_token("", items)) {
+        part.update(token.as_bytes());
+    }
+    for id in &defined {
+        if let Some(token) = graph.token_of(*id) {
+            part.update(token.as_bytes());
+        }
+    }
+    (part.finalize(), defined)
 }
 
 /// What a case's key reads at compile time ([`Compiled`]): each include
@@ -6139,6 +6189,7 @@ fn crate_sources(
 /// BY NAME, NOT BY CALL: a name mentioned is taken whether or not it runs, so
 /// the set errs toward more, which costs a re-judge and never a stale verdict.
 /// A source that will not parse keys on its whole text.
+#[cfg(test)]
 fn common_reached(common: &str, texts: &[String]) -> String {
     use ra_ap_syntax::ast::HasModuleItem as _;
     let parse = batten_facts::source::rust_parse(common, ra_ap_syntax::Edition::Edition2024);
@@ -14361,10 +14412,12 @@ mod tests {
 
     /// S13 (CLOUD-2904, round 3): the schema applies a package's flat scoping,
     /// so a private item of a package holding a `#[path]` module is keyed at
-    /// the package, not at its module.
+    /// the package, not at its module, though the module holding it is not
+    /// the one the `#[path]` widens.
     ///
     /// Fails by: the production line setting [`FileScope::flat`] dropped (the
-    /// suite stayed green without it).
+    /// suite stayed green without it; with `helper` in the root module, the
+    /// widened module alone keyed it at the package).
     #[test]
     fn the_schema_scopes_a_moved_package_flat() {
         let root = crate::scratch::scratch("schema-flat-write");
@@ -14374,26 +14427,26 @@ mod tests {
             std::fs::write(tree.join("p/Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
             std::fs::write(
                 tree.join("p/src/lib.rs"),
-                "#[path = \"x.rs\"]\nmod x;\nconst fn helper() -> u8 { 1 }\npub fn f() -> bool { helper() == 1 }\n",
+                "#[path = \"x.rs\"]\nmod x;\nmod inner {\n    pub const fn helper() -> u8 { 1 }\n    const fn hidden() -> u8 { 1 }\n}\npub fn f() -> bool { inner::helper() == 1 }\n",
             )
             .unwrap();
             std::fs::write(tree.join("p/src/x.rs"), "pub fn g() {}\n").unwrap();
         }
         let mutant = Listed {
             file: String::from("p/src/lib.rs"),
-            ..listed("BinaryOperator", "!=", (4, 32), (4, 34))
+            ..listed("BinaryOperator", "!=", (7, 38), (7, 40))
         };
         let schema =
             write_schema(&root, &work, &[mutant], &BTreeSet::new(), &BTreeSet::new()).unwrap();
         assert!(
-            schema.items.contains_key(&format!("helper{DEFINED_IN}p")),
+            schema.items.contains_key(&format!("hidden{DEFINED_IN}p")),
             "{:?}",
             schema.items.keys().collect::<Vec<_>>()
         );
         assert!(
             !schema
                 .items
-                .contains_key(&format!("helper{DEFINED_IN}p{DEFINED_IN}src"))
+                .contains_key(&format!("hidden{DEFINED_IN}p{DEFINED_IN}src::inner"))
         );
     }
 
