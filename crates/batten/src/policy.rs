@@ -1137,14 +1137,7 @@ pub fn load_from(
         // share a name and decide disjoint surfaces. Narrower rather than looser
         // for a module or a bundle, where the pair still collapses to the name
         // in practice because those decide exactly one surface.
-        if !seen.insert((source_key, rule.scope.as_str())) {
-            return Err(UsageError::raise(format!(
-                "rule `{}` registers `{source_key}` at scope `{}`, which another rule already \
-                 registers at that scope",
-                rule.id,
-                rule.scope.as_str()
-            )));
-        }
+        claim_scope(&mut seen, source_key, rule)?;
 
         // The module comes from wherever the RULES came from, and that is the
         // whole of this branch. Under `--config-from <ref>` the authority is
@@ -1256,11 +1249,7 @@ pub fn load_from(
             continue;
         }
 
-        let paths = match (rule.module.as_deref(), rule.bundle.as_deref()) {
-            (Some(module), _) => vec![module.to_owned()],
-            (None, Some(bundle)) => bundle_members(root, bundle, reference, &rule.id)?,
-            (None, None) => Vec::new(),
-        };
+        let paths = rule_paths(root, rule, reference)?;
         let sources = read_sources(root, &paths, reference, &rule.id, checks)?;
         if checks != ModuleChecks::SkipOnHotPath {
             check_finding_ids(&sources, words, &tokens)?;
@@ -1304,6 +1293,37 @@ pub fn load_from(
         }
     }
     Ok(bundles)
+}
+
+/// Record `rule`'s `(source, scope)` pair in `seen`, refusing a second row
+/// registering one source at one scope: the second enablement decides nothing
+/// the first did not. Lifted out of [`load_from`] for `clippy::too_many_lines`;
+/// the call site carries why the key is the pair (CLOUD-1672).
+fn claim_scope<'a>(
+    seen: &mut BTreeSet<(&'a str, &'static str)>,
+    source_key: &'a str,
+    rule: &Rule,
+) -> Result<()> {
+    if seen.insert((source_key, rule.scope.as_str())) {
+        return Ok(());
+    }
+    Err(UsageError::raise(format!(
+        "rule `{}` registers `{source_key}` at scope `{}`, which another rule already \
+         registers at that scope",
+        rule.id,
+        rule.scope.as_str()
+    )))
+}
+
+/// The module paths a non-preset `rule` names: its one `module`, or every
+/// member of its `bundle` root at `reference`. Lifted out of [`load_from`] for
+/// `clippy::too_many_lines`.
+fn rule_paths(root: &Path, rule: &Rule, reference: Option<&str>) -> Result<Vec<String>> {
+    Ok(match (rule.module.as_deref(), rule.bundle.as_deref()) {
+        (Some(module), _) => vec![module.to_owned()],
+        (None, Some(bundle)) => bundle_members(root, bundle, reference, &rule.id)?,
+        (None, None) => Vec::new(),
+    })
 }
 
 /// The verdict registry and the collidable tokens, built exactly off the hot path
