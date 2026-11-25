@@ -1050,12 +1050,14 @@ pub enum Sourcing {
     /// every verb that RUNS the rules reads, so a base's rules are never paired
     /// with the tree's predicates.
     AtReference,
-    /// Each rule where its sources are (CLOUD-2840, `config lint`): at
-    /// `reference` when they are there, else in the working tree, so a module a
-    /// branch ADDS is still judged; a rule whose sources are in neither is left
-    /// unloaded, and the checks that need EVERY rule (`check_registry_is_exhausted`,
+    /// Every rule from the WORKING TREE, `reference` unread (CLOUD-2840, `config
+    /// lint`): one source, so the registry, the claims and the module texts all
+    /// agree, and a module a branch adds or modifies is judged by the text it
+    /// runs. A rule whose sources are ABSENT from the tree ([`sources_in_tree`])
+    /// is left unloaded, as an absent file is said by the verbs that run it, and
+    /// the checks that need EVERY rule (`check_registry_is_exhausted`,
     /// `check_collapse`) stand down, since a set with a gap cannot answer them.
-    WherePresent,
+    TreeWherePresent,
 }
 
 /// [`load`] under a chosen [`Sourcing`].
@@ -1111,14 +1113,13 @@ pub fn load_from(
     // the value is what lets the collision refusal name BOTH sides, which is the
     // difference between a pointer and a complaint.
     let mut ids: BTreeMap<String, String> = BTreeMap::new();
-    // A rule left unloaded because its sources are nowhere (`WherePresent`).
+    // A rule left unloaded because its sources are absent (`TreeWherePresent`).
     let mut unloaded = false;
     for rule in rules.iter().filter(|r| r.kind == RuleKind::Policy) {
         let reference = match sourcing {
             Sourcing::AtReference => reference,
-            Sourcing::WherePresent if sources_present(root, rule, reference) => reference,
-            Sourcing::WherePresent if sources_present(root, rule, None) => None,
-            Sourcing::WherePresent => {
+            Sourcing::TreeWherePresent if sources_in_tree(root, rule) => None,
+            Sourcing::TreeWherePresent => {
                 unloaded = true;
                 continue;
             }
@@ -3793,18 +3794,19 @@ pub fn strings(bundle: &Bundle, input: &str, rule: &str) -> Look<Vec<String>> {
     collect_string_list(&answered, &bundle.packages, rule).map_or(Look::CouldNotLook, Look::Is)
 }
 
-/// Are `rule`'s sources there to read at `reference` (the working tree for
-/// `None`)? A `module` row's file, a `bundle` row's members; a preset is read
-/// from the binary, so it is always there (CLOUD-2840, `lint::run`).
+/// Are `rule`'s sources in the working tree at all (CLOUD-2840, `lint::run`)?
+/// A `module` row's file; a `bundle` row's root, by its path alone; a preset is
+/// read from the binary, so it is always there.
+///
+/// ABSENCE ONLY, NEVER A FAULT. A bundle root that is there but empty or
+/// unlistable is not absent: it is loaded, and `bundle_members` refuses it, so a
+/// gate that enables nothing is never read as a gap that stands the set checks
+/// down.
 #[must_use]
-pub fn sources_present(root: &Path, rule: &Rule, reference: Option<&str>) -> bool {
+pub fn sources_in_tree(root: &Path, rule: &Rule) -> bool {
     match (rule.module.as_deref(), rule.bundle.as_deref()) {
-        (Some(module), _) => match reference {
-            Some(reference) => crate::git::show(root, reference, module).is_ok(),
-            None => root.join(module).is_file(),
-        },
-        (None, Some(bundle)) => bundle_members(root, bundle, reference, &rule.id)
-            .is_ok_and(|members| !members.is_empty()),
+        (Some(module), _) => root.join(module).exists(),
+        (None, Some(bundle)) => root.join(bundle.trim_end_matches('/')).exists(),
         (None, None) => true,
     }
 }

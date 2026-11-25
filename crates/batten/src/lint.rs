@@ -825,29 +825,42 @@ pub fn smells(
     Ok(found)
 }
 
-/// Every policy rule's bundle, each loaded WHERE ITS SOURCES ARE (CLOUD-2840):
-/// at `base_ref` when they are there, else from the working tree, and a rule
-/// whose sources are in neither is left unloaded, as an absent file is said by
-/// the verbs that run the rule. ONE load, so every check across rules still
-/// sees every rule it can (`policy::Sourcing::WherePresent`).
+/// Every policy rule the WORKING config registers, loaded from the working tree
+/// in one load (CLOUD-2840): the registry, the claims and the module texts all
+/// come from one source, so the cross-rule checks compare like with like. A rule
+/// whose sources are absent from the tree is left unloaded
+/// (`policy::Sourcing::TreeWherePresent`), and then the set has a gap: no
+/// bundles are returned, so the set-level smells abstain as they do for a load
+/// they could not make (`WaiverNamesNoRule`'s could-not-look arm), rather than
+/// answering for a partial set.
 ///
-/// A module the branch ADDS is absent at the base, and under claimed arming a
-/// bare `config lint` reads the fork point: loaded from the tree, it is still
-/// judged, so `engine gate` cannot pass a module its pinned release cannot
-/// evaluate (`install-gate.rego` calling the library, absent on main).
-fn loaded_where_present(
+/// NEVER AT `base_ref`, and not per rule either. The base ref exists for the
+/// config-to-config weakening diff (`trust::weakenings`); the modules this lint
+/// judges are the ones this config runs. Reading a rule's module at the base
+/// judged an ADDED module not at all and a MODIFIED one by its old text, against
+/// the working `[[verdict]]` table (#1276's `egress-fencing.rego` refused for a
+/// verdict its new text no longer raises); mixing the two sources compared a
+/// base module's claims with a tree module's. So `engine gate`, which asks this
+/// verb under the pinned release, cannot pass any module, added or modified,
+/// that release cannot load: the install gate calling the library, absent on main.
+fn loaded_from_tree(
     dir: &Path,
     config: &crate::config_model::Config,
-    base_ref: Option<&str>,
 ) -> Result<Vec<crate::policy::Bundle>> {
-    crate::policy::load_from(
+    let bundles = crate::policy::load_from(
         dir,
         &config.rules,
         crate::policy::Vocabulary::from(config),
         crate::policy::ModuleChecks::Run,
-        base_ref,
-        crate::policy::Sourcing::WherePresent,
-    )
+        None,
+        crate::policy::Sourcing::TreeWherePresent,
+    )?;
+    let whole = config
+        .rules
+        .iter()
+        .filter(|rule| rule.kind == crate::config_model::RuleKind::Policy)
+        .all(|rule| crate::policy::sources_in_tree(dir, rule));
+    Ok(if whole { bundles } else { Vec::new() })
 }
 
 /// Lint the config in `dir`, with `base_ref` naming the trusted base when the
@@ -922,7 +935,7 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
     // to load; `smells` refuses it below with its own message.
     let bundles = match config::parse(&text, &path.display().to_string()) {
         Err(_) => Vec::new(),
-        Ok(config) => loaded_where_present(dir, &config, base_ref)?,
+        Ok(config) => loaded_from_tree(dir, &config)?,
     };
     let found = smells(
         &text,
