@@ -724,7 +724,7 @@ fn lock_path(dir: &Path) -> PathBuf {
 /// # Errors
 ///
 /// Returns an error when the store cannot be created or the lock cannot be taken.
-fn lock(dir: &Path) -> Result<crate::lock_wait::Held> {
+fn lock(dir: &Path) -> Result<batten_facts::lock_wait::Held> {
     std::fs::create_dir_all(dir)
         .with_context(|| format!("create the override store at {}", dir.display()))?;
     let path = lock_path(dir);
@@ -740,14 +740,19 @@ fn lock(dir: &Path) -> Result<crate::lock_wait::Held> {
     // record; a consume that cannot take the lock must WAIT, because the whole
     // claim is that exactly one concurrent consumer wins — and a `WouldBlock`
     // treated as a refusal would make the loser's verdict depend on scheduling.
-    // The wait is on the holder's release ([`crate::lock_wait`]), never a
+    // The wait is on the holder's release ([`batten_facts::lock_wait`]), never a
     // blocking `flock` (CLOUD-2789), and a store this thread already holds is
     // an error rather than a wait on itself.
-    match crate::lock_wait::acquire(file, &path, crate::lock_wait::Mode::Exclusive, None)
-        .with_context(|| format!("lock the override store in {}", dir.display()))?
+    match batten_facts::lock_wait::acquire(
+        file,
+        &path,
+        batten_facts::lock_wait::Mode::Exclusive,
+        None,
+    )
+    .with_context(|| format!("lock the override store in {}", dir.display()))?
     {
-        crate::lock_wait::Taken::Held(held) => Ok(held),
-        crate::lock_wait::Taken::Stopped | crate::lock_wait::Taken::Reentrant => {
+        batten_facts::lock_wait::Taken::Held(held) => Ok(held),
+        batten_facts::lock_wait::Taken::Stopped | batten_facts::lock_wait::Taken::Reentrant => {
             Err(anyhow::anyhow!(
                 "the override store in {} is already locked by this thread",
                 dir.display()

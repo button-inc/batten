@@ -770,16 +770,16 @@ impl Index {
         // WAITED ON THROUGH `lock_wait`, never a blocking `flock` (CLOUD-2789):
         // the wait wakes on the holder's close, and a lock this process already
         // holds is refused rather than waited on by itself.
-        let held = match crate::lock_wait::acquire(
+        let held = match batten_facts::lock_wait::acquire(
             lock,
             &lock_at,
-            crate::lock_wait::Mode::Exclusive,
+            batten_facts::lock_wait::Mode::Exclusive,
             None,
         )
         .with_context(|| "the locator index lock could not be taken".to_owned())?
         {
-            crate::lock_wait::Taken::Held(held) => held,
-            crate::lock_wait::Taken::Stopped | crate::lock_wait::Taken::Reentrant => {
+            batten_facts::lock_wait::Taken::Held(held) => held,
+            batten_facts::lock_wait::Taken::Stopped | batten_facts::lock_wait::Taken::Reentrant => {
                 anyhow::bail!("the locator index lock is already held by this thread")
             }
         };

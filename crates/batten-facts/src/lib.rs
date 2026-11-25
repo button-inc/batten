@@ -25,6 +25,7 @@ pub mod facts;
 pub mod identity;
 /// Rust call sites, parsed — where a token sits, not merely that it appears.
 pub mod invocation;
+pub mod lock_wait;
 pub mod minted;
 pub mod register;
 pub mod scratch;
