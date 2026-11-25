@@ -544,6 +544,7 @@ fn item_moves(
     base: &crate::item_index::Index,
     head: &crate::item_index::Index,
     files: &BTreeMap<String, String>,
+    head_texts: &BTreeMap<String, String>,
 ) -> (
     BTreeMap<crate::item_index::Key, crate::item_index::Key>,
     BTreeMap<crate::item_index::Key, crate::item_index::Key>,
@@ -553,6 +554,12 @@ fn item_moves(
     compared.extend(crate::item_index::moved_items(base, head));
     let mut spliced = crate::item_index::relocated_items(base, head);
     spliced.extend(compared.iter().map(|(from, to)| (from.clone(), to.clone())));
+    // A FORWARDER'S TARGET, LAST AND NEVER OVER A MOVE (CLOUD-2789): an item
+    // that stayed put but became one call to another reaches, through that
+    // target, a body that moved out of its crate.
+    for (from, to) in crate::item_index::forwarded_items(base, head, head_texts) {
+        spliced.entry(from).or_insert(to);
+    }
     (compared, spliced)
 }
 
@@ -653,7 +660,7 @@ pub fn run(
     // names, so a path respelled at an item's new home is no change.
     let base_index = crate::item_index::Index::new(&before, &manifests(root, &fork)?);
     let head_index = crate::item_index::Index::new(&after, &manifests(root, "HEAD")?);
-    let (item_moves, splice_moves) = item_moves(&base_index, &head_index, &moves);
+    let (item_moves, splice_moves) = item_moves(&base_index, &head_index, &moves, &after);
     let cuts = cuts(&moves, &base_index, &head_index);
     let no_moves = BTreeMap::new();
     // `crate::` names a file's own crate only for a library source the index
@@ -882,8 +889,10 @@ fn replay(
     // an assertion read as an expectation change because another file's base
     // body named a removed helper. rustc's `--> path:line` locations are charged
     // to the spliced bodies that hold them; those alone are findings, and the
-    // rest are rebuilt without them. An error no body holds keeps the old,
-    // conservative answer: every remaining test is a finding.
+    // rest are rebuilt without them. An error no body holds is asked of HEAD's
+    // own build first: there too, the replay could not look; only over a HEAD
+    // that builds is every remaining test a finding, the old conservative
+    // answer (CLOUD-2789).
     //
     // EACH CASE IS KEPT THE MOMENT IT PASSES (step 17), under `test:cargo`'s
     // own run-wrapper, so a lap stopped mid-run loses only the cases still
@@ -1440,6 +1449,33 @@ fn judge(
         let unattributed = outcome
             .as_ref()
             .is_some_and(|(code, output)| *code == BUILD_FAILED && output.contains(COMPILE_FAILED));
+        // UNLESS HEAD ITSELF DOES NOT BUILD (CLOUD-2789): then no base body
+        // was judged at all, and calling each one an expectation change is a
+        // could-not-look reported as a refusal. Measured on #1276: a tip whose
+        // own test named a signature it had just changed turned 388 standing
+        // tests into findings. So HEAD's bodies go back and the control seam
+        // builds them; a build that fails there too is HEAD's, and the replay
+        // could not look. One that builds leaves the answer as it was.
+        if unattributed {
+            for (path, (head_text, _)) in &splices {
+                crate::durable::replace(tree.join(path), head_text)
+                    .with_context(|| format!("test replay: restore {path} for HEAD's build"))?;
+            }
+            if let Some((code, output)) = control(&splices)
+                && code == BUILD_FAILED
+                && output.contains(COMPILE_FAILED)
+            {
+                let at: Vec<String> = compile_errors(&output)
+                    .into_iter()
+                    .map(|(path, line)| format!("{path}:{line}"))
+                    .collect();
+                bail!(
+                    "test replay: HEAD's own build fails at {}, with no base body spliced in, so \
+                     no base test could be judged",
+                    at.join(" ")
+                );
+            }
+        }
         let mut failed: BTreeMap<String, (String, Vec<Modified>)> = BTreeMap::new();
         for (path, (head_text, modified)) in &splices {
             for test in modified {
@@ -2956,8 +2992,10 @@ mod tests {
     }
 
     /// Fails by: a refusal no body holds journaled against a test (it would
-    /// outlive the body that caused it) or sent to the control run, or a
-    /// passing union build that failed to link left unjournaled.
+    /// outlive the body that caused it) or judged test by test in the control
+    /// run, or a passing union build that failed to link left unjournaled.
+    /// The control seam is asked only whether HEAD builds (CLOUD-2789); one
+    /// that cannot run answers nothing, so the old answer stands.
     #[test]
     fn only_a_compile_refusal_no_body_holds_is_the_unions() {
         let (splices, _) = two_modified(KEPT_BASE);
@@ -2973,7 +3011,7 @@ mod tests {
             |_: &Splices| Some((BUILD_FAILED, String::from("error: could not compile `x`\n")));
         let findings = judge(&tree, &splices, &unplaced_journal, &unplaced, &control).unwrap();
         assert_eq!(keys(&findings).len(), 2, "every test still standing fails");
-        assert!(!controlled.get(), "the union's refusal is not controlled");
+        assert!(controlled.get(), "HEAD's own build was asked about");
         for (path, (_, tests)) in &splices {
             for test in tests {
                 assert_eq!(unplaced_journal.read(path, test), None, "nor journaled");
@@ -2998,6 +3036,68 @@ mod tests {
                 assert_eq!(passed_journal.read(path, test), Some(Verdict::Passed));
             }
         }
+    }
+
+    /// Fails by: a union refusal HEAD's own build shares read as one expectation
+    /// change per standing test (CLOUD-2789: 388 of them over a tip that did not
+    /// compile), rather than as the could-not-look it is; or HEAD's bodies left
+    /// unrestored for that build.
+    #[test]
+    fn a_union_refusal_heads_own_build_shares_is_could_not_look() {
+        let (splices, _) = two_modified(KEPT_BASE);
+        let tree = judged_tree("replay-head-broken");
+        let broken_journal = journal("replay-head-broken-journal");
+        let unplaced =
+            |_: &Splices| Some((BUILD_FAILED, String::from("error: could not compile `x`\n")));
+        let restored = std::cell::Cell::new(false);
+        let broken = |asked: &Splices| {
+            restored.set(asked.iter().all(|(path, (head_text, _))| {
+                std::fs::read_to_string(tree.join(path)).is_ok_and(|text| text == *head_text)
+            }));
+            Some((
+                BUILD_FAILED,
+                String::from(
+                    "error[E0308]: mismatched types\n   --> crates/x/src/lib.rs:873:43\n\
+                     error: could not compile `x` (lib test) due to 1 previous error\n",
+                ),
+            ))
+        };
+        let Err(refused) = judge(&tree, &splices, &broken_journal, &unplaced, &broken) else {
+            panic!("a HEAD that does not build judges nothing");
+        };
+        let said = refused.to_string();
+        assert!(said.contains("HEAD's own build fails"), "{said}");
+        assert!(said.contains("crates/x/src/lib.rs:873"), "{said}");
+        assert!(restored.get(), "HEAD's own bodies were what was built");
+        for (path, (_, tests)) in &splices {
+            for test in tests {
+                assert_eq!(
+                    broken_journal.read(path, test),
+                    None,
+                    "nothing is journaled"
+                );
+            }
+        }
+        // AND A HEAD THAT BUILDS LEAVES THE OLD ANSWER: the splice broke it.
+        let builds = |_: &Splices| {
+            Some((
+                0,
+                String::from(
+                    "        PASS [   0.010s] batten::it tests::kept\n        \
+                     PASS [   0.010s] batten::it tests::narrowed\n",
+                ),
+            ))
+        };
+        let tree = judged_tree("replay-head-builds");
+        let findings = judge(
+            &tree,
+            &splices,
+            &journal("replay-head-builds-journal"),
+            &unplaced,
+            &builds,
+        )
+        .unwrap();
+        assert_eq!(keys(&findings).len(), 2, "every test still standing fails");
     }
 }
 
