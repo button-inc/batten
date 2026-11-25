@@ -1745,7 +1745,7 @@ fn await_locks(
                         file,
                         lock,
                         crate::lock_wait::Mode::Exclusive,
-                        Some(&stop)
+                        Some(stop)
                     ),
                     Ok(crate::lock_wait::Taken::Held(_))
                 )
