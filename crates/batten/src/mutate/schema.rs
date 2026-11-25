@@ -1216,7 +1216,7 @@ fn probe_sites(
     for (at, (names, mut hasher, mentions, own, range)) in items {
         if at != usize::MAX && position_sensitive(&own) {
             hasher.update(format!("\x1c{}", position_in(&whole, at)).as_bytes());
-            hasher.update(whole.get(range).unwrap_or_default().as_bytes());
+            hasher.update(whole.get(range.clone()).unwrap_or_default().as_bytes());
         }
         if own.contains("line!")
             || own.contains("column!")
@@ -1224,10 +1224,17 @@ fn probe_sites(
             || own.contains("Location::caller")
         {
             probed.compiled.observing.extend(names.iter().cloned());
-            probed
-                .compiled
-                .observer_names
-                .extend(names.iter().map(|name| bare(name).to_owned()));
+            // A MACRO REPORTS ITS CALLER'S LINE, a `const` its own, which is
+            // in its digest already, at its position.
+            if whole
+                .get(range.clone())
+                .is_some_and(|text| text.contains("macro_rules!") || text.contains("macro "))
+            {
+                probed
+                    .compiled
+                    .observer_names
+                    .extend(names.iter().map(|name| bare(name).to_owned()));
+            }
         }
         let digest = hasher.finalize().to_hex().to_string();
         probed
@@ -6027,7 +6034,15 @@ impl<'g> Graph<'g> {
 }
 
 /// The definitions among `found` a walk follows: every one when they hold
-/// one item between them, else every one but an impl ([`Graph::new`]).
+/// one item between them, else every one but an impl ([`Graph::new`]); and
+/// an impl only where the name is also a workspace definition's of its own.
+///
+/// NOT AN IMPL REACHED BY A FOREIGN TRAIT OR A METHOD NAME (CLOUD-2904): a
+/// `#[derive(Clone)]` reached the workspace's one `impl Clone` and its self
+/// type, a `.as_str()` call the one impl with that method, and the walk was
+/// one component keying 91% of probed functions on `Compiled`. A method's
+/// body that ran is a probe of its own, and a value's type is reached from
+/// the code that names it, which reaches that type's impls.
 fn followed<'f>(
     found: &'f [usize],
     definitions: &'f [&str],
@@ -6037,10 +6052,14 @@ fn followed<'f>(
         .iter()
         .map(|id| items.get(definitions[*id]).map_or(0, BTreeSet::len))
         .sum();
+    let owned = found.iter().any(|id| {
+        let key = definitions[*id];
+        !key.ends_with(IMPL_DEFINED) && !key.starts_with(ASSOCIATED)
+    });
     found
         .iter()
         .copied()
-        .filter(move |id| count <= 1 || !definitions[*id].ends_with(IMPL_DEFINED))
+        .filter(move |id| !definitions[*id].ends_with(IMPL_DEFINED) || (owned && count <= 1))
 }
 
 /// One reached name's contribution to a case's digest.
@@ -14914,6 +14933,96 @@ mod tests {
                 .clone()
         };
         assert_ne!(digest("schema-r4-8-a", ""), digest("schema-r4-8-b", "\n"));
+    }
+
+    /// S12 (CLOUD-2904, round 4 #20): a package's build script and the file
+    /// it `#[path]`-includes are keyed in the tokens every case carries.
+    ///
+    /// Fails by: an edit to `build.rs`, or to the module it includes, leaving
+    /// every case's key where it was while the build it shapes changed.
+    #[test]
+    fn a_build_script_and_its_path_module_key_every_case() {
+        let schema = |label: &str, script: &str, support: &str| {
+            let root = crate::scratch::scratch(label);
+            let files = [
+                ("p/Cargo.toml", "[package]\nname = \"p\"\n"),
+                ("p/src/lib.rs", "pub fn f() {}\n"),
+                (
+                    "p/build.rs",
+                    &format!(
+                        "#[path = \"build_support.rs\"]\nmod support;\nfn main() {{ {script} }}\n"
+                    ),
+                ),
+                (
+                    "p/build_support.rs",
+                    &format!("pub fn s() -> u8 {{ {support} }}\n"),
+                ),
+            ];
+            for (path, text) in files {
+                std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+                std::fs::write(root.join(path), text).unwrap();
+            }
+            let mut mutant = listed("FnValue", "()", (1, 1), (1, 2));
+            mutant.file = String::from("p/src/lib.rs");
+            let work = root.join("work");
+            for (path, text) in files {
+                std::fs::create_dir_all(work.join(path).parent().unwrap()).unwrap();
+                std::fs::write(work.join(path), text).unwrap();
+            }
+            write_schema(&root, &work, &[mutant], &BTreeSet::new(), &BTreeSet::new())
+                .unwrap()
+                .items
+                .get("")
+                .cloned()
+                .unwrap_or_default()
+        };
+        let held = schema("schema-s12-a", "", "1");
+        assert_ne!(schema("schema-s12-b", "let _ = 1;", "1"), held, "build.rs");
+        assert_ne!(schema("schema-s12-c", "", "2"), held, "its #[path] module");
+    }
+
+    /// R4-15 (CLOUD-2904, round 4): a foreign trait or a method name joins
+    /// no two types, so a case using one type is not keyed on another that
+    /// implements the same trait or has a method of the same name.
+    ///
+    /// Fails by: every impl under a name followed however many there are,
+    /// which joined the workspace into one component (`Clone`, `.as_str()`)
+    /// and keyed 91% of probed functions on `Compiled`.
+    #[test]
+    fn a_shared_trait_or_method_name_joins_no_two_types() {
+        let run = case("run");
+        let cases: BTreeSet<Case> = [run.clone()].into();
+        let executed = [(run.clone(), [0].into())].into();
+        let none = std::collections::BTreeMap::new();
+        let lib = |cloned: &str, shouted: &str, shown: &str| {
+            format!(
+                "pub fn run() -> u8 {{ A.shout() }}\n#[derive(Clone)]\npub struct A;\n\
+                 impl Shown for A {{}}\npub trait Shown {{ const K: u8 = {shown}; }}\n\
+                 pub struct B {{ {cloned} }}\nimpl Clone for B {{ fn clone(&self) -> Self {{ B {{}} }} }}\n\
+                 pub struct C {{ {shouted} }}\nimpl C {{ pub fn shout(&self) -> u8 {{ 2 }} }}\n"
+            )
+        };
+        let digest = |label: &str, cloned: &str, shouted: &str, shown: &str| {
+            tree_digests(
+                label,
+                &cases,
+                &executed,
+                &[("src/lib.rs", &lib(cloned, shouted, shown))],
+                &none,
+            )[&run]
+                .clone()
+        };
+        let held = digest("schema-r4-15-a", "", "", "1");
+        assert_eq!(
+            digest("schema-r4-15-b", "pub v: u8", "", "1"),
+            held,
+            "a type whose impl of a trait the case's type derives"
+        );
+        assert_eq!(
+            digest("schema-r4-15-c", "", "pub v: u8", "1"),
+            held,
+            "a type whose one impl has a method the case calls by name"
+        );
     }
 
     /// One integration case's digest over `files`, with `src/lib.rs` the
