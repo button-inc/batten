@@ -2021,3 +2021,34 @@ fn a_module_this_engine_cannot_evaluate_is_refused_not_dropped() {
     let output = lint(&dir, &[]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
 }
+
+/// Fails by: a module the working config registers and its BASE lacks read as a
+/// load failure, so `config lint` against `origin/main` (verify, CI, a claimed
+/// branch's fork point) aborts on every branch that adds a module — the shape
+/// of #1276, which adds nine. Absent at the base is no load failure: the lint
+/// reads the smells and exits as it always did.
+#[test]
+fn a_module_the_base_lacks_is_no_load_failure() {
+    let rule = "version = 1\n\n[[rule]]\nid = \"m\"\n\
+                no_fix_reason = \"class 3 (a call rewrite): nothing persists to repair\"\n\
+                kind = \"policy\"\nscope = \"mediated_call\"\nmodule = \"policy/m.rego\"\n\
+                severity = \"deny\"\n";
+    let module = "package batten.m\nimport rego.v1\n\nrules contains \"m\"\n\n\
+                  violation contains {\"rule\": \"m\", \"verdict\": \"call name refused\"} if {\n\
+                  \tinput.call.go\n}\n";
+    let dir = Fixture::new("config-lint-base-lacks-module")
+        .config("version = 1\n")
+        .git()
+        .undeclared_trunk()
+        .base_commit()
+        .config(rule)
+        .file("policy/m.rego", module)
+        .work_commit()
+        .build();
+    let output = lint(&dir, &["--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        !common::stderr(&output).contains("absent at"),
+        "absence at the base is no refusal: {output:?}"
+    );
+}
