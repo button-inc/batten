@@ -331,11 +331,10 @@ pub fn offset(text: &str, position: Position) -> Option<usize> {
 /// How a site is switched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Wrap {
-    /// An operator token replaced, per mutant: the site is its expression.
-    Op {
-        op: Range<usize>,
-        alts: Vec<(u32, String)>,
-    },
+    /// An operator token replaced, per mutant, each with its own token: the
+    /// site is its expression, or the operator chain around it where the
+    /// replacement reassociates that chain ([`op_site`]).
+    Op(Vec<(u32, Range<usize>, String)>),
     /// A function body's contents replaced, per mutant.
     Body(Vec<(u32, String)>),
     /// A guard's condition replaced, per mutant.
@@ -526,13 +525,7 @@ fn switched(
             } else {
                 mutant.replacement.clone()
             };
-            Some((
-                span_of(&expr),
-                Wrap::Op {
-                    op,
-                    alts: vec![(id, alt)],
-                },
-            ))
+            Some((op_site(&expr, &op, &alt), Wrap::Op(vec![(id, op, alt)])))
         }
         "MatchArmGuard" => {
             let arm = node.ancestors().find_map(ast::MatchArm::cast)?;
@@ -567,15 +560,84 @@ fn switched(
     }
 }
 
+/// The span an operator switch at `op` in `expr` covers: `expr`'s own, unless
+/// `alt` in its place reassociates the operator chain `expr` sits in, and then
+/// that whole chain's.
+///
+/// THE SWITCHED BRANCH MUST PARSE AS CARGO-MUTANTS' SWAP DOES (CLOUD-2911).
+/// cargo-mutants replaces the token in the text, so `a && b && c` with its
+/// first `&&` made `||` is `a || b && c`, which is `a || (b && c)`; a switch
+/// around the inner `a && b` alone judged `(a || b) && c`, another program. The
+/// tip census read `item_index.rs:711:21` MISSED that way, while six
+/// `item_index` cases kill the real mutant. Within the chain's outermost
+/// operator expression the swapped text parses as it does in the file: the
+/// chain ends at a parent that is no binary or range operator, which no
+/// operator change moves.
+fn op_site(expr: &SyntaxNode, op: &Range<usize>, alt: &str) -> Range<usize> {
+    const OPEN: &str = "fn f() { (";
+    let own = span_of(expr);
+    let Some(chain) = expr
+        .ancestors()
+        .take_while(|node| {
+            node.kind() == SyntaxKind::BIN_EXPR || node.kind() == SyntaxKind::RANGE_EXPR
+        })
+        .last()
+        .filter(|chain| chain != expr)
+    else {
+        return own;
+    };
+    let whole = span_of(&chain);
+    let text = chain.to_string();
+    let (at, end) = (op.start - whole.start, op.end - whole.start);
+    let swapped = format!("{}{alt}{}", &text[..at], &text[end..]);
+    let parse = batten_facts::source::rust_parse(
+        &format!("{OPEN}{swapped}); }}"),
+        ra_ap_syntax::Edition::Edition2024,
+    );
+    // The expression the swapped token heads, read back: the same operands as
+    // `expr`'s keep its own span; any other reassociated the chain.
+    let shift = |at: usize| OPEN.len() + at - whole.start;
+    let operands = |start: usize, end: usize| start..end + alt.len() - (op.end - op.start);
+    let expected = operands(shift(own.start), shift(own.end));
+    let held = parse
+        .syntax_node()
+        .token_at_offset(TextSize::from(
+            u32::try_from(OPEN.len() + at).unwrap_or(u32::MAX),
+        ))
+        .right_biased()
+        .and_then(|token| token.parent())
+        .map(|node| span_of(&node));
+    if held == Some(expected) { own } else { whole }
+}
+
+/// Whether the binary operator mutant spanning `op` in `function`'s text is
+/// switched over its chain ([`op_site`]) rather than its own expression.
+fn rechained(function: &str, op: &Range<usize>, alt: &str) -> bool {
+    let root = batten_facts::source::rust_parse(function, ra_ap_syntax::Edition::Edition2024)
+        .syntax_node();
+    node_at(&root, op.clone())
+        .and_then(|node| node.ancestors().find_map(ast::BinExpr::cast))
+        .filter(|expr| {
+            expr.op_token().is_some_and(|token| {
+                let range = token.text_range();
+                (usize::from(range.start())..usize::from(range.end())) == *op
+            })
+        })
+        .is_some_and(|expr| op_site(expr.syntax(), op, alt) != span_of(expr.syntax()))
+}
+
 /// Fold `wrap` into the wraps already at a site: same kind merges.
 fn merge(wraps: &mut Vec<Wrap>, wrap: Wrap) {
     for held in wraps.iter_mut() {
-        // ONE SITE, ONE OPERATOR: a site is its expression's span, which holds
-        // exactly one operator token, so two `Op`s at one site swap the same one.
+        // EACH `Op` CARRIES ITS TOKEN: a chain site ([`op_site`]) shares its
+        // span with the chain's own outermost operator, so two `Op`s at one
+        // site may swap different tokens.
         match (held, &wrap) {
-            (Wrap::Op { alts, .. }, Wrap::Op { alts: more, .. })
-            | (Wrap::Body(alts), Wrap::Body(more))
-            | (Wrap::Guard(alts), Wrap::Guard(more)) => {
+            (Wrap::Op(alts), Wrap::Op(more)) => {
+                alts.extend(more.iter().cloned());
+                return;
+            }
+            (Wrap::Body(alts), Wrap::Body(more)) | (Wrap::Guard(alts), Wrap::Guard(more)) => {
                 alts.extend(more.iter().cloned());
                 return;
             }
@@ -590,7 +652,7 @@ fn merge(wraps: &mut Vec<Wrap>, wrap: Wrap) {
     // INNERMOST FIRST: an operator's switch sits inside a guard's, which sits
     // inside an arm's.
     wraps.sort_by_key(|wrap| match wrap {
-        Wrap::Op { .. } => 0,
+        Wrap::Op(_) => 0,
         Wrap::Body(_) => 1,
         Wrap::Guard(_) => 2,
         Wrap::ArmOff(_) => 3,
@@ -694,12 +756,24 @@ impl Writer<'_> {
             return;
         };
         match wrap {
-            Wrap::Op { op, alts } => {
+            Wrap::Op(alts) => {
                 self.out.push('(');
-                for (id, alt) in alts {
+                for (id, op, alt) in alts {
                     let _ = write!(self.out, "if crate::__batten_mutant({id}) {{ ");
+                    // A TOKEN INSIDE A NESTED SITE IS IN NO GAP of this one (a
+                    // chain site holding another mutant's operand): that
+                    // branch is the site's own text with the token swapped,
+                    // where no other mutant is active anyway.
+                    let nested = site
+                        .children
+                        .iter()
+                        .any(|child| child.range.start < op.end && op.start < child.range.end);
                     self.branch(*id, |w| {
-                        w.inner(site.range.clone(), &site.children, Some((op, alt)));
+                        if nested {
+                            w.gap(site.range.clone(), Some((op, alt)));
+                        } else {
+                            w.inner(site.range.clone(), &site.children, Some((op, alt)));
+                        }
                     });
                     self.out.push_str(" } else ");
                 }
@@ -749,9 +823,8 @@ impl Writer<'_> {
 
 fn ids_of(wrap: &Wrap) -> Vec<u32> {
     match wrap {
-        Wrap::Op { alts, .. } | Wrap::Body(alts) | Wrap::Guard(alts) => {
-            alts.iter().map(|(id, _)| *id).collect()
-        }
+        Wrap::Op(alts) => alts.iter().map(|(id, _, _)| *id).collect(),
+        Wrap::Body(alts) | Wrap::Guard(alts) => alts.iter().map(|(id, _)| *id).collect(),
         Wrap::ArmOff(ids) => ids.clone(),
         Wrap::Erase | Wrap::Probe(_) => Vec::new(),
     }
@@ -4653,6 +4726,14 @@ fn site_hasher(root: &std::path::Path, mutant: &Listed) -> Option<blake3::Hasher
     // a function moved whole keeps its key and a second site does not share it.
     let site = offset(&source, mutant.span.start)?.checked_sub(offset(&source, span.start)?)?;
     hasher.update(site.to_string().as_bytes());
+    // A SWITCH WIDENED TO ITS CHAIN JUDGES ANOTHER PROGRAM than the one the
+    // same text was judged as before (CLOUD-2911), so it keys apart: a verdict
+    // or a case's outcome journaled under the narrower switch never stands
+    // for it. Every other mutant keeps its key.
+    let end = offset(&source, mutant.span.end)?.checked_sub(offset(&source, span.start)?)?;
+    if rechained(text, &(site..end), &mutant.replacement) {
+        hasher.update(b"\x1fchain");
+    }
     Some(hasher)
 }
 
@@ -9279,6 +9360,148 @@ mod tests {
         assert_eq!(
             not.text,
             "fn f(a: bool) -> bool {\n    (if crate::__batten_mutant(0) { a } else { !a })\n}\n"
+        );
+    }
+
+    /// An operator swap that reassociates its chain is switched over the whole
+    /// chain, so its branch is cargo-mutants' in-place swap; one that does not
+    /// keeps its own expression; and a chain swap whose token sits inside
+    /// another mutant's site renders that site's text unswitched.
+    ///
+    /// Fails by: `a && b && c`'s first `&&` made `||` judged as
+    /// `(a || b) && c` instead of `a || (b && c)`, the program cargo-mutants
+    /// builds (CLOUD-2911: `item_index.rs:711:21` read MISSED while six cases
+    /// kill it); a swap that keeps its operands widened to the chain; or a
+    /// nested token's swap lost, leaving the branch the original.
+    #[test]
+    fn an_operator_swap_is_switched_as_its_chain_parses() {
+        let three = "fn f(a: bool, b: bool, c: bool) -> bool {\n    a && b && c\n}\n";
+        let first = render_all(three, &[listed("BinaryOperator", "||", (2, 7), (2, 9))]);
+        assert!(
+            first
+                .text
+                .contains("(if crate::__batten_mutant(0) { a || b && c } else { a && b && c })"),
+            "{}",
+            first.text
+        );
+        let both = render_all(
+            three,
+            &[
+                listed("BinaryOperator", "||", (2, 7), (2, 9)),
+                listed("BinaryOperator", "||", (2, 12), (2, 14)),
+            ],
+        );
+        assert!(
+            both.text.contains(
+                "(if crate::__batten_mutant(0) { a || b && c } else if \
+                 crate::__batten_mutant(1) { a && b || c } else { a && b && c })"
+            ),
+            "{}",
+            both.text
+        );
+        let sum = "fn f(a: u8, b: u8, c: u8) -> u8 {\n    a * b + c\n}\n";
+        let kept = render_all(sum, &[listed("BinaryOperator", "/", (2, 7), (2, 8))]);
+        assert!(
+            kept.text
+                .contains("(if crate::__batten_mutant(0) { a / b } else { a * b }) + c"),
+            "{}",
+            kept.text
+        );
+        let product = "fn f(a: u8, b: u8, c: u8) -> u8 {\n    a + b * c\n}\n";
+        let nested = render_all(
+            product,
+            &[
+                listed("BinaryOperator", "+", (2, 11), (2, 12)),
+                listed("BinaryOperator", "/", (2, 11), (2, 12)),
+            ],
+        );
+        assert!(
+            nested.text.contains(
+                "(if crate::__batten_mutant(0) { a + b + c } else { a + (if \
+                 crate::__batten_mutant(1) { b / c } else { b * c }) })"
+            ),
+            "{}",
+            nested.text
+        );
+        // A SITE TOUCHING THE TOKEN IS NOT AROUND IT: one ending where the
+        // token starts, and one starting where it ends, stay switched inside.
+        let before = render_all(
+            "fn f(x: u8, y: u8, b: bool, c: bool) -> bool {\n    x==y&&b&&c\n}\n",
+            &[
+                listed("BinaryOperator", "||", (2, 9), (2, 11)),
+                listed("BinaryOperator", "!=", (2, 6), (2, 8)),
+            ],
+        );
+        assert!(
+            before.text.contains(
+                "(if crate::__batten_mutant(0) { (if crate::__batten_mutant(1) { x!=y } else \
+                 { x==y })||b&&c }"
+            ),
+            "{}",
+            before.text
+        );
+        let after = render_all(
+            "fn f(a: bool, x: u8, y: u8, c: bool) -> bool {\n    a&&x==y&&c\n}\n",
+            &[
+                listed("BinaryOperator", "||", (2, 6), (2, 8)),
+                listed("BinaryOperator", "!=", (2, 9), (2, 11)),
+            ],
+        );
+        assert!(
+            after.text.contains(
+                "(if crate::__batten_mutant(0) { a||(if crate::__batten_mutant(1) { x!=y } \
+                 else { x==y })&&c }"
+            ),
+            "{}",
+            after.text
+        );
+    }
+
+    /// A mutant switched over its chain keys apart from the narrower switch
+    /// the same text was judged as, so nothing journaled under that stands for
+    /// it; any other mutant keeps its key.
+    ///
+    /// Fails by: a chain mutant keyed as before, so the land reuses the MISSED
+    /// and every `passed` outcome its narrower switch journaled (CLOUD-2911:
+    /// `item_index.rs:711:21` read MISSED again on a re-run with the render
+    /// fixed); or a mutant whose switch did not move re-keyed, so its stored
+    /// verdict is judged again for nothing.
+    #[test]
+    fn a_mutant_switched_over_its_chain_keys_apart() {
+        let root = crate::scratch::scratch("schema-chain-key");
+        let source = "fn f(a: bool, b: bool, c: bool) -> bool {\n    a && b && c\n}\n";
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), source).unwrap();
+        let whole = Span {
+            start: Position { line: 1, column: 1 },
+            end: Position { line: 3, column: 2 },
+        };
+        let mutant = |from: (usize, usize), to: (usize, usize)| {
+            let mut mutant = listed("BinaryOperator", "||", from, to);
+            mutant.function.as_mut().unwrap().span = Some(whole);
+            mutant
+        };
+        let expected = |site: usize, chain: bool| {
+            let mut hasher = blake3::Hasher::new();
+            for part in ["src/lib.rs", source.trim_end(), "BinaryOperator", "||", "f"] {
+                hasher.update(part.as_bytes());
+                hasher.update(b"\x1f");
+            }
+            hasher.update(site.to_string().as_bytes());
+            if chain {
+                hasher.update(b"\x1fchain");
+            }
+            hasher.finalize().to_hex().to_string()
+        };
+        assert_eq!(
+            site_key(&root, &mutant((2, 7), (2, 9))),
+            Some(expected(48, true)),
+            "the first `&&` reassociates"
+        );
+        assert_eq!(
+            site_key(&root, &mutant((2, 12), (2, 14))),
+            Some(expected(53, false)),
+            "the second does not"
         );
     }
 
