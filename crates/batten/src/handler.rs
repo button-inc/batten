@@ -1242,8 +1242,11 @@ mod tests {
         // blocks. Run against the un-fixed code it passed in 0.00s — a test
         // asserting its own premise before its conclusion, which is the shape
         // `rules/rust.md` names and `tests/primitives.rs` gates. A child
-        // that sleeps holds the read end open, which is what makes the parent's
-        // write block and the defect reachable.
+        // that stays alive without reading holds the read end open, which is
+        // what makes the parent's write block and the defect reachable. It
+        // spins on a builtin WHILE THIS TEST PROCESS LIVES (`kill -0` sends
+        // nothing), so no clock keeps it alive and nothing outlives the case
+        // (CLOUD-2789); only the handler's declared bound ends it.
         //
         // THE OUTCOME IS THE ASSERTION, NOT THE CLOCK (CLOUD-2059). Written
         // before the deadline, the payload blocks the parent until the deaf child
@@ -1251,7 +1254,11 @@ mod tests {
         // reading is `Pass`, not `TimedOut`. The exact timeout, at the bound the
         // handler declared, is therefore what separates the fix from the defect;
         // an elapsed-time ceiling only restated it, and added a way to flake.
-        let mut deaf = handler("deaf", "stop", &["sh", "-c", "sleep 30"]);
+        let spin = format!(
+            "while kill -0 {} 2>/dev/null; do :; done",
+            std::process::id()
+        );
+        let mut deaf = handler("deaf", "stop", &["sh", "-c", &spin]);
         deaf.timeout_ms = Some(300);
         let outcome = run_one(Path::new("."), &deaf, &Payload::Text(oversized()));
         assert_eq!(

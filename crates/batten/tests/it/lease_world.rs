@@ -204,9 +204,12 @@ fn a_stale_guard_asks_to_cancel_and_runs_when_refused() {
 
 /// `stop` signals the holder it names, so its own trap runs.
 ///
-/// Fails by: no signal sent at all, which leaves the holder sleeping out its
-/// whole interval. Off unix there is no signal to send (`stop` is inert by
-/// construction there), so there is no subject to drive.
+/// Fails by: no signal sent at all. The holder is `cat` on a stdin pipe this
+/// case holds open, so nothing but a signal can end it: a `stop` that sends
+/// none leaves the wait below on the holder's exit forever, and the mutation
+/// judge's per-case cut files that as a timeout (CLOUD-2789). Off unix there is
+/// no signal to send (`stop` is inert by construction there), so there is no
+/// subject to drive.
 #[test]
 fn stop_terminates_the_holder_it_names() {
     if cfg!(not(unix)) {
@@ -216,17 +219,17 @@ fn stop_terminates_the_holder_it_names() {
         clippy::disallowed_types,
         reason = "stays, and test-only: the subject is a signal to ANOTHER process, so a real child is the only holder that can receive one"
     )]
-    let mut holder = std::process::Command::new("sleep")
-        .arg("600")
+    let mut holder = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
         .spawn()
         .expect("a holder to stop");
-    let pid = holder.id();
-    // THE EVENT, NOT A CLOCK (CLOUD-2789): the holder is reaped the moment
-    // `stop`'s signal ends it, and this waits for exactly that. A `stop` that
-    // sends nothing leaves the wait blocked, which the mutation judge files as
-    // the hang it is; the holder then sleeps out its own interval alone.
-    batten::lease::stop(pid);
+    // Held, never written or closed until the holder has exited: an EOF would
+    // end `cat` on its own and pass a `stop` that signalled nothing.
+    let open = holder.stdin.take();
+    batten::lease::stop(holder.id());
     let status = holder.wait().expect("the holder is reaped");
+    drop(open);
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;

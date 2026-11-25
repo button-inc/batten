@@ -258,6 +258,11 @@ pub struct LintAttribute {
     pub level: String,
     /// The attribute's whole source text, `#[` to `]`.
     pub text: String,
+    /// Whether it stands in `#[cfg(test)]` code: on, or inside, an item
+    /// carrying that attribute (CLOUD-2789). Read off the tree by
+    /// [`crate::module_graph::cfg_test`], so a test module's annotation is
+    /// told from the library's without a text scan for the marker.
+    pub in_test: bool,
 }
 
 /// Every lint-level attribute in `source` (outer or inner, any of the five
@@ -319,6 +324,7 @@ pub fn lint_attributes(source: &str, edition: Edition, lint: &str) -> Vec<LintAt
                 line: source[..start].matches('\n').count() + 1,
                 level,
                 text: attr.text().to_string(),
+                in_test: crate::module_graph::cfg_test(&attr),
             })
         })
         .collect()

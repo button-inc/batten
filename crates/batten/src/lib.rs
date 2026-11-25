@@ -1661,7 +1661,8 @@ fn distance_bounded(repository: &str, tag: &str) -> Option<Distance> {
     std::thread::spawn(move || {
         let _ = tx.send(distance(&repository, &tag));
     });
-    rx.recv_timeout(NOTICE_LOOKUP).ok()?.ok()
+    let answered = rx.recv_timeout(NOTICE_LOOKUP);
+    answered.ok()?.ok()
 }
 
 /// Whether the notice may speak in this run: never in CI, never when

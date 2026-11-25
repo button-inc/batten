@@ -3458,31 +3458,47 @@ pub(crate) fn schema_leaf<'a>(
     Some(node)
 }
 
-/// Spawn a just-copied binary, retrying while exec reports `ETXTBSY`.
+/// Spawn a just-copied binary, waiting out `ETXTBSY` on its EVENT.
 ///
 /// A sibling case forking while this copy's write handle was still open hands
 /// that handle to its child, and the kernel refuses to exec a file open for
 /// writing until the child execs and closes it. Measured on #1132 as
-/// `engine_update::the_hook_path_never_builds_a_source_pin` failing with "Text file busy". The
-/// window is the sibling's fork-to-exec, so a short retry outlasts it.
+/// `engine_update::the_hook_path_never_builds_a_source_pin` failing with "Text
+/// file busy". The window is the sibling's fork-to-exec, and its END is an
+/// event the kernel reports: the last write handle's close, `IN_CLOSE_WRITE`.
+/// So the watch is armed BEFORE each attempt — a close between a refused exec
+/// and the watch would otherwise be missed — and a refused attempt blocks on
+/// that close rather than on a clock (CLOUD-2789). Linux is where `ETXTBSY`
+/// lives; elsewhere a refused attempt is simply asked again.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: it spawns a private COPY of the binary, which `batten` cannot target"
 )]
 pub(crate) fn spawn_copy(command: &mut std::process::Command) -> std::process::Child {
-    for _ in 0..100 {
+    loop {
+        #[cfg(target_os = "linux")]
+        let closed = {
+            use rustix::fs::inotify;
+            let watch = inotify::init(inotify::CreateFlags::CLOEXEC).expect("an inotify instance");
+            inotify::add_watch(
+                &watch,
+                Path::new(command.get_program()),
+                inotify::WatchFlags::CLOSE_WRITE,
+            )
+            .expect("watch the copy for its last write handle closing");
+            watch
+        };
         match command.spawn() {
             Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy => {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "bounded by a real terminal state: `ETXTBSY` clears when the sibling child holding the copy's write handle execs, so the poll ends at that exec, capped at `100` tries"
-                )]
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                #[cfg(target_os = "linux")]
+                {
+                    let mut event = [0_u8; 256];
+                    let _ = rustix::io::read(&closed, &mut event);
+                }
             }
             spawned => return spawned.expect("run batten"),
         }
     }
-    command.spawn().expect("run batten")
 }
 
 /// Write `ca.pem`/`ca.key` and a `cert.pem`/`key.pem` the CA signed, into `tls`.
@@ -3624,9 +3640,10 @@ pub(crate) fn tls_www(tls: &Path, root: &Path) -> TlsWww {
             .arg(tls.join("cert.pem"))
             .arg("-key")
             .arg(tls.join("key.pem"))
-            .args(["-WWW", "-quiet"])
+            .arg("-WWW")
             .current_dir(root)
-            .stdout(Stdio::null())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .expect("start the local TLS listener");
@@ -3643,24 +3660,28 @@ const TLS_PORT_TRIES: usize = 8;
 
 /// `host` once its listener holds its port, or the status it exited with first.
 ///
-/// 600 x 50ms: under the full suite's load `s_server` measured slower than the
-/// 5s `provision.rs` allowed one listener alone. The exit is read before the
-/// port, so a port some other process took is never mistaken for this one's.
+/// WAITED ON THE LISTENER'S OWN WORD (CLOUD-2789): `s_server` says `ACCEPT`
+/// on stdout once it is listening, so this blocks on that line, never on a
+/// clock. A listener that exits first — its port taken by another process —
+/// closes stdout instead, and that EOF hands back the status it exited with.
+/// Without `-quiet`, because that is what silences it. Once listening, the rest
+/// of stdout is drained on a thread, so a chatty listener never blocks on a
+/// full pipe.
 fn tls_listening(mut host: TlsWww) -> Result<TlsWww, std::process::ExitStatus> {
-    for _ in 0..600 {
-        if let Ok(Some(status)) = host.child.try_wait() {
-            return Err(status);
-        }
-        if std::net::TcpListener::bind(("127.0.0.1", host.port)).is_err() {
+    use std::io::{BufRead as _, Read as _};
+    let mut said = std::io::BufReader::new(host.child.stdout.take().expect("piped stdout"));
+    let mut line = String::new();
+    while said.read_line(&mut line).unwrap_or(0) > 0 {
+        if line.trim() == "ACCEPT" {
+            std::thread::spawn(move || {
+                let mut rest = [0_u8; 4096];
+                while said.read(&mut rest).unwrap_or(0) > 0 {}
+            });
             return Ok(host);
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a bounded poll: the exit condition is `TcpListener::bind` failing because the listener took the port, and the 600-iteration bound turns a listener that never came up into a failed assertion rather than a hang (CLOUD-1177)"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        line.clear();
     }
-    panic!("the TLS listener never came up");
+    Err(host.child.wait().expect("reap the listener that exited"))
 }
 
 /// A directory link on every host the suite runs on: Windows names the kind at

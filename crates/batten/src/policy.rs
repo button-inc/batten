@@ -9012,22 +9012,17 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
 
     /// Fails by: the coverage sweep's batch shrinking rather than doubling,
     /// so it never runs past the first case and a predicate only the second
-    /// case fires is never entered. That sweep spins, so the case owns its
-    /// deadline and a spin reads as a failure rather than a hung suite.
+    /// case fires is never entered. A sweep that spins instead hangs the case,
+    /// and the mutation judge's per-case cut files that as the timeout it is
+    /// (CLOUD-2789): the case waits on the sweep ending, never on a clock.
     #[test]
     fn a_predicate_only_a_later_case_fires_is_exercised() {
         let module = "package batten.n\nimport rego.v1\n\nrules contains \"n\"\n\n\
 violation contains {\"rule\": \"n\", \"verdict\": \"n\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
 test_a_quiet if {\n\tcount(violation) == 0 with input as {\"call\": {\"operation\": \"read\"}}\n}\n\n\
 test_b_fires if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n";
-        let (sent, got) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let suite = suite_of(&bundle_of("row", &[("policy/n.rego", module)]), false);
-            let _ = sent.send((suite.passed.len(), suite.unexercised));
-        });
-        let (passed, unexercised) = got
-            .recv_timeout(std::time::Duration::from_secs(60))
-            .expect("the coverage sweep ends");
+        let suite = suite_of(&bundle_of("row", &[("policy/n.rego", module)]), false);
+        let (passed, unexercised) = (suite.passed.len(), suite.unexercised);
         assert_eq!(passed, 2);
         assert!(unexercised.is_empty(), "{unexercised:?}");
     }
