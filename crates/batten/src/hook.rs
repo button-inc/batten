@@ -14029,6 +14029,7 @@ fn line_assignments(argv: &[&str], depth: usize, found: &mut Vec<String>) {
     }
 }
 
+#[cfg(test)]
 fn prefix_assignments(tokens: &[&str]) -> Vec<String> {
     prefix_assignment_words(tokens)
         .into_iter()

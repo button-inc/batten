@@ -831,51 +831,10 @@ pub fn flatten_scoped(
             flatten_command(node, source, after, construct, defined, out);
         }
         rable::NodeKind::Pipeline { commands, .. } => {
-            for (index, command) in commands.iter().enumerate() {
-                // A stage's terminator is the pipe that FOLLOWS it; the last
-                // stage inherits whatever followed the pipeline itself.
-                //
-                // BOTH PIPE SPELLINGS ARE `Pipe`, DELIBERATELY. `rable`
-                // distinguishes `|` from `|&` (`PipeSep::PipeBoth`) and this
-                // collapses them, because the only question `Separator` exists
-                // to answer is what happens to the first stage's exit STATUS —
-                // and that is identical for both: the pipeline exits with the
-                // last stage's. `|&` additionally redirects stderr, which is a
-                // question about output rather than about status and which no
-                // `pipeline` row asks.
-                //
-                // Written as a plain value rather than a lookup: an earlier
-                // revision consulted `separators.get(index)` and returned the
-                // same thing from both arms, which read as a distinction being
-                // made and was not one.
-                let follows = if index + 1 < commands.len() {
-                    Some(Separator::Pipe)
-                } else {
-                    after
-                };
-                flatten_scoped(
-                    command,
-                    source,
-                    follows,
-                    construct,
-                    &mut defined.clone(),
-                    out,
-                );
-            }
+            flatten_pipeline(commands, source, after, construct, defined, out);
         }
         rable::NodeKind::List { items } => {
-            for item in items {
-                let follows = match item.operator {
-                    Some(rable::ListOperator::And) => Some(Separator::And),
-                    Some(rable::ListOperator::Or) => Some(Separator::Or),
-                    Some(rable::ListOperator::Semi) => Some(Separator::Semi),
-                    Some(rable::ListOperator::Background) => Some(Separator::Background),
-                    // The final element carries whatever followed the list, and
-                    // it is the only one `rable` leaves without an operator.
-                    None => after,
-                };
-                flatten_scoped(&item.command, source, follows, construct, defined, out);
-            }
+            flatten_list(items, source, after, construct, defined, out);
         }
         // A GROUPING runs its body in this call's own right, so it is walked.
         // A SUBSHELL's body is also marked, because its `cd` dies with it; a
@@ -891,167 +850,20 @@ pub fn flatten_scoped(
             flatten_scoped(body, source, after, construct, &mut defined.clone(), out);
             redirected(out, first, redirects, source);
         }
-        // **A CONTROL-FLOW BODY IS WALKED AND TAGGED**, which is what makes a
-        // module able to decide from structure (CLOUD-1381).
-        //
-        // An earlier revision walked these UNTAGGED, and at the time that was an
-        // over-deny: `run-shape` then exempted a `sleep` inside a condition
-        // loop, and a body command lifted into a bare segment carries nothing
-        // saying it was in a loop, so a conditioned wait was refused as a bare
-        // timer. A second revision withdrew the walk entirely, which stopped
-        // that over-deny and left the module unable to see the loop at all.
-        //
-        // CLOUD-1337 has since withdrawn the exemption, so that particular
-        // over-deny is no longer possible -- but the tagging is not vestigial:
-        // `polls-a-local-process` and `background-timer` PARTITION on what the
-        // loop body reads, and neither can see a body it was never handed.
-        //
-        // Tagging is the answer both attempts were missing. The condition and
-        // the body are DIFFERENT roles and a module needs them apart: the
-        // condition is where a process probe lives, the body is where a sleep
-        // does.
-        rable::NodeKind::While {
-            condition,
-            body,
-            redirects,
-        } => {
-            let mut inner = defined.clone();
-            flatten_scoped(
-                condition,
-                source,
-                None,
-                Some(("while", "condition")),
-                &mut inner,
-                out,
-            );
-            flatten_scoped(
-                body,
-                source,
-                after,
-                Some(("while", "body")),
-                &mut inner,
-                out,
-            );
-            redirected(out, first, redirects, source);
-        }
-        rable::NodeKind::Until {
-            condition,
-            body,
-            redirects,
-        } => {
-            let mut inner = defined.clone();
-            flatten_scoped(
-                condition,
-                source,
-                None,
-                Some(("until", "condition")),
-                &mut inner,
-                out,
-            );
-            flatten_scoped(
-                body,
-                source,
-                after,
-                Some(("until", "body")),
-                &mut inner,
-                out,
-            );
-            redirected(out, first, redirects, source);
-        }
-        rable::NodeKind::If {
-            condition,
-            then_body,
-            else_body,
-            redirects,
-        } => {
-            let mut inner = defined.clone();
-            flatten_scoped(
-                condition,
-                source,
-                None,
-                Some(("if", "condition")),
-                &mut inner,
-                out,
-            );
-            flatten_scoped(
-                then_body,
-                source,
-                None,
-                Some(("if", "body")),
-                &mut inner.clone(),
-                out,
-            );
-            if let Some(body) = else_body {
-                flatten_scoped(body, source, after, Some(("if", "body")), &mut inner, out);
-            }
-            redirected(out, first, redirects, source);
-        }
-        // `for` COUNTS rather than tests, so it is a different node and a
-        // different answer: `for i in $(seq 60); do sleep 10; done` exits on the
-        // clock like any timer. The bash guard named that a deliberate
-        // non-catch "because narrowing that costs a real parser"; it costs none
-        // now, and the narrowing is that this is not a `while`.
-        rable::NodeKind::For {
-            body, redirects, ..
-        }
-        | rable::NodeKind::ForArith {
-            body, redirects, ..
-        } => {
-            flatten_scoped(
-                body,
-                source,
-                after,
-                Some(("for", "body")),
-                &mut defined.clone(),
-                out,
-            );
-            redirected(out, first, redirects, source);
-        }
-        rable::NodeKind::Select {
-            body, redirects, ..
-        } => {
-            flatten_scoped(
-                body,
-                source,
-                after,
-                Some(("select", "body")),
-                &mut defined.clone(),
-                out,
-            );
-            redirected(out, first, redirects, source);
-        }
-        rable::NodeKind::Case {
-            patterns,
-            redirects,
-            ..
-        } => {
-            for arm in patterns {
-                if let Some(body) = arm.body.as_ref() {
-                    flatten_scoped(
-                        body,
-                        source,
-                        None,
-                        Some(("case", "body")),
-                        &mut defined.clone(),
-                        out,
-                    );
-                }
-            }
-            redirected(out, first, redirects, source);
-        }
+        rable::NodeKind::While { .. }
+        | rable::NodeKind::Until { .. }
+        | rable::NodeKind::If { .. }
+        | rable::NodeKind::For { .. }
+        | rable::NodeKind::ForArith { .. }
+        | rable::NodeKind::Select { .. }
+        | rable::NodeKind::Case { .. } => flatten_control(node, source, after, defined, out),
         // A DEFINITION is visible to the items after it, and to its own body
         // (recursion); the body is walked and judged where it is written.
         rable::NodeKind::Function { name, body } => {
             let mut inner = defined.clone();
             inner.push(name.clone());
-            flatten_scoped(
-                body,
-                source,
-                after,
-                Some(("function", "body")),
-                &mut inner,
-                out,
-            );
+            let tag = Some(("function", "body"));
+            flatten_scoped(body, source, after, tag, &mut inner, out);
             defined.push(name.clone());
         }
         // `! cmd` and `time cmd` WRAP a pipeline rather than being one, so the
@@ -1089,6 +901,206 @@ pub fn flatten_scoped(
         // `descend_word`.
         _ => {}
     }
+}
+
+/// [`flatten_scoped`]'s pipeline arm: each stage in a copy of the scope, since
+/// a stage runs in its own subshell.
+fn flatten_pipeline(
+    commands: &[rable::Node],
+    source: &str,
+    after: Option<Separator>,
+    construct: Option<(&'static str, &'static str)>,
+    defined: &[String],
+    out: &mut Vec<Segment>,
+) {
+    for (index, command) in commands.iter().enumerate() {
+        // A stage's terminator is the pipe that FOLLOWS it; the last
+        // stage inherits whatever followed the pipeline itself.
+        //
+        // BOTH PIPE SPELLINGS ARE `Pipe`, DELIBERATELY. `rable`
+        // distinguishes `|` from `|&` (`PipeSep::PipeBoth`) and this
+        // collapses them, because the only question `Separator` exists
+        // to answer is what happens to the first stage's exit STATUS —
+        // and that is identical for both: the pipeline exits with the
+        // last stage's. `|&` additionally redirects stderr, which is a
+        // question about output rather than about status and which no
+        // `pipeline` row asks.
+        //
+        // Written as a plain value rather than a lookup: an earlier
+        // revision consulted `separators.get(index)` and returned the
+        // same thing from both arms, which read as a distinction being
+        // made and was not one.
+        let follows = if index + 1 < commands.len() {
+            Some(Separator::Pipe)
+        } else {
+            after
+        };
+        flatten_scoped(
+            command,
+            source,
+            follows,
+            construct,
+            &mut defined.to_vec(),
+            out,
+        );
+    }
+}
+
+/// [`flatten_scoped`]'s list arm: the items share the scope, so a definition is
+/// visible to the items after it.
+fn flatten_list(
+    items: &[rable::ListItem],
+    source: &str,
+    after: Option<Separator>,
+    construct: Option<(&'static str, &'static str)>,
+    defined: &mut Vec<String>,
+    out: &mut Vec<Segment>,
+) {
+    for item in items {
+        let follows = match item.operator {
+            Some(rable::ListOperator::And) => Some(Separator::And),
+            Some(rable::ListOperator::Or) => Some(Separator::Or),
+            Some(rable::ListOperator::Semi) => Some(Separator::Semi),
+            Some(rable::ListOperator::Background) => Some(Separator::Background),
+            // The final element carries whatever followed the list, and
+            // it is the only one `rable` leaves without an operator.
+            None => after,
+        };
+        flatten_scoped(&item.command, source, follows, construct, defined, out);
+    }
+}
+
+/// [`flatten_scoped`]'s control-flow arms, each in a copy of the scope and
+/// each carrying the redirection written on the node to every command inside.
+///
+/// **A CONTROL-FLOW BODY IS WALKED AND TAGGED**, which is what makes a module
+/// able to decide from structure (CLOUD-1381).
+///
+/// An earlier revision walked these UNTAGGED, and at the time that was an
+/// over-deny: `run-shape` then exempted a `sleep` inside a condition loop, and a
+/// body command lifted into a bare segment carries nothing saying it was in a
+/// loop, so a conditioned wait was refused as a bare timer. A second revision
+/// withdrew the walk entirely, which stopped that over-deny and left the module
+/// unable to see the loop at all.
+///
+/// CLOUD-1337 has since withdrawn the exemption, so that particular over-deny is
+/// no longer possible -- but the tagging is not vestigial:
+/// `polls-a-local-process` and `background-timer` PARTITION on what the loop
+/// body reads, and neither can see a body it was never handed.
+///
+/// Tagging is the answer both attempts were missing. The condition and the body
+/// are DIFFERENT roles and a module needs them apart: the condition is where a
+/// process probe lives, the body is where a sleep does.
+///
+/// `for` COUNTS rather than tests, so it is a different node and a different
+/// answer: `for i in $(seq 60); do sleep 10; done` exits on the clock like any
+/// timer. The bash guard named that a deliberate non-catch "because narrowing
+/// that costs a real parser"; it costs none now, and the narrowing is that this
+/// is not a `while`.
+fn flatten_control(
+    node: &rable::Node,
+    source: &str,
+    after: Option<Separator>,
+    defined: &[String],
+    out: &mut Vec<Segment>,
+) {
+    let first = out.len();
+    let mut inner = defined.to_vec();
+    let redirects = match &node.kind {
+        rable::NodeKind::While {
+            condition,
+            body,
+            redirects,
+        } => {
+            flatten_loop("while", condition, body, source, after, &mut inner, out);
+            redirects
+        }
+        rable::NodeKind::Until {
+            condition,
+            body,
+            redirects,
+        } => {
+            flatten_loop("until", condition, body, source, after, &mut inner, out);
+            redirects
+        }
+        rable::NodeKind::If {
+            condition,
+            then_body,
+            else_body,
+            redirects,
+        } => {
+            let tag = Some(("if", "body"));
+            flatten_scoped(
+                condition,
+                source,
+                None,
+                Some(("if", "condition")),
+                &mut inner,
+                out,
+            );
+            flatten_scoped(then_body, source, None, tag, &mut inner.clone(), out);
+            if let Some(body) = else_body {
+                flatten_scoped(body, source, after, tag, &mut inner, out);
+            }
+            redirects
+        }
+        rable::NodeKind::For {
+            body, redirects, ..
+        }
+        | rable::NodeKind::ForArith {
+            body, redirects, ..
+        } => {
+            flatten_scoped(body, source, after, Some(("for", "body")), &mut inner, out);
+            redirects
+        }
+        rable::NodeKind::Select {
+            body, redirects, ..
+        } => {
+            flatten_scoped(
+                body,
+                source,
+                after,
+                Some(("select", "body")),
+                &mut inner,
+                out,
+            );
+            redirects
+        }
+        rable::NodeKind::Case {
+            patterns,
+            redirects,
+            ..
+        } => {
+            for body in patterns.iter().filter_map(|arm| arm.body.as_ref()) {
+                let tag = Some(("case", "body"));
+                flatten_scoped(body, source, None, tag, &mut inner.clone(), out);
+            }
+            redirects
+        }
+        _ => return,
+    };
+    redirected(out, first, redirects, source);
+}
+
+/// A `while` or `until`: its condition and its body, tagged apart, in one scope.
+fn flatten_loop(
+    keyword: &'static str,
+    condition: &rable::Node,
+    body: &rable::Node,
+    source: &str,
+    after: Option<Separator>,
+    inner: &mut Vec<String>,
+    out: &mut Vec<Segment>,
+) {
+    flatten_scoped(
+        condition,
+        source,
+        None,
+        Some((keyword, "condition")),
+        inner,
+        out,
+    );
+    flatten_scoped(body, source, after, Some((keyword, "body")), inner, out);
 }
 
 /// A word's source text, from the parts the lexer resolved.
