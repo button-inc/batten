@@ -22,7 +22,7 @@
 #MUTANT sort-long-option-unread|s@^\tnames_long_option(argument, {"output".*$@\tfalse@|an_abbreviated_or_clustered_writing_option_is_refused
 #MUTANT gh-method-cluster-unread|s@^\tgh_method_flag(argument)$@\targument == "-X"@|an_abbreviated_or_clustered_writing_option_is_refused
 #MUTANT curl-value-eats-flag-unread|s@^\tnot curl_value_eats_a_flag(arguments)$@\ttrue@|a_curl_flag_consumed_as_a_value_is_not_also_a_flag
-#MUTANT git-assignment-unread|s@^\tnot some_git_assignment(call)$@\ttrue@|a_git_variable_assigned_before_the_program_is_not_a_read
+#MUTANT git-assignment-unread|s@^\tnot some_live_assignment(call)$@\ttrue@|a_git_variable_assigned_before_the_program_is_not_a_read
 #MUTANT curl-scheme-unread|s@^curl_allowed(_, _, word) if regex.match.*$@curl_allowed(_, _, word) if not startswith(word, "-")@|a_curl_read_is_http_only
 #MUTANT git-read-form-writes|s@^\tnot some_writing_flag(verb.rest)$@\ttrue@|a_plan_mode_git_with_global_options_is_allowed
 #MUTANT git-pager-cluster-unread|s@^\tcontains(argument, "O")$@\tfalse@|a_plan_mode_git_with_global_options_is_allowed
@@ -38,6 +38,14 @@
 #MUTANT curl-flag-unread|s@^\tcurl_reads(program.arguments)$@\ttrue@|a_plan_mode_curl_get_is_allowed_and_its_writes_are_refused
 #MUTANT git-fetch-refspec-unread|s@^\tnot writes_a_local_ref(rest)$@\ttrue@|a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused
 #MUTANT git-fetch-refused|s@^\t"fetch",$@@|a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused
+#MUTANT-SUITE crates/batten/tests/it/reach_review.rs
+#MUTANT inert-name-widened|s@^\tinert_name(assignment_name(assignment))$@\ttrue@|only_an_inert_assignment_or_a_bare_program_name_is_a_read
+#MUTANT pager-value-unread|s@^\tassignment_value(assignment) == "cat"$@\ttrue@|only_an_inert_assignment_or_a_bare_program_name_is_a_read
+#MUTANT program-path-unread|s@^\t\tprogram.program == program.name$@\t\ttrue@|only_an_inert_assignment_or_a_bare_program_name_is_a_read
+#MUTANT awk-directive-unread|s@^\tsome directive in {"@include", "@load"}$@\tsome directive in {"@nothing"}@|an_awk_directive_or_long_debug_is_a_write
+#MUTANT awk-debug-unread|s@"pretty-print", "profile", "debug"@"pretty-print", "profile"@|an_awk_directive_or_long_debug_is_a_write
+#MUTANT date-cluster-value-unread|s@^\tregex.match(`^-\[uR\]\*\[drf\]$`, arguments\[i - 1\])$@\tfalse@|an_honest_read_the_tip_refused_is_granted
+#MUTANT gh-method-rest-ambiguous|s@^\tgh_method_rest(arguments\[i\]) == ""$@\ttrue@|a_gh_method_argument_has_one_reading
 #MUTANT git-upload-pack-unread|s@^\tnot git_runs_program(verb.rest)$@\ttrue@|a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused
 #MUTANT read-builtin-refused|s@^\t\t"read",$@@|a_plan_mode_read_loop_is_allowed_and_a_writing_loop_is_refused
 #MUTANT skill-refused|s@^\t\t"Skill",$@@|a_plan_mode_skill_is_allowed_and_a_write_tool_is_not
@@ -171,6 +179,14 @@ date_value(arguments, i) if {
 	arguments[i - 1] in {"-d", "--date", "-r", "--reference", "-f", "--file"}
 }
 
+# A SHORT CLUSTER WHOSE LAST FLAG TAKES THE VALUE (CLOUD-2840 review m7): `-ud
+# @0` is `-u -d @0`. Only the switches `-u` and `-R` come before it, so a `-s`
+# in the cluster is still read as setting the clock.
+date_value(arguments, i) if {
+	i > 0
+	regex.match(`^-[uR]*[drf]$`, arguments[i - 1])
+}
+
 # `hostname` reads with query flags only: an operand, `-F FILE` or `-b` SETS
 # the name, so every argument must be a flag that asks.
 reads(program) if {
@@ -235,21 +251,45 @@ read_only(call) if {
 	count(call.programs) > 0
 	every program in call.programs {
 		reads(program)
+		program.program == program.name
 	}
 	not some_output_redirect(call)
-	not some_git_assignment(call)
+	not some_live_assignment(call)
 }
 
-# A `GIT_*` VARIABLE ASSIGNED BEFORE THE PROGRAM (CLOUD-2840):
-# `GIT_EXTERNAL_DIFF`, `GIT_PAGER`, `GIT_CONFIG_COUNT`/`_KEY_n`/`_VALUE_n` and
-# their kin make git run a program, so `git diff` under one reads nothing the
-# boundary can see. Every `GIT_*` name is refused, which fails closed.
-some_git_assignment(call) if {
+# AN ASSIGNMENT BEFORE THE PROGRAM IS A READ'S ONLY IF IT IS INERT (CLOUD-2840
+# review M4). `GIT_EXTERNAL_DIFF` and `GIT_PAGER` make git run a program, but so
+# do `PATH`, `LD_PRELOAD`, `HOME` (a config file's), `RIPGREP_CONFIG_PATH`,
+# `CURL_HOME`, `GH_BROWSER` and their kin for every program here — refusing
+# `GIT_*` alone granted all of those. So the list is of the INERT names, which
+# set locale, colour, width or a prompt and load nothing: a name outside it is
+# not proven a read. A pager is inert only as `cat`, which runs nothing. Each
+# `assigns` entry is `NAME=value`, per line and through `env -S`.
+some_live_assignment(call) if {
 	is_array(call.segments)
 	some segment in call.segments
-	some name in segment.assigns
-	startswith(name, "GIT_")
+	some assignment in segment.assigns
+	not inert_assignment(assignment)
 }
+
+inert_assignment(assignment) if {
+	inert_name(assignment_name(assignment))
+}
+
+inert_assignment(assignment) if {
+	assignment_name(assignment) in {"GIT_PAGER", "PAGER"}
+	assignment_value(assignment) == "cat"
+}
+
+inert_name(name) if name in {"LANG", "LANGUAGE", "TZ", "NO_COLOR", "COLUMNS", "LINES", "TERM", "GIT_TERMINAL_PROMPT"}
+
+inert_name(name) if startswith(name, "LC_")
+
+inert_name(name) if startswith(name, "CLICOLOR")
+
+assignment_name(assignment) := trim_suffix(split(assignment, "=")[0], "+")
+
+assignment_value(assignment) := substring(assignment, indexof(assignment, "=") + 1, -1)
 
 # GUARDED: `segments` is `null` on a non-shell call, and iterating null faults
 # the whole query, which reads as could-not-look for every module here.
@@ -512,7 +552,16 @@ awk_writes(arguments) if {
 
 awk_writes(arguments) if {
 	some argument in arguments
-	names_long_option(argument, {"file", "include", "load", "exec", "dump-variables", "pretty-print", "profile"})
+	names_long_option(argument, {"file", "include", "load", "exec", "dump-variables", "pretty-print", "profile", "debug"})
+}
+
+# A GAWK DIRECTIVE IN THE PROGRAM TEXT loads code as `-i`/`-l` do (CLOUD-2840
+# review M6): `@include "inplace"` edits its input files in place, and `@load
+# "rwarray"` brings `writea`, which writes one. `--debug` is `-D` spelled long.
+awk_writes(arguments) if {
+	some argument in arguments
+	some directive in {"@include", "@load"}
+	contains(argument, directive)
 }
 
 awk_writes(arguments) if {
@@ -598,7 +647,9 @@ gh_api_writes(arguments) if {
 	gh_api_joined_field(argument)
 }
 
-gh_api_joined_field(argument) if regex.match(`^-[a-zA-Z]*[fF]`, argument)
+# A SHORT CLUSTER ENDS AT ITS FIRST VALUE FLAG (CLOUD-2840 review m7): only `-i`
+# is a switch, so in `-HX-GitHub-Api-Version:…` the `X` is the header's value.
+gh_api_joined_field(argument) if regex.match(`^-i*[fF]`, argument)
 
 gh_api_writes(arguments) if {
 	some i, argument in arguments
@@ -618,19 +669,22 @@ gh_api_writes(arguments) if {
 gh_api_writes(arguments) if {
 	some i, argument in arguments
 	gh_method_flag(argument)
-	endswith(argument, "X")
+	gh_method_rest(argument) == ""
 	count(arguments) == i + 1
 }
 
-gh_method_flag(argument) if regex.match(`^-[a-zA-Z]*X`, argument)
+gh_method_flag(argument) if regex.match(`^-i*X`, argument)
 
-gh_method(arguments, i) := method if {
-	argument := arguments[i]
-	method := substring(argument, indexof(argument, "X") + 1, -1)
-	method != ""
+# ONE READING PER ARGUMENT (CLOUD-2840 review m9): the rest of the cluster after
+# `X`, or the next word only when that rest is empty. Two definitions that could
+# both hold gave `-XGETX GET` two methods.
+gh_method(arguments, i) := gh_method_rest(arguments[i]) if gh_method_rest(arguments[i]) != ""
+
+gh_method(arguments, i) := arguments[i + 1] if {
+	gh_method_rest(arguments[i]) == ""
 }
 
-gh_method(arguments, i) := arguments[i + 1] if endswith(arguments[i], "X")
+gh_method_rest(argument) := substring(argument, indexof(argument, "X") + 1, -1)
 
 gh_api_writes(arguments) if {
 	some argument in arguments
