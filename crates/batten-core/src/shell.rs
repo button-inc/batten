@@ -1779,27 +1779,20 @@ fn embedded_commands(text: &str, arithmetic: bool) -> Vec<String> {
     let mut found = Vec::new();
     let mut double = false;
     let mut at = 0;
-    while let Some(&c) = chars.get(at) {
+    // BOUNDED BY THE TEXT'S LENGTH, as `effective_program` is by its tokens:
+    // every pass moves `at` forward, so a change that stops it advancing
+    // answers wrong where a case sees it, rather than spinning.
+    for _ in 0..=chars.len() {
+        let Some(&c) = chars.get(at) else { break };
         let next = chars.get(at + 1).copied();
         match c {
             '\\' => at += 1,
-            '\'' if !double => {
-                at += 1;
-                while chars.get(at).is_some_and(|&inner| inner != '\'') {
-                    at += 1;
-                }
-            }
+            '\'' if !double => at = quote_end(&chars, at + 1),
             '"' => double = !double,
             '`' => {
                 let start = at + 1;
-                at = start;
-                while chars.get(at).is_some_and(|&inner| inner != '`') {
-                    if chars[at] == '\\' {
-                        at += 1;
-                    }
-                    at += 1;
-                }
-                found.push(chars[start..at.min(chars.len())].iter().collect());
+                at = backtick_end(&chars, start);
+                found.push(chars[start..at].iter().collect());
             }
             '$' if next == Some('(') && chars.get(at + 2) == Some(&'(') => at += 2,
             '$' | '<' | '>' if next == Some('(') && (c == '$' || !arithmetic) => {
@@ -1815,21 +1808,45 @@ fn embedded_commands(text: &str, arithmetic: bool) -> Vec<String> {
     found
 }
 
+/// The index of the `'` closing a single-quoted span whose text starts at
+/// `from`, or the text's end where it never closes.
+fn quote_end(chars: &[char], from: usize) -> usize {
+    chars
+        .iter()
+        .skip(from)
+        .position(|&c| c == '\'')
+        .map_or(chars.len(), |offset| from + offset)
+}
+
+/// The index of the `` ` `` closing a backquoted command whose text starts at
+/// `from`, a backslash escaping the character after it, or the text's end
+/// where it never closes.
+fn backtick_end(chars: &[char], from: usize) -> usize {
+    let mut escaped = false;
+    for (at, &c) in chars.iter().enumerate().skip(from) {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '`' {
+            return at;
+        }
+    }
+    chars.len()
+}
+
 /// The index of the `)` closing a group whose text starts at `start`, quotes
 /// honoured, or `None` where it never closes.
 fn closing_paren(chars: &[char], start: usize) -> Option<usize> {
     let mut depth = 1usize;
     let mut double = false;
     let mut at = start;
-    while let Some(&c) = chars.get(at) {
+    // Bounded as `embedded_commands` is, for its reason.
+    for _ in 0..=chars.len() {
+        let Some(&c) = chars.get(at) else { break };
         match c {
             '\\' => at += 1,
-            '\'' if !double => {
-                at += 1;
-                while chars.get(at).is_some_and(|&inner| inner != '\'') {
-                    at += 1;
-                }
-            }
+            '\'' if !double => at = quote_end(chars, at + 1),
             '"' => double = !double,
             '(' if !double => depth += 1,
             ')' if !double => {
@@ -2297,6 +2314,21 @@ mod tests {
         assert_eq!(found("$(a \")\" b)", false), words(&["a \")\" b"]));
         assert_eq!(found("`a \\` b`", false), words(&["a \\` b"]));
         assert_eq!(found("\"'\"$(a)", false), words(&["a"]));
+        assert_eq!(found("'x $(a)' $(b)", false), words(&["b"]));
+        assert_eq!(found("abc$(($(a)))", true), words(&["a"]));
+        assert_eq!(found("x `a`", false), words(&["a"]));
+        assert_eq!(found("$(a \"'\" b)", false), words(&["a \"'\" b"]));
+        assert_eq!(found("$(a 'x)' b)", false), words(&["a 'x)' b"]));
+        assert_eq!(found("$(a \"(\" b)", false), words(&["a \"(\" b"]));
+        assert_eq!(found("$(a \\) b)", false), words(&["a \\) b"]));
+        assert_eq!(found("`", false), words(&[""]));
+        assert_eq!(found("$(", false), words(&[""]));
+        assert_eq!(super::quote_end(&['a', '\'', 'b', '\''], 1), 1);
+        assert_eq!(super::quote_end(&['a', 'b', '\''], 0), 2);
+        assert_eq!(super::quote_end(&['a', 'b'], 1), 2);
+        assert_eq!(super::backtick_end(&['a', '\\', '`', '`'], 0), 3);
+        assert_eq!(super::backtick_end(&['a', '`'], 1), 1);
+        assert_eq!(super::backtick_end(&['a'], 0), 1);
         assert_eq!(super::closing_paren(&['a', ')'], 0), Some(1));
         assert_eq!(super::closing_paren(&['(', ')', ')'], 0), Some(2));
         assert_eq!(super::closing_paren(&['\\', ')', ')'], 0), Some(2));
