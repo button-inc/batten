@@ -1162,6 +1162,13 @@ fn is_kept(path: &Path, kept: &[Kept]) -> bool {
 /// drain grace, the crate's bound on waiting for another process to let go.
 pub const HELD_TREE_PATIENCE: std::time::Duration = batten_stream::DRAIN_GRACE;
 
+/// Whether a waiting pass that has waited `waited` gives up on a held tree for
+/// want of patience: only a pass NO flag stops, and only past
+/// [`HELD_TREE_PATIENCE`]. A pass with a stop flag waits until it is set.
+fn patience_spent(halt: crate::prune::Halt<'_>, waited: std::time::Duration) -> bool {
+    halt.is_none() && waited >= HELD_TREE_PATIENCE
+}
+
 /// How often a waiting pass retries a held tree's lock.
 const HELD_TREE_RETRY: std::time::Duration = std::time::Duration::from_millis(5);
 
@@ -1400,8 +1407,7 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
     let opened = Instant::now();
     // A WAIT NO FLAG ENDS IS BOUNDED BY PATIENCE: `target prune --collect`
     // waited on a held tree for as long as its holder held it.
-    let give_up =
-        || past(request.deadline) || (halt.is_none() && opened.elapsed() >= HELD_TREE_PATIENCE);
+    let give_up = || past(request.deadline) || patience_spent(halt, opened.elapsed());
     let mut held = Held::default();
     let (locks, waited) = lock_trees(request.trees, request.wait, &give_up);
     held.locks = waited;
@@ -2169,6 +2175,42 @@ mod tests {
             fixtures_since: None,
             traces: None,
         }
+    }
+
+    /// Fails by: a pass with a stop flag giving up for patience (it waits for
+    /// its flag), or one without giving up at once or never.
+    #[test]
+    fn only_an_unstoppable_pass_runs_out_of_patience() {
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        let long = super::HELD_TREE_PATIENCE * 2;
+        assert!(!super::patience_spent(Some(&flag), long));
+        assert!(!super::patience_spent(None, Duration::ZERO));
+        assert!(super::patience_spent(None, super::HELD_TREE_PATIENCE));
+        assert!(super::patience_spent(None, long));
+    }
+
+    /// A STOPPED PASS IS ONE THAT FELL SHORT (CLOUD-2789): a pass whose stop
+    /// flag is set but that needed nothing more reports `disk-collected`, and
+    /// one that still needed bytes reports `disk-stopped`.
+    ///
+    /// Fails by: `stopped` set on a pass that met its need, or never set.
+    #[test]
+    fn a_pass_stopped_short_of_its_need_says_so() {
+        let tree = scratch("stopped-short");
+        let trees = vec![tree];
+        let flag = std::sync::atomic::AtomicBool::new(true);
+        let mut met = ask(&trees, &[], 0);
+        met.stop = Some(&flag);
+        assert!(
+            !super::collect(&met).held.stopped,
+            "a met need is not stopped"
+        );
+        let mut short = ask(&trees, &[], 1);
+        short.stop = Some(&flag);
+        assert!(
+            super::collect(&short).held.stopped,
+            "a short pass is stopped"
+        );
     }
 
     /// A `[prune]` table rooted at `target`, with the band `band`.
