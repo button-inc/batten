@@ -1,27 +1,28 @@
-//! The session's setup, run as ONE detached task rather than inside the hook
+//! The session's setup: ONE install task the agent dispatches, never the hook
 //! (CLOUD-2840).
 //!
-//! **The hook budget is 10 ms with a 100 ms ceiling, and setup is minutes.** A
-//! `SessionStart` that ran every declared `session-start` handler and every
-//! `[[startup]]` repair in-process held the agent's first response for as long
-//! as the slowest of them, bounded only by the host's 600 s kill. So the hook
-//! starts this task and returns: it writes the host's payload where the task can
-//! read it, spawns `batten startup --session` in its own process group, and
-//! registers that pid in the task registry before the dispatch returns.
+//! **The hook budget is 10 ms with a 100 ms ceiling, and setup is minutes.** So
+//! `SessionStart` does in-process work only: it spools the host's payload where
+//! the task can read it and says, on the advisory channel every hook's advice
+//! uses, exactly what to dispatch ([`instruction`]). It SPAWNS NOTHING. The
+//! owner's ruling (2026-11-25): "implement install as a 10/100ms hook just like
+//! every other hook with instructions to agent on how to install as background
+//! task and gating until agent dispatches the damn install task".
 //!
-//! **The task runs what the hook used to, in the order it used to**, with one
-//! step moved ahead: the environment manager's install (a `[[startup]]` row
-//! naming a `preset`), then the declared handlers (each under its own
-//! `timeout_ms`), the pin record, the other `[[startup]]` repairs, then the
-//! health report re-decided after them. What any
-//! of them would have said is RECORDED here as JSON lines, and the next
-//! `PreToolUse` or `UserPromptSubmit` surfaces it once ([`surface`]), through the
-//! same constructors the inline path used, so a finding reads the same whichever
-//! call carries it.
+//! **The task is [`DISPATCH`], run by the agent with its harness's own
+//! background facility.** It takes the singleton, registers itself (pid plus
+//! process start tick), then runs the environment manager's install (a
+//! `[[startup]]` row naming a `preset`), the declared handlers (each under its
+//! own `timeout_ms`), the pin record, the other `[[startup]]` repairs, and the
+//! health report re-decided after them. What any of them would have said is
+//! RECORDED here as JSON lines, and the next `PreToolUse` or `UserPromptSubmit`
+//! surfaces it once ([`surface`]), through the same constructors the inline
+//! path used, so a finding reads the same whichever call carries it.
 //!
 //! **The task's last phase is its verdict** ([`crate::task::OK`] or
-//! [`crate::task::FAILED`]): a gate that holds a tool while it installs reads the
-//! registry, never this record, so it can answer without parsing findings.
+//! [`crate::task::FAILED`]): the install gate reads the registry, never this
+//! record, so it can answer without parsing findings. Before any record exists
+//! the gate holds every call but a read and the dispatch itself.
 
 use std::path::{Path, PathBuf};
 
@@ -30,8 +31,8 @@ use crate::task;
 
 /// Whether `event`'s declared rows run in the setup task rather than inline:
 /// `SessionStart`'s, and no other event's. The hook asks this ONE predicate,
-/// and `session_start::a_session_start_registers_its_task_before_it_returns`
-/// is the case that reddens when it answers `false` (CLOUD-2840).
+/// and `session_start::a_blocking_handler_holds_nothing_and_is_said_once` is
+/// the case that reddens when it answers `false` (CLOUD-2840).
 #[must_use]
 pub fn detaches(event: crate::config_model::Event) -> bool {
     event == crate::config_model::Event::SessionStart
@@ -52,18 +53,23 @@ const OUTCOME: &str = "outcome";
 /// The outcome once a call has carried it: renamed, so it is said once.
 const SURFACED: &str = "outcome.surfaced";
 
-/// Register `pid` as the setup task unless a record for it already exists.
+/// The one install task, as the agent dispatches it (CLOUD-2840).
+pub const DISPATCH: &str = "batten startup --session";
+
+/// What the agent is told to do, at `SessionStart` and in the install gate's
+/// refusal: THE ONE SPELLING of the instruction, so the two never drift.
 ///
-/// BOTH SIDES CALL THIS, AND NEITHER WAITS (CLOUD-2840). The hook registers the
-/// pid its spawn returned, so the registry names the task before the hook
-/// returns; the task registers itself before its first push, because a push to
-/// a pid with no record is a no-op ([`task::push`]) and its last phase is the
-/// one the gate reads. Whichever runs second finds the record and leaves it, so
-/// a phase the task already pushed is never reset to `start`.
-fn register_once(git_dir: &Path, pid: &str, now: u64) {
-    if task::read_field(git_dir, pid, "task").is_none() {
-        task::register(git_dir, TASK, pid, "start", now);
-    }
+/// Claude Code's own facility is named because it is the measured host; every
+/// other harness reads the same sentence with its own background facility.
+#[must_use]
+pub fn instruction() -> String {
+    format!(
+        "session setup not dispatched: run `{DISPATCH}` once, as a background task \
+         with your harness's own facility (Claude Code: the Bash tool with \
+         run_in_background and an explicit timeout of 3600000 ms), never inline, \
+         never with `&`, `nohup` or a redirect; until it is dispatched every call \
+         but a read is held, and until it records `ok` a program it installs is held"
+    )
 }
 
 fn dir(git_dir: &Path) -> PathBuf {
@@ -76,7 +82,7 @@ fn dir(git_dir: &Path) -> PathBuf {
 /// ONE STAT ON THE HOT PATH (CLOUD-2840's perf-gate). Every mediated call asks
 /// this, and `git::git_dir` opens the repository: from a directory that is not a
 /// repository root it walks up and opens the enclosing one, on every call of the
-/// `hook` and `passthrough` arms. A setup task is started only where the
+/// `hook` and `passthrough` arms. Setup is prepared only where the
 /// authority is a repository root, so a `.git` directory answers here, a `.git`
 /// file (a linked worktree) is the one case that opens, and no `.git` at all is
 /// no setup to read.
@@ -92,8 +98,9 @@ pub fn git_dir_of(root: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Whether a setup task was ever started under `git_dir`: one stat, so a
-/// reader with nothing to read opens no registry.
+/// Whether `SessionStart` ever prepared setup under `git_dir`: one stat, so a
+/// reader with nothing to read opens no registry. Prepared is not dispatched:
+/// [`record`] answers that.
 #[must_use]
 pub fn started(git_dir: &Path) -> bool {
     dir(git_dir).exists()
@@ -105,36 +112,45 @@ pub fn payload_path(git_dir: &Path) -> PathBuf {
     dir(git_dir).join(PAYLOAD)
 }
 
-/// Start the task for this session, unless one is already running.
-///
-/// Returns the registered pid, or `None` where nothing was started: one is
-/// already running (a resume or a second `SessionStart` must not start a
-/// second install over the first), or the spawn failed — which is silent, as
-/// every side effect at this boundary is, and leaves the gates with no record
-/// to hold on.
+/// Whether `command` is the dispatch itself: [`DISPATCH`], its program reached
+/// by any path, and nothing else on the line. The install gate admits it in
+/// every phase, so the one call that ends the hold is never held.
 #[must_use]
-pub fn start(root: &Path, git_dir: &Path, raw: &str, now: u64) -> Option<String> {
-    let (running, _) = task::partition(git_dir);
-    if running.iter().any(|entry| entry.task == TASK) {
-        return None;
-    }
+pub fn is_dispatch(command: &str) -> bool {
+    let mut words = command.split_whitespace();
+    let mut wanted = DISPATCH.split_whitespace();
+    words
+        .next()
+        .zip(wanted.next())
+        .is_some_and(|(program, name)| program.rsplit('/').next() == Some(name))
+        && words.eq(wanted)
+}
+
+/// Spool the host's `SessionStart` payload for the task, in process, and
+/// answer whether setup is still owed: no record of the task exists, so the
+/// agent must be told to dispatch it.
+///
+/// SPAWNS NOTHING (CLOUD-2840): two file writes and one registry read, inside
+/// the hook budget. A record the task already left (a resume or a compaction in
+/// the same container) stands, and its outcome is not erased: a finished
+/// install is not this session's to redo, and an unsaid finding is still owed.
+/// Silent on failure, as every side effect at this boundary is.
+#[must_use]
+pub fn prepare(git_dir: &Path, raw: &str) -> bool {
     let here = dir(git_dir);
-    std::fs::create_dir_all(&here).ok()?;
-    crate::durable::replace(here.join(PAYLOAD), raw).ok()?;
-    // A NEW SESSION'S OUTCOME REPLACES THE LAST ONE'S, surfaced or not: what a
-    // previous container found is not this one's state.
-    let _ = std::fs::remove_file(here.join(OUTCOME));
-    let _ = std::fs::remove_file(here.join(SURFACED));
-    let exe = std::env::current_exe().ok()?;
-    let pid = crate::exec::detached_in(
-        &exe,
-        &["startup".to_owned(), "--session".to_owned()],
-        &[],
-        root,
-    )?
-    .to_string();
-    register_once(git_dir, &pid, now);
-    Some(pid)
+    if std::fs::create_dir_all(&here).is_err() {
+        return false;
+    }
+    let _ = crate::durable::replace(here.join(PAYLOAD), raw);
+    record(git_dir).is_none()
+}
+
+/// The setup task's registry record, live or ended, or `None` where it was
+/// never dispatched.
+#[must_use]
+pub fn record(git_dir: &Path) -> Option<task::Entry> {
+    let (running, gone) = task::partition(git_dir);
+    running.into_iter().chain(gone).find(|entry| entry.task == TASK)
 }
 
 /// What one finding is, recorded as the inputs its refusal is built from.
@@ -178,13 +194,19 @@ pub fn run(
     rows: &[crate::config_model::Startup],
 ) -> bool {
     let pid = std::process::id().to_string();
-    register_once(git_dir, &pid, crate::clock::now_unix());
+    // THE SINGLETON BEFORE THE RECORD: a second dispatch while one runs leaves
+    // no record of its own, so the gate reads the one task that is installing.
     if !matches!(
         task::singleton_acquire(git_dir, TASK, &pid, std::time::Duration::ZERO),
         task::Claim::Taken | task::Claim::Reclaimed(_)
     ) {
         return true;
     }
+    let _ = std::fs::create_dir_all(dir(git_dir));
+    // A NEW RUN'S OUTCOME REPLACES THE LAST ONE'S, surfaced or not.
+    let _ = std::fs::remove_file(dir(git_dir).join(OUTCOME));
+    let _ = std::fs::remove_file(dir(git_dir).join(SURFACED));
+    task::register(git_dir, TASK, &pid, "start", crate::clock::now_unix());
     let mut findings = Vec::new();
 
     // THE ENVIRONMENT MANAGER'S INSTALL FIRST (CLOUD-2840). A `[[startup]]` row
@@ -455,20 +477,36 @@ mod tests {
         assert_eq!(Some(workspace.refusal()), inline.finding());
     }
 
-    /// Fails by: the setup task never registered under its pid, so no gate
-    /// that holds on it ever sees it start (CLOUD-2789).
+    /// Fails by: a registered setup task not found as the setup task's record,
+    /// so the gate reads "never dispatched" while it installs (CLOUD-2840).
     #[test]
-    fn a_setup_task_is_registered_under_its_pid() {
+    fn a_registered_task_is_the_setup_record() {
         let git_dir = crate::scratch::scratch("session-setup-registered");
-        assert_eq!(task::read_field(&git_dir, "4194305", "task"), None);
-        register_once(&git_dir, "4194305", 100);
+        assert!(record(&git_dir).is_none());
+        task::register(&git_dir, "another-task", "4194304", "start", 100);
+        assert!(record(&git_dir).is_none(), "another task is not setup");
+        task::register(&git_dir, TASK, "4194305", "start", 100);
         assert_eq!(
-            task::read_field(&git_dir, "4194305", "task").as_deref(),
-            Some(TASK)
+            record(&git_dir).map(|entry| entry.pid).as_deref(),
+            Some("4194305")
         );
     }
 
-    /// Fails by: `started` answering true where no setup task ever ran.
+    /// Fails by: a dispatch read as any other call, so the gate holds the one
+    /// call that ends the hold; or a longer line read as the dispatch, so a
+    /// mutating call rides past the gate behind it.
+    #[test]
+    fn the_dispatch_is_exactly_the_one_command() {
+        assert!(is_dispatch("batten startup --session"));
+        assert!(is_dispatch("  /root/.local/bin/batten  startup --session "));
+        assert!(!is_dispatch("batten startup"));
+        assert!(!is_dispatch("batten startup --session && cargo build"));
+        assert!(!is_dispatch("mise exec -- batten startup --session"));
+        assert!(!is_dispatch("notbatten startup --session"));
+        assert!(!is_dispatch(""));
+    }
+
+    /// Fails by: `started` answering true where setup was never prepared.
     #[test]
     fn a_task_is_started_only_once_its_directory_exists() -> std::io::Result<()> {
         let git_dir = crate::scratch::scratch("session-setup-started");
@@ -478,29 +516,22 @@ mod tests {
         Ok(())
     }
 
-    /// Fails by: `start` answering a pid (`Some(String::new())`) while the
-    /// session's task is already running, so a resume starts a second install
-    /// over the first. Registers this process as the running task, so the
-    /// real code returns at once and the case never spawns anything.
+    /// Fails by: `prepare` answering "setup owed" where the task already left
+    /// a record, so a resume or a compaction asks for a second install; or
+    /// answering "nothing owed" before any dispatch, so the agent is never told.
+    /// `prepare` spawns nothing: the registry it leaves holds no record of its own.
     #[test]
-    fn a_start_while_the_task_runs_starts_nothing() {
-        let git_dir = crate::scratch::scratch("session-setup-running");
-        let own = std::process::id().to_string();
-        task::register(&git_dir, TASK, &own, "start", 100);
-        if cfg!(unix) {
-            assert!(
-                task::partition(&git_dir)
-                    .0
-                    .iter()
-                    .any(|entry| entry.task == TASK),
-                "premise: this process is the running task"
-            );
-            assert_eq!(start(&git_dir, &git_dir, "{}", 200), None);
-            assert!(
-                !payload_path(&git_dir).exists(),
-                "a refused start spools no payload"
-            );
-        }
+    fn prepare_owes_a_dispatch_only_where_no_record_exists() {
+        let git_dir = crate::scratch::scratch("session-setup-prepare");
+        assert!(prepare(&git_dir, "{}"), "never dispatched: owed");
+        assert_eq!(
+            crate::fsio::read_to_string(payload_path(&git_dir)).ok().as_deref(),
+            Some("{}"),
+            "the payload is spooled for the task"
+        );
+        assert!(record(&git_dir).is_none(), "prepare registers nothing");
+        task::register(&git_dir, TASK, "4194305", task::OK, 100);
+        assert!(!prepare(&git_dir, "{}"), "a recorded task is not owed again");
     }
 
     /// Fails by: a crash read as said only once it HAS an outcome, so a task

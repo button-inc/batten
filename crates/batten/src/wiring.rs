@@ -720,10 +720,12 @@ pub fn register_committed(
 }
 
 /// Add batten's registration under every event in `spellings` that carries
-/// none, and return those events in the order given.
+/// none, and return those events, and every event whose stale bound was
+/// removed, in the order given.
 ///
-/// An event already registering a batten command is left exactly as it is, so
-/// a second run adds nothing — the property the `[[startup]]` check relies on.
+/// An event already registering a batten command is left as it is but for a
+/// bound [`hook::entry_timeout`] no longer plants (CLOUD-2840), so a second run
+/// changes nothing — the property the `[[startup]]` check relies on.
 fn add_missing(
     document: &mut serde_json::Value,
     file: hook::WiringFile,
@@ -767,6 +769,17 @@ fn add_missing(
                 .any(|(_, registered)| is_batten(registered, command))
         });
         if present {
+            // A BOUND THE ENGINE NO LONGER OWES IS DRIFT (CLOUD-2840): an entry
+            // planted with `"timeout": 10` kills the pinned engine's inline
+            // install, and leaving batten's own entry "exactly as it is" kept
+            // that bound through every code change that retired it.
+            if hook::entry_timeout(harness, spelling).is_none()
+                && events
+                    .get_mut(*spelling)
+                    .is_some_and(|value| strip_bound(value, command))
+            {
+                added.push((*spelling).to_owned());
+            }
             continue;
         }
         // The registration's own command: the event on argv where the host's
@@ -792,6 +805,28 @@ fn add_missing(
         added.push((*spelling).to_owned());
     }
     added
+}
+
+/// Remove `timeout` from every nested hook under `value` whose command is
+/// batten's, and answer whether one was removed. Anybody else's hook keeps its
+/// bound: the engine owes nothing about a program it does not run.
+fn strip_bound(value: &mut serde_json::Value, command: &str) -> bool {
+    let mut stripped = false;
+    for entry in value.as_array_mut().into_iter().flatten() {
+        let hooks = entry
+            .get_mut("hooks")
+            .and_then(serde_json::Value::as_array_mut);
+        for hook in hooks.into_iter().flatten() {
+            let ours = hook
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|registered| is_batten(registered, command));
+            if let (true, Some(object)) = (ours, hook.as_object_mut()) {
+                stripped |= object.remove("timeout").is_some();
+            }
+        }
+    }
+    stripped
 }
 
 // --- the disarm half: the SCRIPT, because the registration is unread ----------
@@ -1189,6 +1224,78 @@ mod tests {
             .file
     }
 
+    /// `v0.0.221` as a comparable triple, or `None` where it is no release tag.
+    fn release(tag: &str) -> Option<(u64, u64, u64)> {
+        let mut parts = tag.strip_prefix('v')?.split('.').map(str::parse::<u64>);
+        Some((parts.next()?.ok()?, parts.next()?.ok()?, parts.next()?.ok()?))
+    }
+
+    /// Whether the engine `pin` names does in-process work only at
+    /// `SessionStart`, so a bound on its entry kills nothing.
+    fn pin_is_bounded(pin: Option<&crate::config_model::Pin>, since: Option<&str>) -> bool {
+        let Some(since) = since.and_then(release) else {
+            return false;
+        };
+        pin.is_some_and(|pin| {
+            pin.source.is_some()
+                || pin
+                    .release
+                    .as_deref()
+                    .and_then(release)
+                    .is_some_and(|tag| tag >= since)
+        })
+    }
+
+    /// THE COMMITTED WIRING MAY NOT BOUND AN ENGINE THAT INSTALLS INLINE
+    /// (CLOUD-2840). Fails by: `.claude/settings.json` declaring a `timeout` on
+    /// batten's `SessionStart` entry while `batten.toml` pins a release whose
+    /// `SessionStart` runs the locked install inline (v0.0.221): the bound
+    /// killed that install on a cold container, and the next `mise` call
+    /// auto-installed unlocked into a 403 (CLOUD-2881).
+    #[test]
+    fn committed_session_start_wiring_bounds_only_a_bounded_engine() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let config: crate::config_model::Config = toml::from_str(
+            &crate::fsio::read_to_string(root.join("batten.toml")).expect("the authority"),
+        )
+        .expect("the authority parses");
+        let settings: serde_json::Value = serde_json::from_str(
+            &crate::fsio::read_to_string(root.join(".claude/settings.json"))
+                .expect("the committed surface"),
+        )
+        .expect("the surface parses");
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
+        let bounded: Vec<&serde_json::Value> = settings["hooks"]["SessionStart"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry["hooks"].as_array())
+            .flatten()
+            .filter(|hook| {
+                hook["command"]
+                    .as_str()
+                    .is_some_and(|registered| is_batten(registered, &command))
+            })
+            .filter_map(|hook| hook.get("timeout"))
+            .collect();
+        if !pin_is_bounded(config.engine.as_ref(), hook::BOUNDED_SINCE) {
+            assert!(
+                bounded.is_empty(),
+                "the pinned engine installs inline, so its SessionStart takes no bound: {bounded:?}"
+            );
+        }
+        // ANTI-VACUITY: the predicate tells a bounded pin from an inline one.
+        let pin = |tag: &str| crate::config_model::Pin {
+            release: Some(tag.to_owned()),
+            source: None,
+        };
+        assert!(!pin_is_bounded(Some(&pin("v0.0.221")), None));
+        assert!(!pin_is_bounded(Some(&pin("v0.0.221")), Some("v0.0.222")));
+        assert!(pin_is_bounded(Some(&pin("v0.0.222")), Some("v0.0.222")));
+        assert!(pin_is_bounded(Some(&pin("v0.1.0")), Some("v0.0.222")));
+        assert!(!pin_is_bounded(None, Some("v0.0.222")));
+    }
+
     /// The load-bearing negative: a broad selector, so a MIS-registered batten is
     /// wrong rather than reclaimed.
     ///
@@ -1369,6 +1476,43 @@ mod tests {
         );
         // A key this verb never read survives the edit.
         assert!(document["permissions"]["allow"].is_array());
+    }
+
+    /// Fails by: a batten `SessionStart` entry planted with `"timeout": 10`
+    /// left exactly as it is, so the pinned engine's inline install is still
+    /// killed at 10 s after the code stopped planting the bound (CLOUD-2840);
+    /// or anybody else's bound stripped with it; or the repair repeating.
+    #[test]
+    fn a_stale_session_start_bound_is_removed_from_battens_entry_only() {
+        let command = "batten adjudicate --harness claude-code";
+        let mut document = serde_json::json!({"hooks": {"SessionStart": [{"hooks": [
+            {"type": "command", "command": command, "timeout": 10},
+            {"type": "command", "command": "their-hook", "timeout": 30},
+        ]}]}});
+        let premise = hook::entry_timeout(crate::config_model::Harness::ClaudeCode, "SessionStart");
+        assert_eq!(premise, None, "premise: no released engine is bounded yet");
+        let owed = add_missing(
+            &mut document,
+            claude(),
+            &["SessionStart"],
+            command,
+            crate::config_model::Harness::ClaudeCode,
+        );
+        assert_eq!(owed, vec!["SessionStart".to_owned()]);
+        let hooks = &document["hooks"]["SessionStart"][0]["hooks"];
+        assert!(hooks[0].get("timeout").is_none(), "{hooks}");
+        assert_eq!(hooks[1]["timeout"], 30, "not batten's: kept");
+        assert!(
+            add_missing(
+                &mut document,
+                claude(),
+                &["SessionStart"],
+                command,
+                crate::config_model::Harness::ClaudeCode,
+            )
+            .is_empty(),
+            "the second run owes nothing"
+        );
     }
 
     #[test]

@@ -1,12 +1,12 @@
-//! `SessionStart` starts the setup task and returns inside the hook budget
-//! (CLOUD-2840), over the compiled binary.
+//! `SessionStart` spawns nothing and names the one install task the agent
+//! dispatches (CLOUD-2840), over the compiled binary.
 //!
-//! The property is the one a session feels: the agent's first response no
-//! longer waits on provisioning. A handler that blocks until the case releases
-//! it, declared with a ten-minute bound, is the worst a consumer can write; the
-//! door must still answer at once, the registry must name the task while it
-//! runs, and what the handler said must reach the session exactly once after it
-//! finishes.
+//! The owner's design: the hook is a 10/100 ms hook like every other, and it
+//! tells the agent how to install as a background task. A handler that blocks
+//! until the case releases it, declared with a ten-minute bound, is the worst a
+//! consumer can write; the door must answer without running it or starting
+//! anything that would, and once the agent dispatches the task, what the
+//! handler said must reach the session exactly once after it finishes.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 
 use common::{stderr, stdout, write};
 
-/// How long a case polls for the task's terminal phase before it gives up. An
-/// INPUT, never an assertion (`wall_clock.rs`): the loop ends the moment the
-/// phase lands, and giving up is the failure.
+/// How long a case polls for the handler to open its gate before it gives up.
+/// An INPUT, never an assertion (`wall_clock.rs`): the loop ends the moment the
+/// handler reads, and giving up is the failure.
 const SETTLE: Duration = Duration::from_secs(120);
 
 /// One hook call through the door: `event`, with `extra` merged into the payload.
@@ -65,72 +65,56 @@ pub(crate) fn pre_tool(repo: &Path) -> String {
     format!("{out}{err}")
 }
 
-/// The setup task's record, once its phase is terminal.
-///
-/// GIVES UP AS SOON AS THE TASK CANNOT FINISH, not only at [`SETTLE`]
-/// (CLOUD-2789): a task the registry never named, or one whose process is gone
-/// with its phase short of terminal, will never land one, and waiting out the
-/// bound for it read a broken start as a hung suite rather than a red case.
-pub(crate) fn settle(repo: &Path) -> String {
-    let terminal = |phase: &Option<String>| {
-        phase
-            .as_deref()
-            .is_some_and(|phase| phase == "ok" || phase == "failed")
-    };
-    let began = Instant::now();
-    let mut asked = None::<Instant>;
-    while began.elapsed() < SETTLE {
-        let phase = setup_phase(repo);
-        if terminal(&phase) {
-            return phase.unwrap_or_default();
-        }
-        // Registered before the door returns (`session_setup::start`), so a
-        // registry that does not name it never will.
-        assert!(phase.is_some(), "nothing registered the setup task");
-        // Asked at most once a second: each ask is a process.
-        if asked.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
-            asked = Some(Instant::now());
-            if !setup_alive(repo) {
-                // Read once more: the phase lands before the process exits.
-                let last = setup_phase(repo);
-                assert!(terminal(&last), "the setup task exited at {last:?}");
-                return last.unwrap_or_default();
-            }
-        }
-        std::thread::yield_now();
-    }
-    panic!("the setup task never finished: {:?}", setup_phase(repo));
+/// The dispatch the door names, as the agent runs it: `batten startup
+/// --session` in `repo`, through `command` (so a case's `PATH`, `HOME` or
+/// environment kind reaches the task exactly as it would reach the agent's).
+fn dispatch(repo: &Path, mut command: common::Batten) -> common::Batten {
+    command.current_dir(repo).args(["startup", "--session"]);
+    command
 }
 
-/// Write `line` into the FIFO at `gate` once the handler has opened it to
-/// read, GIVING UP AS SOON AS NOTHING EVER WILL (CLOUD-2789), as [`settle`]
-/// does. A blocking open waits for a reader forever: a setup task that
-/// returned before its handlers ran hung this case to nextest's timeout
-/// rather than turning it red. The open is non-blocking, so with no reader it
-/// fails at once and the task's liveness decides whether to try again.
-fn release(repo: &Path, gate: &Path, line: &str) {
+/// Dispatch the setup task through `command`, run it to its end, and answer
+/// its last phase: what the agent's background task leaves behind.
+pub(crate) fn settle_with(repo: &Path, command: common::Batten) -> String {
+    let mut command = dispatch(repo, command);
+    let ran = command.streamed_output().expect("the task runs");
+    assert!(
+        matches!(ran.status.code(), Some(0 | 1)),
+        "the task answers 0 or 1: {}",
+        stderr(&ran)
+    );
+    setup_phase(repo).expect("the dispatched task registered itself")
+}
+
+/// [`settle_with`] under the suite's own engine invocation.
+pub(crate) fn settle(repo: &Path) -> String {
+    settle_with(repo, common::batten())
+}
+
+/// The FIFO at `gate`, opened for write once the handler has opened it to
+/// read, GIVING UP AS SOON AS NOTHING EVER WILL (CLOUD-2789). A blocking open
+/// waits for a reader forever: a setup task that returned before its handlers
+/// ran hung this case to nextest's timeout rather than turning it red. The open
+/// is non-blocking, so with no reader it fails at once, and `task` — the
+/// dispatched process itself, this case's own child — decides whether to try
+/// again: once it has exited, nothing will ever read. The handler blocks until
+/// the descriptor is written or dropped.
+fn reader(task: &mut std::process::Child, repo: &Path, gate: &Path) -> rustix::fd::OwnedFd {
     use rustix::fs::{Mode, OFlags};
     let began = Instant::now();
-    let mut asked = None::<Instant>;
     while began.elapsed() < SETTLE {
         match rustix::fs::open(
             gate,
             OFlags::WRONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
             Mode::empty(),
         ) {
-            Ok(fd) => {
-                let wrote = rustix::io::write(&fd, line.as_bytes()).expect("write the gate");
-                assert_eq!(wrote, line.len(), "the whole line reaches the handler");
-                return;
-            }
+            Ok(fd) => return fd,
             Err(rustix::io::Errno::NXIO) => {}
             Err(other) => panic!("the gate cannot be opened: {other}"),
         }
-        if asked.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
-            asked = Some(Instant::now());
-            assert!(
-                setup_alive(repo),
-                "the setup task exited before its handler read the gate: {:?}",
+        if let Ok(Some(status)) = task.try_wait() {
+            panic!(
+                "the setup task exited ({status}) before its handler read the gate: {:?}",
                 setup_phase(repo)
             );
         }
@@ -139,43 +123,12 @@ fn release(repo: &Path, gate: &Path, line: &str) {
     panic!("the handler never opened the gate: {:?}", setup_phase(repo));
 }
 
-/// Whether `batten task alive` names the setup task as running, and its
-/// process has not exited.
-///
-/// AN EXITED PROCESS NOBODY REAPED STILL ANSWERS `kill -0` (CLOUD-2789): the
-/// door's detached task outlives the door, so its parent is whatever adopts
-/// it, and where that never reaps, a task that exited without pushing a phase
-/// read as running until [`SETTLE`]. Its `/proc` state says it exited.
-fn setup_alive(repo: &Path) -> bool {
-    let alive = common::batten()
-        .current_dir(repo)
-        .args(["task", "alive"])
-        .streamed_output()
-        .expect("the binary runs");
-    // A CRASHED RECORD NAMES THE TASK TOO (CLOUD-2789): `session-setup
-    // crashed(start) …` matched a bare name test, so a setup process gone
-    // short of a terminal phase read as running and `settle` waited out its
-    // whole bound, which a mutation judge reported as a hang.
-    let running = stdout(&alive).lines().any(|line| {
-        line.strip_prefix("session-setup ")
-            .is_some_and(|rest| !rest.starts_with("crashed("))
-    });
-    running && !setup_exited(repo)
-}
-
-/// Whether the setup task's registered process has exited and waits to be
-/// reaped: state `Z` in `/proc/<pid>/stat`, read past the parenthesised name.
-/// Off Linux there is no `/proc` to read, and nothing is read as exited.
-fn setup_exited(repo: &Path) -> bool {
-    if !cfg!(target_os = "linux") {
-        return false;
-    }
-    setup_field(repo, "pid")
-        .and_then(|pid| std::fs::read_to_string(format!("/proc/{pid}/stat")).ok())
-        .is_some_and(|stat| {
-            stat.rsplit_once(')')
-                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
-        })
+/// Write `line` to the handler through `fd`, then close it.
+fn write_gate(fd: rustix::fd::OwnedFd, line: &str) {
+    let wrote = rustix::io::write(&fd, line.as_bytes()).expect("write the gate");
+    assert_eq!(wrote, line.len(), "the whole line reaches the handler");
+    // CLOSED HERE, which is the handler's end of file.
+    drop(fd);
 }
 
 /// The setup task's current phase, or `None` where nothing registered it.
@@ -228,17 +181,40 @@ fn bench(name: &str, body: &str, timeout_ms: u64) -> PathBuf {
     repo
 }
 
-/// Fails by: a `SessionStart` that waits on a declared handler — the inline
-/// dispatch this replaced, which held the first response for the row's whole
-/// bound; a task the registry cannot name while it runs; or an outcome that
-/// never reaches the session, or reaches it twice.
-#[test]
-fn a_blocking_handler_holds_nothing_and_is_said_once() {
-    let repo = bench(
-        "session-start-detached",
-        "read line < \"$(dirname \"$0\")/../gate\"\necho \"step finished: $line\"",
-        600_000,
-    );
+/// Whether a process other than this one runs `batten startup --session`
+/// with `repo` as its directory: the spawn the door must never make.
+fn setup_process_in(repo: &Path) -> bool {
+    let own = std::process::id().to_string();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        let pid = entry.file_name().to_string_lossy().into_owned();
+        if pid == own || !pid.bytes().all(|byte| byte.is_ascii_digit()) {
+            return false;
+        }
+        let cmdline = std::fs::read(entry.path().join("cmdline")).unwrap_or_default();
+        let words: Vec<&[u8]> = cmdline.split(|byte| *byte == 0).collect();
+        let dispatched = words.windows(2).any(|pair| pair == [&b"startup"[..], &b"--session"[..]]);
+        dispatched
+            && std::fs::read_link(entry.path().join("cwd")).is_ok_and(|cwd| cwd == repo)
+    })
+}
+
+/// Whether anything holds `gate` open to read: a non-blocking open for write
+/// fails with `ENXIO` exactly when no reader exists.
+fn read_by_anyone(gate: &Path) -> bool {
+    use rustix::fs::{Mode, OFlags};
+    rustix::fs::open(
+        gate,
+        OFlags::WRONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .is_ok()
+}
+
+/// A FIFO at `repo/gate` the fixture's handler blocks on.
+fn fifo(repo: &Path) -> PathBuf {
     let gate = repo.join("gate");
     #[expect(
         clippy::disallowed_types,
@@ -249,16 +225,66 @@ fn a_blocking_handler_holds_nothing_and_is_said_once() {
         .streamed_output()
         .expect("mkfifo runs");
     assert!(made.status.success(), "{}", stderr(&made));
+    gate
+}
 
-    // THE FIFO IS THE BOUND, NOT A CLOCK (`wall_clock.rs`). The handler cannot
-    // finish until this case writes to the pipe below, so the door returning
-    // here at all is the proof it did not wait: a door that waited would hold
-    // this case until nextest's own timeout, which is red. The 100 ms the hook
-    // owes is measured where measurements live, the `session-start` perf arm.
+/// The blocking fixture: a handler that waits on the FIFO, bounded at ten
+/// minutes, which an inline dispatch would have waited out.
+fn blocking_bench(name: &str) -> (PathBuf, PathBuf) {
+    let repo = bench(
+        name,
+        "read line < \"$(dirname \"$0\")/../gate\"\necho \"step finished: $line\"",
+        600_000,
+    );
+    let gate = fifo(&repo);
+    (repo, gate)
+}
+
+/// Fails by: a `SessionStart` that runs a declared handler or spawns the task
+/// that would (mutant `session-start-spawns`, 70d075762's design); or one
+/// that tells the agent nothing, so the session never dispatches the install.
+///
+/// THE FIFO IS THE BOUND, NOT A CLOCK (`wall_clock.rs`): a door that ran the
+/// handler inline would hold this case until nextest's timeout, and a door that
+/// spawned it leaves a reader on the gate and a record in the registry, both
+/// read here. The 100 ms the hook owes is the `session-start` perf arm's.
+#[test]
+fn a_session_start_spawns_nothing_and_names_the_dispatch() {
+    let (repo, gate) = blocking_bench("session-start-spawns-nothing");
+    let (out, err) = door(&repo, "SessionStart", &serde_json::json!({}));
+    let said = format!("{out}{err}");
+    assert!(
+        said.contains("batten startup --session") && said.contains("run_in_background"),
+        "the door names the dispatch and how to run it: {said}"
+    );
+    assert_eq!(setup_phase(&repo), None, "the registry names no task");
+    assert!(!setup_process_in(&repo), "no setup process runs");
+    assert!(!read_by_anyone(&gate), "no handler waits on the gate");
+    // ANTI-VACUITY: the same probes see the task once the agent dispatches it.
+    let mut child = dispatch(&repo, common::batten())
+        .spawn()
+        .expect("the task starts");
+    write_gate(reader(&mut child, &repo, &gate), "released\n");
+    let ended = child.streamed_wait().expect("the task ends");
+    assert_eq!(ended.status.code(), Some(1), "a speaking handler is a finding");
+    assert_eq!(setup_phase(&repo).as_deref(), Some("failed"));
+}
+
+/// Fails by: a dispatched task the registry cannot name while it runs; a
+/// second dispatch that stacks a second record; or an outcome that never
+/// reaches the session, or reaches it twice.
+#[test]
+fn a_blocking_handler_holds_nothing_and_is_said_once() {
+    let (repo, gate) = blocking_bench("session-start-dispatched");
     let (out, _) = door(&repo, "SessionStart", &serde_json::json!({}));
     assert!(!out.contains("step finished"), "{out}");
 
-    // Registered before the door returned, so the very next read names it.
+    let mut child = dispatch(&repo, common::batten())
+        .spawn()
+        .expect("the task starts");
+    // The task registers itself before its handler runs: once the handler
+    // holds the gate, the registry names the task.
+    let held = reader(&mut child, &repo, &gate);
     let alive = common::batten()
         .current_dir(&repo)
         .args(["task", "alive"])
@@ -269,13 +295,23 @@ fn a_blocking_handler_holds_nothing_and_is_said_once() {
         "the running task is in the registry: {}",
         stdout(&alive)
     );
+    let first_pid = setup_field(&repo, "pid");
+    // A SECOND DISPATCH WHILE ONE RUNS STACKS NOTHING: the singleton refuses
+    // it before it records, so the gate still reads the one task installing.
+    let second = dispatch(&repo, common::batten())
+        .streamed_output()
+        .expect("the second dispatch runs");
+    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
+    assert_eq!(setup_field(&repo, "pid"), first_pid, "one record, the first's");
     assert!(
         !pre_tool(&repo).contains("step finished"),
         "nothing is said while the task runs"
     );
 
-    release(&repo, &gate, "released\n");
-    assert_eq!(settle(&repo), "failed", "a speaking handler is a finding");
+    write_gate(held, "released\n");
+    let ended = child.streamed_wait().expect("the task ends");
+    assert_eq!(ended.status.code(), Some(1), "a speaking handler is a finding");
+    assert_eq!(setup_phase(&repo).as_deref(), Some("failed"));
     let first = pre_tool(&repo);
     assert!(
         first.contains("step finished: released"),
@@ -286,23 +322,6 @@ fn a_blocking_handler_holds_nothing_and_is_said_once() {
         !second.contains("step finished"),
         "and only the first: {second}"
     );
-}
-
-/// Fails by: a `SessionStart` that runs its rows inline, which registers no
-/// task, so nothing names the setup the moment the door returns.
-///
-/// Mutation, stated and applied by hand: `session_setup::detaches` returning
-/// `false` (its comparison replaced with the literal) sends every row back
-/// inline, and this case reddens on its first assertion.
-#[test]
-fn a_session_start_registers_its_task_before_it_returns() {
-    let repo = bench("session-start-registers", "exit 0", 5000);
-    let _ = door(&repo, "SessionStart", &serde_json::json!({}));
-    assert!(
-        setup_phase(&repo).is_some(),
-        "the setup task is in the registry when the door returns"
-    );
-    let _ = settle(&repo);
 }
 
 /// Fails by: any compile on session start in a tree that pins no source — the
@@ -382,14 +401,17 @@ fn no_compile_runs_without_a_source_pin() {
     })
     .to_string();
     let mut command = common::batten();
-    command.env("PATH", path);
+    command.env("PATH", &path);
     let _ = common::stdin_run(
         &mut command,
         &repo,
         &["adjudicate", "--harness", "claude-code"],
         &payload,
     );
-    let _ = settle(&repo);
+    // THE AGENT'S DISPATCH, under the same `PATH` the session has.
+    let mut task = common::batten();
+    task.env("PATH", &path);
+    let _ = settle_with(&repo, task);
     let called = std::fs::read_to_string(&log).unwrap_or_default();
     assert!(
         !called.contains("cargo") && !called.contains("install:local"),
@@ -450,14 +472,17 @@ fn the_preset_install_runs_before_any_handler() {
     })
     .to_string();
     let mut command = common::batten();
-    command.env("PATH", path);
+    command.env("PATH", &path);
     let _ = common::stdin_run(
         &mut command,
         &repo,
         &["adjudicate", "--harness", "claude-code"],
         &payload,
     );
-    let _ = settle(&repo);
+    // THE AGENT'S DISPATCH, under the same `PATH` the session has.
+    let mut task = common::batten();
+    task.env("PATH", &path);
+    let _ = settle_with(&repo, task);
     let order = std::fs::read_to_string(&log).expect("the task ran");
     let lines: Vec<&str> = order.lines().collect();
     let install = lines
