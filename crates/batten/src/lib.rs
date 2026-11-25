@@ -3275,10 +3275,10 @@ fn run_design_audit(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
 /// order, so the output is byte-stable for a given tree (§6). Silence means
 /// there were no rows to decide — which is not the same as every row passing,
 /// and is why the count is always the last line.
-/// The session's setup task (CLOUD-2840), started detached by `SessionStart`.
+/// The session's setup task (CLOUD-2840), which the agent dispatches as a
+/// background task when `SessionStart` advises it; the hook spawns nothing.
 ///
-/// Silent on both channels: its streams are null, and what it found is recorded
-/// for the next call by [`session_setup::run`]. Exit `0` when every step passed,
+/// What it found is recorded for the next call by [`session_setup::run`]. Exit `0` when every step passed,
 /// `1` otherwise, for a person who runs it by hand.
 fn run_session_setup(overrides: &Overrides) -> Result<ExitCode> {
     let here = Path::new(".");
@@ -3289,13 +3289,19 @@ fn run_session_setup(overrides: &Overrides) -> Result<ExitCode> {
         Some(found) => found,
         None => git::git_dir(here)?,
     };
-    let handlers = resolved
+    let (handlers, actions) = resolved
         .hook
         .as_ref()
-        .map(|table| table.handlers.clone())
+        .map(|table| (table.handlers.clone(), table.actions.clone()))
         .unwrap_or_default();
+    // THE PIN ADOPTION THE HOOK USED TO MAKE (CLOUD-2595 §2c), here because it
+    // may fetch a release's sums over the network, and the hook does in-process
+    // work only (CLOUD-2840). A config that already pins is untouched.
+    if let Ok(Some(tag)) = adopt_engine_key(here, overrides) {
+        let _ = writeln!(std::io::stderr(), "{}", adopted_line(&tag));
+    }
     Ok(
-        if session_setup::run(here, &git_dir, &handlers, &resolved.startup) {
+        if session_setup::run(here, &git_dir, &handlers, &actions, &resolved.startup) {
             ExitCode::Success
         } else {
             ExitCode::Usage
@@ -20465,23 +20471,12 @@ fn install_pending_for(
         return None;
     }
     let dispatching = session_setup::is_dispatch(&envelope.command);
-    let Some(entry) = session_setup::record(&git_dir) else {
-        return Some(serde_json::json!({
-            "state": "undispatched",
-            "task": session_setup::TASK,
-            "pid": null,
-            "pending": [],
-            "dispatch": session_setup::DISPATCH,
-            "dispatching": dispatching,
-        }));
-    };
-    let state = match task::state(&entry) {
-        task::State::Running => "running",
-        task::State::Ok => "ok",
-        task::State::Failed => "failed",
-        task::State::Crashed => "crashed",
-    };
-    let pending: Vec<String> = if state == "ok" {
+    let setup = session_setup::state(&git_dir);
+    let state = setup.token();
+    let pending: Vec<String> = if matches!(
+        setup,
+        session_setup::State::Undispatched | session_setup::State::Ok(_)
+    ) {
         Vec::new()
     } else {
         let roots = install_roots();
@@ -20505,7 +20500,7 @@ fn install_pending_for(
     Some(serde_json::json!({
         "state": state,
         "task": session_setup::TASK,
-        "pid": entry.pid,
+        "pid": setup.pid(),
         "pending": pending,
         "dispatch": session_setup::DISPATCH,
         "dispatching": dispatching,
@@ -23414,7 +23409,6 @@ fn collect_batch_advice(
     expire_sightings(envelope);
     expire_history_reads(envelope);
     report_directives(envelope, advice);
-    adopt_engine_pin(envelope, overrides, advice);
     Ok(())
 }
 
@@ -23440,32 +23434,6 @@ fn stamp_session(envelope: &hook::Envelope) {
     // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
     // `run_claim_check` reads it: a linked worktree dates its own session.
     let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
-}
-
-/// Pin this engine into a config that pins nothing, at the session's start
-/// (CLOUD-2595 §2c), and say so once on the advisory channel.
-///
-/// `SessionStart` rather than any call: it is the one hook event that may write
-/// (a session's first moment, the same one the setup task starts at), and
-/// it fires once per session, so the record is said once.
-fn adopt_engine_pin(
-    envelope: &hook::Envelope,
-    overrides: &Overrides,
-    advice: &mut Vec<advisory::Advice>,
-) {
-    if envelope.event != crate::config_model::Event::SessionStart {
-        return;
-    }
-    let here = hook_authority_root();
-    if !here.join(crate::config_model::CONFIG_FILE).exists() {
-        return;
-    }
-    if let Ok(Some(tag)) = adopt_engine_key(here, overrides) {
-        advice.push(advisory::Advice::rendered(
-            severity::AdvisoryTier::Advisory,
-            adopted_line(&tag),
-        ));
-    }
 }
 
 /// The record a written pin is reported by: `batten note call fix silent at
@@ -24083,29 +24051,20 @@ fn mediated_payload(raw: &str, tool: &str, params: &serde_json::Value) -> Option
 /// [`session_setup::DISPATCH`] with its harness's background facility, and the
 /// install gate holds its calls until it does. Silent on failure, like every
 /// side effect at this boundary.
-fn prepare_session_setup(raw: &str, overrides: &Overrides, advice: &mut Vec<advisory::Advice>) {
+fn prepare_session_setup(raw: &str, envelope: &hook::Envelope, advice: &mut Vec<advisory::Advice>) {
     let here = hook_authority_root();
     if !here.join(crate::config_model::CONFIG_FILE).exists() {
         return;
     }
-    let Ok(resolved) = HookLoads::resolve(here, overrides) else {
-        return;
-    };
-    // NOTHING DECLARED, NOTHING OWED: a consumer with no session-start row and
-    // no `[[startup]]` row is never told to dispatch, and never held for it.
-    let declared = resolved.hook.as_ref().is_some_and(|table| {
-        table
-            .handlers
-            .iter()
-            .any(|row| handler::HandlerExt::event(row) == Some(crate::config_model::Event::SessionStart))
-    });
-    if !declared && resolved.startup.is_empty() {
-        return;
-    }
+    // EVERY CONSUMER OWES IT, declared rows or none (review of 076a19082): the
+    // task also records the session's pin and re-decides the container's
+    // health, which every consumer had at `SessionStart` before the hook
+    // stopped running them inline.
     let Some(git_dir) = session_setup::git_dir_of(here) else {
         return;
     };
-    if session_setup::prepare(&git_dir, raw) {
+    let session = envelope.session.as_deref().unwrap_or_default();
+    if session_setup::prepare(&git_dir, raw, session) {
         advice.push(advisory::Advice::rendered(
             severity::AdvisoryTier::Warning,
             session_setup::instruction(),
@@ -24162,7 +24121,7 @@ fn dispatch_handlers(
     // the next call. The host's bytes are spooled here because this is where
     // they are in hand, and they are what each row reads on stdin.
     if session_setup::detaches(envelope.event) {
-        prepare_session_setup(raw, overrides, advice);
+        prepare_session_setup(raw, envelope, advice);
         return None;
     }
     let hook_config = hook_table(overrides)?;
@@ -24424,7 +24383,12 @@ fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
 /// refuses an action on `pre-tool`, so this returns before touching config for
 /// the one event that runs on every mediated tool call.
 fn fire_actions(envelope: &hook::Envelope, overrides: &Overrides, err: &mut dyn Write) {
-    if envelope.event == crate::config_model::Event::PreTool {
+    // NOT AT `SessionStart` EITHER (CLOUD-2840): the hook spawns nothing there,
+    // so a session-start action runs in the setup task the agent dispatches.
+    if matches!(
+        envelope.event,
+        crate::config_model::Event::PreTool | crate::config_model::Event::SessionStart
+    ) {
         return;
     }
     // The REPOSITORY's authority, not the cwd's (CLOUD-824). Same reading as

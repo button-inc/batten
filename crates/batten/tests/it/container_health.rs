@@ -117,6 +117,13 @@ fn session_report(dir: &Path) -> Option<String> {
         advisory(&started).is_none_or(|text| !text.contains(CHECK)),
         "the health report is the task's, never the door's"
     );
+    // OWED BY EVERY CONSUMER (review of 076a19082): this fixture declares no
+    // session-start row and no `[[startup]]` row, and the door still tells the
+    // agent to dispatch the task that re-decides the container's health.
+    assert!(
+        advisory(&started).is_some_and(|text| text.contains("batten startup --session")),
+        "the door advises the dispatch the health report rides on"
+    );
     // `session_start` is unix-only, as is the detached setup task it waits on.
     #[cfg(unix)]
     let _ = crate::session_start::settle(dir);

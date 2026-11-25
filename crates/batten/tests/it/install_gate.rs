@@ -51,9 +51,17 @@ fn bench(name: &str) -> PathBuf {
 /// Record the setup task under `pid` in `phase`, keyed as the registry keys it.
 fn setup(dir: &Path, pid: &str, phase: &str) {
     let git_dir = batten::git::git_dir(dir).expect("the bench has a git dir");
-    // THE SETUP DIRECTORY `session_setup::start` WRITES BEFORE IT REGISTERS:
-    // the gate reads no registry where no setup was ever started.
-    std::fs::create_dir_all(git_dir.join("batten-session-setup")).expect("the setup dir");
+    // THE SETUP DIRECTORY `SessionStart` PREPARES, with what a task leaves in
+    // it for the session it ran for: its start, and its finish once its phase
+    // is terminal. The gate reads no registry where no setup was prepared.
+    let setup = git_dir.join("batten-session-setup");
+    std::fs::create_dir_all(&setup).expect("the setup dir");
+    std::fs::write(setup.join("session"), "").expect("the session");
+    std::fs::write(setup.join("began"), format!("\t{pid}")).expect("the start");
+    let _ = std::fs::remove_file(setup.join("done"));
+    if phase == "ok" || phase == "failed" {
+        std::fs::write(setup.join("done"), format!("\t{phase}\t{pid}")).expect("the finish");
+    }
     let registry = git_dir.join("batten-tasks");
     std::fs::create_dir_all(&registry).expect("a registry");
     for stale in std::fs::read_dir(&registry).expect("the registry lists") {
@@ -266,7 +274,10 @@ fn a_call_before_the_dispatch_is_held_and_a_read_is_not() {
         &serde_json::json!({"command": "batten startup --session", "run_in_background": false}),
         &[],
     );
-    assert!(held(&foreground), "but never in the foreground: {foreground}");
+    assert!(
+        held(&foreground),
+        "but never in the foreground: {foreground}"
+    );
 }
 
 /// Only a call about to run can be held, so only one is asked about the
@@ -347,6 +358,30 @@ fn an_ok_task_admits_the_program() {
     setup(&dir, NO_SUCH_PID, "ok");
     let said = call(&dir, &format!("{ABSENT} --version"));
     assert!(!held(&said), "{said}");
+}
+
+/// Fails by: a finished setup read from the registry alone, so `land`'s reap
+/// of its dead record reads as never dispatched and holds every call again
+/// after `ok` (review of 076a19082); or the manager held after `ok`.
+#[test]
+fn a_finished_setup_survives_the_reap() {
+    let dir = bench("install-gate-reaped");
+    setup(&dir, NO_SUCH_PID, "ok");
+    // WHAT THE REAP LEAVES: no registry record at all.
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    std::fs::remove_dir_all(git_dir.join("batten-tasks")).expect("reaped");
+    let env = shimmed(&dir);
+    let env: Vec<(&str, &std::ffi::OsStr)> = env
+        .iter()
+        .map(|(key, value)| (*key, value.as_os_str()))
+        .collect();
+    let said = call_with(&dir, "cargo build", &env);
+    assert!(
+        !held(&said),
+        "an `ok` install admits after the reap: {said}"
+    );
+    let said = call_with(&dir, "mise run x", &env);
+    assert!(!held(&said), "and the manager with it: {said}");
 }
 
 /// Fails by: a failed or dead install admitted, so its absent program runs and

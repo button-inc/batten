@@ -134,7 +134,11 @@ fn project(home: &Path, tools: &[&str]) -> PathBuf {
     }
     manifest.insert("tools".to_owned(), toml::Value::Table(pinned));
     let dir = home.join("project");
-    write(&dir, "mise.toml", &toml::to_string(&manifest).expect("serialize"));
+    write(
+        &dir,
+        "mise.toml",
+        &toml::to_string(&manifest).expect("serialize"),
+    );
     write(&dir, "mise.lock", &locked("project-tool"));
     install(home, "global-tool");
     write(
@@ -160,7 +164,10 @@ fn locked_mode_reaches_project_tools_only() {
     let home = scratch("locked-scopes-global");
     let dir = project(&home, &["project-tool"]);
     let (passed, said) = toolchain_check(&dir, &home);
-    assert!(passed, "a global tool absent from the lock fails the task\n{said}");
+    assert!(
+        passed,
+        "a global tool absent from the lock fails the task\n{said}"
+    );
 
     let home = scratch("locked-scopes-unlocked-project");
     let dir = project(&home, &["project-tool", "unlocked-tool"]);

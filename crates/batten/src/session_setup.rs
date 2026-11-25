@@ -53,6 +53,22 @@ const OUTCOME: &str = "outcome";
 /// The outcome once a call has carried it: renamed, so it is said once.
 const SURFACED: &str = "outcome.surfaced";
 
+/// The session `SessionStart` last prepared setup for: the one that owes a
+/// dispatch until a task records it is done.
+const SESSION: &str = "session";
+
+/// `<session>\t<pid>`: the session a task began for, and its pid.
+const BEGAN: &str = "began";
+
+/// `<session>\t<ok|failed>\t<pid>`: the session a task finished for.
+///
+/// OUTSIDE THE REGISTRY ON PURPOSE (CLOUD-2840): `land`'s reap unregisters
+/// every record whose pid is gone, the finished setup's included, and a gate
+/// that read only the registry then read a finished install as never
+/// dispatched and held the session again. The registry answers only "is it
+/// running"; these files answer "did it finish, for this session".
+const DONE: &str = "done";
+
 /// The one install task, as the agent dispatches it (CLOUD-2840).
 pub const DISPATCH: &str = "batten startup --session";
 
@@ -100,7 +116,7 @@ pub fn git_dir_of(root: &Path) -> Option<PathBuf> {
 
 /// Whether `SessionStart` ever prepared setup under `git_dir`: one stat, so a
 /// reader with nothing to read opens no registry. Prepared is not dispatched:
-/// [`record`] answers that.
+/// [`state`] answers that.
 #[must_use]
 pub fn started(git_dir: &Path) -> bool {
     dir(git_dir).exists()
@@ -126,31 +142,105 @@ pub fn is_dispatch(command: &str) -> bool {
         && words.eq(wanted)
 }
 
-/// Spool the host's `SessionStart` payload for the task, in process, and
-/// answer whether setup is still owed: no record of the task exists, so the
-/// agent must be told to dispatch it.
+/// Spool the host's `SessionStart` payload for the task and name the session
+/// it is for, in process, and answer whether a dispatch is owed: this session
+/// has no running, finished or failed task.
 ///
-/// SPAWNS NOTHING (CLOUD-2840): two file writes and one registry read, inside
-/// the hook budget. A record the task already left (a resume or a compaction in
-/// the same container) stands, and its outcome is not erased: a finished
-/// install is not this session's to redo, and an unsaid finding is still owed.
-/// Silent on failure, as every side effect at this boundary is.
+/// SPAWNS NOTHING (CLOUD-2840): file writes and one registry read, inside the
+/// hook budget. KEYED PER SESSION: a new session in the same clone owes its own
+/// dispatch (its handlers, repairs, pin record and health report), while a
+/// resume or a compaction of a session whose task finished owes nothing. A
+/// crashed task owes a re-dispatch. Silent on failure, as every side effect at
+/// this boundary is.
 #[must_use]
-pub fn prepare(git_dir: &Path, raw: &str) -> bool {
+pub fn prepare(git_dir: &Path, raw: &str, session: &str) -> bool {
     let here = dir(git_dir);
     if std::fs::create_dir_all(&here).is_err() {
         return false;
     }
     let _ = crate::durable::replace(here.join(PAYLOAD), raw);
-    record(git_dir).is_none()
+    let _ = crate::durable::replace(here.join(SESSION), session);
+    matches!(state(git_dir), State::Undispatched | State::Crashed(_))
 }
 
-/// The setup task's registry record, live or ended, or `None` where it was
-/// never dispatched.
+/// Where this session's setup stands, as the install gate reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum State {
+    /// Prepared, and no task ran for this session.
+    Undispatched,
+    /// A task is running, under this pid.
+    Running(String),
+    /// This session's task finished `ok`.
+    Ok(String),
+    /// This session's task finished `failed`.
+    Failed(String),
+    /// This session's task began and is gone without finishing.
+    Crashed(String),
+}
+
+impl State {
+    /// The token a policy module reads.
+    #[must_use]
+    pub const fn token(&self) -> &'static str {
+        match self {
+            State::Undispatched => "undispatched",
+            State::Running(_) => "running",
+            State::Ok(_) => "ok",
+            State::Failed(_) => "failed",
+            State::Crashed(_) => "crashed",
+        }
+    }
+
+    /// The task's pid, or `None` before any task ran.
+    #[must_use]
+    pub fn pid(&self) -> Option<&str> {
+        match self {
+            State::Undispatched => None,
+            State::Running(pid) | State::Ok(pid) | State::Failed(pid) | State::Crashed(pid) => {
+                Some(pid)
+            }
+        }
+    }
+}
+
+/// One tab-separated record file under the setup directory, split.
+fn fields(git_dir: &Path, name: &str) -> Option<Vec<String>> {
+    let body = crate::fsio::read_to_string(dir(git_dir).join(name)).ok()?;
+    Some(
+        body.trim_end_matches('\n')
+            .split('\t')
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// This session's setup state: a running task first (whichever session
+/// dispatched it), then this session's finished or begun task, else none.
 #[must_use]
-pub fn record(git_dir: &Path) -> Option<task::Entry> {
-    let (running, gone) = task::partition(git_dir);
-    running.into_iter().chain(gone).find(|entry| entry.task == TASK)
+pub fn state(git_dir: &Path) -> State {
+    let session = crate::fsio::read_to_string(dir(git_dir).join(SESSION)).unwrap_or_default();
+    let (running, _) = task::partition(git_dir);
+    if let Some(live) = running
+        .into_iter()
+        .find(|entry| entry.task == TASK && task::state(entry) == task::State::Running)
+    {
+        return State::Running(live.pid);
+    }
+    if let Some([ran_for, phase, pid]) = fields(git_dir, DONE).as_deref()
+        && *ran_for == session
+    {
+        return if phase == task::OK {
+            State::Ok(pid.clone())
+        } else {
+            State::Failed(pid.clone())
+        };
+    }
+    if let Some([ran_for, pid]) = fields(git_dir, BEGAN).as_deref()
+        && *ran_for == session
+    {
+        return State::Crashed(pid.clone());
+    }
+    State::Undispatched
 }
 
 /// What one finding is, recorded as the inputs its refusal is built from.
@@ -191,6 +281,7 @@ pub fn run(
     root: &Path,
     git_dir: &Path,
     handlers: &[crate::config_model::Handler],
+    actions: &[crate::config_model::Action],
     rows: &[crate::config_model::Startup],
 ) -> bool {
     let pid = std::process::id().to_string();
@@ -207,6 +298,10 @@ pub fn run(
     let _ = std::fs::remove_file(dir(git_dir).join(OUTCOME));
     let _ = std::fs::remove_file(dir(git_dir).join(SURFACED));
     task::register(git_dir, TASK, &pid, "start", crate::clock::now_unix());
+    // THE SESSION THIS TASK RUNS FOR: the one `SessionStart` last prepared.
+    let session = crate::fsio::read_to_string(dir(git_dir).join(SESSION)).unwrap_or_default();
+    let _ = std::fs::remove_file(dir(git_dir).join(DONE));
+    let _ = crate::durable::replace(dir(git_dir).join(BEGAN), format!("{session}\t{pid}"));
     let mut findings = Vec::new();
 
     // THE ENVIRONMENT MANAGER'S INSTALL FIRST (CLOUD-2840). A `[[startup]]` row
@@ -241,7 +336,20 @@ pub fn run(
         &payload,
     );
     findings.extend(handler_findings(&dispatched));
-    let handlers_passed = findings.is_empty();
+    let handlers_passed = !failed_any(&dispatched);
+    // THE SESSION-START ACTIONS, which the hook used to fire inline: fire and
+    // forget, as they always were, but from this task (CLOUD-2840).
+    crate::action::fire(
+        actions,
+        crate::config_model::Event::SessionStart,
+        crate::action::Facts {
+            event: "session-start",
+            tool: "",
+            path: "",
+            session: &session,
+        },
+        &mut std::io::stderr(),
+    );
 
     task::push(
         git_dir,
@@ -270,6 +378,7 @@ pub fn run(
     let _ = crate::durable::replace(dir(git_dir).join(OUTCOME), body);
     let passed = handlers_passed && rows_passed;
     let last = if passed { task::OK } else { task::FAILED };
+    let _ = crate::durable::replace(dir(git_dir).join(DONE), format!("{session}\t{last}\t{pid}"));
     task::push(
         git_dir,
         &pid,
@@ -279,6 +388,21 @@ pub fn run(
     );
     task::singleton_release(git_dir, TASK);
     passed
+}
+
+/// Whether a handler FAILED: reported a violation, refused, or broke the
+/// contract. ADVICE IS NOT FAILURE (CLOUD-2840): a handler that exits `0` and
+/// speaks is said once on the next call, and the task still ends `ok`, so the
+/// install gate does not hold the session over a sentence.
+fn failed_any(dispatched: &crate::handler::Dispatched) -> bool {
+    dispatched.ran.iter().any(|ran| {
+        matches!(
+            ran.outcome,
+            crate::handler::Outcome::Reported(_)
+                | crate::handler::Outcome::Deny(_)
+                | crate::handler::Outcome::Broke(_)
+        )
+    })
 }
 
 /// What the handlers said, as the findings the inline dispatch reported.
@@ -349,17 +473,15 @@ pub fn surface(git_dir: &Path) -> Vec<Refusal> {
     if !outcome.exists() && (surfaced.exists() || !here.exists()) {
         return Vec::new();
     }
-    let (running, gone) = task::partition(git_dir);
-    let state = running
-        .into_iter()
-        .chain(gone)
-        .find(|entry| entry.task == TASK)
-        .map(|entry| task::state(&entry));
-    let Some(state @ (task::State::Ok | task::State::Failed | task::State::Crashed)) = state else {
-        // Running, or never started: nothing is a state yet.
-        return Vec::new();
+    // THIS SESSION'S STATE, the gate's own reading: a record `land`'s reap
+    // removed cannot hide an outcome nobody has said yet.
+    let crashed = match state(git_dir) {
+        State::Ok(_) | State::Failed(_) => false,
+        State::Crashed(_) => true,
+        // Running, or never dispatched: nothing is a state yet.
+        State::Undispatched | State::Running(_) => return Vec::new(),
     };
-    if state == task::State::Crashed && !outcome.exists() {
+    if crashed && !outcome.exists() {
         // A CRASH IS A STATE (task.rs's header): a task gone with no outcome and
         // no terminal phase is said once, keyed by the surfaced marker.
         if !surfaced.exists() && crate::durable::replace(&surfaced, "").is_ok() {
@@ -477,18 +599,68 @@ mod tests {
         assert_eq!(Some(workspace.refusal()), inline.finding());
     }
 
-    /// Fails by: a registered setup task not found as the setup task's record,
-    /// so the gate reads "never dispatched" while it installs (CLOUD-2840).
+    /// Write what a task leaves for `session` under `git_dir`: the session
+    /// prepared, the task's start, and its finish when `phase` is given.
+    fn left(git_dir: &Path, session: &str, pid: &str, phase: Option<&str>) {
+        std::fs::create_dir_all(dir(git_dir)).unwrap_or_default();
+        std::fs::write(dir(git_dir).join(SESSION), session).unwrap_or_default();
+        std::fs::write(dir(git_dir).join(BEGAN), format!("{session}\t{pid}")).unwrap_or_default();
+        let _ = std::fs::remove_file(dir(git_dir).join(DONE));
+        if let Some(phase) = phase {
+            std::fs::write(
+                dir(git_dir).join(DONE),
+                format!("{session}\t{phase}\t{pid}"),
+            )
+            .unwrap_or_default();
+        }
+    }
+
+    /// Fails by: a finished task read from the registry alone, so `land`'s reap
+    /// of its dead record reads as "never dispatched" and the gate holds the
+    /// session after `ok` (review of 076a19082); or a task for ANOTHER session
+    /// read as this one's, so a new session is never told to install; or a task
+    /// that began and vanished read as anything but a crash.
     #[test]
-    fn a_registered_task_is_the_setup_record() {
-        let git_dir = crate::scratch::scratch("session-setup-registered");
-        assert!(record(&git_dir).is_none());
-        task::register(&git_dir, "another-task", "4194304", "start", 100);
-        assert!(record(&git_dir).is_none(), "another task is not setup");
-        task::register(&git_dir, TASK, "4194305", "start", 100);
+    fn the_state_is_this_sessions_and_survives_the_reap() {
+        let git_dir = crate::scratch::scratch("session-setup-state");
+        assert_eq!(state(&git_dir), State::Undispatched);
+        // FINISHED, AND NO REGISTRY RECORD AT ALL: what a reap leaves.
+        left(&git_dir, "s1", "4194305", Some(task::OK));
+        assert_eq!(state(&git_dir), State::Ok("4194305".to_owned()));
+        left(&git_dir, "s1", "4194305", Some(task::FAILED));
+        assert_eq!(state(&git_dir), State::Failed("4194305".to_owned()));
+        left(&git_dir, "s1", "4194305", None);
+        assert_eq!(state(&git_dir), State::Crashed("4194305".to_owned()));
+        // A NEW SESSION IN THE SAME CLONE owes its own dispatch.
+        left(&git_dir, "s1", "4194305", Some(task::OK));
+        std::fs::write(dir(&git_dir).join(SESSION), "s2").unwrap_or_default();
+        assert_eq!(state(&git_dir), State::Undispatched);
+        assert_eq!(State::Undispatched.pid(), None);
+        assert_eq!(State::Ok("7".to_owned()).pid(), Some("7"));
+    }
+
+    /// Fails by: a running task read as anything but running, whichever
+    /// session dispatched it, so a second dispatch is asked for over it.
+    #[test]
+    fn a_live_task_is_running() {
+        let git_dir = crate::scratch::scratch("session-setup-live");
+        let own = std::process::id().to_string();
+        task::register(&git_dir, TASK, &own, "handlers", 100);
+        if cfg!(unix) {
+            assert_eq!(state(&git_dir), State::Running(own));
+        }
+        let other = crate::scratch::scratch("session-setup-live-other");
+        task::register(
+            &other,
+            "another-task",
+            &std::process::id().to_string(),
+            "x",
+            100,
+        );
         assert_eq!(
-            record(&git_dir).map(|entry| entry.pid).as_deref(),
-            Some("4194305")
+            state(&other),
+            State::Undispatched,
+            "another task is not setup"
         );
     }
 
@@ -516,22 +688,34 @@ mod tests {
         Ok(())
     }
 
-    /// Fails by: `prepare` answering "setup owed" where the task already left
-    /// a record, so a resume or a compaction asks for a second install; or
-    /// answering "nothing owed" before any dispatch, so the agent is never told.
-    /// `prepare` spawns nothing: the registry it leaves holds no record of its own.
+    /// Fails by: `prepare` answering "setup owed" where this session's task
+    /// finished, so a resume or a compaction asks for a second install; or
+    /// "nothing owed" before any dispatch, or for a new session, or after a
+    /// crash, so the agent is never told. `prepare` spawns nothing: the
+    /// registry it leaves holds no record.
     #[test]
-    fn prepare_owes_a_dispatch_only_where_no_record_exists() {
+    fn prepare_owes_a_dispatch_per_session() {
         let git_dir = crate::scratch::scratch("session-setup-prepare");
-        assert!(prepare(&git_dir, "{}"), "never dispatched: owed");
+        assert!(prepare(&git_dir, "{}", "s1"), "never dispatched: owed");
         assert_eq!(
-            crate::fsio::read_to_string(payload_path(&git_dir)).ok().as_deref(),
+            crate::fsio::read_to_string(payload_path(&git_dir))
+                .ok()
+                .as_deref(),
             Some("{}"),
             "the payload is spooled for the task"
         );
-        assert!(record(&git_dir).is_none(), "prepare registers nothing");
-        task::register(&git_dir, TASK, "4194305", task::OK, 100);
-        assert!(!prepare(&git_dir, "{}"), "a recorded task is not owed again");
+        assert!(
+            task::partition(&git_dir).0.is_empty(),
+            "prepare registers nothing"
+        );
+        left(&git_dir, "s1", "4194305", Some(task::OK));
+        assert!(
+            !prepare(&git_dir, "{}", "s1"),
+            "a finished session owes nothing"
+        );
+        assert!(prepare(&git_dir, "{}", "s2"), "a new session owes its own");
+        left(&git_dir, "s3", "4194305", None);
+        assert!(prepare(&git_dir, "{}", "s3"), "a crash owes a re-dispatch");
     }
 
     /// Fails by: a crash read as said only once it HAS an outcome, so a task
@@ -540,14 +724,12 @@ mod tests {
     fn a_task_gone_without_an_outcome_is_surfaced_once_as_a_crash() -> std::io::Result<()> {
         let git_dir = crate::scratch::scratch("session-setup-crashed");
         std::fs::create_dir_all(dir(&git_dir))?;
-        task::register(&git_dir, TASK, "999999999", "start", 100);
-        if cfg!(unix) {
-            assert_eq!(
-                surface(&git_dir),
-                vec![crate::doctor::workspace_finding(TASK, "crashed", &[])]
-            );
-            assert!(surface(&git_dir).is_empty(), "said once");
-        }
+        left(&git_dir, "s1", "999999999", None);
+        assert_eq!(
+            surface(&git_dir),
+            vec![crate::doctor::workspace_finding(TASK, "crashed", &[])]
+        );
+        assert!(surface(&git_dir).is_empty(), "said once");
         Ok(())
     }
 
@@ -557,14 +739,12 @@ mod tests {
     fn a_finished_task_with_no_outcome_says_nothing() {
         for phase in [task::OK, task::FAILED] {
             let git_dir = crate::scratch::scratch(&format!("session-setup-ended-{phase}"));
-            std::fs::create_dir_all(dir(&git_dir)).unwrap_or_default();
-            task::register(&git_dir, TASK, "4194305", phase, 100);
+            left(&git_dir, "s1", "4194305", Some(phase));
             assert!(surface(&git_dir).is_empty(), "{phase}");
             assert!(!dir(&git_dir).join(SURFACED).exists(), "{phase}");
         }
-        let git_dir = crate::scratch::scratch("session-setup-crashed");
-        std::fs::create_dir_all(dir(&git_dir)).unwrap_or_default();
-        task::register(&git_dir, TASK, "4194305", "start", 100);
+        let git_dir = crate::scratch::scratch("session-setup-ended-crashed");
+        left(&git_dir, "s1", "4194305", None);
         assert_eq!(surface(&git_dir).len(), 1);
         assert!(surface(&git_dir).is_empty(), "said once");
     }
@@ -575,8 +755,7 @@ mod tests {
     #[test]
     fn an_outcome_beside_a_spent_crash_marker_is_still_surfaced() -> std::io::Result<()> {
         let git_dir = crate::scratch::scratch("session-setup-outcome-after-crash");
-        std::fs::create_dir_all(dir(&git_dir))?;
-        task::register(&git_dir, TASK, "4194305", task::FAILED, 100);
+        left(&git_dir, "s1", "4194305", Some(task::FAILED));
         let report = Finding::Report {
             id: "step".to_owned(),
             text: "said".to_owned(),

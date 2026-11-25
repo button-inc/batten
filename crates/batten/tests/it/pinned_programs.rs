@@ -497,11 +497,18 @@ fn a_session_start_records_the_programs_the_pin_composes() {
     );
     let mut command = common::batten();
     command.env("PATH", &path);
-    let _ = common::stdin_run(
+    let door = common::stdin_run(
         &mut command,
         &dir,
         &["adjudicate", "--harness", "claude-code"],
         &payload,
+    );
+    // OWED BY EVERY CONSUMER (review of 076a19082): the pin is recorded by the
+    // task the door advises, whatever the consumer declares.
+    assert!(
+        common::stdout(&door).contains("batten startup --session"),
+        "the door advises the dispatch the pin record rides on: {}",
+        common::stdout(&door)
     );
     // THE PIN RECORD IS THE SETUP TASK'S (CLOUD-2840): the agent dispatches it
     // under the session's `PATH`, so the stub still answers.

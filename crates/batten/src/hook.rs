@@ -2080,12 +2080,19 @@ pub(crate) fn entry_timeout(harness: Harness, spelling: &str) -> Option<u64> {
     bound_since(BOUNDED_SINCE, harness, spelling)
 }
 
+/// Whether `spelling` on `harness` is the one entry [`entry_timeout`] ever
+/// bounds: the only entry a stale bound can sit on, so the only one `wiring`
+/// strips (CLOUD-2840). Every other `timeout` on batten's entries is not this
+/// row's to touch.
+pub(crate) fn bounded_event(harness: Harness, spelling: &str) -> bool {
+    bound_since(Some(""), harness, spelling).is_some()
+}
+
 /// [`entry_timeout`] for an engine first bounded at `since`: the decision
 /// apart from the constant, so each of its terms is shown able to fail while
 /// no release is bounded yet.
 fn bound_since(since: Option<&str>, harness: Harness, spelling: &str) -> Option<u64> {
-    (since.is_some() && harness == Harness::ClaudeCode && spelling == "SessionStart")
-        .then_some(10)
+    (since.is_some() && harness == Harness::ClaudeCode && spelling == "SessionStart").then_some(10)
 }
 
 /// Render one harness's registrations as the JSON its host reads.
@@ -14509,9 +14516,15 @@ mod tests {
         assert_eq!(entry_timeout(Harness::ClaudeCode, "SessionStart"), None);
         assert_eq!(bound_since(None, Harness::ClaudeCode, "SessionStart"), None);
         let since = Some("v0.0.222");
-        assert_eq!(bound_since(since, Harness::ClaudeCode, "SessionStart"), Some(10));
+        assert_eq!(
+            bound_since(since, Harness::ClaudeCode, "SessionStart"),
+            Some(10)
+        );
         assert_eq!(bound_since(since, Harness::ClaudeCode, "PreToolUse"), None);
         assert_eq!(bound_since(since, Harness::GeminiCli, "SessionStart"), None);
+        assert!(bounded_event(Harness::ClaudeCode, "SessionStart"));
+        assert!(!bounded_event(Harness::ClaudeCode, "PreToolUse"));
+        assert!(!bounded_event(Harness::GeminiCli, "SessionStart"));
     }
 
     /// CLOUD-2509: a leading `/` is absolute on every host, and the host flag

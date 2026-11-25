@@ -1167,7 +1167,7 @@ fn acquire_pausing(
         // declares, and the interval IS the safety margin rather than a guess at how
         // long something takes.
         pause(recheck);
-        if may_reclaim(holder.as_deref(), holder_of(lock).as_deref())
+        if may_reclaim_at(lock, holder.as_deref(), holder_of(lock).as_deref())
             && std::fs::remove_dir_all(lock).is_ok()
             && take(lock, pid)
         {
@@ -1228,6 +1228,30 @@ fn may_reclaim(first: Option<&str>, second: Option<&str>) -> bool {
     }
 }
 
+/// [`may_reclaim`], or the same holder seen twice whose pid now names ANOTHER
+/// process: the lock's stamped start tick is not the pid's (CLOUD-2840).
+///
+/// A RECYCLED PID IS A DEAD HOLDER. `may_reclaim` asks only whether the pid
+/// exists, so a holder that died and whose pid the kernel handed to anything
+/// else kept the lock forever: a second `batten startup --session` became a
+/// silent no-op and the install gate stayed shut. The registry keys a record
+/// on pid plus start tick for the same reason; the lock now does too.
+fn may_reclaim_at(lock: &Path, first: Option<&str>, second: Option<&str>) -> bool {
+    may_reclaim(first, second)
+        || (first.is_some() && first == second && first.is_some_and(|pid| recycled(lock, pid)))
+}
+
+/// Whether `pid`, which the lock at `lock` names, is now a different process
+/// from the one that stamped it. A lock with no stamp (written before this
+/// field, or off Linux) is never read as recycled.
+fn recycled(lock: &Path, pid: &str) -> bool {
+    let Ok(stamped) = crate::fsio::read_to_string(lock.join("start")) else {
+        return false;
+    };
+    let stamped = stamped.trim();
+    !stamped.is_empty() && process_start(pid).is_some_and(|now| now != stamped)
+}
+
 /// What a reclaim reports when the lock it took named no pid.
 const UNSTAMPED: &str = "(none: the lock carried no readable pid)";
 
@@ -1244,6 +1268,11 @@ fn take(lock: &Path, pid: &str) -> bool {
     if crate::durable::replace(lock.join("pid"), format!("{pid}\n")).is_err() {
         let _ = std::fs::remove_dir_all(lock);
         return false;
+    }
+    // THE HOLDER'S START TICK, so a recycled pid reads as a dead holder
+    // ([`recycled`]). Best effort: a lock without it is judged by pid alone.
+    if let Some(start) = process_start(pid) {
+        let _ = crate::durable::replace(lock.join("start"), format!("{start}\n"));
     }
     true
 }
@@ -1514,6 +1543,31 @@ mod tests {
         // that finished its write: held.
         assert!(may_reclaim(None, None));
         assert!(!may_reclaim(None, Some(&live)));
+    }
+
+    /// Fails by: a lock whose pid now names another process read as held, so
+    /// a dead holder's recycled pid keeps it forever (CLOUD-2840); or a lock
+    /// whose stamp matches its live holder read as recycled, so a live holder
+    /// is robbed.
+    #[test]
+    fn a_recycled_holder_pid_is_reclaimable() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let lock = registry("task-lock-recycled").join("lock");
+        let own = std::process::id().to_string();
+        assert!(take(&lock, &own), "premise: the lock is free");
+        assert!(!recycled(&lock, &own), "stamped by this process: live");
+        assert!(!may_reclaim_at(&lock, Some(&own), Some(&own)));
+        std::fs::write(lock.join("start"), "1\n").unwrap_or_default();
+        assert!(recycled(&lock, &own), "the stamp names another process");
+        assert!(may_reclaim_at(&lock, Some(&own), Some(&own)));
+        assert!(
+            !may_reclaim_at(&lock, Some(&own), Some("31337")),
+            "it changed hands"
+        );
+        std::fs::remove_file(lock.join("start")).unwrap_or_default();
+        assert!(!recycled(&lock, &own), "no stamp: judged by pid alone");
     }
 
     #[test]

@@ -773,7 +773,10 @@ fn add_missing(
             // planted with `"timeout": 10` kills the pinned engine's inline
             // install, and leaving batten's own entry "exactly as it is" kept
             // that bound through every code change that retired it.
-            if hook::entry_timeout(harness, spelling).is_none()
+            // ONLY THAT BOUND (review of 076a19082): a `timeout` on any other
+            // event or host is somebody's decision this row never made.
+            if hook::bounded_event(harness, spelling)
+                && hook::entry_timeout(harness, spelling).is_none()
                 && events
                     .get_mut(*spelling)
                     .is_some_and(|value| strip_bound(value, command))
@@ -1227,7 +1230,11 @@ mod tests {
     /// `v0.0.221` as a comparable triple, or `None` where it is no release tag.
     fn release(tag: &str) -> Option<(u64, u64, u64)> {
         let mut parts = tag.strip_prefix('v')?.split('.').map(str::parse::<u64>);
-        Some((parts.next()?.ok()?, parts.next()?.ok()?, parts.next()?.ok()?))
+        Some((
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+        ))
     }
 
     /// Whether the engine `pin` names does in-process work only at
@@ -1505,6 +1512,21 @@ mod tests {
         assert_eq!(owed, vec!["SessionStart".to_owned()]);
         let hooks = &document["hooks"]["SessionStart"][0]["hooks"];
         assert!(hooks[0].get("timeout").is_none(), "{hooks}");
+        let mut other = serde_json::json!({"hooks": {"PreToolUse": [{"hooks": [
+            {"type": "command", "command": command, "timeout": 30},
+        ]}]}});
+        assert!(
+            add_missing(
+                &mut other,
+                claude(),
+                &["PreToolUse"],
+                command,
+                crate::config_model::Harness::ClaudeCode,
+            )
+            .is_empty(),
+            "a bound on any other event is not stale"
+        );
+        assert_eq!(other["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 30);
         assert_eq!(hooks[1]["timeout"], 30, "not batten's: kept");
         assert!(
             add_missing(
