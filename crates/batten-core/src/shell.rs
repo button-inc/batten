@@ -488,7 +488,7 @@ pub fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
             // M3): a segment of no words — `''` — is a line of no words, and a
             // loop that stops once the count is met took none for it, refused,
             // and cancelled the per-line reading for every segment.
-            while let Some(line) = lines.next() {
+            for line in lines.by_ref() {
                 counted += line.words.len();
                 taken.push(line);
                 if counted >= wanted {
