@@ -1486,6 +1486,7 @@ fn flatten_control(
     let mut inner = defined.clone();
     // Each arm that may not run, walked apart and merged as uncertain.
     let mut arms: Vec<Vec<Definition>> = Vec::new();
+    descend_header(node, source, &inner, out);
     let redirects = match &node.kind {
         rable::NodeKind::While {
             condition,
@@ -1526,43 +1527,18 @@ fn flatten_control(
             }
             redirects
         }
-        // THE HEADER RUNS FIRST, and its substitutions are commands (item 6):
-        // `for x in $(cmd)`, `for (( i=$(cmd); … ))`, `case $(cmd) in`.
         rable::NodeKind::For {
-            words,
-            body,
-            redirects,
-            ..
-        } => {
-            descend_words(words.as_deref().unwrap_or_default(), source, &inner, out);
-            flatten_scoped(body, source, after, Some(("for", "body")), &mut inner, out);
-            redirects
+            body, redirects, ..
         }
-        rable::NodeKind::ForArith {
-            init,
-            cond,
-            incr,
-            body,
-            redirects,
+        | rable::NodeKind::ForArith {
+            body, redirects, ..
         } => {
-            let mut nested = Vec::new();
-            for clause in [init, cond, incr] {
-                descend_text(clause, true, &inner, &mut nested);
-            }
-            for segment in &mut nested {
-                segment.nested = true;
-            }
-            out.append(&mut nested);
             flatten_scoped(body, source, after, Some(("for", "body")), &mut inner, out);
             redirects
         }
         rable::NodeKind::Select {
-            words,
-            body,
-            redirects,
-            ..
+            body, redirects, ..
         } => {
-            descend_words(words.as_deref().unwrap_or_default(), source, &inner, out);
             flatten_scoped(
                 body,
                 source,
@@ -1574,14 +1550,10 @@ fn flatten_control(
             redirects
         }
         rable::NodeKind::Case {
-            word,
             patterns,
             redirects,
+            ..
         } => {
-            descend_words(std::slice::from_ref(word), source, &inner, out);
-            for arm in patterns {
-                descend_words(&arm.patterns, source, &inner, out);
-            }
             for body in patterns.iter().filter_map(|arm| arm.body.as_ref()) {
                 let tag = Some(("case", "body"));
                 let mut arm = inner.clone();
@@ -1597,6 +1569,41 @@ fn flatten_control(
         merge_uncertain(defined, arm);
     }
     redirected(out, first, redirects, source, defined);
+}
+
+/// A control-flow HEADER'S substitutions, which run before its body (item 6):
+/// `for x in $(cmd)`, `select x in $(cmd)`, `for (( i=$(cmd); … ))`, and a
+/// `case` word or pattern. Each is a nested segment.
+fn descend_header(
+    node: &rable::Node,
+    source: &str,
+    defined: &[Definition],
+    out: &mut Vec<Segment>,
+) {
+    match &node.kind {
+        rable::NodeKind::For { words, .. } | rable::NodeKind::Select { words, .. } => {
+            descend_words(words.as_deref().unwrap_or_default(), source, defined, out);
+        }
+        rable::NodeKind::ForArith {
+            init, cond, incr, ..
+        } => {
+            let mut nested = Vec::new();
+            for clause in [init, cond, incr] {
+                descend_text(clause, true, defined, &mut nested);
+            }
+            for segment in &mut nested {
+                segment.nested = true;
+            }
+            out.append(&mut nested);
+        }
+        rable::NodeKind::Case { word, patterns, .. } => {
+            descend_words(std::slice::from_ref(word), source, defined, out);
+            for arm in patterns {
+                descend_words(&arm.patterns, source, defined, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A `while` or `until`: its condition and its body, tagged apart, in one scope.
