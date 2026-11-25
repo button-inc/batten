@@ -967,7 +967,6 @@ description = "Everything `fmt` does, plus clippy's autofixes and the derived ar
 # body opted into is what mise does to an array anyway: the entries run in order
 # and the first one that fails ends the task with its own exit code, so a
 # half-applied fix still cannot report success.
-env = { MISE_LOCKED_SCOPES = "project" }
 run = [
   "cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features",
   "mise run completions",
@@ -1907,12 +1906,12 @@ description = "Gate: every declared gate has a mutation its own suite is PROVEN 
 # makes `batten mutate cargo` list `cargo mutants --workspace` with no base; a
 # subtask inherits it, as `mutant:changed`'s inherit its base, and a base set
 # beside it is a usage error. Both run whatever the first says, as there.
-env = { MISE_LOCKED_SCOPES = "project", MUTANT_WHOLE_TREE = "1" }
+env = { MUTANT_WHOLE_TREE = "1" }
 run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
 
 [tasks."mutant:changed"]
 #MUTANT-SUITE crates/batten/tests/it/mutate_schema.rs
-#MUTANT changed-base-overrides-caller|s@^env = { MISE_LOCKED_SCOPES = "project", MUTANT_CHANGED_SINCE = .*@env = { MISE_LOCKED_SCOPES = "project", MUTANT_CHANGED_SINCE = "origin/main" }@|mutant_changed_hands_a_callers_base_to_both_runners
+#MUTANT changed-base-overrides-caller|s@^env = { MUTANT_CHANGED_SINCE = .*@env = { MUTANT_CHANGED_SINCE = "origin/main" }@|mutant_changed_hands_a_callers_base_to_both_runners
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change is caught, and every declared Rego, Pkl or manifest gate it touched has a mutation its suite catches"
 # ON ADMISSION, AT LANDING (CLOUD-1746, the owner's 2026-10-16 ruling, with
 # local and CI parity). `hk.pkl`'s `mutant:changed` step runs it in `verify`; CI
@@ -1958,7 +1957,7 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 # `origin/main` IS THE DEFAULT, NEVER AN OVERRIDE (CLOUD-2918): an operator who
 # narrowed the base gets that base judged, as `mutant:rust` already keeps it,
 # rather than the whole branch.
-env = { MISE_LOCKED_SCOPES = "project", MUTANT_CHANGED_SINCE = "{{ get_env(name='MUTANT_CHANGED_SINCE', default='origin/main') }}" }
+env = { MUTANT_CHANGED_SINCE = "{{ get_env(name='MUTANT_CHANGED_SINCE', default='origin/main') }}" }
 run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
 
 [tasks."mutant:declared"]
@@ -3561,7 +3560,6 @@ description = "Session start: provision what mise does not own — the rustup cr
 # own rather than a flattened `1`.
 quiet = true
 silent = "stdout"
-env = { MISE_LOCKED_SCOPES = "project" }
 run = "mise run provision:startup"
 
 [tasks."session:batten"]
@@ -3689,7 +3687,6 @@ description = "Session start: set this clone's repo-local git identity, quietly 
 # own rather than a flattened `1`.
 quiet = true
 silent = "stdout"
-env = { MISE_LOCKED_SCOPES = "project" }
 run = "mise run attribution-identity"
 
 [tasks."session:signing"]
@@ -4300,7 +4297,6 @@ arg "[target]" help="the Darwin triple to link; with none, both" {
   choices "aarch64-apple-darwin" "x86_64-apple-darwin"
 }
 '''
-env = { MISE_LOCKED_SCOPES = "project" }
 run = [
   "mise run target-ensure {% if usage.target %}{{usage.target}}{% else %}aarch64-apple-darwin{% endif %}",
   "{{vars.batten}} step run darwin-link --arg {% if usage.target %}{{usage.target}}{% else %}aarch64-apple-darwin{% endif %} -- cargo zigbuild --workspace --profile darwin-link --target {% if usage.target %}{{usage.target}}{% else %}aarch64-apple-darwin{% endif %}",
@@ -4372,7 +4368,6 @@ description = "Type-check for other targets from Linux (no macOS runner needed)"
 #     workspace code is held to it.
 #   * `--message-format=short` is one `path:line:col: error: …` per diagnostic,
 #     so a failure names its line and not a page of context.
-env = { MISE_LOCKED_SCOPES = "project" }
 run = [
   "mise run target-ensure x86_64-pc-windows-gnu",
   "mise run target-ensure x86_64-unknown-linux-musl",
@@ -4419,7 +4414,6 @@ description = "Run the workspace suite against x86_64-unknown-linux-musl — the
 # the flattening to 1. The target step still goes through `target-ensure`, so a
 # concurrent toolchain mutator queues on the lock instead of colliding inside
 # rustup (CLOUD-220).
-env = { MISE_LOCKED_SCOPES = "project" }
 run = [
   "mise run target-ensure x86_64-unknown-linux-musl",
   "cargo nextest run --workspace --target x86_64-unknown-linux-musl",
@@ -4559,7 +4553,7 @@ description = "The dist leg at the lap's cost: `dist` for this host with the dis
 # THE PROFILE IS THIS TASK'S, NOT THE GATE SET'S: only `--profile dist` reads
 # these, so they are scoped to the one leg that builds it rather than exported
 # to every step `verify:gated` runs.
-env = { MISE_LOCKED_SCOPES = "project", CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "256", CARGO_PROFILE_DIST_OPT_LEVEL = "0", CARGO_PROFILE_DIST_INCREMENTAL = "true" }
+env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "256", CARGO_PROFILE_DIST_OPT_LEVEL = "0", CARGO_PROFILE_DIST_INCREMENTAL = "true" }
 run = "mise run dist {{vars.dist_host}} --build-tool cargo-dist"
 
 [tasks."tree-clean"]
@@ -4946,7 +4940,6 @@ description = "The full local gate each `land` lap runs — iterate a draft with
 # no build. The receipt steps stay on this tree's build, so the writer and the
 # reader of a receipt are one version. (Above the array, not in it: the shell
 # census reads every array line, comments included.)
-env = { MISE_LOCKED_SCOPES = "project" }
 run = [
   "batten receipt clean",
   "mise run toolchain-check",
@@ -4971,7 +4964,7 @@ run = [
 
 [tasks."verify:gated"]
 #MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
-#MUTANT engine-unnamed|s@^env = { MISE_LOCKED_SCOPES = "project", BATTEN_BIN = "[^"]*" }$@env = { MISE_LOCKED_SCOPES = "project" }@|the_gate_set_runs_the_engine_it_built_first
+#MUTANT engine-unnamed|s@^env = { BATTEN_BIN = "[^"]*" }$@@|the_gate_set_runs_the_engine_it_built_first
 description = "Every gate verify runs, and the receipt — invoked through `verify`, after the claim and linearity questions"
 # Split out of `[tasks.verify]` for CLOUD-407, when `verify` was a mapper that
 # flattened this task's code to 1. Nothing flattens it now (CLOUD-843): a gate
@@ -5045,7 +5038,7 @@ description = "Every gate verify runs, and the receipt — invoked through `veri
 # before it even looks up its receipt, so a step that hit still queued behind
 # every sibling build.
 depends = ["tree-clean"]
-env = { MISE_LOCKED_SCOPES = "project", BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}/debug/batten" }
+env = { BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}/debug/batten" }
 # THE FAN (operator ruling, 2026-11-11). Every independent gate runs in ONE
 # `mise run --continue-on-error` invocation, listed cheapest first: mise starts
 # them in that order within its job limit, so the seconds-cheap gates report
@@ -5170,12 +5163,10 @@ run = [
 # that `step run` and `ci step` need before the wrapped command.
 [tasks."verify:ci-suite"]
 description = "The suite, through its keyed `ci-suite` step — invoked through `verify`'s third tier"
-env = { MISE_LOCKED_SCOPES = "project" }
 run = "{{vars.batten}} step run ci-suite -- mise run ci"
 
 [tasks."verify:ci-slow-needed"]
 description = "CI's slow-tier question, asked as the `ci` job asks it — invoked through `verify`'s third tier"
-env = { MISE_LOCKED_SCOPES = "project" }
 run = "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main"
 
 # THE LAP'S COMMIT RANGE, AS DATA (CLOUD-1702). `commit-lint` reads
@@ -5192,14 +5183,14 @@ run = "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise
 # suite read `BASE_SHA` too, and never saw this one.
 [tasks."verify:commit-lint"]
 description = "`commit-lint` over the verify lap's own range — invoked through `verify:gated`"
-env = { MISE_LOCKED_SCOPES = "project", BASE_SHA = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}", HEAD_SHA = "HEAD" }
+env = { BASE_SHA = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}", HEAD_SHA = "HEAD" }
 run = "mise run commit-lint"
 
 # THE TRUSTED BASE, AS DATA (CLOUD-236, CLOUD-1702): the same base as the range
 # above, for `config-lint`'s `--config-from`.
 [tasks."verify:config-lint"]
 description = "`config-lint` against the verify lap's trusted base — invoked through `verify:gated`"
-env = { MISE_LOCKED_SCOPES = "project", CONFIG_LINT_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }
+env = { CONFIG_LINT_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }
 run = "mise run config-lint"
 
 # THE BASE-TEST REPLAY (CLOUD-2090), over the same trusted base as the two above:
@@ -5303,7 +5294,6 @@ description = "Run both commit-msg gates over a drafted message file BEFORE `git
 # then `commit-msg`, so a message refusal used to arrive after every compile.
 # Same two tasks the hook runs, so the answer cannot differ.
 usage = 'arg "<file>" help="The drafted commit message"'
-env = { MISE_LOCKED_SCOPES = "project" }
 run = [
   "mise run commit-msg {{usage.file}}",
   "mise run commit-attribution-msg {{usage.file}}",
@@ -5451,8 +5441,11 @@ run = "release-plz release-pr"
 # installed. The refusal is the NESTED `mise` the task body runs; the top-level
 # run only warns. `locked_scopes` is global-only as config, so a project cannot
 # narrow it here, but as `MISE_LOCKED_SCOPES` in a task's `env` it reaches every
-# nested `mise`: each task whose body runs one sets `MISE_LOCKED_SCOPES =
-# "project"`, and `locked_scopes.rs` holds it (a global tool absent from the lock
+# nested `mise`: each task whose OWN body runs a nested `mise install`, `exec`
+# or `lock` sets `MISE_LOCKED_SCOPES = "project"`. A task that only runs `mise
+# run` does not: a run only warns, and the task it runs carries its own scope —
+# so `verify:gated`'s env stays exactly `BATTEN_BIN`, as CLOUD-2924 admitted it.
+# `locked_scopes.rs` holds it (a global tool absent from the lock
 # passes, an unlocked project tool still exits 1). Not `[env]`, which an
 # activated shell would export and so widen the user's own policy everywhere in
 # this checkout. WHAT STAYS LOCKED FOR GLOBAL TOOLS: a top-level command typed in
