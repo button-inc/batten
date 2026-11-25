@@ -12419,7 +12419,22 @@ fn run_land_linear(
         return Ok(ExitCode::Internal);
     }
     let tracking = land::tracking_ref(reference);
-    let tip = match land::advance(root, url, reference, &tracking) {
+    // UNDER THE LAP'S OWN GATE, THE TIP REPLAY JUST FETCHED (CLOUD-1991,
+    // CLOUD-2253 B5). The lap's Replay set `tracking` moments before this gate
+    // started, and the gate's watcher arm reads the trunk for the whole run and
+    // cancels it the moment the trunk moves (`land::verify_raced`), so a second
+    // fetch here bought a round trip and no fact. Outside a lap, or with no
+    // tracking ref to read, the fetch is still what makes this current.
+    let lapped = std::env::var(land::LAP_GATE).is_ok_and(|marker| !marker.trim().is_empty());
+    let fetched = if lapped {
+        match git::resolve_ref(root, &tracking) {
+            Ok(Some(tip)) => Ok(tip),
+            _ => land::advance(root, url, reference, &tracking),
+        }
+    } else {
+        land::advance(root, url, reference, &tracking)
+    };
+    let tip = match fetched {
         Ok(tip) => tip,
         Err(error) => {
             writeln!(
@@ -13092,6 +13107,18 @@ fn lap_engine(root: &Path) -> Option<(Option<String>, EngineUse)> {
         .then(|| engine_for_gate(&exe, &now, &now))
         .flatten();
     Some((engine, used))
+}
+
+/// The lap's engine as the `BATTEN_BIN` a gate it spawns outside verify reads
+/// (CLOUD-2924, CLOUD-2253 A5): the body gates and the entry gates spell batten
+/// `{{vars.batten}}` too, and without it each paid a `cargo run` build walk.
+/// Empty where the lap has no engine of its own to hand over, so the gate keeps
+/// whatever `BATTEN_BIN` it inherits, as verify's does.
+fn gate_engine(root: &Path) -> Vec<(String, Option<String>)> {
+    lap_engine(root)
+        .and_then(|(engine, _)| engine)
+        .map(|engine| vec![("BATTEN_BIN".to_owned(), Some(engine))])
+        .unwrap_or_default()
 }
 
 fn run_land_lap(
@@ -14352,11 +14379,53 @@ fn note_the_cooldown(
 /// on a could-not-look, so a fetch that cannot run must leave the reading exactly
 /// as stale as it was rather than become a refusal — the trunk being unreachable
 /// is not a verdict about the branch.
+///
+/// **ONCE PER PRECHECK** (CLOUD-2253 A8). Settling, unwinding and placing a bet
+/// each asked for a fresh trunk, and the Replay that follows them on the same
+/// row fetched it a fourth time; the first fetch answers all of them, and
+/// [`trunk_advanced`] hands it to that Replay.
 fn advance_trunk(root: &Path, reference: &str) {
     let tracking = land::tracking_ref(reference);
-    if let Ok(terms) = lease::terms(root) {
-        let _ = land::advance(root, &terms.remote, reference, &tracking);
+    advance_trunk_with(&tracking, || {
+        lease::terms(root)
+            .ok()
+            .and_then(|terms| land::advance(root, &terms.remote, reference, &tracking).ok())
+    });
+}
+
+/// The tracking ref this lap's BetSettled precheck already advanced, if any
+/// (CLOUD-2253 A8). Forgotten at the start of every such precheck and taken by
+/// the Replay after it, so it never outlives the row that fetched it.
+static TRUNK_ADVANCED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// [`advance_trunk`] over `fetch`, which answers the tip or could-not-look:
+/// the fetch runs only when this precheck has not already advanced `tracking`.
+fn advance_trunk_with(tracking: &str, fetch: impl FnOnce() -> Option<String>) {
+    let Ok(mut advanced) = TRUNK_ADVANCED.lock() else {
+        return;
+    };
+    if advanced.as_deref() == Some(tracking) {
+        return;
     }
+    if fetch().is_some() {
+        *advanced = Some(tracking.to_owned());
+    }
+}
+
+/// Forget any advance an earlier precheck made: a new row reads a new trunk.
+fn forget_trunk_advance() {
+    if let Ok(mut advanced) = TRUNK_ADVANCED.lock() {
+        *advanced = None;
+    }
+}
+
+/// Whether this precheck already advanced `tracking`, consuming the answer.
+fn trunk_advanced(tracking: &str) -> bool {
+    TRUNK_ADVANCED
+        .lock()
+        .ok()
+        .and_then(|mut advanced| advanced.take())
+        .is_some_and(|advanced| advanced == tracking)
 }
 
 fn unwind_the_bet(
@@ -15172,10 +15241,15 @@ fn run_land_replay(
     let (replayed, candidates) = if propose {
         land::replay_proposing(root, url, reference, branch, resolve)?
     } else {
-        (
-            land::replay(root, url, reference, branch, resolve)?,
-            Vec::new(),
-        )
+        // THE TIP THIS LAP'S BET PRECHECK FETCHED A MOMENT AGO IS THE TIP
+        // (CLOUD-2253 A8): fetched again here it bought a round trip and no fact.
+        let tracking = land::tracking_ref(reference);
+        let replayed = if trunk_advanced(&tracking) {
+            land::replay_onto(root, &tracking, branch, resolve)?
+        } else {
+            land::replay(root, url, reference, branch, resolve)?
+        };
+        (replayed, Vec::new())
     };
     match replayed {
         land::Replay::Conflicted { commit, paths } => {
@@ -15434,8 +15508,9 @@ fn run_land_placed(root: &Path, err: &mut dyn Write) -> Result<ExitCode> {
     Ok(ExitCode::Success)
 }
 
-/// The self-stall terms for this verify (CLOUD-2369), or `None` where the bound
-/// is switched off or there is no task to watch.
+/// The self-stall terms for this verify (CLOUD-2369), or `None` where there is
+/// no task to watch. A bound of `0` beats is still `Some`: it never stalls, and
+/// the arm still reads the red slot (CLOUD-2253 C12).
 ///
 /// The task whose stamps are read is the one the gate's steps announce under:
 /// the one this run `registered` (the lap's own), else the one a supervising
@@ -15449,9 +15524,10 @@ fn verify_stall(root: &Path, registered: Option<u32>) -> Option<land::Stall> {
         .ok()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .unwrap_or(240);
-    if beats == 0 {
-        return None;
-    }
+    // `0` SWITCHES OFF THE STALL BOUND AND NOTHING ELSE (CLOUD-2253 C12).
+    // `land::stalled` never fires on `0` beats, so the arm still runs and still
+    // reads the red slot; returning `None` here dropped the red reader with it,
+    // and a known-red gate then ran its whole fan.
     let pid = registered.or_else(|| {
         std::env::var(step::TASK_PID)
             .ok()
@@ -16228,10 +16304,11 @@ fn run_land_ready(
         // as children of a `verify` that exports it, so "no bet" has to be said
         // out loud rather than left unsaid (measured: the case for this asserted
         // the mirror and read an outer process's bet).
-        let published: Vec<(String, Option<String>)> = vec![(
+        let mut published: Vec<(String, Option<String>)> = vec![(
             speculation::PUBLISHED_AS.to_owned(),
             bet.published().map(str::to_owned),
         )];
+        published.extend(gate_engine(root));
         match land::ready(root, &gates, &body, &published) {
             land::Readied::Clear => {
                 writeln!(out, "land: {} body gate(s) clear", gates.len())?;
@@ -16352,8 +16429,15 @@ fn spend_the_matrix(
     // **THE FORGE'S HEAD, NEVER THIS CLONE'S**: `Readiness::head` says why. A
     // ready pull request's push that bought a run is asked its receipts by the
     // Push row's precheck (CLOUD-2436), since this may then buy `Nothing`.
-    let reading = verdict_for(&repo, &head);
+    let read = verdict_reading(&repo, &head);
+    let reading = read.as_ref().map(|(verdict, _)| verdict.clone());
     let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
+    // KEPT FOR THE WAIT ONLY WHEN THIS READY BUYS NOTHING (CLOUD-2253 A7): a
+    // ready that fires starts runs this reading never saw.
+    keep_ready_reading(
+        read.filter(|_| spend == land::Spend::Nothing)
+            .map(|(_, raw)| (repo.clone(), head.clone(), raw)),
+    );
     // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293), and
     // only when a ready will actually fire: a lap that readies nothing — the
     // pull request already ready, its run answered or on its way — buys no
@@ -16529,7 +16613,7 @@ fn run_land_entry_gates(
             return Ok(Some(ExitCode::Internal));
         }
     };
-    match land::admits_the_landing(root, &gates, &pr) {
+    match land::admits_the_landing(root, &gates, &pr, &gate_engine(root)) {
         land::Admitted::Clear => {
             writeln!(out, "land: {} entry gate(s) clear", gates.len())?;
             Ok(None)
@@ -16611,6 +16695,26 @@ fn retire_the_branch(
     Ok(())
 }
 
+/// The check-runs reading Ready took, kept for the Wait over the same head
+/// (CLOUD-2253 A7): `(repo, sha, reading)`. Cleared by every Ready and taken by
+/// the Wait, so it never outlives the lap that read it.
+static READY_READING: std::sync::Mutex<Option<(String, String, rest::Answer)>> =
+    std::sync::Mutex::new(None);
+
+/// Keep `reading` for the next Wait over `sha` in `repo`, or clear the slot.
+fn keep_ready_reading(kept: Option<(String, String, rest::Answer)>) {
+    if let Ok(mut slot) = READY_READING.lock() {
+        *slot = kept;
+    }
+}
+
+/// Take Ready's reading if it is of `sha` in `repo`. A reading of another head
+/// — a push moved it since — is dropped, never handed over.
+fn take_ready_reading(repo: &str, sha: &str) -> Option<rest::Answer> {
+    let taken = READY_READING.lock().ok()?.take()?;
+    (taken.0 == repo && taken.1 == sha).then_some(taken.2)
+}
+
 /// What the required checks say about a sha the CALLER names, or `None`.
 ///
 /// Every way this fails is a could-not-look — a roster that can decide nothing,
@@ -16626,7 +16730,10 @@ fn retire_the_branch(
 /// uncancellable, because `Compensation::Abandon` reads `git::head_commit` and
 /// that is the other sha. The ready asks about `Readiness::head`; a wait asks
 /// about the head it just pushed. One reading for both is what conflated them.
-fn verdict_for(repo: &str, sha: &str) -> Option<checks_green::Verdict> {
+///
+/// Beside the verdict, the reading it was decided over, which Ready keeps for
+/// the Wait over the same head (CLOUD-2253 A7).
+fn verdict_reading(repo: &str, sha: &str) -> Option<(checks_green::Verdict, rest::Answer)> {
     let sha = sha.to_owned();
     let roster = checks_green::Roster {
         required: roster_field(std::env::var("CI_REQUIRED_CHECKS").ok().as_deref()),
@@ -16674,7 +16781,9 @@ fn verdict_for(repo: &str, sha: &str) -> Option<checks_green::Verdict> {
     }
     // The interval it returns is for a LOOP to honour, and this is one read.
     let _pace = poll.absorb(Some(&raw), config.interval);
-    checks_green::decide(poll.runs(), &roster).ok()
+    checks_green::decide(poll.runs(), &roster)
+        .ok()
+        .map(|verdict| (verdict, raw))
 }
 
 /// `batten land wait` (CLOUD-1338): the lap's raced wait, and the record it
@@ -16783,12 +16892,13 @@ fn run_land_wait(
 
     let trunk = trunk_watch(reference, &base, &config.repo, config.interval);
     let holding = Heartbeat::for_clone(root);
+    let primed = take_ready_reading(&config.repo, &sha).filter(|_| !fresh_ready);
     let (waited, red) = land::wait_reading(
         &config,
         &roster,
         &trunk,
-        asks,
-        fresh_ready,
+        (asks, fresh_ready),
+        primed,
         &|observed| holding.beat(observed),
         out,
     )?;
@@ -17151,6 +17261,7 @@ fn asks_before_the_step(
         // THE BET IS SETTLED BEFORE ANYTHING IS SPENT, and before the replay that
         // would otherwise build on somebody else's commits.
         Some(pipeline::Precheck::BetSettled) => {
+            forget_trunk_advance();
             if let Some(code) = settle_the_bet(root, url, bet, reference, branch, out, err)? {
                 return Ok(Answered::Stop(code));
             }
@@ -34359,6 +34470,94 @@ mod tests {
             super::lap_engine(root),
             Some((exe.to_str().map(str::to_owned), super::EngineUse::Reused))
         );
+        // AND THE BODY AND ENTRY GATES GET THE SAME ENGINE (CLOUD-2253 A5).
+        assert_eq!(
+            super::gate_engine(root),
+            vec![(String::from("BATTEN_BIN"), exe.to_str().map(str::to_owned))]
+        );
+        if let Ok(mut cell) = super::LAP_ENGINE.lock() {
+            *cell = None;
+        }
+        assert!(
+            super::gate_engine(root).is_empty(),
+            "no lap engine publishes nothing, so an inherited one stands"
+        );
+    }
+
+    /// One trunk fetch answers a whole bet precheck and the Replay after it
+    /// (CLOUD-2253 A8); a new precheck fetches again.
+    ///
+    /// Fails by: settle, unwind and place each fetching the trunk, the Replay
+    /// fetching it a fourth time, a failed fetch read as an advance, or one
+    /// row's fetch answering the next row.
+    #[test]
+    fn one_trunk_fetch_answers_a_bet_precheck_and_its_replay() {
+        let fetches = std::cell::Cell::new(0_u32);
+        let fetch = || {
+            fetches.set(fetches.get() + 1);
+            Some(String::from("tip"))
+        };
+        super::forget_trunk_advance();
+        super::advance_trunk_with("refs/remotes/origin/main", fetch);
+        super::advance_trunk_with("refs/remotes/origin/main", fetch);
+        super::advance_trunk_with("refs/remotes/origin/main", fetch);
+        assert_eq!(fetches.get(), 1, "one fetch per precheck");
+        assert!(!super::trunk_advanced("refs/remotes/origin/other"));
+        super::advance_trunk_with("refs/remotes/origin/main", fetch);
+        assert!(super::trunk_advanced("refs/remotes/origin/main"));
+        assert!(
+            !super::trunk_advanced("refs/remotes/origin/main"),
+            "taken once"
+        );
+        super::forget_trunk_advance();
+        super::advance_trunk_with("refs/remotes/origin/main", || None);
+        assert!(
+            !super::trunk_advanced("refs/remotes/origin/main"),
+            "a fetch that failed advanced nothing"
+        );
+        super::advance_trunk_with("refs/remotes/origin/main", fetch);
+        super::forget_trunk_advance();
+        assert!(
+            !super::trunk_advanced("refs/remotes/origin/main"),
+            "forgotten"
+        );
+    }
+
+    /// Ready's reading reaches the Wait over the same head once, and never the
+    /// Wait over another (CLOUD-2253 A7).
+    ///
+    /// Fails by: a reading handed to a head a push moved past, a reading
+    /// handed over twice, or none handed over at all.
+    #[test]
+    fn ready_s_reading_reaches_one_wait_over_its_own_head() {
+        let raw = crate::rest::Answer {
+            status: 200,
+            etag: Some(String::from("\"e\"")),
+            poll_floor: None,
+            backoff: None,
+            body: String::from("{}"),
+            headers: std::collections::BTreeMap::new(),
+        };
+        let kept = || Some((String::from("o/r"), String::from("aaa"), raw.clone()));
+        super::keep_ready_reading(kept());
+        assert_eq!(super::take_ready_reading("o/r", "aaa"), Some(raw.clone()));
+        assert_eq!(super::take_ready_reading("o/r", "aaa"), None, "taken once");
+        super::keep_ready_reading(kept());
+        assert_eq!(
+            super::take_ready_reading("o/r", "bbb"),
+            None,
+            "another head"
+        );
+        assert_eq!(super::take_ready_reading("o/r", "aaa"), None, "and dropped");
+        super::keep_ready_reading(kept());
+        assert_eq!(
+            super::take_ready_reading("x/y", "aaa"),
+            None,
+            "another repo"
+        );
+        super::keep_ready_reading(kept());
+        super::keep_ready_reading(None);
+        assert_eq!(super::take_ready_reading("o/r", "aaa"), None, "cleared");
     }
     use super::*;
 

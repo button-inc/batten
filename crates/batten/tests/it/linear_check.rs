@@ -156,6 +156,54 @@ fn a_fetch_that_cannot_complete_is_could_not_look_and_never_a_pass() {
     );
 }
 
+/// UNDER THE LAP'S OWN GATE THE VERB READS THE TIP REPLAY SET, AND FETCHES
+/// NOTHING (CLOUD-1991, CLOUD-2253 B5). The remote here is an address nothing
+/// listens on, so only a read of the tracking ref can answer: the same clone
+/// outside a lap is still could-not-look, the case above. Trunk movement during
+/// the gate is the gate's watcher arm's to catch
+/// (`the_watcher_reads_the_trunk_on_its_interval_until_it_moves`).
+///
+/// Fails by: the lap's gate paying a second trunk fetch, or a lap reading a
+/// tracking ref that is not there as linear.
+#[test]
+fn under_the_laps_gate_linearity_reads_the_tip_replay_set() {
+    let dir = common::scratch("linear-check-lapped");
+    let origin = origin(&dir);
+    let clone = clone(&dir, &origin, "lapped", false);
+    let lapped = |clone: &Path| {
+        common::batten()
+            .args(["land", "linear", "main"])
+            .env("BATTEN_LAND_GATE", "1")
+            .current_dir(clone)
+            .streamed_output()
+            .expect("run batten land linear")
+    };
+    common::git_in(
+        &clone,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "http://127.0.0.1:9/nothing.git",
+        ],
+    );
+    let unset = lapped(&clone);
+    assert_eq!(
+        unset.status.code(),
+        Some(batten::exit::ExitCode::Internal.code()),
+        "no tracking ref is still a fetch, and this one cannot complete: {}",
+        said(&unset)
+    );
+    let url = format!("file://{}", origin.display());
+    common::git_in(
+        &clone,
+        &["fetch", "-q", &url, "main:refs/remotes/origin/main"],
+    );
+    let out = lapped(&clone);
+    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    assert!(!said(&out).contains("could not fetch"), "{}", said(&out));
+}
+
 #[test]
 fn a_clone_with_no_landing_remote_is_could_not_look() {
     let dir = common::scratch("linear-check-no-remote");
