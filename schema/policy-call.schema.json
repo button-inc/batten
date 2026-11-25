@@ -568,8 +568,14 @@
           ]
         },
         "install-pending": {
-          "description": "Fact::InstallPending (CLOUD-2840). The session's setup task, read from the task registry: `state` is `running`, `ok`, `failed` or `crashed` (the task's own last phase, or a pid gone without one), `task` its registry name and `pid` its pid. `pending` lists this call's command-position programs that resolve to nothing on PATH or resolve under the environment manager's install root -- what the task may still be installing -- and is empty once the task said `ok`, when nothing is resolved at all. NULL when no setup task is recorded or the registry could not be read.",
+          "description": "Fact::InstallPending (CLOUD-2840). The session's setup task, read from the task registry: `state` is `undispatched` (SessionStart prepared setup and the agent has not dispatched it: no record, `pid` null), `running`, `ok`, `failed` or `crashed` (the task's own last phase, or a pid gone without one), `task` its registry name and `pid` its pid. `pending` lists this call's command-position programs that resolve to nothing on PATH, resolve under the environment manager's install root, or are the manager itself -- what the task may still be installing -- and is empty once the task said `ok`, when nothing is resolved at all, and before dispatch. `dispatch` is the one command the agent runs to start the task, and `dispatching` whether this call is exactly that command. NULL when SessionStart prepared no setup or the registry could not be read.",
           "properties": {
+            "dispatch": {
+              "type": "string"
+            },
+            "dispatching": {
+              "type": "boolean"
+            },
             "pending": {
               "items": {
                 "type": "string"
@@ -577,10 +583,14 @@
               "type": "array"
             },
             "pid": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "state": {
               "enum": [
+                "undispatched",
                 "running",
                 "ok",
                 "failed",
