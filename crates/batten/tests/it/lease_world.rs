@@ -221,29 +221,12 @@ fn stop_terminates_the_holder_it_names() {
         .spawn()
         .expect("a holder to stop");
     let pid = holder.id();
-    // Reaped on its own thread, so a `stop` that sends nothing FAILS here within
-    // the bound rather than hanging out the holder's whole interval. The bound
-    // sits under the mutation judge's 20 s floor per case (CLOUD-2911): at 30 s
-    // a `stop` made `()` was cut as a timeout, which decides nothing, before
-    // this case could fail it (CLOUD-2789).
-    let (reaped, exited) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = reaped.send(holder.wait());
-    });
+    // THE EVENT, NOT A CLOCK (CLOUD-2789): the holder is reaped the moment
+    // `stop`'s signal ends it, and this waits for exactly that. A `stop` that
+    // sends nothing leaves the wait blocked, which the mutation judge files as
+    // the hang it is; the holder then sleeps out its own interval alone.
     batten::lease::stop(pid);
-    let Ok(reaped) = exited.recv_timeout(std::time::Duration::from_secs(10)) else {
-        // Nothing stopped it: kill it so the reaping thread ends, then fail.
-        #[expect(
-            clippy::disallowed_types,
-            reason = "stays, and test-only: the cleanup of the real child this case spawned, when the subject failed to signal it"
-        )]
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", &pid.to_string()])
-            .status();
-        let _ = exited.recv();
-        panic!("stop sent no signal: the holder was still running after 10s");
-    };
-    let status = reaped.expect("the holder is reaped");
+    let status = holder.wait().expect("the holder is reaped");
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
