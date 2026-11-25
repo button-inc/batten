@@ -42,7 +42,6 @@
 use crate::prune::PruneExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// How long the hook may collect before admitting (CLOUD-2197): a sixth of the
 /// harness's 60 s default command-hook timeout, so a killed hook is never the
@@ -130,7 +129,7 @@ struct Sampler<'a> {
     pending:
         std::cell::RefCell<Option<std::sync::mpsc::Receiver<Option<crate::collect::Collected>>>>,
     /// The flag every collection ends on, set once the watcher stops.
-    halt: Arc<AtomicBool>,
+    halt: Arc<crate::lock_wait::Stop>,
     trace: bool,
     started: std::time::Instant,
     last_wake: std::cell::Cell<Option<std::time::Instant>>,
@@ -193,7 +192,7 @@ impl Sampler<'_> {
     /// Stop every collection, and wait for the running one's answer for at
     /// most [`PASS_GRACE`]; a pass that outlives it is recorded abandoned.
     fn settle(&self) {
-        self.halt.store(true, Ordering::Release);
+        self.halt.raise();
         let Some(answered) = self.pending.borrow_mut().take() else {
             return;
         };
@@ -243,7 +242,7 @@ impl Sampler<'_> {
         }
         // ONE COLLECTION AT A TIME: a sample that finds one running does
         // nothing, and the next sample judges what it left.
-        if self.pending.borrow().is_some() || self.halt.load(Ordering::Acquire) {
+        if self.pending.borrow().is_some() || self.halt.is_raised() {
             return;
         }
         let (repo, config, kept) = (self.repo.clone(), self.config.clone(), self.kept.clone());
@@ -275,7 +274,7 @@ impl Sampler<'_> {
                     &kept,
                     free,
                     &mut unread,
-                    (None, true, Some(&halt)),
+                    (None, true, Some(halt.as_ref())),
                     &copies,
                 );
                 let _ = answer.send(done);
@@ -309,7 +308,7 @@ pub const PERIOD: std::time::Duration = std::time::Duration::from_millis(1);
 pub fn watch<'scope>(
     scope: &'scope std::thread::Scope<'scope, '_>,
     watch: DiskWatch<'scope>,
-    stop: &'scope AtomicBool,
+    stop: &'scope Arc<crate::lock_wait::Stop>,
 ) -> std::thread::ScopedJoinHandle<'scope, Vec<String>> {
     watch_on(scope, watch, stop, None)
 }
@@ -319,7 +318,7 @@ pub fn watch<'scope>(
 fn watch_on<'scope>(
     scope: &'scope std::thread::Scope<'scope, '_>,
     watch: DiskWatch<'scope>,
-    stop: &'scope AtomicBool,
+    stop: &'scope Arc<crate::lock_wait::Stop>,
     driver: Option<compio::driver::DriverType>,
 ) -> std::thread::ScopedJoinHandle<'scope, Vec<String>> {
     scope.spawn(move || {
@@ -341,7 +340,7 @@ fn watch_on<'scope>(
         // A STOP ENDS IT TOO (CLOUD-2789): a run shorter than one walk of a
         // large tree is not held open for the rest of the walk.
         for tree in crate::collect::trees(&repo, config) {
-            crate::collect::rearm_until(&tree, Some(stop));
+            crate::collect::rearm_until(&tree, Some(stop.as_ref()));
         }
         let sampler = Sampler {
             repo,
@@ -354,7 +353,8 @@ fn watch_on<'scope>(
             sink: record.map(Sink::from),
             settled: std::cell::Cell::new(u64::MAX),
             pending: std::cell::RefCell::new(None),
-            halt: Arc::new(AtomicBool::new(false)),
+            // THE RUN'S OWN STOP: a pass ends the moment the watched run does.
+            halt: Arc::clone(stop),
             trace: crate::collect::tracing(),
             started: std::time::Instant::now(),
             last_wake: std::cell::Cell::new(None),
@@ -369,8 +369,8 @@ fn watch_on<'scope>(
 /// clock's blocking face until `stop` is set. Its own function so that the
 /// stop test is driven directly, since no kernel this suite runs on refuses
 /// the runtime.
-fn blocking_floor(stop: &AtomicBool, mut tick: impl FnMut()) {
-    while !stop.load(Ordering::Relaxed) {
+fn blocking_floor(stop: &crate::lock_wait::Stop, mut tick: impl FnMut()) {
+    while !stop.is_raised() {
         tick();
         crate::pr_watch::clock::hold(PERIOD, None);
     }
@@ -381,7 +381,11 @@ fn blocking_floor(stop: &AtomicBool, mut tick: impl FnMut()) {
 ///
 /// A runtime that cannot be built leaves the timer's floor to the crate's one
 /// synchronous pause, so the watcher is never silently off.
-fn run(sampler: &Sampler<'_>, stop: &AtomicBool, driver: Option<compio::driver::DriverType>) {
+fn run(
+    sampler: &Sampler<'_>,
+    stop: &crate::lock_wait::Stop,
+    driver: Option<compio::driver::DriverType>,
+) {
     let mut builder = compio::runtime::RuntimeBuilder::new();
     if let Some(driver) = driver {
         let mut proactor = compio::driver::ProactorBuilder::new();
@@ -406,9 +410,9 @@ fn run(sampler: &Sampler<'_>, stop: &AtomicBool, driver: Option<compio::driver::
         let timer = async {
             // THE CRATE'S ONE CLOCK (`crate::pr_watch::clock`), whose single
             // inventory row names this floor's bound: the band.
-            while !stop.load(Ordering::Relaxed) {
+            while !stop.is_raised() {
                 crate::pr_watch::clock::pause_for(PERIOD).await;
-                if stop.load(Ordering::Relaxed) {
+                if stop.is_raised() {
                     break;
                 }
                 sampler.sample();
@@ -463,7 +467,7 @@ async fn until_first(first: impl Future<Output = ()>, second: impl Future<Output
 #[cfg(target_os = "linux")]
 fn wake_source<'a>(
     sampler: &'a Sampler<'_>,
-    stop: &'a AtomicBool,
+    stop: &'a crate::lock_wait::Stop,
 ) -> impl Future<Output = ()> + 'a {
     let armed = fanotify::arm(&sampler.repo).and_then(|group| {
         let group = Arc::new(group);
@@ -491,7 +495,7 @@ fn wake_source<'a>(
             // COALESCED: one batch of queued events is read, then one sample
             // judges them all. An overflow is a wake like any other.
             fanotify::drain(&group);
-            if stop.load(Ordering::Relaxed) {
+            if stop.is_raised() {
                 return;
             }
             sampler.sample();
@@ -504,7 +508,7 @@ fn wake_source<'a>(
 #[cfg(not(target_os = "linux"))]
 fn wake_source<'a>(
     sampler: &'a Sampler<'_>,
-    _stop: &'a AtomicBool,
+    _stop: &'a crate::lock_wait::Stop,
 ) -> impl Future<Output = ()> + 'a {
     // The same armed line as Linux's refused branch, from the same `arm`.
     let errno = fanotify::arm(&sampler.repo).err().unwrap_or_default();
@@ -599,7 +603,12 @@ fn around_on<T>(
     let Some(watch) = watch else {
         return (body(), Vec::new());
     };
-    let stop = AtomicBool::new(false);
+    // A STOP NO WAIT CAN MISS (CLOUD-2789): the watcher's loops read it, and a
+    // pass waiting on a held tree is woken by it. One that cannot be made
+    // leaves the body unwatched rather than unstoppable.
+    let Ok(stop) = crate::lock_wait::Stop::new().map(Arc::new) else {
+        return (body(), Vec::new());
+    };
     std::thread::scope(|scope| {
         let handle = watch_on(scope, watch, &stop, driver);
         // TWO STATEMENTS, NOT ONE WITH A SPARE. The store is the normal
@@ -616,7 +625,7 @@ fn around_on<T>(
             let _stop = Stop(&stop);
             body()
         };
-        stop.store(true, Ordering::Relaxed);
+        stop.raise();
         let lines = handle.join().unwrap_or_default();
         (answer, lines)
     })
@@ -637,17 +646,18 @@ fn around_on<T>(
 /// So the bound was never the defect; the un-stoppable watcher was.
 ///
 /// In production the same shape swallows any panic raised inside a watched step.
-struct Stop<'a>(&'a AtomicBool);
+struct Stop<'a>(&'a crate::lock_wait::Stop);
 
 impl Drop for Stop<'_> {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.0.raise();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     /// A copies directory no case creates: the pass reads no cargo-mutants
     /// copy, so a case never frees one another suite's sweep staged
@@ -660,12 +670,12 @@ mod tests {
     /// never samples until it is stopped, and then never ends.
     #[test]
     fn the_blocking_floor_ticks_until_it_is_stopped() {
-        let stop = AtomicBool::new(false);
+        let stop = crate::lock_wait::Stop::new().expect("a stop");
         let mut ticks = 0;
         blocking_floor(&stop, || {
             ticks += 1;
             if ticks == 3 {
-                stop.store(true, Ordering::Relaxed);
+                stop.raise();
             }
         });
         assert_eq!(ticks, 3);
@@ -765,10 +775,10 @@ mod tests {
     /// Fails by: a `drop` that does not store, or stores `false`.
     #[test]
     fn the_watcher_is_stopped_however_the_body_leaves() {
-        let stop = AtomicBool::new(false);
+        let stop = crate::lock_wait::Stop::new().expect("a stop");
         drop(Stop(&stop));
         assert!(
-            stop.load(Ordering::Relaxed),
+            stop.is_raised(),
             "the guard's drop is what ends the watcher on an unwind"
         );
     }

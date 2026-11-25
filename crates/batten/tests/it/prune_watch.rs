@@ -1202,9 +1202,10 @@ fn linked(name: &str) -> PathBuf {
 }
 
 /// `batten step run probe` in `dir` below the floor, its command blocked on a
-/// FIFO until the watcher has STARTED A PASS: the test reads the engine's
-/// trace as it is written and releases the step at the first `disk-sample`,
-/// which the watcher writes on the wake that spawns the pass. No clock decides
+/// FIFO until the engine traces `event`: the test reads the trace as it is
+/// written and releases the step at the first line `event` begins —
+/// `disk-sample`, written on the wake that spawns the pass, or `disk-wait`,
+/// written as the pass parks on a held tree. No clock decides
 /// when the step ends, and none bounds it (CLOUD-2789): the case waits on the
 /// engine's own exit, and a hang is the runner's to report.
 ///
@@ -1213,7 +1214,7 @@ fn linked(name: &str) -> PathBuf {
     clippy::disallowed_types,
     reason = "test-only: the step's command waits on a FIFO `mkfifo` makes, and the engine is read as it writes"
 )]
-fn step_released_at_the_pass(case: &str, dir: &Path) -> (Option<i32>, String) {
+fn step_released_at(case: &str, dir: &Path, event: &str) -> (Option<i32>, String) {
     use std::io::{BufRead as _, Write as _};
     // THE CASE'S OWN temp directory: `own_temp` names one after the fixture's
     // last component, `repo` for every hooked fixture, and a case running
@@ -1248,8 +1249,8 @@ fn step_released_at_the_pass(case: &str, dir: &Path) -> (Option<i32>, String) {
         let line = line.expect("read the engine's stderr");
         said.push_str(&line);
         said.push('\n');
-        if line.starts_with("disk-sample ") {
-            // The pass is spawned: let the step's command return.
+        if line.starts_with(event) {
+            // The event the case waits for: let the step's command return.
             std::fs::OpenOptions::new()
                 .write(true)
                 .open(&fifo)
@@ -1301,7 +1302,7 @@ fn a_step_run_in_a_linked_worktree_exits_under_pressure() {
         return;
     }
     let linked = linked("step-run-linked");
-    let (code, said) = step_released_at_the_pass("step-run-linked", &linked);
+    let (code, said) = step_released_at("step-run-linked", &linked, "disk-sample ");
     assert_eq!(code, Some(0), "{said}");
     assert!(said.contains("step run probe: disk-watch-armed "), "{said}");
 }
@@ -1322,7 +1323,7 @@ fn a_held_tree_does_not_hold_a_watched_step_open() {
     holder
         .try_lock()
         .expect("hold the tree as another collector would");
-    let (code, said) = step_released_at_the_pass("step-run-held", &dir);
+    let (code, said) = step_released_at("step-run-held", &dir, "disk-wait ");
     drop(holder);
     assert_eq!(code, Some(0), "{said}");
     // STOPPED, NEVER ABANDONED: the pass ends because it observed the stop,
@@ -1338,12 +1339,16 @@ fn a_held_tree_does_not_hold_a_watched_step_open() {
 }
 
 /// `target prune` under the same two conditions (CLOUD-2789): from a linked
-/// worktree it collects and exits, and a tree another process holds is waited
-/// on for its patience, then reported held.
+/// worktree it collects and exits, and a tree another process holds is WAITED
+/// FOR — on the holder's release, an event, never a clock. The case releases
+/// its holder at the `disk-wait <tree>` the engine traces as it parks, and the
+/// unit under that tree is then collected.
 ///
-/// Fails by: a duplicated tree, or a blocking wait on a held one.
+/// Fails by: a duplicated tree, a blocking wait on a held one, a wait that
+/// skips the tree, or one that never parks.
 #[test]
-fn a_forced_collection_exits_from_a_worktree_and_past_a_held_tree() {
+fn a_forced_collection_exits_from_a_worktree_and_waits_out_a_held_tree() {
+    use std::io::BufRead as _;
     if !cfg!(target_os = "linux") {
         return;
     }
@@ -1352,18 +1357,19 @@ fn a_forced_collection_exits_from_a_worktree_and_past_a_held_tree() {
         prune
             .current_dir(dir)
             .env("TARGET_PRUNE_FREE_MB", "50")
+            .env("BATTEN_DISK_TRACE", "1")
             .args(["target", "prune", "-y"]);
         prune
-            .stdin(std::process::Stdio::null())
-            .streamed_output_keeping(batten::capture::Keep {
-                stdin: true,
-                stdout: false,
-                stderr: false,
-            })
-            .expect("the binary runs")
     };
     let linked = linked("prune-linked");
-    let ran = forced(&linked);
+    let ran = forced(&linked)
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
     let said = format!("{}{}", common::stdout(&ran), common::stderr(&ran));
     assert_eq!(ran.status.code(), Some(0), "{said}");
     assert!(
@@ -1376,19 +1382,32 @@ fn a_forced_collection_exits_from_a_worktree_and_past_a_held_tree() {
     holder
         .try_lock()
         .expect("hold the tree as another collector would");
-    let ran = forced(&dir);
-    drop(holder);
-    let said = format!("{}{}", common::stdout(&ran), common::stderr(&ran));
-    assert_eq!(ran.status.code(), Some(0), "{said}");
+    let mut holder = Some(holder);
+    let mut prune = forced(&dir);
+    let mut child = prune
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    let mut said = String::new();
+    let stderr = std::io::BufReader::new(child.stderr.take().expect("stderr is piped"));
+    for line in stderr.lines() {
+        let line = line.expect("read the engine's stderr");
+        if line.starts_with("disk-wait ") {
+            // The pass parked on the held tree: let it go.
+            drop(holder.take());
+        }
+        said.push_str(&line);
+        said.push('\n');
+    }
+    let status = child.wait().expect("wait for the engine");
+    assert!(holder.is_none(), "the pass never parked: {said}");
+    assert_eq!(status.code(), Some(0), "{said}");
     assert!(
-        said.contains("disk-held "),
-        "the held tree is named: {said}"
+        !present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
+        "the tree released mid-wait was collected: {said}"
     );
-    assert!(present(
-        &dir.join("target/debug"),
-        "aged",
-        "dddddddddddddddd"
-    ));
 }
 
 /// `BATTEN_DISK_TRACE=1` writes each sample the watcher takes to stderr, the
