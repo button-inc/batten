@@ -373,8 +373,7 @@ fn a_malformed_shard_is_refused_before_the_registered_runner() {
 #[cfg(unix)]
 #[test]
 fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
-    let note = common::scratch("mutate-hangs-note").join("pids");
-    let root = hung_toy("hangs", &note);
+    let (root, hung) = hung_toy("hangs");
 
     let answer = common::batten()
         .args(["mutate", "sweep"])
@@ -397,12 +396,11 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
     // child alone left the test binary and its own child alive under init; two
     // were found 35 and 56 minutes after their runs, on the machine running
     // this suite. Both pids the hung case recorded must be gone.
-    let survivors = survivors_of(&note);
-    assert!(
-        survivors.is_empty(),
-        "the sweep ended its hung suite but left {survivors:?} running: the bound must end \
-         the suite's whole process group, not its direct child"
-    );
+    // WAITED ON AS AN EVENT (CLOUD-2789): the toy and its child each hold the
+    // `alive` fifo, so its end of file is both of them gone. One the bound
+    // left running holds it open, and this case hangs on it: the bound must
+    // end the suite's whole process group, not its direct child.
+    hung.ended();
     // AND WHAT IT REPORTS, WHICH THIS CASE USED TO DECLINE TO ASSERT
     // (CLOUD-1860). The declining comment read: *"what a killed suite reports is
     // the sweep's business and is covered by the decision table above."* It was
@@ -719,32 +717,26 @@ fn a_mutation_row_applies_without_spawning() {
 fn a_signalled_sweep_takes_its_suite_with_it() {
     use std::os::unix::process::ExitStatusExt as _;
 
-    let note = common::scratch("mutate-signalled-note").join("pids");
-    let root = hung_toy("signalled", &note);
+    let (root, hung) = hung_toy("signalled");
     let mut sweep = common::batten()
         .args(["mutate", "sweep"])
         .current_dir(&root)
         .env("MUTANT_GATES", "toy")
         .env("MUTANT_TASKS", "mise.toml")
-        // Far past PATIENCE, so the bound cannot be what ends the suite here.
+        // Far past any run here, so the bound cannot be what ends the suite.
         .env("BATTEN_MUTATE_SUITE_TIMEOUT", "3000")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn batten mutate");
-    await_note(&note, &mut sweep);
+    hung.started();
 
     kill(sweep.id(), "TERM");
-    // Survivors are collected BEFORE anything is asserted, so a red run kills
-    // what it found rather than leaving it for the next one to trip over.
-    let status = await_exit(&mut sweep);
-    let survivors = survivors_of(&note);
-    assert!(
-        survivors.is_empty(),
-        "the sweep was TERMed but left {survivors:?} running: it must forward what it is \
-         sent to the suite's group"
-    );
-    let status = status.expect("the sweep must exit on its signal rather than wait out its suite");
+    // THE SWEEP'S EXIT AND ITS SUITE'S END ARE BOTH EVENTS (CLOUD-2789): a
+    // sweep that waits out its suite, or leaves the suite's group running
+    // rather than forwarding what it is sent, hangs this case.
+    let status = sweep.wait().expect("wait for the sweep");
+    hung.ended();
     assert_eq!(
         status.signal(),
         Some(15),
@@ -757,27 +749,26 @@ fn a_signalled_sweep_takes_its_suite_with_it() {
 /// A capped `mutant:changed` lost its mise while `mutant:rust` ran on under
 /// init, holding the schema mirror's lock. Here the sweep runs under a shell
 /// that outlives the exec (`; :`), the shell is `SIGKILL`ed once the hung suite
-/// has started, and within [`ORPHAN_WITHIN`] neither the sweep nor anything its
-/// suite started may still run. The lock is an `flock`, so it drops with them.
+/// has started, and then neither the sweep nor anything its suite started may
+/// still run. The lock is an `flock`, so it drops with them.
 ///
 /// Fails by: the parent watch never firing, so the sweep and its suite run on
 /// under init until the suite bound.
 #[cfg(target_os = "linux")]
 #[test]
 fn an_orphaned_sweep_ends_and_leaves_nothing_running() {
-    let note = common::scratch("mutate-orphaned-note").join("pids");
-    let root = hung_toy("orphaned", &note);
+    let (root, hung) = hung_toy("orphaned");
     let body = format!("{} mutate sweep; :", env!("CARGO_BIN_EXE_batten"));
     let mut shell = common::task_bash(&root, &body)
         .env("MUTANT_GATES", "toy")
         .env("MUTANT_TASKS", "mise.toml")
-        // Far past PATIENCE, so the bound cannot be what ends the suite here.
+        // Far past any run here, so the bound cannot be what ends the suite.
         .env("BATTEN_MUTATE_SUITE_TIMEOUT", "3000")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn the shell over batten mutate");
-    await_note(&note, &mut shell);
+    hung.started();
     let children = format!("/proc/{0}/task/{0}/children", shell.id());
     let sweep: u32 = fs::read_to_string(&children)
         .expect("the shell's children")
@@ -788,49 +779,38 @@ fn an_orphaned_sweep_ends_and_leaves_nothing_running() {
 
     kill(shell.id(), "KILL");
     let _ = shell.wait();
-    // THE BOUND IS AN INPUT, NOT AN ASSERTION (`wall_clock.rs`): the poll gives
-    // up at `ORPHAN_WITHIN`, and what is asserted is the outcome, gone or not.
-    let sweep_gone = await_gone_within(sweep, ORPHAN_WITHIN);
-    let survivors = survivors_of(&note);
-    if !sweep_gone {
-        kill(sweep, "KILL");
-    }
-    assert!(
-        sweep_gone && survivors.is_empty(),
-        "an orphaned sweep must end itself and its suite within {ORPHAN_WITHIN:?}: sweep \
-         gone {sweep_gone}, survivors {survivors:?}"
-    );
+    // BOTH ENDS ARE EVENTS (CLOUD-2789): the sweep, no child of this case, by
+    // its pidfd, and the suite by the `alive` fifo's end. A parent watch that
+    // never fires leaves the sweep and its suite running, and this case hangs.
+    await_gone(sweep);
+    hung.ended();
 }
 
-/// How soon an orphaned sweep and its suite must be gone.
-#[cfg(target_os = "linux")]
-const ORPHAN_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// How long a case waits for the hung toy to start: its cold build comes first.
-#[cfg(unix)]
-const BUILD_PATIENCE: std::time::Duration = std::time::Duration::from_secs(300);
-
-/// How long a case waits for a process to go or a sweep to exit. Either happens
-/// in milliseconds when the teardown works, so this bounds only a red run.
-#[cfg(unix)]
-const PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);
-
 /// A toy whose `over_the_limit_is_refused` case never returns, and leaves a
-/// process of its own: it spawns `sleep 3600`, writes its own pid and the
-/// sleep's into `note`, then sleeps an hour. `read` on a closed stdin would
-/// return, so the wait has to be one nothing external can satisfy.
+/// process of its own, with a [`Hung`] watching it. The case holds the `alive`
+/// fifo and hands it to the `sleep 3600` it spawns, writes its own pid and the
+/// sleep's into the `note` fifo, then sleeps an hour. `read` on a closed stdin
+/// would return, so the wait has to be one nothing external can satisfy.
 #[cfg(unix)]
-fn hung_toy(name: &str, note: &Path) -> PathBuf {
+fn hung_toy(name: &str) -> (PathBuf, Hung) {
+    let fifos = common::scratch(&format!("mutate-{name}-fifos"));
+    let (note_at, alive_at) = (fifos.join("pids"), fifos.join("alive"));
+    let hung = Hung::watch(&note_at, &alive_at);
     let root = toy(name);
     let mut gate = String::from(TOY_GATE);
     gate.push_str(CAUGHT);
     gate.push('\n');
     write_program(&root, "mise-tasks/toy.sh", &gate);
-    let note = note.display().to_string();
-    let hang = format!(
-        "let held = std::process::Command::new(\"sleep\").arg(\"3600\").spawn().expect(\"spawn \
-         the grandchild\");\n    std::fs::write({note:?}, format!(\"{{}} {{}}\", \
-         std::process::id(), held.id())).expect(\"write the note\");\n    \
+    let (note, alive) = (
+        note_at.display().to_string(),
+        alive_at.display().to_string(),
+    );
+    let body = format!(
+        "let alive = std::fs::OpenOptions::new().append(true).open({alive:?}).expect(\"hold \
+         the alive fifo\");\n    let held = std::process::Command::new(\"sh\").args([\"-c\", \
+         \"exec 3>>\\\"$0\\\"; exec sleep 3600\", {alive:?}]).spawn().expect(\"spawn the \
+         grandchild\");\n    std::fs::write({note:?}, format!(\"{{}} {{}}\", std::process::id(), \
+         held.id())).expect(\"write the note\");\n    let _held = alive;\n    \
          std::thread::sleep(std::time::Duration::from_secs(3600));"
     );
     write(
@@ -839,121 +819,91 @@ fn hung_toy(name: &str, note: &Path) -> PathBuf {
         &format!(
             "{}{}{}",
             runs("toy.sh"),
-            case("over_the_limit_is_refused", &hang),
+            case("over_the_limit_is_refused", &body),
             case("under_the_limit_passes", "assert!(gate(\"1\").is_some());"),
         ),
     );
     cargo_package(&root);
     track(&root);
-    root
+    (root, hung)
 }
 
-/// The pids a hung toy recorded — its test binary, then the process it spawned —
-/// that are still running once [`PATIENCE`] is spent. Each survivor is killed
-/// before this returns, so a red case never leaks what it found.
+/// What a hung toy says while it runs, each read off a fifo so a case waits
+/// on it as an event and never on a clock (CLOUD-2789): the two pids its case
+/// records once it has started, and the end of everything it started, which
+/// is the `alive` fifo's end of file once its last holder is gone.
 #[cfg(unix)]
-fn survivors_of(note: &Path) -> Vec<u32> {
-    let text = fs::read_to_string(note).expect("the hung case recorded its pids before it hung");
-    let pids: Vec<u32> = text
-        .split_whitespace()
-        .map(|pid| pid.parse().expect("a recorded pid"))
-        .collect();
-    assert_eq!(pids.len(), 2, "the test binary and its child: {text}");
-    let survivors: Vec<u32> = pids.into_iter().filter(|pid| !await_gone(*pid)).collect();
-    for pid in &survivors {
-        kill(*pid, "KILL");
-    }
-    survivors
+struct Hung {
+    pids: std::sync::mpsc::Receiver<Vec<u32>>,
+    gone: std::sync::mpsc::Receiver<()>,
 }
 
-/// Whether `pid` has gone: no such process, or a zombie whose reaping is its new
-/// parent's business. A container's pid 1 need not reap, and a zombie runs
-/// nothing, so counting one as alive would redden a case for its host.
+#[cfg(unix)]
+impl Hung {
+    /// Make both fifos and start reading them, before the toy can run.
+    fn watch(note: &Path, alive: &Path) -> Self {
+        fifo(note);
+        fifo(alive);
+        let (named, pids) = std::sync::mpsc::channel();
+        let note = note.to_path_buf();
+        std::thread::spawn(move || {
+            let text = fs::read_to_string(&note).expect("read the note fifo");
+            let _ = named.send(
+                text.split_whitespace()
+                    .map(|pid| pid.parse().expect("a recorded pid"))
+                    .collect(),
+            );
+        });
+        let (ended, gone) = std::sync::mpsc::channel();
+        let alive = alive.to_path_buf();
+        std::thread::spawn(move || {
+            let _ = fs::read_to_string(&alive);
+            let _ = ended.send(());
+        });
+        Self { pids, gone }
+    }
+
+    /// Block until the hung case has started, answering the two pids it
+    /// recorded: its test binary, then the process it spawned.
+    fn started(&self) -> Vec<u32> {
+        let pids = self.pids.recv().expect("the note's reader answers");
+        assert_eq!(pids.len(), 2, "the test binary and its child: {pids:?}");
+        pids
+    }
+
+    /// Block until everything the hung case started is gone.
+    fn ended(&self) {
+        self.gone.recv().expect("the alive fifo's reader answers");
+    }
+}
+
+/// A fifo at `path`.
 #[cfg(unix)]
 #[expect(
     clippy::disallowed_types,
-    reason = "stays, and test-only: `ps` is the POSIX way to ask for a process's state, and this suite runs on macOS where `/proc` is not an answer"
+    reason = "stays, and test-only: `mkfifo` is the POSIX way to make a fifo, and this suite runs on macOS, where rustix makes none"
 )]
-fn gone(pid: u32) -> bool {
-    let answer = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .streamed_output()
-        .expect("run ps");
-    let state = String::from_utf8_lossy(&answer.stdout);
-    let state = state.trim();
-    state.is_empty() || state.starts_with('Z')
+fn fifo(path: &Path) {
+    let made = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success(), "mkfifo {}", path.display());
 }
 
-/// Block until `pid` is [`gone`], reporting whether it got there in time.
-#[cfg(unix)]
-fn await_gone(pid: u32) -> bool {
-    await_gone_within(pid, PATIENCE)
-}
-
-/// Block until `pid` is [`gone`] or `bound` passes, reporting which.
-#[cfg(unix)]
-fn await_gone_within(pid: u32, bound: std::time::Duration) -> bool {
-    let deadline = std::time::Instant::now() + bound;
-    while std::time::Instant::now() < deadline {
-        if gone(pid) {
-            return true;
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is `gone`, bounded by `PATIENCE` \
-                      — running out is what this reports as `false` (CLOUD-1177)"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    false
-}
-
-/// Block until a hung case's `note` holds its two pids, failing if the sweep
-/// exits first or [`BUILD_PATIENCE`] runs out — and killing the sweep either way.
-#[cfg(unix)]
-fn await_note(note: &Path, sweep: &mut std::process::Child) {
-    let deadline = std::time::Instant::now() + BUILD_PATIENCE;
-    while std::time::Instant::now() < deadline {
-        if fs::read_to_string(note).is_ok_and(|text| text.split_whitespace().count() == 2) {
-            return;
-        }
-        if let Ok(Some(status)) = sweep.try_wait() {
-            panic!("the sweep exited {status:?} before its hung case started");
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the note holding two pids, \
-                      bounded by `BUILD_PATIENCE` — past that this kills the sweep and panics \
-                      (CLOUD-1177)"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    kill(sweep.id(), "KILL");
-    panic!(
-        "the hung case never recorded its pids in {}",
-        note.display()
-    );
-}
-
-/// Block until `child` exits, or kill it and answer `None` once [`PATIENCE`]
-/// runs out — never panicking, so the caller still collects what it left behind.
-#[cfg(unix)]
-fn await_exit(child: &mut std::process::Child) -> Option<std::process::ExitStatus> {
-    let deadline = std::time::Instant::now() + PATIENCE;
-    while std::time::Instant::now() < deadline {
-        if let Some(status) = child.try_wait().expect("poll the sweep") {
-            return Some(status);
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the sweep exiting, bounded by \
-                      `PATIENCE` — past that this kills it and answers `None` (CLOUD-1177)"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    kill(child.id(), "KILL");
-    let _ = child.wait();
-    None
+/// Block until `pid`, no child of this case, has exited: its pidfd reads ready
+/// then, a zombie included. One already reaped has no pidfd and is gone.
+#[cfg(target_os = "linux")]
+fn await_gone(pid: u32) {
+    let pid = rustix::process::Pid::from_raw(i32::try_from(pid).expect("a pid")).expect("a pid");
+    let Ok(pidfd) = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()) else {
+        return;
+    };
+    let mut fds = [rustix::event::PollFd::new(
+        &pidfd,
+        rustix::event::PollFlags::IN,
+    )];
+    while let Err(rustix::io::Errno::INTR) = rustix::event::poll(&mut fds, None) {}
 }
 
 /// Send `signal` to `pid`, by name, best effort: the pid may already be gone.
