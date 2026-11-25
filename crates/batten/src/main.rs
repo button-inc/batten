@@ -33,6 +33,11 @@ fn main() -> ExitCode {
     if let Some(code) = batten::rustc_wrapped(std::env::args_os()) {
         return code;
     }
+    // AS A LOCK-WAIT HELPER (CLOUD-2789): a waiter off Linux re-enters this
+    // binary to block on a lock it can end; the argv is the mode and the path.
+    if let Some(code) = batten::lock_wait::helped(std::env::args_os()) {
+        return code;
+    }
     // A SCHEMA SWEEP OVER A LISTING FILE (CLOUD-2253), and AS NEXTEST'S
     // `run-wrapper` while the sweep records reach: everything after the marker
     // is the listing, or the case's argv.

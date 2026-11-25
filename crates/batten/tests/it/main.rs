@@ -285,6 +285,7 @@ mod lint_rego;
 mod locator_index;
 mod lock_complete;
 mod lock_installable;
+mod lock_wait_helper;
 mod locked_scopes;
 mod macos_link;
 #[cfg(unix)]
