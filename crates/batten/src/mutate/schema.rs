@@ -3527,6 +3527,14 @@ fn verdict_of_run(
         .map(|(case, _)| case.clone())
         .collect();
     if matches!(outcome, super::Outcome::TimedOut) {
+        // NO REPORT IS WRITTEN under the bound, so the cases the run's own
+        // output reports passing are its passes ([`settled`] re-runs only the
+        // rest).
+        let passed = if report.is_some() {
+            passed
+        } else {
+            passed_in(said, cases)
+        };
         if let Some(killer) = failed_in(said, cases) {
             return (Verdict::Caught, Some(killer), passed);
         }
@@ -3553,9 +3561,24 @@ fn verdict_of_run(
 /// line `FAIL [ <duration>] <binary> <case>` ([`super::case_of`]). A case
 /// outside `cases` is never one: the run selected only those.
 fn failed_in(said: &str, cases: &BTreeSet<Case>) -> Option<Case> {
-    said.lines().find_map(|line| {
+    reported_in(said, "FAIL", cases).next()
+}
+
+/// Every one of `cases` a run's output reports `PASS`, in the order it says
+/// them, from the same status line as [`failed_in`].
+fn passed_in(said: &str, cases: &BTreeSet<Case>) -> Vec<Case> {
+    reported_in(said, "PASS", cases).collect()
+}
+
+/// The `cases` a run's output reports with status `status`, one per line.
+fn reported_in<'a>(
+    said: &'a str,
+    status: &'a str,
+    cases: &'a BTreeSet<Case>,
+) -> impl Iterator<Item = Case> + 'a {
+    said.lines().filter_map(move |line| {
         let words: Vec<&str> = line.split_whitespace().collect();
-        if words.first() != Some(&"FAIL") {
+        if words.first() != Some(&status) {
             return None;
         }
         let [binary, name] = super::case_of(&words)[..] else {
@@ -3564,6 +3587,58 @@ fn failed_in(said: &str, cases: &BTreeSet<Case>) -> Option<Case> {
         let case: Case = (name.to_owned(), binary.to_owned());
         cases.contains(&case).then_some(case)
     })
+}
+
+/// What one judging run answers: its verdict, the case that killed the
+/// mutant, and every case that passed.
+type RunAnswer = (Verdict, Option<Case>, Vec<Case>);
+
+/// One batch's verdict, with a run the bound ended over more than one case
+/// settled case by case (CLOUD-2911).
+///
+/// A KILL IS NEVER A TIMEOUT FOR WANT OF ITS TURN: the bound ends a run of
+/// several cases with no report, so a case that would have killed the mutant
+/// may never have started, behind slow or unmeasured siblings that sorted
+/// first ([`phases`] costs an unmeasured case at [`UNMEASURED_SECONDS`]). Each
+/// case the run did not report passing is run alone, cheapest first, stopped
+/// at the first kill. Only a case that times out ALONE, under its own bound,
+/// is a hang: if every case passes alone, the run timed out on the cases'
+/// sum and the mutant survived them.
+///
+/// # Errors
+///
+/// A run could not be started.
+fn settled<R>(
+    batch: &BTreeSet<Case>,
+    seconds: &std::collections::BTreeMap<Case, f64>,
+    run: &mut R,
+) -> anyhow::Result<RunAnswer>
+where
+    R: FnMut(&BTreeSet<Case>) -> anyhow::Result<RunAnswer>,
+{
+    let (verdict, killer, mut passed) = run(batch)?;
+    let mut open: Vec<&Case> = batch.iter().filter(|case| !passed.contains(case)).collect();
+    if verdict != Verdict::Timeout || batch.len() < 2 || open.is_empty() {
+        return Ok((verdict, killer, passed));
+    }
+    let cost = |case: &Case| seconds.get(case).copied().unwrap_or(UNMEASURED_SECONDS);
+    open.sort_by(|a, b| cost(a).total_cmp(&cost(b)).then_with(|| a.cmp(b)));
+    let mut hung = false;
+    for case in open {
+        let (verdict, killer, alone) = run(&[case.clone()].into())?;
+        passed.extend(alone);
+        match verdict {
+            Verdict::Missed => {}
+            Verdict::Timeout => hung = true,
+            _ => return Ok((verdict, killer, passed)),
+        }
+    }
+    let verdict = if hung {
+        Verdict::Timeout
+    } else {
+        Verdict::Missed
+    };
+    Ok((verdict, None, passed))
 }
 
 /// Keep what an erring run of mutant `id` said under the sweep's `errors/`,
@@ -3643,36 +3718,72 @@ fn judge(
         .and_then(|key| hints.lock().ok()?.get(key).cloned())
         .unwrap_or_default();
     let (first, second) = phases(&open, &hinted, judging.seconds);
-    for phase in batches(&first).iter().chain(&batches(&second)) {
-        match run_cases(judging, id, mutant, phase) {
-            Ok((verdict, killed_by, passed)) => {
-                // EVERY CASE'S OUTCOME, AS IT LANDS: a run killed mid-sweep
-                // keeps each pass and kill it already proved.
-                for case in &passed {
-                    record(case, PASSED);
-                }
-                if verdict == Verdict::Missed {
-                    continue;
-                }
-                if let Some(case) = journaled_kill(verdict, killed_by.as_ref()) {
-                    record(case, "caught");
-                }
-                if let (Some(key), Some(case)) = (sibling, killed_by)
-                    && let Ok(mut hints) = hints.lock()
-                {
-                    hints.entry(key).or_default().insert(case);
-                }
-                return Judged::ran(verdict, skipped);
+    let runs: Vec<BTreeSet<Case>> = batches(&first)
+        .into_iter()
+        .chain(batches(&second))
+        .collect();
+    let mut run = |cases: &BTreeSet<Case>| run_cases(judging, id, mutant, cases);
+    // EVERY CASE'S OUTCOME, AS IT LANDS: a run killed mid-sweep keeps each
+    // pass and kill it already proved.
+    let decided = decide(&runs, judging.seconds, &mut run, |case| {
+        record(case, PASSED);
+    });
+    match decided {
+        Ok((verdict, killed_by)) => {
+            if let Some(case) = journaled_kill(verdict, killed_by.as_ref()) {
+                record(case, "caught");
             }
-            Err(why) => {
-                // A RUN THAT COULD NOT START SAYS WHY, beside the runs that
-                // failed: on #1276 six such errors left no log at all.
-                keep_error(judging, id, &format!("{why:#}\n"));
-                return Judged::ran(Verdict::Error, skipped);
+            if let (Some(key), Some(case)) = (sibling, killed_by)
+                && let Ok(mut hints) = hints.lock()
+            {
+                hints.entry(key).or_default().insert(case);
             }
+            Judged::ran(verdict, skipped)
+        }
+        Err(why) => {
+            // A RUN THAT COULD NOT START SAYS WHY, beside the runs that
+            // failed: on #1276 six such errors left no log at all.
+            keep_error(judging, id, &format!("{why:#}\n"));
+            Judged::ran(Verdict::Error, skipped)
         }
     }
-    Judged::ran(Verdict::Missed, skipped)
+}
+
+/// A mutant's verdict from its batch `runs` in order, each [`settled`]: the
+/// first that decides anything but a survivor or a hang decides, a hang only
+/// when no later run kills (CLOUD-2911), and a survivor of every run is
+/// missed. Each case a run passed is handed to `on_pass` as it lands.
+///
+/// # Errors
+///
+/// A run could not be started.
+fn decide<R>(
+    runs: &[BTreeSet<Case>],
+    seconds: &std::collections::BTreeMap<Case, f64>,
+    run: &mut R,
+    mut on_pass: impl FnMut(&Case),
+) -> anyhow::Result<(Verdict, Option<Case>)>
+where
+    R: FnMut(&BTreeSet<Case>) -> anyhow::Result<RunAnswer>,
+{
+    let mut hung = false;
+    for batch in runs {
+        let (verdict, killed_by, passes) = settled(batch, seconds, run)?;
+        for case in &passes {
+            on_pass(case);
+        }
+        match verdict {
+            Verdict::Missed => {}
+            Verdict::Timeout => hung = true,
+            _ => return Ok((verdict, killed_by)),
+        }
+    }
+    let verdict = if hung {
+        Verdict::Timeout
+    } else {
+        Verdict::Missed
+    };
+    Ok((verdict, None))
 }
 
 /// What [`judge`] decided of one mutant.
@@ -14825,7 +14936,7 @@ pub fn repo() -> u8 {{ scratch() }}
                     FAIL [   0.600s] batten::it m::b\n        \
                     SLOW [> 60.000s] batten tests::a\n";
         let (verdict, killer, _) = verdict_of_run(Outcome::TimedOut, None, &cases, said);
-        assert_eq!((verdict, killer), (Verdict::Caught, Some(b)));
+        assert_eq!((verdict, killer), (Verdict::Caught, Some(b.clone())));
         let foreign = "        FAIL [   0.600s] batten tests::other\n";
         assert_eq!(
             verdict_of_run(Outcome::TimedOut, None, &cases, foreign),
@@ -14833,8 +14944,155 @@ pub fn repo() -> u8 {{ scratch() }}
         );
         let passed = "        PASS [   0.600s] batten::it m::b\n";
         assert_eq!(
-            verdict_of_run(Outcome::TimedOut, None, &cases, passed).0,
+            verdict_of_run(Outcome::TimedOut, None, &cases, passed),
+            (Verdict::Timeout, None, vec![b])
+        );
+    }
+
+    /// Every run a scripted judge was handed, in order.
+    type Asked = std::rc::Rc<std::cell::RefCell<Vec<BTreeSet<Case>>>>;
+
+    /// A scripted judge: each run's answer by the cases it was handed, and
+    /// every run it was handed, in order.
+    fn scripted(
+        answers: Vec<(BTreeSet<Case>, RunAnswer)>,
+    ) -> (
+        impl FnMut(&BTreeSet<Case>) -> anyhow::Result<RunAnswer>,
+        Asked,
+    ) {
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let log = std::rc::Rc::clone(&asked);
+        let run = move |cases: &BTreeSet<Case>| {
+            log.borrow_mut().push(cases.clone());
+            answers
+                .iter()
+                .find(|(given, _)| given == cases)
+                .map(|(_, answer)| answer.clone())
+                .ok_or_else(|| anyhow::anyhow!("unscripted run {cases:?}"))
+        };
+        (run, asked)
+    }
+
+    /// A slow passing case and a fast failing one, whose run the bound ended
+    /// before the fast one reported, is caught by the fast one run alone,
+    /// cheapest first and stopped there (CLOUD-2911, `engine.rs:281:53`).
+    ///
+    /// Fails by: a timed-out run of several cases read as a hang, so a mutant
+    /// a case kills is filed a timeout for the slow case that ran first; or
+    /// the re-runs not cheapest first, or not stopped at the kill.
+    #[test]
+    fn a_kill_behind_a_slow_sibling_is_caught_not_timed_out() {
+        let (slow, fast, mid) = (case("slow"), case("fast"), case("mid"));
+        let both: BTreeSet<Case> = [slow.clone(), fast.clone(), mid.clone()].into();
+        let seconds = [(slow.clone(), 112.0), (mid.clone(), 2.0)].into();
+        let (mut run, asked) = scripted(vec![
+            (both.clone(), (Verdict::Timeout, None, Vec::new())),
+            (
+                [fast.clone()].into(),
+                (Verdict::Caught, Some(fast.clone()), Vec::new()),
+            ),
+            (
+                [mid.clone()].into(),
+                (Verdict::Missed, None, vec![mid.clone()]),
+            ),
+            (
+                [slow.clone()].into(),
+                (Verdict::Missed, None, vec![slow.clone()]),
+            ),
+        ]);
+        let judged = settled(&both, &seconds, &mut run).expect("runs");
+        assert_eq!((judged.0, judged.1), (Verdict::Caught, Some(fast.clone())));
+        assert_eq!(*asked.borrow(), [both, [fast].into()]);
+    }
+
+    /// A mutant one case hangs ALONE stays a timeout, a case its run already
+    /// passed is never run again, and a run that timed out only on its cases'
+    /// sum — every case passing alone — is a survivor (CLOUD-2911).
+    ///
+    /// Fails by: a hang settled as a survivor; a credited pass re-run; or a
+    /// sum-only timeout kept as a hang.
+    #[test]
+    fn only_a_case_that_hangs_alone_is_a_timeout() {
+        let (hang, done, ok) = (case("hang"), case("done"), case("ok"));
+        let batch: BTreeSet<Case> = [hang.clone(), done.clone(), ok.clone()].into();
+        let seconds = std::collections::BTreeMap::new();
+        let (mut run, asked) = scripted(vec![
+            (batch.clone(), (Verdict::Timeout, None, vec![done.clone()])),
+            ([hang.clone()].into(), (Verdict::Timeout, None, Vec::new())),
+            (
+                [ok.clone()].into(),
+                (Verdict::Missed, None, vec![ok.clone()]),
+            ),
+        ]);
+        let (verdict, killer, passed) = settled(&batch, &seconds, &mut run).expect("runs");
+        assert_eq!((verdict, killer), (Verdict::Timeout, None));
+        assert_eq!(passed, [done.clone(), ok.clone()]);
+        assert_eq!(
+            *asked.borrow(),
+            [batch.clone(), [hang].into(), [ok.clone()].into()]
+        );
+        let summed: BTreeSet<Case> = [done.clone(), ok.clone()].into();
+        let (mut run, _) = scripted(vec![
+            (summed.clone(), (Verdict::Timeout, None, Vec::new())),
+            ([done.clone()].into(), (Verdict::Missed, None, vec![done])),
+            ([ok.clone()].into(), (Verdict::Missed, None, vec![ok])),
+        ]);
+        assert_eq!(
+            settled(&summed, &seconds, &mut run).expect("runs").0,
+            Verdict::Missed
+        );
+        let (mut run, asked) = scripted(vec![(
+            [case("lone")].into(),
+            (Verdict::Timeout, None, Vec::new()),
+        )]);
+        assert_eq!(
+            settled(&[case("lone")].into(), &seconds, &mut run)
+                .expect("runs")
+                .0,
             Verdict::Timeout
+        );
+        assert_eq!(asked.borrow().len(), 1, "a lone case's timeout is its own");
+    }
+
+    /// A hang in one batch decides only when no later batch kills: the runs
+    /// go on past it, a later kill outranks it, and every pass is handed on
+    /// as it lands (CLOUD-2911).
+    ///
+    /// Fails by: a timed-out batch ending the mutant's judging, so a kill in a
+    /// later batch is filed a timeout; or a hang with no kill filed a survivor.
+    #[test]
+    fn a_later_kill_outranks_an_earlier_hang() {
+        let (hang, ok, killer) = (case("hang"), case("ok"), case("killer"));
+        let runs: Vec<BTreeSet<Case>> = vec![
+            [hang.clone()].into(),
+            [ok.clone()].into(),
+            [killer.clone()].into(),
+        ];
+        let seconds = std::collections::BTreeMap::new();
+        let (mut run, _) = scripted(vec![
+            (runs[0].clone(), (Verdict::Timeout, None, Vec::new())),
+            (runs[1].clone(), (Verdict::Missed, None, vec![ok.clone()])),
+            (
+                runs[2].clone(),
+                (Verdict::Caught, Some(killer.clone()), Vec::new()),
+            ),
+        ]);
+        let mut passes = Vec::new();
+        let decided = decide(&runs, &seconds, &mut run, |case| passes.push(case.clone()));
+        assert_eq!(decided.expect("runs"), (Verdict::Caught, Some(killer)));
+        assert_eq!(passes, std::slice::from_ref(&ok));
+        let (mut run, _) = scripted(vec![
+            (runs[0].clone(), (Verdict::Timeout, None, Vec::new())),
+            (runs[1].clone(), (Verdict::Missed, None, vec![ok])),
+        ]);
+        assert_eq!(
+            decide(&runs[..2], &seconds, &mut run, |_| {}).expect("runs"),
+            (Verdict::Timeout, None)
+        );
+        let (mut run, _) = scripted(vec![(runs[1].clone(), (Verdict::Missed, None, Vec::new()))]);
+        assert_eq!(
+            decide(&runs[1..2], &seconds, &mut run, |_| {}).expect("runs"),
+            (Verdict::Missed, None)
         );
     }
 
