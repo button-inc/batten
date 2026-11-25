@@ -1912,7 +1912,7 @@ run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
 
 [tasks."mutant:changed"]
 #MUTANT-SUITE crates/batten/tests/it/mutate_schema.rs
-#MUTANT changed-base-overrides-caller|s@^env = { MUTANT_CHANGED_SINCE = .*@env = { MUTANT_CHANGED_SINCE = "origin/main" }@|mutant_changed_hands_a_callers_base_to_both_runners
+#MUTANT changed-base-overrides-caller|s@^env = { MISE_LOCKED_SCOPES = "project", MUTANT_CHANGED_SINCE = .*@env = { MISE_LOCKED_SCOPES = "project", MUTANT_CHANGED_SINCE = "origin/main" }@|mutant_changed_hands_a_callers_base_to_both_runners
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change is caught, and every declared Rego, Pkl or manifest gate it touched has a mutation its suite catches"
 # ON ADMISSION, AT LANDING (CLOUD-1746, the owner's 2026-10-16 ruling, with
 # local and CI parity). `hk.pkl`'s `mutant:changed` step runs it in `verify`; CI
@@ -4971,7 +4971,7 @@ run = [
 
 [tasks."verify:gated"]
 #MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
-#MUTANT engine-unnamed|s@^env = { BATTEN_BIN = "[^"]*" }$@@|the_gate_set_runs_the_engine_it_built_first
+#MUTANT engine-unnamed|s@^env = { MISE_LOCKED_SCOPES = "project", BATTEN_BIN = "[^"]*" }$@env = { MISE_LOCKED_SCOPES = "project" }@|the_gate_set_runs_the_engine_it_built_first
 description = "Every gate verify runs, and the receipt — invoked through `verify`, after the claim and linearity questions"
 # Split out of `[tasks.verify]` for CLOUD-407, when `verify` was a mapper that
 # flattened this task's code to 1. Nothing flattens it now (CLOUD-843): a gate
