@@ -1571,29 +1571,49 @@ fn credential_usable(value: &Secret, probe: &str) -> bool {
 /// consumer's config to write. Reporting the distinction is the only thing
 /// separating this from a mechanism that loads clean and decides nothing.
 pub(crate) fn credential_health() -> Credential {
+    credential_check(true)
+}
+
+/// [`credential_health`] without its could-not-look reports (#1276): `doctor
+/// egress` asks only whether a live credential would go direct, and its piped
+/// run prints nothing but its verdict line. The same decision, so the two
+/// never disagree about whether the fence is owed.
+pub(crate) fn credential_quiet() -> Credential {
+    credential_check(false)
+}
+
+/// The credential decision itself, saying its could-not-look reasons where
+/// `report` asks.
+fn credential_check(report: bool) -> Credential {
     let declaration = match credential_declaration() {
         Ok(declaration) => declaration,
         // No declared table is could-not-look, not health. Reading it as healthy
         // would authorise stripping the host's wiring on a consumer that never
         // said how to check.
         Err(why) => {
-            crate::config::report(&Verdict::NoProbe(why).why());
+            if report {
+                crate::config::report(&Verdict::NoProbe(why).why());
+            }
             return Credential::Unusable;
         }
     };
     let Some(probe) = declaration.probe_url.as_deref() else {
-        crate::config::report(
-            &Verdict::NoProbe("no `[credential] probe_url` is declared".to_owned()).why(),
-        );
+        if report {
+            crate::config::report(
+                &Verdict::NoProbe("no `[credential] probe_url` is declared".to_owned()).why(),
+            );
+        }
         return Credential::Unusable;
     };
     if declaration.names.is_empty() {
-        crate::config::report(
-            &Verdict::NoProbe(
-                "`[credential] names` is empty, so there is no variable to look in".to_owned(),
-            )
-            .why(),
-        );
+        if report {
+            crate::config::report(
+                &Verdict::NoProbe(
+                    "`[credential] names` is empty, so there is no variable to look in".to_owned(),
+                )
+                .why(),
+            );
+        }
         return Credential::Unusable;
     }
     if declaration
