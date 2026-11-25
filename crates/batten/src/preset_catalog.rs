@@ -962,9 +962,14 @@ than its producer, which writes whole or removes, and reads the same way.",
     // grants at `permission-request` and `permission-denied` as well as at
     // pre-tool, in every mode but plan (71a7be4b0). The source changed under
     // 0.0.4, which `every_manifest_matches_its_recorded_digest` refused.
+    // VERSION 1.0.0, a major bump (refuses what it admitted): the read grant
+    // delegates to the engine's read-only library (CLOUD-2840), which refuses a
+    // live assignment (`PATH=./bin ls`), a program spelled with a path outside
+    // the system directories, an assigning reader onto a sensitive name, and a
+    // gawk directive, all of which 0.1.0 granted.
     Manifest {
         name: "claude-code-cloud",
-        version: semver::Version::new(0, 1, 0),
+        version: semver::Version::new(1, 0, 0),
         suggested: true,
         install: None,
         modules: &[
