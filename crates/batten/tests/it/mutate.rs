@@ -1591,7 +1591,9 @@ fn the_copy_is_a_repository_so_a_suite_that_resolves_its_own_root_answers_about_
 
 /// The tier [`a_suite_reading_the_index_judges_the_mutant`] runs: the gate's
 /// STAGED bytes, `git show :path`, as a gate judging the committed rule reads
-/// them, never the checkout's.
+/// them, never the checkout's. Gated as its one reader is: off unix it is
+/// dead, which `-D warnings` refuses on the cross targets.
+#[cfg(unix)]
 const INDEX_GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
     std::process::Command::new("bash")
         .args(["-c", "git show :mise-tasks/toy.sh | bash -s -- \"$0\"", input])
