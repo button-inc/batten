@@ -11746,6 +11746,145 @@ mod tests {
         assert_eq!(item[&plain], held[&plain], "and no other");
     }
 
+    /// The first item of `source`, parsed as the schema parses a file.
+    fn first_item(source: &str) -> ast::Item {
+        batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+            .tree()
+            .syntax()
+            .descendants()
+            .find_map(ast::Item::cast)
+            .expect("an item")
+    }
+
+    /// CLOUD-2789: each visibility spelling keys its item where it is
+    /// visible: none and `pub(self)` at its module, every restricted `pub(..)`
+    /// at its package, `pub` workspace-wide.
+    ///
+    /// Fails by: `pub(self)` read as a package visibility, or a restricted
+    /// form read as private, so a case naming it from a sibling module holds.
+    #[test]
+    fn each_visibility_spelling_keys_its_item_where_it_is_visible() {
+        for (source, visible) in [
+            ("fn a() {}", Visible::Module),
+            ("pub(self) fn a() {}", Visible::Module),
+            ("pub ( self ) fn a() {}", Visible::Module),
+            ("pub(crate) fn a() {}", Visible::Package),
+            ("pub(super) fn a() {}", Visible::Package),
+            ("pub(in crate::m) fn a() {}", Visible::Package),
+            ("pub fn a() {}", Visible::Workspace),
+        ] {
+            assert_eq!(visibility(&first_item(source)), visible, "{source}");
+        }
+    }
+
+    /// CLOUD-2789: a private item of a module that `include!`s a file is keyed
+    /// at its package, since the included text names it from a module its
+    /// path does not say; the same item of a module that includes nothing is
+    /// keyed at its module.
+    ///
+    /// Fails by: the widened set ignored, so a case in the included file never
+    /// sees the private item it names.
+    #[test]
+    fn a_private_item_of_an_including_module_is_keyed_at_its_package() {
+        let place = FileScope::of("crates/p/src/m.rs");
+        let keys = |source: &str| {
+            let root = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+                .tree()
+                .syntax()
+                .clone();
+            let widened = widened_modules(&root, &place);
+            let helper = root
+                .descendants()
+                .filter_map(ast::Item::cast)
+                .find(|item| matches!(item, ast::Item::Fn(_)))
+                .expect("fn helper");
+            definitions(&helper, &place, &widened)
+        };
+        assert_eq!(
+            keys("include!(\"x.rs\");\nfn helper() {}\n"),
+            [format!("helper{DEFINED_IN}crates/p")]
+        );
+        assert_eq!(
+            keys("fn helper() {}\n"),
+            [format!("helper{DEFINED_IN}crates/p{DEFINED_IN}src::m")]
+        );
+    }
+
+    /// CLOUD-2789: a file directly in `tests/`, `examples/` or `benches/` is a
+    /// crate root, scoped at that directory: the parent of the scope of a
+    /// `common/mod.rs` beside it, as a `src/` file's own module is its stem.
+    ///
+    /// Fails by: such a root scoped under its own stem, a sibling of
+    /// `common`'s scope rather than its parent.
+    #[test]
+    fn a_test_crate_root_is_scoped_at_its_directory() {
+        for dir in ["tests", "examples", "benches"] {
+            let root = FileScope::of(&format!("crates/p/{dir}/it.rs"));
+            let common = FileScope::of(&format!("crates/p/{dir}/common/mod.rs"));
+            assert_eq!(root.module_at(None), dir);
+            assert_eq!(common.module_at(None), format!("{dir}::common"));
+        }
+        assert_eq!(FileScope::of("crates/p/src/m.rs").module_at(None), "src::m");
+    }
+
+    /// CLOUD-2789: a name in a string or in a macro's token tree is in an
+    /// associated position, since neither is parsed into paths and either may
+    /// name a method; a name a `let` binds is not.
+    ///
+    /// Fails by: only a string inside a token tree counted, so a method
+    /// named in `m!(x.here())` or a format capture outside one is missed.
+    #[test]
+    fn a_string_or_a_token_tree_is_an_associated_position() {
+        let token = |source: &str, hit: &dyn Fn(&ra_ap_syntax::SyntaxToken) -> bool| {
+            batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+                .tree()
+                .syntax()
+                .descendants_with_tokens()
+                .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+                .find(|t| hit(t))
+                .expect("the token")
+        };
+        let named = |t: &ra_ap_syntax::SyntaxToken| t.text() == "here";
+        let string = |t: &ra_ap_syntax::SyntaxToken| t.kind() == SyntaxKind::STRING;
+        assert!(associated_position(&token(
+            "fn f() { m!(x.here()); }",
+            &named
+        )));
+        assert!(associated_position(&token(
+            "fn f() { let s = \"{here}\"; }",
+            &string
+        )));
+        assert!(!associated_position(&token(
+            "fn f() { let here = 1; }",
+            &named
+        )));
+    }
+
+    /// CLOUD-2789: a case directory's `over` file names the tree the case ran
+    /// over and is never read as a reach line, while a recorder file beside it
+    /// is.
+    ///
+    /// Fails by: `over` read as reach, so a tree spelled in digits reaches a
+    /// site the case never ran.
+    #[test]
+    fn a_case_over_file_is_never_read_as_reach() {
+        let dir = crate::scratch::scratch("schema-over-not-reach").join("k");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("case"), "k\tbin").unwrap();
+        std::fs::write(dir.join(DONE), "0").unwrap();
+        std::fs::write(dir.join(OVER), "7").unwrap();
+        std::fs::write(dir.join("probes"), "3\n").unwrap();
+        let identity = Identity {
+            probes: &[],
+            sites: &[],
+            mutant_fns: &std::collections::BTreeMap::new(),
+            file_fns: &std::collections::BTreeMap::new(),
+            classic: &BTreeSet::new(),
+        };
+        let reach = collect_dirs([dir], &identity).unwrap();
+        assert_eq!(reach.sites.keys().copied().collect::<Vec<_>>(), [3]);
+    }
+
     /// T1 (CLOUD-2904): a private item added to a module moves the cases whose
     /// functions name it from inside that module, and none naming its
     /// spelling from outside, where it is not visible. 1dc469d24 added a
