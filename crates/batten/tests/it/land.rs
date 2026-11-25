@@ -556,6 +556,17 @@ fn script(repo: &Path, name: &str, body: &str) -> String {
 /// `batten land verify` under a registered task, with the self-stall bound
 /// and a one-second beat (CLOUD-2369).
 fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (i32, String) {
+    land_verify_beating(repo, gate, task, beats, "1")
+}
+
+/// [`land_verify_supervised`] with the lease's beat set to `heartbeat` seconds.
+fn land_verify_beating(
+    repo: &Path,
+    gate: &str,
+    task: &str,
+    beats: &str,
+    heartbeat: &str,
+) -> (i32, String) {
     let registered = batten()
         .args(["task", "register", "land", task, "verify"])
         .current_dir(repo)
@@ -571,7 +582,7 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
         .env("LAND_VERIFY", gate)
         .env("BATTEN_TASK_PID", task)
         .env("LAND_SELF_STALL_BEATS", beats)
-        .env("LAND_LOCK_HEARTBEAT", "1")
+        .env("LAND_LOCK_HEARTBEAT", heartbeat)
         .current_dir(repo)
         .streamed_output()
         .expect("run batten land verify");
@@ -661,7 +672,35 @@ fn a_verify_that_never_reports_is_never_stalled() {
 /// rather than a refusal of the tree, or the cancel not reclaiming the gate.
 #[test]
 fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
-    let repo = Fixture::at(scratch("land-verify-red").join("repo"))
+    known_red_gate_stops("land-verify-red", "424245", "600", "1");
+}
+
+/// THE RED READER IS NOT THE STALL BOUND (CLOUD-2253 C12): `0` beats switches
+/// off the stall and nothing else, so a known-red gate still stops at once.
+///
+/// Fails by: `LAND_SELF_STALL_BEATS=0` dropping the red reader with the stall,
+/// so the gate runs its wedge out and passes.
+#[test]
+fn a_zero_stall_bound_still_reads_the_red_slot() {
+    known_red_gate_stops("land-verify-red-unbounded", "424246", "0", "1");
+}
+
+/// THE RED SLOT IS READ ON ITS OWN CADENCE, NOT THE LEASE'S BEAT (CLOUD-2253
+/// C12). Under a thirty-second beat the arm's first reading precedes the red
+/// step, and the wedge ends before a second beat would read it.
+///
+/// Fails by: red read once a beat, so the gate outlives its red step by up to
+/// a beat and here runs its wedge out and passes.
+#[test]
+fn a_red_step_is_read_well_inside_a_long_beat() {
+    known_red_gate_stops("land-verify-red-long-beat", "424247", "600", "30");
+}
+
+/// A gate whose first step is answered red from a failure receipt and which then
+/// wedges, run under `beats` and a `heartbeat`-second beat: the lap refuses the
+/// tree and reclaims the gate rather than outliving the red step.
+fn known_red_gate_stops(name: &str, task: &str, beats: &str, heartbeat: &str) {
+    let repo = Fixture::at(scratch(name).join("repo"))
         .config(
             "version = 1\n\n\
              [[rule]]\n\
@@ -713,7 +752,7 @@ fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
             marker.display()
         ),
     );
-    let (code, out) = land_verify_supervised(&repo, &gate, "424245", "600");
+    let (code, out) = land_verify_beating(&repo, &gate, task, beats, heartbeat);
     assert_eq!(code, 2, "a known-red tree is refused: {out}");
     assert!(!out.contains("verify stalled"), "{out}");
     let record = lap_record(&repo, &branch_of(&repo));

@@ -3247,6 +3247,13 @@ pub fn push(
 ) -> Result<Outcome> {
     let advertisement = advertise(remote, Service::ReceivePack)?;
     let old = advertisement.head_of(reference);
+    // THE REF ALREADY READS `head`, SO THE PUSH IS DONE (CLOUD-2253 A6). A swap
+    // of a value for itself loses nothing `admit` guards, and sending one built
+    // a pack and paid receive-pack's round trip to change nothing. A lap whose
+    // head did not move answers its push from the advertisement alone.
+    if old == head {
+        return Ok(Outcome::Applied);
+    }
     // THE CALLER'S ASSERTION, before anything is sent (CLOUD-2056). The CAS
     // below only proves the ref did not move DURING the swap; whether `old` is a
     // value this push may replace at all is the caller's to say, from what it
@@ -4124,6 +4131,30 @@ mod tests {
                 .contains(&format!("{ZERO} {head} refs/heads/topic")),
             "the first push creates the ref"
         );
+    }
+
+    /// A push of the value the remote already reads is answered from the
+    /// advertisement: no pack is built and no swap is sent, whatever `admit`
+    /// would say, because replacing `head` with `head` loses nothing (CLOUD-2253
+    /// A6). A different value still goes through `admit`.
+    ///
+    /// Fails by: a no-op push paying the receive-pack round trip, or a refusal
+    /// of a swap that would change nothing.
+    #[test]
+    fn a_push_of_the_advertised_value_sends_nothing() {
+        let dir = leased_clone("push-noop");
+        let head = crate::git::head_commit(&dir).expect("head");
+        let stand = standing(&[("refs/heads/topic", &head)], Vec::new());
+        let pushed = push(REMOTE, &dir, "refs/heads/topic", &head, &|_| false)
+            .expect("an unchanged ref is an outcome");
+        assert_eq!(pushed, Outcome::Applied);
+        assert_eq!(stand.borrow().asked.len(), 1, "discovery only");
+        let other = "1".repeat(40);
+        let stand = standing(&[("refs/heads/topic", &other)], Vec::new());
+        let refused = push(REMOTE, &dir, "refs/heads/topic", &head, &|_| false)
+            .expect("a refusal is an outcome");
+        assert!(matches!(refused, Outcome::Rejected { .. }), "{refused:?}");
+        assert_eq!(stand.borrow().asked.len(), 1, "discovery only");
     }
 
     /// Fails by: a `200` upload-pack answer read as a failed fetch.

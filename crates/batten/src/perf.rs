@@ -1034,17 +1034,19 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
     // built SECOND as already fresh whenever its sources are older than the
     // first arm's output. Measured: the head build finished in 0.45s and the
     // "head" binary was the base binary byte for byte. So switching arms drops
-    // `batten`'s own units first; the dependency closure CLOUD-1891 shares is
-    // left alone.
+    // the workspace's own units first; the dependency closure CLOUD-1891 shares
+    // is left alone.
+    //
+    // EVERY MEMBER, NOT `batten` ALONE (CLOUD-2253 C14). The same identity holds
+    // for each workspace crate `batten` links, so a head arm whose diff touched
+    // one of them linked the base arm's unit for it
+    // (`switching_arms_drops_every_members_units`).
     let marker = target_dir.map(|dir| dir.join(LAST_ARM));
     let mut cleaned = false;
     if let Some(marker) = &marker {
         let last = crate::fsio::read_to_string(marker).ok();
         if switches_arm(last.as_deref(), what) {
-            let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
-                .iter()
-                .map(|word| (*word).to_owned())
-                .collect();
+            let clean = clean_args(profile, dir);
             if !run(dir, Tool::Cargo, &clean, &env)? {
                 bail!(
                     "perf-pair: could not drop the other arm's `batten` units before the {what} build. No measurement."
@@ -1067,6 +1069,43 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
 
 /// The file in a shared target dir naming the arm last built into it.
 const LAST_ARM: &str = "perf-last-arm";
+
+/// The `cargo clean` that drops every workspace member's units under
+/// `profile`, for the arm about to be built in `dir` (CLOUD-2253 C14).
+///
+/// THE MEMBERS ARE THE ARM'S OWN, read from its `Cargo.lock`'s path-sourced
+/// entries, so a crate the other arm lacks is still named and every name
+/// resolves in the workspace cargo is asked about. `batten` is named whatever
+/// the lock says, so a tree whose lock will not read cleans no less than
+/// before. Confined by `--manifest-path`, for [`build_args`]'s reason.
+fn clean_args(profile: &str, dir: &Path) -> Vec<String> {
+    let lock = crate::fsio::read_to_string(dir.join("Cargo.lock")).unwrap_or_default();
+    let mut members = crate::release_state::workspace_packages(&lock);
+    if !members.iter().any(|member| member == "batten") {
+        members.push(String::from("batten"));
+    }
+    let mut args = vec![String::from("clean")];
+    for member in members {
+        args.push(String::from("-p"));
+        args.push(member);
+    }
+    args.extend([
+        String::from("--profile"),
+        profile.to_owned(),
+        String::from("--manifest-path"),
+        dir.join("Cargo.toml").to_string_lossy().into_owned(),
+    ]);
+    // THE PROFILE THE BUILD DEFINES, DEFINED FOR THE CLEAN TOO: an arm that
+    // predates `[profile.perf-arm]` knows it only from these settings, and cargo
+    // refuses to clean a profile it cannot name.
+    if profile == PAIR_PROFILE {
+        for setting in PAIR_PROFILE_CONFIG {
+            args.push(String::from("--config"));
+            args.push(setting.to_owned());
+        }
+    }
+    args
+}
 
 /// Whether building `what` follows a build of the OTHER arm (or of nothing
 /// recorded), so the shared `batten` units must be dropped first.
@@ -3882,6 +3921,125 @@ mod tests {
             "nothing recorded is not trusted"
         );
         assert!(!switches_arm(Some("head"), "head"));
+    }
+
+    /// A two-member workspace at `dir`: a `batten` binary printing `value`
+    /// through a `facts` library member, the shape of `batten` over its
+    /// workspace crates.
+    fn two_member_tree(dir: &Path, value: &str) {
+        let write = |path: &str, text: &str| {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nresolver = \"2\"\nmembers = [\"crates/*\"]\n\n\
+             [profile.perf-arm]\ninherits = \"release\"\n",
+        );
+        write(
+            "crates/batten/Cargo.toml",
+            "[package]\nname = \"batten\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\nfacts = { path = \"../facts\" }\n",
+        );
+        write(
+            "crates/batten/src/main.rs",
+            "fn main() { println!(\"{}\", facts::VALUE); }\n",
+        );
+        write(
+            "crates/facts/Cargo.toml",
+            "[package]\nname = \"facts\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        );
+        write(
+            "crates/facts/src/lib.rs",
+            &format!("pub const VALUE: &str = \"{value}\";\n"),
+        );
+        // COMMITTED, as a real arm's is: the members are read from it.
+        write(
+            "Cargo.lock",
+            "version = 4\n\n[[package]]\nname = \"batten\"\nversion = \"0.0.0\"\n\
+             dependencies = [\n \"facts\",\n]\n\n[[package]]\nname = \"facts\"\n\
+             version = \"0.0.0\"\n",
+        );
+    }
+
+    /// The clean names every member the arm's lock carries, `batten` even when
+    /// the lock will not read, and is confined to the arm's own manifest.
+    ///
+    /// Fails by: a member dropped, `batten` dropped from an unreadable lock, or
+    /// a clean that walks up into an enclosing workspace.
+    #[test]
+    fn the_clean_names_every_member_of_the_arm() {
+        let root = crate::scratch::scratch("perf-clean-args");
+        two_member_tree(&root, "x");
+        let args = clean_args(PAIR_PROFILE, &root);
+        let manifest = root.join("Cargo.toml").to_string_lossy().into_owned();
+        assert_eq!(
+            args[..9],
+            [
+                "clean",
+                "-p",
+                "batten",
+                "-p",
+                "facts",
+                "--profile",
+                PAIR_PROFILE,
+                "--manifest-path",
+                manifest.as_str()
+            ]
+        );
+        assert_eq!(
+            args.len(),
+            9 + 2 * PAIR_PROFILE_CONFIG.len(),
+            "the pair profile is defined for the clean as for the build"
+        );
+        let bare = crate::scratch::scratch("perf-clean-args-bare");
+        let args = clean_args(PAIR_PROFILE, &bare);
+        assert_eq!(&args[..3], ["clean", "-p", "batten"]);
+    }
+
+    /// THE SHARED DIR HOLDS ONE UNIT PER WORKSPACE MEMBER, NOT ONLY `batten`
+    /// (CLOUD-2253 C14). The head tree is written first, so its member sources
+    /// are older than the base arm's output; a switch that drops only
+    /// `batten`'s units then links the head binary against the base arm's
+    /// member, and the pair measures the base twice.
+    ///
+    /// Fails by: the switch cleaning `-p batten` alone, so the head binary
+    /// prints the base arm's value.
+    #[test]
+    fn switching_arms_drops_every_members_units() {
+        if !cfg!(unix) {
+            return;
+        }
+        let root = crate::scratch::scratch("perf-switch-members");
+        let (base, head, shared) = (root.join("base"), root.join("head"), root.join("shared"));
+        two_member_tree(&head, "head");
+        two_member_tree(&base, "base");
+        // OLDER THAN ANY OUTPUT THE BASE BUILD WRITES: back-dated rather than
+        // waited for, so the case asserts the reuse and never a clock.
+        for tree in [&head, &base] {
+            for member in ["crates/facts/src/lib.rs", "crates/batten/src/main.rs"] {
+                let file = std::fs::File::options()
+                    .write(true)
+                    .open(tree.join(member))
+                    .unwrap();
+                file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
+                    .unwrap();
+            }
+        }
+        build(&base, Some(&shared), "base", PAIR_PROFILE).unwrap();
+        assert!(build(&head, Some(&shared), "head", PAIR_PROFILE).unwrap());
+        let binary = shared.join(PAIR_PROFILE).join("batten");
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays: the case runs the binary the pair built, which is the fact under test"
+        )]
+        let printed = std::process::Command::new(&binary).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&printed.stdout).trim(),
+            "head",
+            "the head arm links its own members"
+        );
     }
 
     /// CLOUD-2107: identical arms are a broken build only when this run built the
