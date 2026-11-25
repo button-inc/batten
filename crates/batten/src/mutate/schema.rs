@@ -11963,6 +11963,113 @@ mod tests {
         assert_eq!(names, [vec![String::from("X")]]);
     }
 
+    /// A member of an impl or trait answers to its own name in an associated
+    /// position only; a free item answers to it freely.
+    ///
+    /// Fails by: `is_member` read as false, or `associated_names`' member arm
+    /// never taken (shard 0/8's survivors), so a member's name is free and a
+    /// local of that spelling moves every case naming it (CLOUD-2904).
+    #[test]
+    fn a_member_answers_to_its_name_in_an_associated_position_only() {
+        let source = "impl Host { fn here(&self) {} }\n\
+                      trait Kind { fn kind(&self); }\n\
+                      fn free() {}\n";
+        let functions: Vec<ast::Item> =
+            batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+                .tree()
+                .syntax()
+                .descendants()
+                .filter_map(ast::Item::cast)
+                .filter(|item| matches!(item, ast::Item::Fn(_)))
+                .collect();
+        let free: Vec<Vec<String>> = functions.iter().map(item_names).collect();
+        let associated: Vec<Vec<String>> = functions.iter().map(associated_names).collect();
+        let one = |name: &str| vec![String::from(name)];
+        assert_eq!(free, [vec![], vec![], one("free")]);
+        assert_eq!(associated, [one("here"), one("kind"), vec![]]);
+    }
+
+    /// `pub` is the workspace, a restricted `pub(..)` the package, and
+    /// `pub(self)` or no visibility the module.
+    ///
+    /// Fails by: the `words == "pub"` test inverted (shard 0/8's survivor), so
+    /// a `pub` item is keyed to its package and a `pub(crate)` one to the
+    /// workspace.
+    #[test]
+    fn a_visibility_bounds_where_its_item_is_seen() {
+        let seen: Vec<Visible> =
+            items_of("pub fn a() {}\npub(crate) fn b() {}\npub(self) fn c() {}\nfn d() {}\n")
+                .iter()
+                .map(visibility)
+                .collect();
+        assert_eq!(
+            seen,
+            [
+                Visible::Workspace,
+                Visible::Package,
+                Visible::Module,
+                Visible::Module
+            ]
+        );
+    }
+
+    /// A `#[path = "…"]` attribute names its file as written; any other
+    /// attribute names none.
+    ///
+    /// Fails by: `path_attr` answering a fixed path (shard 0/8's survivor),
+    /// so every `#[path]` module includes a file that is not its own.
+    #[test]
+    fn a_path_attribute_names_the_file_it_writes() {
+        let named: Vec<Option<String>> =
+            items_of("#[path = \"a/b.rs\"]\nmod x;\n#[cfg(test)]\nmod y;\n")
+                .iter()
+                .filter_map(|item| match item {
+                    ast::Item::Module(module) => ast::HasAttrs::attrs(module).next(),
+                    _ => None,
+                })
+                .map(|attr| path_attr(&attr))
+                .collect();
+        assert_eq!(named, [Some(String::from("a/b.rs")), None]);
+    }
+
+    /// A `#[path]` module inside an inline module names a file under that
+    /// module's directory as well as beside its file.
+    ///
+    /// Fails by: the inline-module guard inverted (shard 0/8's uncovered
+    /// mutant), so a nested `#[path]` file is matched under its module path
+    /// and its names are scoped to the wrong module.
+    #[test]
+    fn a_nested_path_module_includes_its_inline_modules_directory() {
+        let root = crate::scratch::scratch("schema-nested-path-module");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "mod outer {\n    #[path = \"p.rs\"]\n    mod inner;\n}\n",
+        )
+        .unwrap();
+        let files = BTreeSet::from([String::from("src/lib.rs")]);
+        assert_eq!(
+            included_sources(&root, &files),
+            BTreeSet::from([String::from("src/outer/p.rs"), String::from("src/p.rs")])
+        );
+    }
+
+    /// A type-like item a module or type path wants is taken; one no such
+    /// path names, or a function a type path happens to spell, is not.
+    ///
+    /// Fails by: the `a_type` disjointness inverted (shard 0/8's uncovered
+    /// mutant), so a type is taken by every path but its own.
+    #[test]
+    fn a_type_is_taken_by_a_type_path_naming_it() {
+        let items = items_of("struct Shape;\nfn shape() {}\n");
+        let (shape, function) = (Shared::of(&items[0]), Shared::of(&items[1]));
+        let none = BTreeSet::new();
+        let wanted = |name: &str| BTreeSet::from([String::from(name)]);
+        assert!(shape.answers(&none, &wanted("Shape")));
+        assert!(!shape.answers(&none, &wanted("Other")));
+        assert!(!function.answers(&none, &wanted("shape")));
+    }
+
     /// A traced case keys on the files it touched, an absent one and a
     /// directory's listing included, and on nothing else; an untraced case
     /// keys on every non-Rust file.
