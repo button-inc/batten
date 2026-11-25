@@ -2497,15 +2497,28 @@ mod tests {
     /// directory holds no copy, so the arithmetic under test is all the pass
     /// sees — without a deadline read off the clock, which `wall_clock`
     /// refuses in anything an assertion reads.
+    ///
+    /// DATED BEFORE THE BOX'S EARLIEST LIVE BUILD, NOT BEFORE NOW (CLOUD-2789).
+    /// The pass reads the real process table, and a unit read since the earliest
+    /// running `cargo` or `rustc` anywhere is live. Measured on 2e25bee46: a lap
+    /// killed an hour earlier orphaned builds that were still alive, so "newer"
+    /// (read an hour ago) was live and the case freed one unit where two were
+    /// needed. Dating both units before that start leaves the arithmetic all
+    /// the case reads, whatever else the box is running.
     #[test]
     fn a_collection_frees_toward_max_in_mebibytes() {
         let repo = scratch("toward-max");
         let profile = repo.join("target/debug");
+        let builds = super::live_since(&[]).unwrap_or_else(SystemTime::now);
+        let back = SystemTime::now()
+            .duration_since(builds)
+            .unwrap_or_default()
+            .as_secs();
         let older = unit(
             &profile,
             "older",
             "8888888888888888",
-            7200,
+            back + 7200,
             "libolder-8888888888888888.rlib",
             600 * 1024,
         );
@@ -2513,7 +2526,7 @@ mod tests {
             &profile,
             "newer",
             "9999999999999999",
-            3600,
+            back + 3600,
             "libnewer-9999999999999999.rlib",
             600 * 1024,
         );
