@@ -8052,6 +8052,15 @@ fn placed_cd(segment: &Segment, tokens: &[&str], current: &Path) -> Option<std::
     let [verb, target] = tokens else {
         return None;
     };
+    // A REDEFINED `cd` IS NOT THE BUILTIN (CLOUD-2840 review): a call to the
+    // function may go anywhere, or nowhere, so it places nothing.
+    if segment
+        .lines
+        .iter()
+        .any(|line| line.function_call && line.words.first().is_some_and(|first| first == verb))
+    {
+        return None;
+    }
     if !matches!(*verb, "cd" | "pushd")
         || !placeable(target)
         || target.starts_with('-')
@@ -10508,11 +10517,33 @@ fn reach_into(
             // The parse decides which calls those are, in order and unwrapped
             // (`SegmentLine::function_call`); a name alone hid a forced push
             // behind `git() { :; }` written after it.
-            if !line.function_call {
+            //
+            // BUT ITS ARGUMENTS MAY RUN (review finding 1): the body is handed
+            // them, so what it runs with them is reached (`forwarded`); and a
+            // function named like a wrapper still reaches the program after the
+            // wrapper's name, as it did before the parse decided calls —
+            // `sudo() { "$@"; }; sudo git push --force` pushes.
+            let mut argvs: Vec<Vec<&str>> = Vec::new();
+            if line.function_call {
+                let call = argv
+                    .iter()
+                    .position(|word| !is_env_assignment(program_token(word)));
+                if effective_program(argv).is_some_and(|index| Some(index) != call) {
+                    argvs.push(argv.to_vec());
+                }
+                argvs.extend(
+                    line.forwarded
+                        .iter()
+                        .map(|words| words.iter().map(String::as_str).collect()),
+                );
+            } else {
+                argvs.push(argv.to_vec());
+            }
+            for run in &argvs {
                 reached.extend(
-                    effective_program(argv)
+                    effective_program(run)
                         .map(|index| {
-                            reach_argv(argv, index, outer_mediated, via, false, depth, stage)
+                            reach_argv(run, index, outer_mediated, via, false, depth, stage)
                         })
                         .unwrap_or_default(),
                 );
@@ -10521,7 +10552,7 @@ fn reach_into(
             // program is inside that one word, where the wrapper look-through
             // steps past it as an option value.
             if let Some(depth) = depth.checked_sub(1) {
-                for script in split_strings(argv) {
+                for script in argvs.iter().flat_map(|run| split_strings(run)) {
                     reached.extend(reach_into(
                         &script,
                         outer_mediated,
@@ -10572,6 +10603,12 @@ fn reach_into(
 
 /// The values every `env -S`/`--split-string` in an argv's wrapper prefix
 /// carries: each is split by `env` into the command it runs.
+///
+/// **AS `env`'S OWN OPTION PARSER READS THEM** (CLOUD-2840 review M3): short
+/// options cluster (`-iS'…'`, `-vS '…'`), a long one may be any unambiguous
+/// prefix (`--sp`, `--s=…`), and `-u`/`-C` take the next word, which is
+/// neither the program nor the end of the options. Each spelling read as a
+/// plain flag was a forced push in the string reaching no module.
 fn split_strings(argv: &[&str]) -> Vec<String> {
     let mut found = Vec::new();
     let mut in_env = false;
@@ -10581,20 +10618,89 @@ fn split_strings(argv: &[&str]) -> Vec<String> {
             in_env = true;
             continue;
         }
-        if !in_env {
+        if !in_env || word == "-" {
             continue;
         }
-        if word == "-S" || word == "--split-string" {
-            found.extend(words.next().map(str::to_owned));
-        } else if let Some(value) = word.strip_prefix("--split-string=") {
-            found.push(value.to_owned());
-        } else if let Some(value) = word.strip_prefix("-S").filter(|value| !value.is_empty()) {
-            found.push(value.to_owned());
-        } else if !word.starts_with('-') && !is_env_assignment(word) {
+        if word == "--" {
+            in_env = false;
+        } else if let Some(long) = word.strip_prefix("--") {
+            let (name, attached) = long
+                .split_once('=')
+                .map_or((long, None), |(name, value)| (name, Some(value)));
+            let takes = env_long_option(name);
+            if takes == EnvOption::Value || takes == EnvOption::Split {
+                let value = attached
+                    .map(str::to_owned)
+                    .or_else(|| words.next().map(str::to_owned));
+                if takes == EnvOption::Split {
+                    found.extend(value);
+                }
+            }
+        } else if let Some(cluster) = word.strip_prefix('-') {
+            for (at, flag) in cluster.char_indices() {
+                if matches!(flag, 'S' | 'u' | 'C') {
+                    let rest = &cluster[at + flag.len_utf8()..];
+                    let value = if rest.is_empty() {
+                        words.next().map(str::to_owned)
+                    } else {
+                        Some(rest.to_owned())
+                    };
+                    if flag == 'S' {
+                        found.extend(value);
+                    }
+                    break;
+                }
+            }
+        } else if !is_env_assignment(word) {
             in_env = false;
         }
     }
     found
+}
+
+/// What one of `env`'s long options does with a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnvOption {
+    /// Takes none, or names no option `env` has (an ambiguous prefix).
+    Flag,
+    /// Takes one, attached or as the next word.
+    Value,
+    /// `--split-string`: takes one, which is the command `env` runs.
+    Split,
+}
+
+/// `env`'s long option `name` names, read as `getopt_long` reads it: the exact
+/// name, else the one option it is a prefix of (GNU coreutils `env`).
+fn env_long_option(name: &str) -> EnvOption {
+    const LONG: [(&str, EnvOption); 12] = [
+        ("ignore-environment", EnvOption::Flag),
+        ("null", EnvOption::Flag),
+        ("unset", EnvOption::Value),
+        ("chdir", EnvOption::Value),
+        ("split-string", EnvOption::Split),
+        ("block-signal", EnvOption::Flag),
+        ("default-signal", EnvOption::Flag),
+        ("ignore-signal", EnvOption::Flag),
+        ("list-signal-handling", EnvOption::Flag),
+        ("debug", EnvOption::Flag),
+        ("help", EnvOption::Flag),
+        ("version", EnvOption::Flag),
+    ];
+    if name.is_empty() {
+        return EnvOption::Flag;
+    }
+    if let Some((_, takes)) = LONG.iter().find(|(full, _)| *full == name) {
+        return *takes;
+    }
+    match LONG
+        .iter()
+        .filter(|(full, _)| full.starts_with(name))
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [(_, takes)] => *takes,
+        _ => EnvOption::Flag,
+    }
 }
 
 /// A text a construct runs that [`segments`] will not parse, read the crude
@@ -13989,9 +14095,6 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
     None
 }
 
-/// The variable names a line assigns before its effective program, wrappers
-/// included (`env GIT_PAGER=x git log`): what the program runs under, which a
-/// reading of its argv cannot see (CLOUD-2840).
 /// Every assignment a segment's programs run under, as `NAME=value` with
 /// quotes resolved (CLOUD-2840 review M3).
 ///
@@ -17147,6 +17250,181 @@ mod tests {
                 programs(text)
             );
         }
+    }
+
+    /// A CALL TO A FUNCTION RUNS WHAT ITS BODY RUNS WITH THE CALL'S ARGUMENTS
+    /// (CLOUD-2840 review, findings 1 and 5). A function named like a wrapper,
+    /// or one whose body runs `"$@"`, `"$*"` or `"$1"`, runs the program its
+    /// arguments name; an argument also lands where its body reads it.
+    ///
+    /// Fails by: the call's line dropped because its first word names a
+    /// definition, so `git` is reached in none of these.
+    #[test]
+    fn a_function_call_reaches_the_program_its_arguments_name() {
+        let programs = |text: &str| super::command_programs(text);
+        for text in [
+            "sudo() { \"$@\"; }; sudo git push --force origin main",
+            "env() { \"$@\"; }; env git push --force origin main",
+            "nohup() { \"$@\"; }; nohup git push --force origin main",
+            "sudo() { :; }; sudo git push --force origin main",
+            "f() { \"$@\"; }; f git push --force origin main",
+            "f() { command \"$@\"; }; f git push --force origin main",
+            "f() { \"$1\" push --force origin main; }; f git",
+            "f() { \"${@:2}\"; }; f x git push --force origin main",
+            "f() { shift; \"$@\"; }; f x git push --force origin main",
+            "f() { eval \"$*\"; }; f git push --force origin main",
+            "f() { local c=$1; shift; $c \"$@\"; }; f git push --force origin main",
+            "g() { \"$@\"; }; f() { g \"$@\"; }; f git push --force origin main",
+            "f() { g \"$@\"; }; g() { \"$@\"; }; f git push --force origin main",
+            "f() { \"$@\"; }\nf git push --force origin main",
+        ] {
+            assert!(
+                programs(text).iter().any(|found| found == "git"),
+                "`git` must be reached in `{text}`: {:?}",
+                programs(text)
+            );
+        }
+        // An argument lands where the body reads it: the push is the call's.
+        let reach = program_reach("f() { git \"$1\" --force origin main; }; f push");
+        assert!(
+            reach.iter().any(|entry| entry["arguments"]
+                == serde_json::json!(["push", "--force", "origin", "main"])),
+            "{reach:?}"
+        );
+        // An argument the body only prints is not a program.
+        for text in [
+            "f() { echo \"$@\"; }; f git push --force origin main",
+            "f() { printf '%s\\n' \"$1\"; }; f git",
+        ] {
+            assert!(
+                !programs(text).iter().any(|found| found == "git"),
+                "`{text}` runs no git: {:?}",
+                programs(text)
+            );
+        }
+    }
+
+    /// A NAME IS A FUNCTION ONLY AFTER A DEFINITION THAT CERTAINLY RAN AND WAS
+    /// NOT REMOVED (CLOUD-2840 review B2, finding 2).
+    ///
+    /// Fails by: a definition behind `&&`, `||` or `&`, or one `unset -f`
+    /// removed, still hiding the forced push after it.
+    #[test]
+    fn an_uncertain_or_removed_definition_hides_no_program() {
+        let programs = |text: &str| super::command_programs(text);
+        for text in [
+            "false && git() { :; }; git push --force origin main",
+            "true || git() { :; }; git push --force origin main",
+            "git() { :; } & git push --force origin main",
+            "git() { :; }; unset -f git; git push --force origin main",
+            "git() { :; }; unset git; git push --force origin main",
+            "git() { :; }; true && unset -f git; git push --force origin main",
+            "git() { :; }; if true; then unset -f git; fi; git push --force origin main",
+            "git() { :; }; f() { unset -f git; }; f; git push --force origin main",
+        ] {
+            assert!(
+                programs(text).iter().any(|found| found == "git"),
+                "`git` must be reached in `{text}`: {:?}",
+                programs(text)
+            );
+        }
+        for text in [
+            "touched() { echo x; } && touched",
+            "touched() { echo x; }; true && touched",
+            "touched() { echo x; }; unset -v touched; touched",
+        ] {
+            assert!(
+                !programs(text).iter().any(|found| found == "touched"),
+                "a call after a certain definition runs the function: `{text}` {:?}",
+                programs(text)
+            );
+        }
+    }
+
+    /// A call to a function inside `$( )` or `<( )` runs the function, as at
+    /// the top level (CLOUD-2840 review, finding 5).
+    ///
+    /// Fails by: the substitution walked with no definitions, so the call is
+    /// read as a `PATH` program nobody installed.
+    #[test]
+    fn a_function_called_in_a_substitution_is_no_path_program() {
+        for text in [
+            "touched() { echo x; }; echo $(touched)",
+            "touched() { echo x; }; cat <(touched)",
+            "touched() { echo x; }; out=$(touched)",
+        ] {
+            let programs = super::command_programs(text);
+            assert!(
+                !programs.iter().any(|found| found == "touched"),
+                "`{text}`: {programs:?}"
+            );
+        }
+    }
+
+    /// A REDEFINED `cd` IS NOT THE BUILTIN, so its call places no stage
+    /// (CLOUD-2840 review, finding 5).
+    ///
+    /// Fails by: `cd /tmp` placed although `cd` names a function that may go
+    /// anywhere, or nowhere.
+    #[test]
+    fn a_redefined_cd_places_no_stage() {
+        let crate::facts::Look::Is(parsed) = segments("cd() { :; }; cd /tmp") else {
+            panic!("parses");
+        };
+        let call = parsed
+            .iter()
+            .find(|segment| segment.words == ["cd", "/tmp"])
+            .expect("the call is a segment");
+        assert_eq!(super::placed_cd(call, &["cd", "/tmp"], Path::new("")), None);
+        let crate::facts::Look::Is(parsed) = segments("cd /tmp") else {
+            panic!("parses");
+        };
+        assert_eq!(
+            super::placed_cd(&parsed[0], &["cd", "/tmp"], Path::new("")),
+            Some(PathBuf::from("/tmp"))
+        );
+    }
+
+    /// A ZERO-WORD SEGMENT KEEPS THE PER-LINE READING (CLOUD-2840 review M3,
+    /// finding 4), and `env -S` is found however it is spelled.
+    ///
+    /// Fails by: an empty word's segment taking no line, so every segment
+    /// keeps the fused reading and line two's push is read as `cd`'s operand;
+    /// or a clustered, long or abbreviated split string read as an option.
+    #[test]
+    fn an_empty_segment_and_every_split_string_spelling_reach_the_program() {
+        let programs = |text: &str| super::command_programs(text);
+        for text in [
+            "cd /tmp\ngit push --force origin main; ''",
+            "cd /tmp\ngit push --force origin main; \"\"",
+            "env -iS'git push --force origin main'",
+            "env -vS 'git push --force origin main'",
+            "env --split-string='git push --force origin main'",
+            "env --split-string 'git push --force origin main'",
+            "env --sp 'git push --force origin main'",
+            "env --spl='git push --force origin main'",
+            "env --s='git push --force origin main'",
+            "env -u FOO -S 'git push --force origin main'",
+            "env --unset FOO -S 'git push --force origin main'",
+            "env -C /tmp -S 'git push --force origin main'",
+        ] {
+            assert!(
+                programs(text).iter().any(|found| found == "git"),
+                "`git` must be reached in `{text}`: {:?}",
+                programs(text)
+            );
+        }
+        let crate::facts::Look::Is(parsed) =
+            segments("git status\nGIT_EXTERNAL_DIFF=./x git diff; ''")
+        else {
+            panic!("parses");
+        };
+        assert!(
+            super::segment_assignments(&parsed[0])
+                .iter()
+                .any(|assign| assign == "GIT_EXTERNAL_DIFF=./x"),
+            "{parsed:?}"
+        );
     }
 
     /// The names a line assigns before its program, through wrappers, and
