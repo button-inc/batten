@@ -502,6 +502,112 @@ fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
         .join(format!("{}.json", fingerprint.to_hex())))
 }
 
+/// How many (head, base) slots a check keeps beside its canonical receipt, the
+/// bound step receipts keep (CLOUD-2784). Past it, the oldest go first.
+const KEPT_SLOTS: usize = 32;
+
+/// The directory a check's (head, base) slots live in, beside its canonical
+/// receipt (CLOUD-2253 A3).
+fn slot_dir(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
+    let canonical = receipt_path(repo_root, check)?;
+    Ok(canonical.with_extension("slots"))
+}
+
+/// The slot one (head, base) pair is filed under.
+fn slot_path(repo_root: &str, check: &str, head: &str, base: &str) -> Result<std::path::PathBuf> {
+    Ok(slot_dir(repo_root, check)?.join(format!("{head}.{base}.json")))
+}
+
+/// The base the gate this receipt records actually judged (CLOUD-2253 A3):
+/// the speculation's base when a lap published one (`BATTEN_SPEC_BASE`), else
+/// the tracking ref. A published base that will not resolve is not a base, so
+/// the tracking ref answers.
+fn judged_base(facts: &RepoFacts) -> String {
+    std::env::var(crate::speculation::PUBLISHED_AS)
+        .ok()
+        .filter(|base| !base.trim().is_empty())
+        .and_then(|base| git::resolve_ref(Path::new("."), base.trim()).ok().flatten())
+        .unwrap_or_else(|| facts.main.clone())
+}
+
+/// A head-keyed check's verdict over its canonical receipt, else over the slot
+/// filed for this (head, trunk) pair (CLOUD-2253 A3).
+///
+/// THE SLOT ANSWERS ONLY A YES. The canonical receipt is the most recent and
+/// says why a miss is a miss — another head, another trunk — so a missing or
+/// stale slot leaves its verdict standing.
+fn head_validity(facts: &RepoFacts, check: &str) -> Validity {
+    let canonical = receipt_path(&facts.repo_root, check)
+        .ok()
+        .and_then(|path| load_statement(&path));
+    let verdict = validity(
+        canonical.as_ref(),
+        check,
+        &facts.head,
+        &facts.main,
+        &facts.git_dir,
+    );
+    if verdict == Validity::Valid {
+        return verdict;
+    }
+    let slot = slot_path(&facts.repo_root, check, &facts.head, &facts.main)
+        .ok()
+        .and_then(|path| load_statement(&path));
+    match validity(
+        slot.as_ref(),
+        check,
+        &facts.head,
+        &facts.main,
+        &facts.git_dir,
+    ) {
+        Validity::Valid => Validity::Valid,
+        _ => verdict,
+    }
+}
+
+/// File `statement` under its (head, base) slot, and keep the newest
+/// [`KEPT_SLOTS`].
+fn file_slot(repo_root: &str, check: &str, statement: &Statement) -> Result<()> {
+    let head = statement
+        .subject
+        .first()
+        .map(|subject| subject.digest.git_commit.as_str())
+        .unwrap_or_default();
+    let path = slot_path(repo_root, check, head, &statement.predicate.recorded_main)?;
+    let dir = slot_dir(repo_root, check)?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("create the receipt slots {}", dir.display()))?;
+    let json = serde_json::to_string_pretty(statement)?;
+    crate::durable::replace(&path, format!("{json}\n"))
+        .with_context(|| format!("write the receipt slot {}", path.display()))?;
+    evict_slots(&dir, &path);
+    Ok(())
+}
+
+/// Drop all but the newest [`KEPT_SLOTS`] slots in `dir`, never `kept`. Best
+/// effort: an eviction that fails costs disk, never a verdict.
+fn evict_slots(dir: &Path, kept: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut slots: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path != kept)
+        .map(|path| {
+            let at = std::fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            (at, path)
+        })
+        .collect();
+    slots.sort();
+    let over = (slots.len() + 1).saturating_sub(KEPT_SLOTS);
+    for (_, path) in slots.into_iter().take(over) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Resolve the verdict for each named check, for a caller that must not do I/O.
 ///
 /// `hook::adjudicate` is contractually pure — "no I/O, no environment, no
@@ -877,18 +983,7 @@ pub(crate) fn verdicts(
                     None
                 };
                 let verdict = match key {
-                    ReceiptKey::Head => {
-                        let statement = receipt_path(&facts.repo_root, check)
-                            .ok()
-                            .and_then(|path| load_statement(&path));
-                        validity(
-                            statement.as_ref(),
-                            check,
-                            &facts.head,
-                            &facts.main,
-                            &facts.git_dir,
-                        )
-                    }
+                    ReceiptKey::Head => head_validity(&facts, check),
                     // `None` above is could-not-look for this check: allow it.
                     ReceiptKey::Branch => {
                         branch.as_ref().map_or(Validity::Valid, |(branch, own)| {
@@ -1331,16 +1426,7 @@ pub fn head_receipt_valid(check: &str) -> bool {
     let Ok(facts) = repo_facts() else {
         return false;
     };
-    let Ok(path) = receipt_path(&facts.repo_root, check) else {
-        return false;
-    };
-    validity(
-        load_statement(&path).as_ref(),
-        check,
-        &facts.head,
-        &facts.main,
-        &facts.git_dir,
-    ) == Validity::Valid
+    head_validity(&facts, check) == Validity::Valid
 }
 
 fn load_statement(path: &Path) -> Option<Statement> {
@@ -1553,7 +1639,11 @@ pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCo
         predicate_type: PREDICATE_TYPE.to_owned(),
         predicate: Predicate {
             check: check.to_owned(),
-            recorded_main: facts.main.clone(),
+            // THE BASE THE GATE JUDGED, NOT THE ONE THE REF HAPPENS TO READ
+            // (CLOUD-2253 A3). Under a speculation the gate ran over the
+            // holder's head; recording the tracking ref made a won bet read
+            // StaleMain and re-run a gate over byte-identical inputs.
+            recorded_main: judged_base(&facts),
             recorded_git_dir: facts.git_dir.clone(),
             policy_digest: PolicyDigest {
                 sha256: hex_sha256(&policy),
@@ -1578,6 +1668,16 @@ pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCo
     let json = serde_json::to_string_pretty(&statement)?;
     crate::durable::replace(&canonical, format!("{json}\n"))
         .with_context(|| format!("write the receipt {}", canonical.display()))?;
+    // AND ITS (HEAD, BASE) SLOT, so a return to a pair already judged is a hit
+    // however many receipts were written since (CLOUD-2253 A3). A speculative
+    // gate files the tracking ref's slot too: the bet is still pending while
+    // the trunk stands, and the receipt it replaces answered that pair.
+    file_slot(&facts.repo_root, check, &statement)?;
+    if statement.predicate.recorded_main != facts.main {
+        let mut pending = statement.clone();
+        pending.predicate.recorded_main.clone_from(&facts.main);
+        file_slot(&facts.repo_root, check, &pending)?;
+    }
 
     let compat_dir = Path::new(&facts.git_dir).join("batten-receipts");
     std::fs::create_dir_all(&compat_dir)
@@ -1857,19 +1957,7 @@ pub fn run_status(
                 None => ("-".to_owned(), Validity::Missing),
             }
         }
-        ReceiptKey::Head => {
-            let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
-            (
-                facts.head.clone(),
-                validity(
-                    statement.as_ref(),
-                    check,
-                    &facts.head,
-                    &facts.main,
-                    &facts.git_dir,
-                ),
-            )
-        }
+        ReceiptKey::Head => (facts.head.clone(), head_validity(&facts, check)),
         ReceiptKey::Branch => {
             let Some((branch, own)) = branch_facts(&facts.main) else {
                 return Err(anyhow::anyhow!(
@@ -2112,14 +2200,7 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
     let required = verified_by(&authority)?;
     let mut unverified = Vec::new();
     for check in &required {
-        let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
-        let verdict = validity(
-            statement.as_ref(),
-            check,
-            &facts.head,
-            &facts.main,
-            &facts.git_dir,
-        );
+        let verdict = head_validity(&facts, check);
         if verdict != Validity::Valid {
             unverified.push((check.clone(), verdict));
         }

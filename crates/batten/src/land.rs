@@ -1087,12 +1087,24 @@ pub fn wait(
     heartbeat: &(dyn Fn(u64) + Sync),
     out: &mut dyn std::io::Write,
 ) -> Result<Waited> {
-    wait_reading(config, roster, trunk, asks, fresh_ready, heartbeat, out).map(|(waited, _)| waited)
+    wait_reading(
+        config,
+        roster,
+        trunk,
+        (asks, fresh_ready),
+        None,
+        heartbeat,
+        out,
+    )
+    .map(|(waited, _)| waited)
 }
 
 /// [`wait`], and beside its verdict the [`RedReading`] a red one was taken over
 /// (CLOUD-2270): which failed runs a push over this head owes a read, and which
 /// checks the stop abandoned still running.
+///
+/// `primed` is a check-runs reading of this head the lap already took — Ready's
+/// (CLOUD-2253 A7) — answering the first ask in place of a second read.
 ///
 /// # Errors
 ///
@@ -1101,8 +1113,8 @@ pub fn wait_reading(
     config: &crate::pr_watch::Config,
     roster: &crate::checks_green::Roster,
     trunk: &crate::main_watch::Config,
-    asks: u32,
-    fresh_ready: bool,
+    (asks, fresh_ready): (u32, bool),
+    primed: Option<crate::rest::Answer>,
     heartbeat: &(dyn Fn(u64) + Sync),
     out: &mut dyn std::io::Write,
 ) -> Result<(Waited, RedReading)> {
@@ -1115,6 +1127,7 @@ pub fn wait_reading(
             checks: &|etag| crate::pr_watch::read(config, etag),
             trunk: &|etag| crate::main_watch::read(trunk, etag),
             pause: &crate::pr_watch::pause_until,
+            primed,
         },
     )
 }
@@ -1137,6 +1150,9 @@ struct Waiting<'a> {
     trunk: Reader<'a>,
     /// The wait between asks, abandoned when the flag is raised.
     pause: &'a (dyn Fn(f64, &std::sync::atomic::AtomicBool) + Sync),
+    /// A reading of the checks the lap already took, answering the first ask
+    /// (CLOUD-2253 A7). Never after a ready fired: its runs are not in it.
+    primed: Option<crate::rest::Answer>,
 }
 
 /// [`wait_reading`] over the reads and pause `waiting` names.
@@ -1163,6 +1179,7 @@ fn raced(
     // kept.
     let (tx, rx) = std::sync::mpsc::channel::<Waited>();
     let decided = std::sync::atomic::AtomicBool::new(false);
+    let in_flight = std::sync::atomic::AtomicBool::new(false);
     // THE RED READING RIDES BESIDE THE VERDICT, not inside it (CLOUD-2270):
     // filled by the green arm before it sends `Red`, so whoever reads the
     // verdict reads the reading the verdict was taken over.
@@ -1172,6 +1189,7 @@ fn raced(
         let green = tx.clone();
         let stop = &decided;
         let red_slot = &red;
+        let running = &in_flight;
         drop(scope.spawn(move || {
             let mut poll = crate::pr_watch::Poll::default();
             // The runs already on the head when a fresh ready's wait first read
@@ -1184,7 +1202,13 @@ fn raced(
                 // The conditional read is `pr_watch`'s, so the argv, the client
                 // and the empty-string-on-failure posture stay its business and
                 // this arm only decides when to ask.
-                let raw = (waiting.checks)(poll.etag());
+                // THE FIRST ASK IS ANSWERED BY READY'S READING WHERE THERE IS
+                // ONE (CLOUD-2253 A7): the same head, read moments ago, and its
+                // validator makes the second ask a conditional one.
+                let raw = match (ask, &waiting.primed) {
+                    (1, Some(primed)) => Some(primed.clone()),
+                    _ => (waiting.checks)(poll.etag()),
+                };
                 let interval = poll.absorb(raw.as_ref(), config.interval);
                 // THE HOLDER'S HEARTBEAT, AND THIS LOOP IS THE ONLY PLACE THAT
                 // SPENDS REAL TIME (review of #848). A lap acquires its lease
@@ -1282,6 +1306,15 @@ fn raced(
                     (waiting.pause)(interval, stop);
                 }
             }
+            // WHETHER THE LAST READING STILL HAD A RUN IN FLIGHT, read once both
+            // arms are out of asks (CLOUD-2253 A2): see the verdict below.
+            let in_flight = poll.runs().iter().any(|run| {
+                !matches!(
+                    crate::forge::RunState::of(Some(&run.status), Some(&run.conclusion)),
+                    crate::forge::RunState::Completed(_)
+                )
+            });
+            running.store(in_flight, std::sync::atomic::Ordering::Relaxed);
         }));
 
         let stale = tx.clone();
@@ -1324,7 +1357,20 @@ fn raced(
         rx.recv().ok()
     });
 
-    let waited = waited.unwrap_or(Waited::Unanswered);
+    // OUT OF ASKS OVER A MATRIX STILL RUNNING IS UNREAD, NEVER PENDING
+    // (CLOUD-2253 A2). `Unanswered` maps to `Pending`, which re-drafts the head
+    // and cancels its runs, so a CI path longer than the ask budget threw away a
+    // matrix that was about to answer and bought another on the same sha. A run
+    // in flight is an answer still coming: keep the runs and the ready state, as
+    // an unread wait does (CLOUD-1215). Decided only once NEITHER arm answered,
+    // so the staleness arm keeps its whole budget.
+    let waited = waited.unwrap_or_else(|| {
+        if in_flight.load(std::sync::atomic::Ordering::Relaxed) {
+            Waited::Unread
+        } else {
+            Waited::Unanswered
+        }
+    });
     let reading = match &waited {
         Waited::Red { .. } => red.into_inner().unwrap_or_default(),
         _ => RedReading::default(),
@@ -2784,6 +2830,14 @@ fn win(root: &Path, arms: &Arms<'_>, raced: Raced) {
 /// gate it watches.
 fn stall_arm(root: &Path, stall: &Stall, seed: Option<Still>, arms: &Arms<'_>) {
     let mut run = seed;
+    // THE RED SLOT HAS ITS OWN CADENCE (CLOUD-2253 C12). It was read once a
+    // beat, so a red step stopped the gate up to a whole beat — 30 s by
+    // default — after it was filed. It is a file read, so it is read every
+    // `RED_EVERY`, and the stall's progress keeps the beat: one progress
+    // reading per `ticks` red readings.
+    let tick = stall.beat.min(RED_EVERY);
+    let ticks = ticks_per_beat(stall.beat, tick);
+    let mut tick_of_beat = 0_u32;
     while !arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
         // A KNOWN-RED STEP ENDS THE GATE AT ONCE (CLOUD-2253): its siblings'
         // minutes would only say red again, so the lap does not wait for them.
@@ -2791,13 +2845,31 @@ fn stall_arm(root: &Path, stall: &Stall, seed: Option<Still>, arms: &Arms<'_>) {
             win(root, arms, Raced::Red(step));
             return;
         }
-        run = still(run, (stall.progress)(&stall.git_dir, stall.pid));
-        if stalled(run.as_ref(), stall.beats) {
-            win(root, arms, Raced::Stalled(stall.beats));
-            return;
+        if tick_of_beat == 0 {
+            run = still(run, (stall.progress)(&stall.git_dir, stall.pid));
+            if stalled(run.as_ref(), stall.beats) {
+                win(root, arms, Raced::Stalled(stall.beats));
+                return;
+            }
         }
-        crate::pr_watch::pause_until(stall.beat.as_secs_f64(), arms.stop);
+        tick_of_beat = (tick_of_beat + 1) % ticks;
+        crate::pr_watch::pause_until(tick.as_secs_f64(), arms.stop);
     }
+}
+
+/// The red slot's cadence: a file read, so cheap enough to ask each second
+/// (CLOUD-2253 C12).
+const RED_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How many `tick`s make one `beat`, never fewer than one, so the stall's
+/// progress is still read once a beat whatever the red cadence is.
+fn ticks_per_beat(beat: std::time::Duration, tick: std::time::Duration) -> u32 {
+    if tick.is_zero() {
+        return 1;
+    }
+    u32::try_from(beat.as_millis() / tick.as_millis().max(1))
+        .unwrap_or(u32::MAX)
+        .max(1)
 }
 
 /// Has the base moved since this lap replayed onto it?
@@ -3537,8 +3609,17 @@ pub enum Admitted {
 /// **An UNDECLARED set is a pass**, on [`ready`]'s asymmetry: naming no entry
 /// gates is a legitimate configuration, and naming one that cannot run is a dead
 /// gate.
+///
+/// `published` reaches each gate's environment, as [`ready`]'s does: the lap's
+/// engine as `BATTEN_BIN` (CLOUD-2924), so a gate spelling batten through the
+/// consumer's runner does not rebuild-check it.
 #[must_use]
-pub fn admits_the_landing(root: &Path, gates: &[Vec<String>], pr: &str) -> Admitted {
+pub fn admits_the_landing(
+    root: &Path,
+    gates: &[Vec<String>],
+    pr: &str,
+    published: &[(String, Option<String>)],
+) -> Admitted {
     for argv in gates {
         let Some(first) = argv.first() else {
             continue;
@@ -3560,9 +3641,13 @@ pub fn admits_the_landing(root: &Path, gates: &[Vec<String>], pr: &str) -> Admit
         // run rather than as this engine's own spelling (review of #848).
         let gate = with_pr.join(" ");
         with_pr.push(pr.to_owned());
-        let Some((code, output)) =
-            crate::exec::piped_argv(root, &with_pr, "", crate::exec::Diagnostics::Keep, &[])
-        else {
+        let Some((code, output)) = crate::exec::piped_argv(
+            root,
+            &with_pr,
+            "",
+            crate::exec::Diagnostics::Keep,
+            published,
+        ) else {
             // AN ADVISORY GATE THAT WILL NOT RUN IS NOT A REFUSAL EITHER, which
             // is the same reading one line down rather than a separate decision:
             // `|| true` swallowed an unrunnable command exactly as it swallowed a
@@ -4496,6 +4581,18 @@ mod forge_tests {
     /// red reading, and every pause asked for, the checks arm's at 7s and the
     /// trunk arm's at 9s.
     fn race(answers: &[String], asks: u32, fresh_ready: bool) -> (Waited, RedReading, Vec<f64>) {
+        let (waited, red, paused, _) = race_primed(answers, asks, fresh_ready, None);
+        (waited, red, paused)
+    }
+
+    /// [`race`] with the first ask answered by `primed`, and beside the rest
+    /// how many times the checks arm actually read the forge.
+    fn race_primed(
+        answers: &[String],
+        asks: u32,
+        fresh_ready: bool,
+        primed: Option<crate::rest::Answer>,
+    ) -> (Waited, RedReading, Vec<f64>, usize) {
         let config = crate::pr_watch::Config {
             sha: String::from("s"),
             repo: String::from("o/r"),
@@ -4529,19 +4626,71 @@ mod forge_tests {
                 checks: &checks,
                 trunk: &trunk_read,
                 pause: &pause,
+                primed,
             },
         )
         .unwrap();
         let mut paused = paused.into_inner().unwrap();
         paused.sort_by(f64::total_cmp);
-        (waited, red, paused)
+        (
+            waited,
+            red,
+            paused,
+            asked.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    /// READY'S READING ANSWERS THE WAIT'S FIRST ASK (CLOUD-2253 A7): a green
+    /// head Ready already read is green without reading the forge again, and a
+    /// pending one reads only from the second ask on.
+    ///
+    /// Fails by: the reading Ready took thrown away and the forge read twice
+    /// for one fact.
+    #[test]
+    fn ready_s_reading_answers_the_first_ask() {
+        let (waited, _, _, asked) = race_primed(
+            &[check("", 1)],
+            3,
+            false,
+            Some(reading(&check("success", 1))),
+        );
+        assert!(matches!(waited, Waited::Green { .. }), "{waited:?}");
+        assert_eq!(asked, 0, "the forge was not read again");
+        let (_, _, _, asked) = race_primed(&[check("", 1)], 3, false, Some(reading(&check("", 1))));
+        assert_eq!(asked, 2, "every ask after the first reads the forge");
+        let (_, _, _, asked) = race_primed(&[check("", 1)], 3, false, None);
+        assert_eq!(asked, 3, "unprimed, every ask reads");
     }
 
     #[test]
     fn each_arm_pauses_between_its_asks_and_never_after_the_last() {
         let (waited, _, paused) = race(&[check("", 1)], 3, false);
-        assert_eq!(waited, Waited::Unanswered);
+        assert_eq!(waited, Waited::Unread);
         assert_eq!(paused, vec![7.0, 7.0, 9.0, 9.0]);
+    }
+
+    /// RUNNING OUT OF ASKS OVER A MATRIX STILL RUNNING IS NOT A PENDING VERDICT
+    /// (CLOUD-2253 A2). The runs are mid-flight and their answer is coming, so
+    /// the wait is `Unread`: the head stays ready and no run is cancelled. A
+    /// set with nothing running when the asks run out stays `Unanswered`.
+    ///
+    /// Fails by: an exhausted budget re-drafting the pull request and
+    /// cancelling a matrix that was about to answer.
+    #[test]
+    fn an_exhausted_wait_over_a_running_matrix_keeps_its_runs() {
+        let (waited, _, _) = race(&[check("", 1)], 2, false);
+        assert_eq!(waited, Waited::Unread);
+        let seen = tap_verdict(&waited);
+        assert!(!abandons_the_runs(seen), "the running matrix is kept");
+        let tap = Tap {
+            landed: false,
+            singleton_held: true,
+            is_draft: Some(false),
+            verdict: seen,
+        };
+        assert!(!closes_the_tap(&tap), "the head is not re-drafted");
+        let (waited, _, _) = race(&[check("skipped", 1)], 2, true);
+        assert_eq!(waited, Waited::Unanswered, "nothing running is not unread");
     }
 
     #[test]
@@ -6032,16 +6181,48 @@ mod tests {
         let root = std::env::current_dir().unwrap();
         let gate = |word: &str| vec![vec![String::from(word)]];
         assert!(matches!(
-            super::admits_the_landing(&root, &gate("false"), "7"),
+            super::admits_the_landing(&root, &gate("false"), "7", &[]),
             super::Admitted::Refused { .. }
         ));
         assert!(matches!(
-            super::admits_the_landing(&root, &gate(&format!("{}false", super::ADVISORY)), "7"),
+            super::admits_the_landing(&root, &gate(&format!("{}false", super::ADVISORY)), "7", &[]),
             super::Admitted::Clear
         ));
         assert!(matches!(
-            super::admits_the_landing(&root, &gate("true"), "7"),
+            super::admits_the_landing(&root, &gate("true"), "7", &[]),
             super::Admitted::Clear
+        ));
+    }
+
+    /// An entry gate reads what the lap publishes to it (CLOUD-2253 A5): the
+    /// lap's engine as `BATTEN_BIN`, which it never received before.
+    ///
+    /// Fails by: the publication dropped before the spawn, so the gate falls
+    /// back to building the engine itself.
+    #[test]
+    fn an_entry_gate_reads_what_the_lap_publishes() {
+        if !cfg!(unix) {
+            return;
+        }
+        let root = std::env::current_dir().unwrap();
+        let gate = vec![vec![
+            String::from("sh"),
+            String::from("-c"),
+            String::from("test \"$BATTEN_BIN\" = /lap/engine"),
+            String::from("sh"),
+        ]];
+        let published = [(
+            String::from("BATTEN_BIN"),
+            Some(String::from("/lap/engine")),
+        )];
+        assert!(matches!(
+            super::admits_the_landing(&root, &gate, "7", &published),
+            super::Admitted::Clear
+        ));
+        let other = [(String::from("BATTEN_BIN"), Some(String::from("/elsewhere")))];
+        assert!(matches!(
+            super::admits_the_landing(&root, &gate, "7", &other),
+            super::Admitted::Refused { .. }
         ));
     }
 
