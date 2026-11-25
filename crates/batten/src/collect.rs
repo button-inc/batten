@@ -1701,75 +1701,60 @@ pub(crate) fn collect_toward_max_in(
     })
 }
 
-/// Block until each build lock among `held` has been free once, or `bound`
-/// passes (CLOUD-2286). `true` when every one was: the build that held it
-/// finished, so a second pass may reach what the first passed over.
+/// Wait until each build lock among `held` has been free once (CLOUD-2286).
+/// `true` when every one was: the build that held it finished, so a second
+/// pass may reach what the first passed over.
 ///
-/// THE WAIT IS THE LOCK ITSELF, NEVER A TIMER (CLOUD-1177): a thread takes
-/// each `.cargo-lock` blocking, exactly as cargo would, and lets go at once;
-/// the caller waits on that thread up to `bound`. A thread still blocked at the
-/// bound is left to finish on its own, and it holds the lock for no longer
-/// than taking it takes. A collector lock among `held` is another pass, not a
-/// build, and is not waited on.
+/// THE WAIT IS THE LOCK ITSELF, NEVER A TIMER (CLOUD-1177, CLOUD-2789): it
+/// waits through [`crate::lock_wait`] on each holder's release, on the
+/// caller's thread, and lets go at once. A collector lock among `held` is
+/// another pass, not a build, and is not waited on.
 #[must_use]
-pub fn await_builds(held: &[PathBuf], bound: std::time::Duration) -> bool {
-    await_locks(held, bound, |lock| {
-        lock.file_name().is_some_and(|name| name == ".cargo-lock")
-    })
+pub fn await_builds(held: &[PathBuf]) -> bool {
+    await_locks(
+        held,
+        |lock| lock.file_name().is_some_and(|name| name == ".cargo-lock"),
+        &mut || {},
+    )
 }
 
-/// Block until every TREE in `held` is released by the collector holding it,
-/// for at most `bound`; `false` when none is held or the bound passes first.
+/// Wait until every TREE in `held` is released by the collector holding it;
+/// `false` when none is held.
 ///
 /// A held tree is another collector's pass ([`lock_tree`]), never a build, so
-/// waiting is always right: that pass is freeing space. Measured on #1276:
-/// `land replay` refused at 3,864 MB free against 4,096 because the lap's own
-/// disk watcher held both trees, and that same pass then freed 4,746 MB.
+/// waiting is always right: that pass is freeing space, and it ends on its own
+/// run's stop. Measured on #1276: `land replay` refused at 3,864 MB free
+/// against 4,096 because the lap's own disk watcher held both trees, and that
+/// same pass then freed 4,746 MB.
 #[must_use]
-pub fn await_collectors(held: &[PathBuf], bound: std::time::Duration) -> bool {
-    await_locks(held, bound, Path::is_dir)
+pub fn await_collectors(held: &[PathBuf]) -> bool {
+    await_locks(held, Path::is_dir, &mut || {})
 }
 
-/// Block on the lock of each of `held` that `which` selects, for at most `bound`.
-fn await_locks(
-    held: &[PathBuf],
-    bound: std::time::Duration,
-    which: impl Fn(&Path) -> bool,
-) -> bool {
-    let locks: Vec<PathBuf> = held.iter().filter(|lock| which(lock)).cloned().collect();
+/// Wait on the lock of each of `held` that `which` selects, calling `parked`
+/// before each park; `false` when none is selected, or one is this process's
+/// own, which a wait would never see released.
+///
+/// NO THREAD AND NO CLOCK (CLOUD-2789): the detached thread this replaced was
+/// left blocked in a `flock` past its caller's bound.
+fn await_locks(held: &[PathBuf], which: impl Fn(&Path) -> bool, parked: &mut dyn FnMut()) -> bool {
+    let locks: Vec<&PathBuf> = held.iter().filter(|lock| which(lock)).collect();
     if locks.is_empty() {
         return false;
     }
-    let Ok(stop) = crate::lock_wait::Stop::new() else {
-        return false;
-    };
-    // NO THREAD IS LEFT BLOCKED PAST THE BOUND (CLOUD-2789). The wait runs on
-    // the caller's thread through [`crate::lock_wait`], which ends on `stop`;
-    // the bound raises it from a scoped thread that ends the moment the wait
-    // does, because dropping `done` wakes it.
-    std::thread::scope(|scope| {
-        let (done, finished) = std::sync::mpsc::channel::<()>();
-        let stop = &stop;
-        scope.spawn(move || {
-            if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = finished.recv_timeout(bound) {
-                stop.raise();
-            }
-        });
-        let all = locks.iter().all(|lock| {
-            crate::durable::open_handle(lock).is_ok_and(|file| {
-                matches!(
-                    crate::lock_wait::acquire(
-                        file,
-                        lock,
-                        crate::lock_wait::Mode::Exclusive,
-                        Some(stop)
-                    ),
-                    Ok(crate::lock_wait::Taken::Held(_))
-                )
-            })
-        });
-        drop(done);
-        all
+    locks.into_iter().all(|lock| {
+        crate::durable::open_handle(lock).is_ok_and(|file| {
+            matches!(
+                crate::lock_wait::acquire_announced(
+                    file,
+                    lock,
+                    crate::lock_wait::Mode::Exclusive,
+                    None,
+                    &mut *parked
+                ),
+                Ok(crate::lock_wait::Taken::Held(_))
+            )
+        })
     })
 }
 
@@ -2431,14 +2416,14 @@ mod tests {
     /// Fails by: a wait reported finished with no build lock to wait on.
     #[test]
     fn only_a_build_lock_is_awaited() {
-        assert!(!super::await_builds(&[], Duration::ZERO));
+        assert!(!super::await_builds(&[]));
         let dir = scratch("await-builds");
         let collector = dir.join("target");
         std::fs::create_dir_all(&collector).expect("mkdir");
-        assert!(!super::await_builds(&[collector], Duration::ZERO));
+        assert!(!super::await_builds(&[collector]));
         let free = dir.join(".cargo-lock");
         std::fs::write(&free, b"").expect("write");
-        assert!(super::await_builds(&[free], Duration::from_secs(5)));
+        assert!(super::await_builds(&[free]));
     }
 
     /// Fails by: a pass's counts, freed bytes or trace misreported, or either
@@ -2650,35 +2635,30 @@ mod tests {
     }
 
     /// Fails by: a tree another collector holds not waited for, a wait reported
-    /// with nothing held, or one past its bound reported as released.
+    /// with nothing held, or one that returns before the holder lets go.
     #[test]
-    fn a_tree_another_collector_holds_is_waited_for_within_its_bound() {
+    fn a_tree_another_collector_holds_is_waited_for_until_it_is_released() {
         let tree = scratch("await-collector");
         std::fs::create_dir_all(&tree).expect("mkdir");
         let build = tree.join(".cargo-lock");
         std::fs::write(&build, "").expect("lock file");
-        assert!(!super::await_collectors(
-            &[build],
-            Duration::from_millis(50)
-        ));
-        assert!(!super::await_collectors(&[], Duration::from_millis(50)));
+        assert!(!super::await_collectors(&[build]));
+        assert!(!super::await_collectors(&[]));
         // ANOTHER PROCESS'S HOLD, as a plain `flock` the waiter does not know
-        // is its own: a `lock_wait` hold would be refused as re-entry and
-        // never waited on.
+        // is its own: a `lock_wait` hold would be refused as re-entry.
         let held = crate::durable::open_handle(&tree).expect("open the tree");
         held.try_lock().expect("first holder");
-        let (taken, released) = std::sync::mpsc::channel::<()>();
-        let holder = std::thread::spawn(move || {
-            let _ = released.recv();
-            drop(held);
+        let mut holder = Some(held);
+        // RELEASED ON THE WAITER'S OWN PARK, the event: no clock decides it.
+        let waited = super::await_locks(std::slice::from_ref(&tree), Path::is_dir, &mut || {
+            drop(holder.take());
         });
+        assert!(holder.is_none(), "the waiter parked on the held tree");
+        assert!(waited, "and took it once it was released");
         assert!(
-            !super::await_collectors(std::slice::from_ref(&tree), Duration::from_millis(100)),
-            "a tree still held past the bound"
+            super::await_collectors(&[tree]),
+            "a free tree is taken at once"
         );
-        taken.send(()).expect("release");
-        assert!(super::await_collectors(&[tree], Duration::from_secs(10)));
-        holder.join().expect("holder");
     }
 
     /// Fails by: the schema mirror's build left out of the ranking, so a lap's
