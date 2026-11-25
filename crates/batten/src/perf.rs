@@ -1394,9 +1394,9 @@ fn stage(repo: &Path, out: &Path) -> Result<(PathBuf, PathBuf)> {
 }
 
 /// The `session-start` arm's fixture (CLOUD-2840): a git repository declaring
-/// one session-start row, so the hook does its real work there — writes the
-/// payload, spawns the setup task detached and registers it — and the arm
-/// prices that, not an early return. `check-repo` is no repository, and making
+/// one session-start row, so the hook does its real work there — spools the
+/// payload, names the session and advises the dispatch, spawning nothing — and
+/// the arm prices that, not an early return. `check-repo` is no repository, and making
 /// it one would move what every other arm measures.
 fn stage_session(out: &Path) -> Result<PathBuf> {
     let session = out.join("session-repo");
@@ -1783,8 +1783,8 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
             wired,
             repo.as_path(),
         ),
-        // THE SESSION'S FIRST MOMENT (CLOUD-2840): the hook starts the setup
-        // task and returns, so the first response waits on this and no more.
+        // THE SESSION'S FIRST MOMENT (CLOUD-2840): the hook advises the setup
+        // dispatch and returns, so the first response waits on this and no more.
         (
             "session-start",
             Some(hooks.join("claude-code-session-start.json")),
