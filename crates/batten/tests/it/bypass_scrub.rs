@@ -311,8 +311,6 @@ fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
         .to_owned();
     assert!(!admission.is_empty(), "the request must name an address");
 
-    // THE OWNER'S YES, which an owner-only override spends on (CLOUD-2926).
-    common::owner_admits(root, "protected-mutation", "path write refused", subject);
     let spent = common::run(
         root,
         &[
