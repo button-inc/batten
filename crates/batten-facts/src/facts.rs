@@ -828,9 +828,10 @@ pub enum Fact {
     /// `$GIT_DIR`: the same reading `land` uses to refuse a second lap, so a
     /// call is judged by the fact the lap itself trusts.
     LandLive,
-    /// What the session's setup task is doing while this call runs, and which
-    /// of the call's command-position programs it may still be installing
-    /// (CLOUD-2840).
+    /// What the session's setup task is doing while this call runs (or that
+    /// the agent has not dispatched it yet), which of the call's
+    /// command-position programs it may still be installing, and whether this
+    /// call is the dispatch itself (CLOUD-2840).
     InstallPending,
     /// The current branch's red-head record: the head a lap's wait stopped red
     /// on, each failed check's newest run with whether its log was read, and
@@ -2700,12 +2701,14 @@ impl Fact {
             }),
             Fact::InstallPending => serde_json::json!({
                 "type": ["object", "null"],
-                "description": "Fact::InstallPending (CLOUD-2840). The session's setup task, read from the task registry: `state` is `running`, `ok`, `failed` or `crashed` (the task's own last phase, or a pid gone without one), `task` its registry name and `pid` its pid. `pending` lists this call's command-position programs that resolve to nothing on PATH or resolve under the environment manager's install root -- what the task may still be installing -- and is empty once the task said `ok`, when nothing is resolved at all. NULL when no setup task is recorded or the registry could not be read.",
+                "description": "Fact::InstallPending (CLOUD-2840). The session's setup task, read from the task registry: `state` is `undispatched` (SessionStart prepared setup and the agent has not dispatched it: no record, `pid` null), `running`, `ok`, `failed` or `crashed` (the task's own last phase, or a pid gone without one), `task` its registry name and `pid` its pid. `pending` lists this call's command-position programs that resolve to nothing on PATH, resolve under the environment manager's install root, or are the manager itself -- what the task may still be installing -- and is empty once the task said `ok`, when nothing is resolved at all, and before dispatch. `dispatch` is the one command the agent runs to start the task, and `dispatching` whether this call is exactly that command. NULL when SessionStart prepared no setup or the registry could not be read.",
                 "properties": {
-                    "state": {"enum": ["running", "ok", "failed", "crashed"]},
+                    "state": {"enum": ["undispatched", "running", "ok", "failed", "crashed"]},
                     "task": {"type": "string"},
-                    "pid": {"type": "string"},
+                    "pid": {"type": ["string", "null"]},
                     "pending": {"type": "array", "items": {"type": "string"}},
+                    "dispatch": {"type": "string"},
+                    "dispatching": {"type": "boolean"},
                 },
             }),
             Fact::Instant => serde_json::json!({
