@@ -476,9 +476,12 @@ fn a_step_that_passes_says_nothing() {
 
     let door = bench.session_start();
     assert_eq!(door.code, Some(0));
+    // THE DISPATCH NOTICE IS THE DOOR'S ONE LINE (CLOUD-2840, admitted by the
+    // owner): setup is owed, so the hook tells the agent what to dispatch, and
+    // a passing step adds nothing to it.
     assert!(
-        door.out.is_empty(),
-        "a passing step announces nothing on stdout: {}",
+        door.out.contains(&batten::session_setup::instruction()) && !door.out.contains("quiet"),
+        "a passing step announces nothing beside the dispatch notice: {}",
         door.out
     );
     assert!(
