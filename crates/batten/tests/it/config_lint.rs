@@ -2141,3 +2141,137 @@ fn one_absent_module_never_disarms_the_load_check() {
         "the present module is still judged: {output:?}"
     );
 }
+
+/// A branch whose work commit MODIFIES `name`'s module from `base_body` to
+/// `work_body`; claimed, so a bare `config lint` is armed at the fork point too.
+fn branch_modifying(fixture: &str, name: &str, base_body: &str, work_body: &str) -> PathBuf {
+    let head = "version = 1\nmust_land_on = \"origin/main\"\n";
+    let config = format!("{head}\n{}", module_rule(name));
+    let module = format!("policy/{name}.rego");
+    let dir = Fixture::new(fixture)
+        .config(&config)
+        .file(&module, &module_text(name, base_body))
+        .git()
+        .undeclared_trunk()
+        .base_commit()
+        .file(&module, &module_text(name, work_body))
+        .work_commit()
+        .build();
+    claim(&dir);
+    dir
+}
+
+/// Fails by: a MODIFIED module judged by its BASE text, so a branch that fixes
+/// a module the engine could not load is refused for the text it replaced —
+/// #1276's own shape, `egress-fencing.rego`'s base copy judged against the
+/// working `[[verdict]]` table, so `verify:config-lint` exited 1 (CLOUD-2840).
+#[test]
+fn a_modified_module_is_judged_by_its_working_text() {
+    let dir = branch_modifying(
+        "config-lint-modified-fixed",
+        "m",
+        "data.batten.nothing.here(input.call)",
+        "input.call.go",
+    );
+    for extra in [&["--config-from", "origin/main"][..], &[]] {
+        let output = lint(&dir, extra);
+        assert_eq!(output.status.code(), Some(0), "{extra:?}: {output:?}");
+    }
+}
+
+/// Fails by: a MODIFIED module read at the base, so a branch that makes it
+/// unevaluable passes, and `engine gate` (the pinned release asking this verb)
+/// passes a module that release cannot load — the added-module case's shape,
+/// reached through an edit instead of an addition (CLOUD-2840).
+#[test]
+fn a_modified_module_the_engine_cannot_evaluate_is_refused() {
+    let dir = branch_modifying(
+        "config-lint-modified-unevaluable",
+        "m",
+        "input.call.go",
+        "data.batten.nothing.here(input.call)",
+    );
+    for extra in [&["--config-from", "origin/main"][..], &[]] {
+        let output = lint(&dir, extra);
+        let said = common::stderr(&output);
+        assert_ne!(output.status.code(), Some(0), "{extra:?}: {output:?}");
+        assert!(
+            said.contains("policy/m.rego") && said.contains("data.batten.nothing.here"),
+            "{extra:?}: the modified module is judged by the text it runs: {output:?}"
+        );
+    }
+}
+
+/// A module `name` publishing each of `ids`, each raising on its own field.
+fn module_publishing(name: &str, ids: &[&str]) -> String {
+    let declared: String = ids
+        .iter()
+        .map(|id| format!("rules contains \"{id}\"\n\n"))
+        .collect();
+    let raised: String = ids
+        .iter()
+        .map(|id| {
+            format!(
+                "violation contains {{\"rule\": \"{id}\", \"verdict\": \"call name refused\"}} if {{\n\
+                 \tinput.call.{id}\n}}\n\n"
+            )
+        })
+        .collect();
+    format!("package batten.{name}\nimport rego.v1\n\n{declared}{raised}")
+}
+
+/// Fails by: one load mixing sources, so a base-read module's claims meet a
+/// tree-read module's: moving the predicate id `x` out of a MODIFIED module
+/// into an ADDED one reads as two modules declaring it, and the move is
+/// refused as a collision it is not (CLOUD-2840). Judged against the base it
+/// answers as it does on the tree alone.
+#[test]
+fn moving_an_id_into_an_added_module_is_no_collision() {
+    let head = "version = 1\n";
+    let dir = Fixture::new("config-lint-id-moved")
+        .config(&format!("{head}\n{}", module_rule("a")))
+        .file("policy/a.rego", &module_publishing("a", &["a", "x"]))
+        .git()
+        .undeclared_trunk()
+        .base_commit()
+        .config(&format!("{head}\n{}{}", module_rule("a"), module_rule("b")))
+        .file("policy/a.rego", &module_publishing("a", &["a"]))
+        .file("policy/b.rego", &module_publishing("b", &["b", "x"]))
+        .work_commit()
+        .build();
+    let against_base = lint(&dir, &["--config-from", "origin/main"]);
+    let tree = lint(&dir, &[]);
+    for output in [&against_base, &tree] {
+        assert!(
+            !common::stderr(output).contains("both declare"),
+            "the id was moved, not duplicated: {output:?}"
+        );
+    }
+    assert_eq!(
+        against_base.status.code(),
+        tree.status.code(),
+        "{against_base:?}"
+    );
+}
+
+/// Fails by: a bundle root that is THERE but holds no module read as sources
+/// absent, so the rule is left unloaded, the set checks stand down, and a gate
+/// enabling nothing passes as configured. Only a root that is not there at all
+/// is absent; this one is refused, naming it (CLOUD-2840).
+#[test]
+fn an_empty_bundle_root_is_refused_not_unloaded() {
+    let config = "version = 1\n\n[[rule]]\nid = \"b\"\n\
+                  no_fix_reason = \"class 3 (a call rewrite): nothing persists to repair\"\n\
+                  kind = \"policy\"\nscope = \"mediated_call\"\nbundle = \"policy/b/\"\n\
+                  severity = \"deny\"\n";
+    let dir = Fixture::new("config-lint-empty-bundle")
+        .config(config)
+        .file("policy/b/README.md", "no module here\n")
+        .build();
+    let output = lint(&dir, &[]);
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        common::stderr(&output).contains("carries no `.rego` module"),
+        "the empty root is named: {output:?}"
+    );
+}
