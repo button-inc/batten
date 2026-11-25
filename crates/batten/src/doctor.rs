@@ -1048,7 +1048,7 @@ pub fn diagnose_egress() -> Egress {
     egress_of(
         crate::fetch::is_direct(EGRESS_NEVER_FENCED_HOST),
         crate::fetch::is_direct(EGRESS_RESOLVER_HOST),
-        crate::provision::credential_health,
+        crate::provision::credential_quiet,
     )
 }
 
