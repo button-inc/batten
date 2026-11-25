@@ -1152,6 +1152,53 @@ mod rule_surface_tests {
         assert_ne!(epoch(&dir), before, "the module reads `board-writes`");
     }
 
+    /// A rule WITH a module is served from its cache entry while the module is
+    /// unchanged: the stored digest is of the module the entry names, and the
+    /// hit re-reads that module, not nothing.
+    ///
+    /// Fails by: the hit digesting no module (`!module.is_empty()` inverted at
+    /// `for_rule_cached`), so a module-bearing rule never hits and recomputes
+    /// its epoch on every refusal (CLOUD-2789, shard 0/8's survivor).
+    #[test]
+    fn a_module_rules_cached_epoch_is_served_while_its_module_holds() {
+        let dir = repo("epoch-rule-cached", &config("", "restore it"));
+        let cold = super::for_rule_cached(&dir, None, RULE, VERDICT).unwrap();
+        assert_eq!(cold, epoch(&dir), "the cache answers what `for_rule` does");
+        let root = super::state_dir(&dir)
+            .as_deref()
+            .and_then(crate::cache::root_under)
+            .unwrap()
+            .join("epoch-rule");
+        let entries: Vec<PathBuf> = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(entries.len(), 1, "one entry for one rule");
+        let stored = fs::read_to_string(&entries[0]).unwrap();
+        let (value, rest) = stored.split_once('\n').unwrap();
+        assert_eq!(value, cold);
+        assert!(
+            rest.starts_with("policy/held.rego\n"),
+            "it names its module"
+        );
+        fs::write(&entries[0], format!("served-from-cache\n{rest}")).unwrap();
+        assert_eq!(
+            super::for_rule_cached(&dir, None, RULE, VERDICT).unwrap(),
+            "served-from-cache",
+            "an unchanged module is a hit"
+        );
+        fs::write(
+            dir.join("policy/held.rego"),
+            format!("{MODULE}\n# edited\n"),
+        )
+        .unwrap();
+        assert_ne!(
+            super::for_rule_cached(&dir, None, RULE, VERDICT).unwrap(),
+            "served-from-cache",
+            "an edited module is a miss"
+        );
+    }
+
     /// Fails by: the narrowing reaching past the unrelated, so the rule's own
     /// row or its module changing leaves an admission bound.
     #[test]
