@@ -12209,6 +12209,42 @@ mod tests {
         assert!(!function.answers(&none, &wanted("shape")));
     }
 
+    /// A `use` answers to the names it binds; a glob or an `as _` import is
+    /// always taken, since what it brings in has no name of its own here.
+    ///
+    /// Fails by: `always` never set (shard 3/8's `|=` to `&=` survivor), so a
+    /// glob answers only to its names, or the `!always` guard dropped (its
+    /// `delete !` survivor), so a named import is always taken (CLOUD-2789).
+    #[test]
+    fn a_use_answers_to_its_bindings_and_a_glob_is_always_taken() {
+        let names: Vec<Option<BTreeSet<String>>> =
+            items_of("use a::b;\nuse a::*;\nuse a::c as _;\n")
+                .iter()
+                .map(|item| Shared::of(item).names)
+                .collect();
+        assert_eq!(
+            names,
+            [Some(BTreeSet::from([String::from("b")])), None, None]
+        );
+    }
+
+    /// An impl, a macro, an item macro, an extern block and an extern crate
+    /// are keyed workspace-wide: no visibility bounds what reaches them.
+    ///
+    /// Fails by: their arm deleted (shard 3/8's survivor), so each falls to
+    /// its absent visibility and is keyed to its module (CLOUD-2789).
+    #[test]
+    fn an_impl_or_a_macro_is_visible_workspace_wide() {
+        let seen: Vec<Visible> = items_of(
+            "impl T {}\nmacro_rules! m { () => {} }\nmacro n() {}\nm!();\n\
+             extern \"C\" {}\nextern crate core;\n",
+        )
+        .iter()
+        .map(visibility)
+        .collect();
+        assert_eq!(seen, [Visible::Workspace; 6]);
+    }
+
     /// A traced case keys on the files it touched, an absent one and a
     /// directory's listing included, and on nothing else; an untraced case
     /// keys on every non-Rust file.
