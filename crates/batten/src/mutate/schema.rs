@@ -4711,10 +4711,7 @@ fn judge(
             {
                 hints.entry(key).or_default().insert(case);
             }
-            Judged {
-                by_hang: hung_kill,
-                ..Judged::ran(verdict, skipped)
-            }
+            Judged::decided(verdict, skipped, hung_kill)
         }
         Err(why) => {
             // A RUN THAT COULD NOT START SAYS WHY, beside the runs that
@@ -4838,11 +4835,16 @@ struct Judged {
 impl Judged {
     /// A verdict no held kill decided.
     const fn ran(verdict: Verdict, skipped: usize) -> Self {
+        Self::decided(verdict, skipped, false)
+    }
+
+    /// A verdict runs decided, `by_hang` when a case's hang was the kill.
+    const fn decided(verdict: Verdict, skipped: usize, by_hang: bool) -> Self {
         Self {
             verdict,
             skipped,
             held_kill: false,
-            by_hang: false,
+            by_hang,
         }
     }
 }
@@ -11814,6 +11816,10 @@ mod tests {
         let judged = judging.with_red(&control);
         assert_eq!(judged.red, &control);
         assert_eq!(judged.mutants.len(), 1);
+        let passed: Control = [(case("quick"), 0.5)].into();
+        let timed = judged.with_control(&passed);
+        assert_eq!(timed.control, &passed);
+        assert_eq!(timed.red, &control, "the red cases kept");
     }
 
     /// A checkout that moved during the sweep makes each hand-back not
@@ -20686,5 +20692,49 @@ pub fn repo() -> u8 {{ scratch() }}
         });
         tally.judged(Judged::ran(Verdict::Missed, 3));
         assert_eq!(tally.line(4), reused_line(0, 1, 4, 5));
+    }
+
+    /// A mutant a case killed by its hang is counted as one, and said so; one
+    /// decided any other way is not (CLOUD-2911).
+    ///
+    /// Fails by: a kill by hang dropped from the count, or the line saying
+    /// nothing, so a census cannot tell a hang's kills from a failure's.
+    #[test]
+    fn a_kill_by_hang_is_counted_and_said() {
+        let tally = Tally::default();
+        assert_eq!(
+            Judged::decided(Verdict::Caught, 1, true),
+            Judged {
+                verdict: Verdict::Caught,
+                skipped: 1,
+                held_kill: false,
+                by_hang: true,
+            }
+        );
+        tally.judged(Judged::decided(Verdict::Caught, 0, true));
+        tally.judged(Judged::decided(Verdict::Caught, 0, false));
+        tally.judged(Judged::ran(Verdict::Timeout, 0));
+        assert_eq!(
+            tally.hang_line(),
+            "mutate schema: 1 mutant(s) caught by a hang: cut at a case's own limit, its \
+             control passing inside a fifth of it"
+        );
+    }
+
+    /// A sweep starts without a killed sweep's error logs or judging temp
+    /// (CLOUD-2911).
+    ///
+    /// Fails by: a killed sweep's error log read as this sweep's run erring.
+    #[test]
+    fn a_sweep_starts_without_a_killed_sweeps_run_state() {
+        let state = crate::scratch::scratch("schema-run-state");
+        for dir in [state.join("errors"), state.join(JUDGE_TEMP)] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("left"), "stale").unwrap();
+        }
+        clear_run_state(&state);
+        assert!(!state.join("errors").exists());
+        assert!(!state.join(JUDGE_TEMP).exists());
+        assert!(state.is_dir(), "the state itself stays");
     }
 }
