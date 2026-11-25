@@ -1110,6 +1110,17 @@ impl Reaper {
         self.reaped.set(true);
     }
 
+    /// End the owned group, when Batten leads one: TERM, then KILL to what is
+    /// left. Its pgid stays this tree's while any member lives, so it is safe
+    /// after the leader is reaped.
+    fn end_group(&self) {
+        if self.grouped {
+            let pid = self.child.to_string();
+            let _ = terminate_group(&pid);
+            let _ = escalate_group(&pid);
+        }
+    }
+
     /// The clean exit: the child was waited and its output collected.
     fn disarm(mut self) {
         self.armed = false;
@@ -1121,11 +1132,7 @@ impl Drop for Reaper {
         if !self.armed {
             return;
         }
-        if self.grouped {
-            let pid = self.child.to_string();
-            let _ = terminate_group(&pid);
-            let _ = escalate_group(&pid);
-        }
+        self.end_group();
         if self.reaped.get() {
             return;
         }
@@ -1136,6 +1143,68 @@ impl Drop for Reaper {
         end_process(self.child);
         await_reaped(self.child);
     }
+}
+
+/// A pipe end's identity — its inode on Linux, where `/proc` names a held pipe
+/// `pipe:[<inode>]` — or `None` where it cannot be read.
+#[cfg(target_os = "linux")]
+fn pipe_identity(pipe: &impl std::os::fd::AsFd) -> Option<u64> {
+    rustix::fs::fstat(pipe).ok().map(|stat| stat.st_ino)
+}
+
+/// No `/proc` to match a pipe against off Linux.
+#[cfg(not(target_os = "linux"))]
+fn pipe_identity<T>(_pipe: &T) -> Option<u64> {
+    None
+}
+
+/// Whether a live member of the group `pgid` holds any of `pipes` open: a
+/// process whose `/proc/<pid>/stat` names the group and one of whose
+/// descriptors is `pipe:[<inode>]` for one of them. A zombie holds no
+/// descriptor, so a member that already exited never counts.
+#[cfg(target_os = "linux")]
+fn group_holds(pgid: u32, pipes: &[Option<u64>]) -> bool {
+    let held: Vec<String> = pipes
+        .iter()
+        .flatten()
+        .map(|inode| format!("pipe:[{inode}]"))
+        .collect();
+    if held.is_empty() {
+        return false;
+    }
+    let Ok(table) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    table.filter_map(Result::ok).any(|entry| {
+        let dir = entry.path();
+        let in_group = std::fs::read_to_string(dir.join("stat"))
+            .ok()
+            .and_then(|stat| stat_group(&stat))
+            .is_some_and(|group| group == pgid);
+        in_group
+            && std::fs::read_dir(dir.join("fd")).is_ok_and(|fds| {
+                fds.filter_map(Result::ok).any(|fd| {
+                    std::fs::read_link(fd.path()).is_ok_and(|target| {
+                        held.iter().any(|pipe| target.as_os_str() == pipe.as_str())
+                    })
+                })
+            })
+    })
+}
+
+/// Off Linux nothing can be read, so a clean run leaves its group alone, as
+/// it always did.
+#[cfg(not(target_os = "linux"))]
+fn group_holds(_pgid: u32, _pipes: &[Option<u64>]) -> bool {
+    false
+}
+
+/// The process group in one `/proc/<pid>/stat` line: the third field after
+/// the parenthesised command, which may itself hold spaces and parentheses.
+#[cfg(target_os = "linux")]
+fn stat_group(stat: &str) -> Option<u32> {
+    let (_, after) = stat.rsplit_once(") ")?;
+    after.split(' ').nth(2)?.parse().ok()
 }
 
 /// Block until the direct child `pid` has exited, and reap it. Only ever
@@ -2663,6 +2732,9 @@ fn run_one(
             "exec: the spawned child exposed no pipes to tee"
         ));
     };
+    // The pipes' identities, read before the drains take them: what a member
+    // of the group still holding one looks like on the clean path.
+    let pipes = [pipe_identity(&out_pipe), pipe_identity(&err_pipe)];
 
     // The live-capture key (CLOUD-430): this process, this dispatch, and this
     // command's position. Through the CLI the dispatch is always `0`, so the
@@ -2688,6 +2760,17 @@ fn run_one(
 
     let status = child.wait().context("wait for the wrapped command")?;
     reaper.reaped();
+    // A CLEAN EXIT ENDS AN OWNED GROUP STILL HOLDING THE PIPES (CLOUD-2789).
+    // Only the error and unwind paths signalled the group, so a child that
+    // exited 0 left a grandchild on its stdout running past `exec`, and the
+    // drain below waited out its whole budget on a pipe that could never
+    // close. A member holding a capture pipe is the run still running; one
+    // that let go of both is a background job the child meant to leave, and
+    // a clean run leaves it alone (`a_clean_managed_run_leaves_its_group_alone`).
+    // Read off the process table, not a clock: the holder is a fact now.
+    if reaper.grouped && group_holds(reaper.child, &pipes) {
+        reaper.end_group();
+    }
     let (received, escalated) = forwarding.finish_reporting();
     group.clear();
 
@@ -4235,6 +4318,20 @@ mod tests {
             alive.first("the background job outliving the clean run"),
             "yes"
         );
+    }
+
+    /// Fails by: a stat line's group read from the wrong field, or from inside
+    /// a command name that holds spaces and parentheses.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_stat_line_names_its_group_past_any_command_name() {
+        assert_eq!(super::stat_group("42 (sh) S 1 4242 4242 0"), Some(4242));
+        assert_eq!(
+            super::stat_group("42 (a) b (c) S 7 99 1 0"),
+            Some(99),
+            "the LAST `) ` ends the command name"
+        );
+        assert_eq!(super::stat_group("garbage"), None);
     }
 
     /// Fails by: a bundle running fewer commands than its width and failure
