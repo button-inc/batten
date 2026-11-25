@@ -41,7 +41,7 @@
 #MUTANT-SUITE crates/batten/tests/it/reach_review.rs
 #MUTANT inert-name-widened|s@^\tinert_name(assignment_name(assignment))$@\ttrue@|only_an_inert_assignment_or_a_bare_program_name_is_a_read
 #MUTANT pager-value-unread|s@^\tassignment_value(assignment) == "cat"$@\ttrue@|only_an_inert_assignment_or_a_bare_program_name_is_a_read
-#MUTANT program-path-unread|s@^\t\tprogram.program == program.name$@\t\ttrue@|only_an_inert_assignment_or_a_bare_program_name_is_a_read
+#MUTANT program-path-unread|s@^\t\tnot spelled_with_a_path(program)$@\t\ttrue@|only_an_inert_assignment_or_a_bare_program_name_is_a_read
 #MUTANT awk-directive-unread|s%^\tsome directive in {"@include", "@load"}$%\tsome directive in {"@nothing"}%|an_awk_directive_or_long_debug_is_a_write
 #MUTANT awk-debug-unread|s@"pretty-print", "profile", "debug"@"pretty-print", "profile"@|an_awk_directive_or_long_debug_is_a_write
 #MUTANT date-cluster-value-unread|s@^\tregex.match(`^-\[uR\]\*\[drf\]$`, arguments\[i - 1\])$@\tfalse@|an_honest_read_the_tip_refused_is_granted
@@ -251,7 +251,7 @@ read_only(call) if {
 	count(call.programs) > 0
 	every program in call.programs {
 		reads(program)
-		program.program == program.name
+		not spelled_with_a_path(program)
 	}
 	not some_output_redirect(call)
 	not some_live_assignment(call)
@@ -290,6 +290,12 @@ inert_name(name) if startswith(name, "CLICOLOR")
 assignment_name(assignment) := trim_suffix(split(assignment, "=")[0], "+")
 
 assignment_value(assignment) := substring(assignment, indexof(assignment, "=") + 1, -1)
+
+# A PROGRAM SPELLED WITH A PATH IS NOT THE PROGRAM ITS NAME ENDS IN (CLOUD-2840
+# review M4): `./ls`, `/tmp/x/ls` and `bin/cat` run whatever sits there, and the
+# allowlist above is a list of names `PATH` resolves. `program` is the token as
+# written; `name` is its last path component.
+spelled_with_a_path(program) if contains(program.program, "/")
 
 # GUARDED: `segments` is `null` on a non-shell call, and iterating null faults
 # the whole query, which reads as could-not-look for every module here.
