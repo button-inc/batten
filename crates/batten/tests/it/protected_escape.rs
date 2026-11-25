@@ -745,3 +745,67 @@ fn a_rollback_beside_a_fast_forward_that_left_the_path_alone_is_still_refused() 
     assert_eq!(code, Some(2), "the move never touched guarded.txt: {said}");
     assert!(said.contains("path write refused at guarded.txt"), "{said}");
 }
+
+/// One hook call made from `cwd`, the directory the host reports the call in.
+fn payload_in(event: &str, call: &str, command: &str, cwd: &Path) -> String {
+    let mut value: serde_json::Value =
+        serde_json::from_str(&payload(event, call, command)).expect("the payload parses");
+    value["cwd"] = serde_json::Value::from(cwd.display().to_string());
+    value.to_string()
+}
+
+/// A protected path resolves against the checkout the hook GOVERNS, never the
+/// call's cwd (CLOUD-2923, comment 3f743c0b). Fails by: the post-call
+/// comparison (or the pre-call gate) matching a path relative to ANOTHER git
+/// repository the call stands in, so a write to `guarded.txt` there is refused
+/// as though it were the governed checkout's `guarded.txt`.
+#[test]
+fn a_protected_looking_write_in_another_repository_is_admitted() {
+    let dir = fixture("protected-escape-other-repo");
+    // ANOTHER REPOSITORY, carrying no authority, with a tracked file at the
+    // governed checkout's protected path, as the incident's scratch clone had.
+    let other = Fixture::new("protected-escape-other-repo-theirs")
+        .file(GUARDED, "theirs\n")
+        .git()
+        .base_commit()
+        .build();
+    // NAMES NO PROTECTED PATH, so the pre-call gate allows it and the post-call
+    // comparison is what decides, as in the incident.
+    let command = "python3 tool.py";
+    let run = |call: &str, cwd: &Path, target: &Path| {
+        let pre = run_with_stdin(
+            cwd,
+            &["adjudicate", "--harness", "claude-code"],
+            &payload_in("PreToolUse", call, command, cwd),
+        );
+        std::fs::write(target.join(GUARDED), format!("changed by {call}\n"))
+            .expect("the write lands");
+        let post = run_with_stdin(
+            cwd,
+            &["adjudicate", "--harness", "claude-code"],
+            &payload_in("PostToolUse", call, command, cwd),
+        );
+        format!(
+            "{}{}{}",
+            stdout(&pre),
+            stdout(&post),
+            String::from_utf8_lossy(&post.stderr)
+        )
+    };
+    let said = run("other", &other, &other);
+    assert!(
+        !said.contains("path write refused"),
+        "a write in another repository is not the governed checkout's: {said}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join(GUARDED)).expect("the governed file"),
+        "guarded\n",
+        "premise: the governed checkout was never touched"
+    );
+    // ANTI-VACUITY: the same write in the governed checkout is still refused.
+    let said = run("governed", &dir, &dir);
+    assert!(
+        said.contains("path write refused at guarded.txt"),
+        "the governed checkout's protected path is still guarded: {said}"
+    );
+}
