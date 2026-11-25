@@ -213,11 +213,21 @@ impl Readings {
 /// The flag a stoppable walk ends on (CLOUD-2789): the disk watcher's, set when
 /// the run it watches returns. `None` is a walk no one stops — the hook's and
 /// `target prune`'s, which a deadline or the verb's own end bounds.
-pub(crate) type Halt<'a> = Option<&'a crate::lock_wait::Stop>;
+///
+/// A TRAIT, SO THIS MODULE NAMES NO STOP OF ITS OWN: the collector hands its
+/// lock wait's stop in, and `prune` reaches nothing new for it (the modules
+/// ratchet's propagation score, CLOUD-2789).
+pub(crate) type Halt<'a> = Option<&'a dyn Raised>;
 
-/// Whether `halt` has been set.
+/// A flag a stoppable walk ends on once it is raised.
+pub(crate) trait Raised {
+    /// Whether it has been raised.
+    fn raised(&self) -> bool;
+}
+
+/// Whether `halt` has been raised.
 pub(crate) fn halted(halt: Halt<'_>) -> bool {
-    halt.is_some_and(crate::lock_wait::Stop::is_raised)
+    halt.is_some_and(Raised::raised)
 }
 
 ///
