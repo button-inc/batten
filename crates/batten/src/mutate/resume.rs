@@ -323,7 +323,7 @@ pub fn held_cases(
             continue;
         };
         let index = schema::dependency_index(root, &format)?;
-        let build = format_build(&build, &unprobed_packages_digest(root, resources, &format));
+        let folds = unprobed_folds(root, resources, &format);
         let cases: std::collections::BTreeMap<(String, String), schema::Ran> = records
             .iter()
             .map(|record| (record.case.clone(), record.ran.clone()))
@@ -334,6 +334,15 @@ pub fn held_cases(
                 continue;
             }
             let (name, binary) = &record.case;
+            // THE CASE'S OWN PACKAGE'S UNPROBED FOLD (CLOUD-2904, C6).
+            let package = binary
+                .split_once("::")
+                .map_or(binary.as_str(), |(package, _)| package);
+            let fold = folds
+                .get(package)
+                .or_else(|| folds.get(EVERY_UNPROBED))
+                .map_or("", String::as_str);
+            let build = format_build(&build, fold);
             held.insert(
                 record.case.clone(),
                 expected(name, binary, &record.tested, &build, env),
@@ -351,6 +360,137 @@ fn format_build(build: &str, unprobed: &str) -> String {
     hasher.update(b"\x1f");
     hasher.update(unprobed.as_bytes());
     hasher.finalize().to_hex().to_string()
+}
+
+/// The key of every unprobed package folded into all cases alike
+/// ([`unprobed_folds`]): a case whose package is not a workspace member's.
+pub const EVERY_UNPROBED: &str = "*";
+
+/// Each workspace package's unprobed fold: by package name, the digest of
+/// the unprobed packages in its dependency closure (normal, dev and build
+/// dependencies, itself included), each as [`unprobed_packages_digest`]
+/// reads one; and under [`EVERY_UNPROBED`], every unprobed package.
+///
+/// PER PACKAGE, NEVER GLOBAL (CLOUD-2904, stage audit C6): folded into every
+/// case alike, the first lap touching a crate no case reaches re-keyed every
+/// record and cleared every reach record (640 s each time). A case runs code
+/// of an unprobed package only through its own package's dependencies.
+#[must_use]
+pub fn unprobed_folds(
+    root: &Path,
+    resources: &std::collections::BTreeMap<String, String>,
+    format: &schema::Format,
+) -> std::collections::BTreeMap<String, String> {
+    let manifests: Vec<(String, String, toml::Table)> = resources
+        .keys()
+        .filter_map(|path| {
+            let dir = match path.strip_suffix("Cargo.toml")? {
+                "" => "",
+                dir => dir.strip_suffix('/')?,
+            };
+            let table = crate::fsio::read_to_string(root.join(path))
+                .ok()?
+                .parse::<toml::Table>()
+                .ok()?;
+            let name = table.get("package")?.get("name")?.as_str()?.to_owned();
+            Some((name, dir.to_owned(), table))
+        })
+        .collect();
+    let dirs: std::collections::BTreeMap<&str, &str> = manifests
+        .iter()
+        .map(|(name, dir, _)| (name.as_str(), dir.as_str()))
+        .collect();
+    let mut digests: std::collections::BTreeMap<&str, String> = std::collections::BTreeMap::new();
+    for (_, dir, _) in &manifests {
+        digests.insert(
+            dir.as_str(),
+            unprobed_package_digest(root, resources, format, dir),
+        );
+    }
+    let depends: std::collections::BTreeMap<&str, Vec<&str>> = manifests
+        .iter()
+        .map(|(name, _, table)| (name.as_str(), workspace_dependencies(table, &dirs)))
+        .collect();
+    let mut folds = std::collections::BTreeMap::new();
+    let mut every = blake3::Hasher::new();
+    for (dir, digest) in &digests {
+        every.update(format!("{dir}\x1f{digest}\x1e").as_bytes());
+    }
+    folds.insert(
+        String::from(EVERY_UNPROBED),
+        every.finalize().to_hex().to_string(),
+    );
+    for (name, _, _) in &manifests {
+        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        let mut frontier = vec![name.as_str()];
+        while let Some(next) = frontier.pop() {
+            if seen.insert(next) {
+                frontier.extend(depends.get(next).into_iter().flatten().copied());
+            }
+        }
+        let mut hasher = blake3::Hasher::new();
+        for package in seen {
+            if let Some(dir) = dirs.get(package)
+                && let Some(digest) = digests.get(dir)
+            {
+                hasher.update(format!("{dir}\x1f{digest}\x1e").as_bytes());
+            }
+        }
+        folds.insert(name.clone(), hasher.finalize().to_hex().to_string());
+    }
+    folds
+}
+
+/// The workspace packages `manifest` depends on, by name: each entry of its
+/// dependency tables, top-level or under a target, that names a workspace
+/// package (`dirs`), directly or through `package = ..`.
+fn workspace_dependencies<'d>(
+    manifest: &toml::Table,
+    dirs: &std::collections::BTreeMap<&'d str, &'d str>,
+) -> Vec<&'d str> {
+    let mut tables: Vec<&toml::Table> = Vec::new();
+    for key in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        tables.extend(manifest.get(key).and_then(toml::Value::as_table));
+        for target in manifest
+            .get("target")
+            .and_then(toml::Value::as_table)
+            .into_iter()
+            .flat_map(toml::Table::values)
+        {
+            tables.extend(target.get(key).and_then(toml::Value::as_table));
+        }
+    }
+    tables
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, value)| {
+            let named = value
+                .get("package")
+                .and_then(toml::Value::as_str)
+                .unwrap_or(key);
+            dirs.get_key_value(named).map(|(name, _)| *name)
+        })
+        .collect()
+}
+
+/// The digest of one unprobed package at `package` (a tree directory), as
+/// [`unprobed_packages_digest`] reads it; empty where `format` probed it.
+fn unprobed_package_digest(
+    root: &Path,
+    resources: &std::collections::BTreeMap<String, String>,
+    format: &schema::Format,
+    package: &str,
+) -> String {
+    let only: std::collections::BTreeMap<String, String> = resources
+        .iter()
+        .filter(|(path, _)| {
+            package.is_empty()
+                || path.starts_with(&format!("{package}/"))
+                || **path == format!("{package}/Cargo.toml")
+        })
+        .map(|(path, id)| (path.clone(), id.clone()))
+        .collect();
+    unprobed_packages_digest(root, &only, format)
 }
 
 /// The digest of every Rust source, by content id, of every workspace package
@@ -2211,6 +2351,57 @@ mod tests {
         )
         .unwrap();
         assert_ne!(held, keyed(), "the helper's edit moves the key");
+    }
+
+    /// C6 (CLOUD-2904, stage audit): an unprobed package's edit moves the
+    /// fold of a package depending on it, and no other's.
+    ///
+    /// Fails by: one global unprobed digest, so a crate no case reaches
+    /// re-keyed every case and cleared every reach record.
+    #[test]
+    fn an_unprobed_package_moves_only_its_dependents_fold() {
+        let root = crate::scratch::scratch("test-run-unprobed-folds");
+        for (path, text) in [
+            ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n"),
+            ("crates/app/Cargo.toml", "[package]\nname = \"app\"\n"),
+            (
+                "crates/user/Cargo.toml",
+                "[package]\nname = \"user\"\n[dev-dependencies]\nhelper = { path = \"../helper\" }\n",
+            ),
+            ("crates/helper/Cargo.toml", "[package]\nname = \"helper\"\n"),
+        ] {
+            std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.join(path), text).unwrap();
+        }
+        let format = schema::Format {
+            probed: [
+                String::from("crates/app/src/lib.rs"),
+                String::from("crates/user/src/lib.rs"),
+            ]
+            .into(),
+            ..schema::Format::default()
+        };
+        let ids = |helper: &str| -> std::collections::BTreeMap<String, String> {
+            [
+                ("Cargo.toml", "w"),
+                ("crates/app/Cargo.toml", "a"),
+                ("crates/user/Cargo.toml", "u"),
+                ("crates/helper/Cargo.toml", "h"),
+                ("crates/app/src/lib.rs", "1"),
+                ("crates/user/src/lib.rs", "1"),
+                ("crates/helper/src/lib.rs", helper),
+            ]
+            .map(|(path, id)| (path.to_owned(), id.to_owned()))
+            .into()
+        };
+        let held = unprobed_folds(&root, &ids("1"), &format);
+        let moved = unprobed_folds(&root, &ids("2"), &format);
+        assert_eq!(held["app"], moved["app"], "a package not depending on it");
+        assert_ne!(held["user"], moved["user"], "a package depending on it");
+        assert_ne!(
+            held[EVERY_UNPROBED], moved[EVERY_UNPROBED],
+            "every unprobed"
+        );
     }
 
     /// Fails by: a stale input state's journal kept (the store grows a run per
