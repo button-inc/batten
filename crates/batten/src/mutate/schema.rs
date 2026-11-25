@@ -1191,7 +1191,13 @@ fn probe_sites(
         }
         hasher.update(token.text().as_bytes());
         hasher.update(b"\x1f");
-        own.push_str(token.text());
+        if token.kind() != SyntaxKind::OUTER_DOC_COMMENT
+            && token.kind() != SyntaxKind::STRING
+            && token.kind() != SyntaxKind::BYTE_STRING
+            && token.kind() != SyntaxKind::C_STRING
+        {
+            own.push_str(token.text());
+        }
         token_mentions(&token, place, mentions);
     }
     // AN ITEM'S POSITION ONLY WHERE ITS OWN TOKENS OBSERVE IT (CLOUD-2904):
@@ -1234,16 +1240,17 @@ fn probe_one(
     probed: &mut Probed,
 ) -> Range<usize> {
     let mut text = function.syntax().to_string();
+    let code = code_text(function.syntax());
     let start = usize::from(function.syntax().text_range().start());
     let local = probed.probes.len();
     probed
         .compiled
         .positions
         .insert(local, position_in(whole, start));
-    if text.contains("track_caller") || text.contains("Location::caller") {
+    if code.contains("track_caller") || code.contains("Location::caller") {
         probed.compiled.observers.insert(local);
     }
-    if position_sensitive(&text) {
+    if position_sensitive(&code) {
         text.push('\x1f');
         text.push_str(&position_in(whole, start));
     }
@@ -1285,7 +1292,12 @@ fn record_includes(
         .map_or("", |(dir, _)| dir)
         .to_owned();
     for node in root.descendants() {
-        let target = if let Some(call) = ast::MacroCall::cast(node.clone()) {
+        let as_target = |included: Option<Included>| match included {
+            Some(Included::Built) => None,
+            Some(Included::File(path)) => Some(path),
+            Some(Included::Unknown) | None => Some(String::from("?")),
+        };
+        let targets: Vec<String> = if let Some(call) = ast::MacroCall::cast(node.clone()) {
             let named = call
                 .path()
                 .and_then(|path| path.segment())
@@ -1297,54 +1309,71 @@ fn record_includes(
             ) {
                 continue;
             }
-            match include_path(&call, &place.file) {
-                Some(Included::Built) => continue,
-                Some(Included::File(path)) => path,
-                Some(Included::Unknown) | None => String::from("?"),
-            }
+            as_target(include_path(&call, &place.file))
+                .into_iter()
+                .collect()
         } else if let Some(module) = ast::Module::cast(node.clone()) {
             let Some(value) = ast::HasAttrs::attrs(&module).find_map(|attr| path_attr(&attr))
             else {
                 continue;
             };
-            tree_join(&dir, &value).unwrap_or_else(|| String::from("?"))
+            vec![tree_join(&dir, &value).unwrap_or_else(|| String::from("?"))]
+        } else if node.kind() == SyntaxKind::TOKEN_TREE {
+            nested_includes(&node, &place.file)
+                .into_iter()
+                .filter_map(|included| as_target(Some(included)))
+                .collect()
         } else {
             continue;
         };
-        let at = usize::from(node.text_range().start());
-        let owner = probed
-            .functions
-            .iter()
-            .enumerate()
-            .filter(|(_, (span, _))| span.start <= at && at < span.end)
-            .min_by_key(|(_, (span, _))| span.end - span.start)
-            .map(|(id, _)| id);
-        if let Some(id) = owner {
-            probed
-                .compiled
-                .probe_includes
-                .entry(id)
-                .or_default()
-                .insert(target);
-            continue;
+        for target in targets {
+            charge_include(&node, target, place, widened, probed);
         }
-        let item = if ast::Module::can_cast(node.kind()) {
-            ast::Item::cast(node.clone())
-        } else {
-            node.ancestors().skip(1).find_map(ast::Item::cast)
-        };
-        let keys = item.map_or_else(
-            || vec![String::new()],
-            |item| definitions(&item, place, widened),
-        );
-        for key in keys {
-            probed
-                .compiled
-                .item_includes
-                .entry(key)
-                .or_default()
-                .insert(target.clone());
-        }
+    }
+}
+
+/// Charge the include `target` written at `node` to the innermost probed
+/// function holding it, or else to the item it sits in ([`record_includes`]).
+fn charge_include(
+    node: &SyntaxNode,
+    target: String,
+    place: &FileScope,
+    widened: &BTreeSet<String>,
+    probed: &mut Probed,
+) {
+    let at = usize::from(node.text_range().start());
+    let owner = probed
+        .functions
+        .iter()
+        .enumerate()
+        .filter(|(_, (span, _))| span.start <= at && at < span.end)
+        .min_by_key(|(_, (span, _))| span.end - span.start)
+        .map(|(id, _)| id);
+    if let Some(id) = owner {
+        probed
+            .compiled
+            .probe_includes
+            .entry(id)
+            .or_default()
+            .insert(target);
+        return;
+    }
+    let item = if ast::Module::can_cast(node.kind()) {
+        ast::Item::cast(node.clone())
+    } else {
+        node.ancestors().skip(1).find_map(ast::Item::cast)
+    };
+    let keys = item.map_or_else(
+        || vec![String::new()],
+        |item| definitions(&item, place, widened),
+    );
+    for key in keys {
+        probed
+            .compiled
+            .item_includes
+            .entry(key)
+            .or_default()
+            .insert(target.clone());
     }
 }
 
@@ -2004,6 +2033,31 @@ fn member_names(item: &ast::Item) -> Vec<String> {
 /// whole and with its position, since a line shift above it changes what it
 /// computes (CLOUD-2904).
 fn position_sensitive(text: &str) -> bool {
+    observes(text)
+}
+
+/// The code `node` is written in: its tokens with no comment, doc comment or
+/// string literal, run together. What [`position_sensitive`] reads.
+///
+/// NEVER ITS DOCS (CLOUD-2904): `Compiled`'s own doc comments name `line!`
+/// and `track_caller`, and read as markers they keyed 91% of the probed
+/// functions at their position, so a blank line above them re-keyed them.
+fn code_text(node: &SyntaxNode) -> String {
+    node.descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+        .filter(|token| {
+            !unkeyed(token.kind())
+                && token.kind() != SyntaxKind::OUTER_DOC_COMMENT
+                && token.kind() != SyntaxKind::STRING
+                && token.kind() != SyntaxKind::BYTE_STRING
+                && token.kind() != SyntaxKind::C_STRING
+        })
+        .map(|token| token.text().to_owned())
+        .collect()
+}
+
+/// Whether code text `text` names a position marker.
+fn observes(text: &str) -> bool {
     ["line!", "column!", "track_caller", "Location::caller"]
         .iter()
         .any(|marker| text.contains(marker))
@@ -2205,7 +2259,7 @@ fn visible_from(mention: &str, definition: &str) -> bool {
 /// two tokens is kept as a line of its own (CLOUD-2904).
 fn keyed_text(node: &SyntaxNode) -> String {
     let whole = node.to_string();
-    if position_sensitive(&whole) {
+    if position_sensitive(&code_text(node)) {
         return format!("//@{}\n{whole}", position_of(node));
     }
     let mut text = String::new();
@@ -6011,7 +6065,8 @@ pub fn case_digests<'c>(
     type Named =
         std::collections::HashMap<(Vec<usize>, BTreeSet<String>), (blake3::Hash, Vec<usize>)>;
     let mut parsed: std::collections::BTreeMap<String, Parsed> = std::collections::BTreeMap::new();
-    let mut shared: std::collections::HashMap<String, (Vec<u8>, Vec<Shared>)> =
+    let mut shared: std::collections::HashMap<String, TestCrate> = std::collections::HashMap::new();
+    let mut file_mentions: std::collections::HashMap<String, BTreeSet<String>> =
         std::collections::HashMap::new();
     let mut digests = std::collections::BTreeMap::new();
     let mut named_parts: Named = std::collections::HashMap::new();
@@ -6037,6 +6092,7 @@ pub fn case_digests<'c>(
         // The test's own text and its module's helpers, from the first source
         // that holds it: what a shared module is reached FROM.
         let mut own: Option<Vec<String>> = None;
+        let mut unfound: Vec<String> = Vec::new();
         for file in case_sources(package_dirs, name, binary) {
             if file.ends_with("common/mod.rs") {
                 continue;
@@ -6061,16 +6117,16 @@ pub fn case_digests<'c>(
                 }
                 None => {
                     hasher.update(bytes);
+                    unfound.push(file.clone());
                 }
             }
         }
-        crate_part(
+        let crate_mentions = crate_part(
             &mut hasher,
-            root,
-            package_dirs,
+            (root, package_dirs),
             case,
             own.as_ref(),
-            &mut shared,
+            (&mut shared, depends),
         );
         // ONCE PER DISTINCT PROBE SET AND OWN-TEXT NAMES, OVER A GRAPH INDEXED
         // ONCE PER SWEEP (#1276). Measured: the union of every reached name's
@@ -6080,7 +6136,7 @@ pub fn case_digests<'c>(
         // so the walk's order is the names', and each name's items are hashed
         // once. A case's own text starts the walk too (CLOUD-2904): a `const`
         // a test names directly is in no probe's names.
-        let outside: BTreeSet<String> = own
+        let mut outside: BTreeSet<String> = own
             .iter()
             .flatten()
             .flat_map(|text| {
@@ -6091,6 +6147,32 @@ pub fn case_digests<'c>(
                 )
             })
             .collect();
+        // A CASE NO SOURCE NAMES STARTS THE WALK FROM ALL ITS FILES SAY
+        // (CLOUD-2904): an `rstest` case, a macro's test or a `mod.rs` module
+        // has no own text, and a `const` its file names was in no key.
+        if own.is_none() {
+            for file in &unfound {
+                outside.extend(
+                    file_mentions
+                        .entry(file.clone())
+                        .or_insert_with(|| {
+                            let text =
+                                crate::fsio::read_to_string(root.join(file)).unwrap_or_default();
+                            mentions_in(
+                                &batten_facts::source::rust_parse(
+                                    &text,
+                                    ra_ap_syntax::Edition::Edition2024,
+                                )
+                                .syntax_node(),
+                                &FileScope::unscoped(),
+                            )
+                        })
+                        .iter()
+                        .cloned(),
+                );
+            }
+            outside.extend(crate_mentions.into_iter().flatten());
+        }
         let key: Vec<usize> = ran.into_iter().flatten().copied().collect();
         let (named, defined) = named_parts
             .entry((key, outside.clone()))
@@ -6113,46 +6195,143 @@ pub fn case_digests<'c>(
     digests
 }
 
-/// The shared crate part of a case's digest ([`case_digests`]): every other
-/// file of its test crate ([`crate_sources`]), by what its own text `own`
-/// reaches, or whole where it has none; each crate's files read and parsed
-/// once into `shared`.
-///
-/// EVERY OTHER FILE OF THE TEST'S CRATE, BY WHAT IT REACHES (CLOUD-2904):
-/// `common/mod.rs` alone left a sibling module a case calls into, the crate
-/// root's `#[global_allocator]` and `common`'s own submodules unkeyed.
-fn crate_part(
-    hasher: &mut blake3::Hasher,
-    root: &std::path::Path,
-    package_dirs: &std::collections::BTreeMap<String, String>,
-    (name, binary): &Case,
-    own: Option<&Vec<String>>,
-    shared: &mut std::collections::HashMap<String, (Vec<u8>, Vec<Shared>)>,
-) {
-    use ra_ap_syntax::ast::HasModuleItem as _;
-    let Some(files) = crate_sources(root, package_dirs, name, binary) else {
-        return;
-    };
-    let (bytes, items) = shared.entry(binary.clone()).or_insert_with(|| {
-        let mut bytes = Vec::new();
+/// A test crate as [`crate_part`] keys it, read once per binary.
+struct TestCrate {
+    /// Every source's keyed text, path first: what a case with no own text keys.
+    whole: Vec<u8>,
+    /// Every item, through inline modules.
+    items: Vec<Shared>,
+    /// Every file an include macro reads at compile time; `?` for one no
+    /// syntax names.
+    includes: BTreeSet<String>,
+    /// Every name its sources mention.
+    mentions: BTreeSet<String>,
+}
+
+impl TestCrate {
+    fn read(root: &std::path::Path, files: &[String]) -> Self {
+        use ra_ap_syntax::ast::HasModuleItem as _;
+        let mut whole = Vec::new();
         let mut items = Vec::new();
-        for file in &files {
+        let mut includes = BTreeSet::new();
+        let mut mentions = BTreeSet::new();
+        for file in files {
             let Ok(source) = crate::fsio::read_to_string(root.join(file)) else {
                 continue;
             };
-            bytes.extend(format!("\x1d{file}\x1f").as_bytes());
-            bytes.extend(source.as_bytes());
+            whole.extend(format!("\x1d{file}\x1f").as_bytes());
             let parse =
                 batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024);
+            let tree = parse.syntax_node();
+            for nested in tree
+                .descendants()
+                .filter(|node| node.kind() == SyntaxKind::TOKEN_TREE)
+                .flat_map(|node| nested_includes(&node, file))
+            {
+                match nested {
+                    Included::File(path) => {
+                        includes.insert(path);
+                    }
+                    Included::Built => {}
+                    Included::Unknown => {
+                        includes.insert(String::from("?"));
+                    }
+                }
+            }
+            for call in tree.descendants().filter_map(ast::MacroCall::cast) {
+                let named = call
+                    .path()
+                    .and_then(|path| path.segment())
+                    .and_then(|segment| segment.name_ref())
+                    .map(|name| name.text().to_string());
+                if !named.is_some_and(|named| INCLUDES.contains(&named.as_str())) {
+                    continue;
+                }
+                match include_target(&call, file) {
+                    Included::File(path) => {
+                        includes.insert(path);
+                    }
+                    Included::Built => {}
+                    Included::Unknown => {
+                        includes.insert(String::from("?"));
+                    }
+                }
+            }
+            mentions.extend(mentions_in(&tree, &FileScope::unscoped()));
             if !parse.errors().is_empty() {
+                whole.extend(source.as_bytes());
                 items.push(Shared::whole(file, &source));
                 continue;
             }
-            items.extend(parse.tree().items().map(|item| Shared::of(&item)));
+            whole.extend(keyed_text(&tree).as_bytes());
+            for item in parse.tree().items() {
+                shared_items(item, &mut items);
+            }
         }
-        (bytes, items)
-    });
+        Self {
+            whole,
+            items,
+            includes,
+            mentions,
+        }
+    }
+}
+
+/// `item` as shared items, and each item of an inline module inside it.
+///
+/// THROUGH INLINE MODULES (CLOUD-2904): a test in `mod inner` calling
+/// `super::helper` names `helper`, which a module item answers to only as
+/// `inner`.
+fn shared_items(item: ast::Item, out: &mut Vec<Shared>) {
+    use ra_ap_syntax::ast::HasModuleItem as _;
+    if let ast::Item::Module(module) = &item
+        && let Some(list) = module.item_list()
+    {
+        for inner in list.items() {
+            shared_items(inner, out);
+        }
+    }
+    out.push(Shared::of(&item));
+}
+
+/// The shared crate part of a case's digest ([`case_digests`]): every file
+/// of its test crate ([`crate_sources`]), by what its own text `own` reaches,
+/// or by every file's keyed text where it has none; and every file the crate
+/// includes, by content. Each crate read once into `shared`. Returns what the
+/// crate's files name, for a case with no own text to start its walk from.
+///
+/// EVERY FILE OF THE TEST'S CRATE, BY WHAT IT REACHES (CLOUD-2904):
+/// `common/mod.rs` alone left a sibling module a case calls into, the crate
+/// root's `#[global_allocator]` and `common`'s own submodules unkeyed. AND THE
+/// CASE'S OWN FILE TOO: read once per binary, a crate less the first case's
+/// file lacked it for every later case calling into it.
+fn crate_part(
+    hasher: &mut blake3::Hasher,
+    (root, package_dirs): (
+        &std::path::Path,
+        &std::collections::BTreeMap<String, String>,
+    ),
+    (_, binary): &Case,
+    own: Option<&Vec<String>>,
+    (shared, depends): (
+        &mut std::collections::HashMap<String, TestCrate>,
+        &Depends<'_>,
+    ),
+) -> Option<BTreeSet<String>> {
+    if !shared.contains_key(binary) {
+        let files = crate_sources(root, package_dirs, binary)?;
+        shared.insert(binary.clone(), TestCrate::read(root, &files));
+    }
+    let test_crate = shared.get(binary)?;
     hasher.update(b"\x17");
+    for target in &test_crate.includes {
+        hasher.update(format!("\x16{target}\x1f").as_bytes());
+        if target == "?" {
+            hasher.update(depends.untraced.as_bytes());
+        } else {
+            hasher.update(resource_id(depends.resources, target).as_bytes());
+        }
+    }
     match own {
         Some(texts) => {
             let wanted: BTreeSet<String> = texts
@@ -6164,10 +6343,12 @@ fn crate_part(
                     )
                 })
                 .collect();
-            hasher.update(reached_digest(items, wanted).as_bytes());
+            hasher.update(reached_digest(&test_crate.items, wanted).as_bytes());
+            None
         }
         None => {
-            hasher.update(bytes);
+            hasher.update(&test_crate.whole);
+            Some(test_crate.mentions.clone())
         }
     }
 }
@@ -6287,14 +6468,16 @@ fn compiled_part(
     }
 }
 
-/// Every source of an integration case's test crate besides its own module
-/// file: the crate root, sibling modules and `common` with its submodules
-/// under `tests/<target>/`, and a Rust-book `tests/common/` beside a
-/// single-file target. `None` for a unit case.
+/// Every source of an integration case's test crate: the files its module
+/// tree declares from each root the target can have ([`module_files`]), and
+/// every Rust file under `tests/<target>/` and a Rust-book `tests/common/`,
+/// which a module a macro declares is in. `None` for a unit case.
+///
+/// BY THE MODULE TREE (CLOUD-2904): a single-file target's `mod support;`,
+/// and a `#[path]` module outside both directories, were in no walk.
 fn crate_sources(
     root: &std::path::Path,
     package_dirs: &std::collections::BTreeMap<String, String>,
-    name: &str,
     binary: &str,
 ) -> Option<Vec<String>> {
     let (package, target) = binary.split_once("::")?;
@@ -6307,11 +6490,15 @@ fn crate_sources(
     } else {
         format!("{dir}/")
     };
-    let own: BTreeSet<String> = case_sources(package_dirs, name, binary)
-        .into_iter()
-        .filter(|file| !file.ends_with("common/mod.rs"))
-        .collect();
     let mut files = BTreeSet::new();
+    let mut roots = vec![
+        format!("{prefix}tests/{target}.rs"),
+        format!("{prefix}tests/{target}/main.rs"),
+    ];
+    roots.extend(declared_test_root(root, &prefix, target));
+    for crate_root in roots {
+        files.extend(module_files(root, &crate_root));
+    }
     for walked in [
         format!("{prefix}tests/{target}"),
         format!("{prefix}tests/common"),
@@ -6329,12 +6516,96 @@ fn crate_sources(
             }
         }
     }
-    Some(
-        files
-            .into_iter()
-            .filter(|file| !own.contains(file))
-            .collect(),
-    )
+    Some(files.into_iter().collect())
+}
+
+/// The root a package's manifest declares for test target `target`, as a
+/// tree path.
+fn declared_test_root(root: &std::path::Path, prefix: &str, target: &str) -> Option<String> {
+    let text = crate::fsio::read_to_string(root.join(format!("{prefix}Cargo.toml"))).ok()?;
+    let table = text.parse::<toml::Table>().ok()?;
+    let path = table
+        .get("test")?
+        .as_array()?
+        .iter()
+        .find(|test| test.get("name").and_then(toml::Value::as_str) == Some(target))?
+        .get("path")?
+        .as_str()?;
+    tree_join(prefix.trim_end_matches('/'), path)
+}
+
+/// The files of the crate rooted at `crate_root` by its module tree: each
+/// `mod name;` as `name.rs` or `name/mod.rs` under its parent's directory,
+/// through inline modules, and a `#[path]` one where it says.
+fn module_files(root: &std::path::Path, crate_root: &str) -> BTreeSet<String> {
+    use ast::{HasAttrs as _, HasName as _};
+    let dir_of = |file: &str| {
+        file.rsplit_once('/')
+            .map_or_else(String::new, |(dir, _)| dir.to_owned())
+    };
+    let mut files = BTreeSet::new();
+    let mut queue = vec![(crate_root.to_owned(), dir_of(crate_root))];
+    while let Some((file, dir)) = queue.pop() {
+        let Ok(source) = crate::fsio::read_to_string(root.join(&file)) else {
+            continue;
+        };
+        if !files.insert(file.clone()) {
+            continue;
+        }
+        let parse = batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024);
+        for module in parse
+            .syntax_node()
+            .descendants()
+            .filter_map(ast::Module::cast)
+        {
+            if module.item_list().is_some() {
+                continue;
+            }
+            let Some(name) = module.name().map(|name| name.text().to_string()) else {
+                continue;
+            };
+            let enclosing: Vec<ast::Module> = module
+                .syntax()
+                .ancestors()
+                .skip(1)
+                .filter_map(ast::Module::cast)
+                .collect();
+            let mut base = Some(dir.clone());
+            for inline in enclosing.iter().rev() {
+                let step = inline
+                    .attrs()
+                    .find_map(|attr| path_attr(&attr))
+                    .or_else(|| inline.name().map(|name| name.text().to_string()));
+                base = base
+                    .zip(step)
+                    .and_then(|(base, step)| tree_join(&base, &step));
+            }
+            let Some(base) = base else {
+                continue;
+            };
+            if let Some(path) = module.attrs().find_map(|attr| path_attr(&attr)) {
+                let from = if enclosing.is_empty() {
+                    dir_of(&file)
+                } else {
+                    base
+                };
+                if let Some(found) = tree_join(&from, &path) {
+                    let child = dir_of(&found);
+                    queue.push((found, child));
+                }
+                continue;
+            }
+            for leaf in [format!("{name}.rs"), format!("{name}/mod.rs")] {
+                if let (Some(found), Some(child)) =
+                    (tree_join(&base, &leaf), tree_join(&base, &name))
+                    && root.join(&found).is_file()
+                {
+                    queue.push((found, child));
+                }
+            }
+        }
+    }
+    files
 }
 
 /// The digest of the items of a shared test module (`common`) that `texts`
@@ -8703,8 +8974,40 @@ fn include_target(call: &ast::MacroCall, file: &str) -> Included {
 }
 
 fn include_path(call: &ast::MacroCall, file: &str) -> Option<Included> {
+    include_path_in(&call.token_tree()?, file)
+}
+
+/// What each include macro written inside the token tree `tree` reads.
+///
+/// TOKENS, NEVER A `MacroCall` (CLOUD-2904): one a macro's arguments hold,
+/// `assert_eq!(include_str!("x"), ..)`, is in no call node, and its file was
+/// in no key.
+fn nested_includes(tree: &SyntaxNode, file: &str) -> Vec<Included> {
+    let children: Vec<ra_ap_syntax::SyntaxElement> = tree
+        .children_with_tokens()
+        .filter(|element| !unkeyed(element.kind()))
+        .collect();
+    children
+        .windows(3)
+        .filter(|window| {
+            window[0]
+                .as_token()
+                .is_some_and(|token| INCLUDES.contains(&token.text()))
+                && window[1].kind() == SyntaxKind::BANG
+                && window[2].kind() == SyntaxKind::TOKEN_TREE
+        })
+        .map(|window| {
+            window[2]
+                .as_node()
+                .and_then(|node| ast::TokenTree::cast(node.clone()))
+                .and_then(|tree| include_path_in(&tree, file))
+                .unwrap_or(Included::Unknown)
+        })
+        .collect()
+}
+
+fn include_path_in(tree: &ast::TokenTree, file: &str) -> Option<Included> {
     use ra_ap_syntax::AstToken as _;
-    let tree = call.token_tree()?;
     let mut strings = Vec::new();
     let mut idents = Vec::new();
     for token in tree
@@ -14434,6 +14737,229 @@ mod tests {
         );
     }
 
+    /// One integration case's digest over `files`, with `src/lib.rs` the
+    /// probed source and the case running nothing probed.
+    fn crate_case(
+        label: &str,
+        (name, binary): (&str, &str),
+        files: &[(&str, &str)],
+        ids: &[(&str, &str)],
+    ) -> String {
+        let case = (name.to_owned(), binary.to_owned());
+        let cases: BTreeSet<Case> = [case.clone()].into();
+        let executed = [(case.clone(), BTreeSet::new())].into();
+        let resources = ids
+            .iter()
+            .map(|(path, id)| ((*path).to_owned(), (*id).to_owned()))
+            .collect();
+        tree_digests(label, &cases, &executed, files, &resources)[&case].clone()
+    }
+
+    /// R4-2 (CLOUD-2904, round 4): a crate's shared items are the same for
+    /// every case of it, so the second case of a binary keys the first case's
+    /// module file it calls into.
+    ///
+    /// Fails by: the shared items cached per binary over the first case's
+    /// crate minus that case's own file, which the second case then lacks.
+    #[test]
+    fn a_later_case_keys_an_earlier_cases_module_it_calls() {
+        let tree = |label: &str, value: &str| {
+            let first = (String::from("a::ta"), String::from("fix::it"));
+            let second = (String::from("b::tb"), String::from("fix::it"));
+            let cases: BTreeSet<Case> = [first.clone(), second.clone()].into();
+            let executed = [
+                (first.clone(), BTreeSet::new()),
+                (second.clone(), BTreeSet::new()),
+            ]
+            .into();
+            let a = format!("pub fn helper() -> u8 {{ {value} }}\n#[test]\nfn ta() {{}}\n");
+            tree_digests(
+                label,
+                &cases,
+                &executed,
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    ("tests/it/main.rs", "mod a;\nmod b;\n"),
+                    ("tests/it/a.rs", &a),
+                    (
+                        "tests/it/b.rs",
+                        "#[test]\nfn tb() { assert_eq!(crate::a::helper(), 1); }\n",
+                    ),
+                ],
+                &std::collections::BTreeMap::new(),
+            )[&second]
+                .clone()
+        };
+        assert_ne!(tree("schema-r4-2-a", "1"), tree("schema-r4-2-b", "2"));
+    }
+
+    /// R4-3 (CLOUD-2904, round 4): a test in a nested module of an
+    /// integration file keys a helper function of the module enclosing it.
+    ///
+    /// Fails by: the enclosing module's functions dropped from the test's
+    /// text and its own file left out of the crate's shared items.
+    #[test]
+    fn a_nested_integration_test_keys_its_enclosing_modules_helper() {
+        let tree = |label: &str, value: &str| {
+            let n = format!(
+                "fn helper() -> u8 {{ {value} }}\nmod inner {{\n    #[test]\n    \
+                 fn t() {{ assert_eq!(super::helper(), 1); }}\n}}\n"
+            );
+            crate_case(
+                label,
+                ("n::inner::t", "fix::it"),
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    ("tests/it/main.rs", "mod n;\n"),
+                    ("tests/it/n.rs", &n),
+                ],
+                &[],
+            )
+        };
+        assert_ne!(tree("schema-r4-3-a", "1"), tree("schema-r4-3-b", "2"));
+    }
+
+    /// R4-4 (CLOUD-2904, round 4): a file an integration test includes at
+    /// compile time is keyed by content.
+    ///
+    /// Fails by: includes recorded only in probed files, never in `tests/`.
+    #[test]
+    fn an_integration_tests_include_keys_the_case() {
+        let tree = |label: &str, id: &str| {
+            crate_case(
+                label,
+                ("s::t", "fix::it"),
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    ("tests/it/main.rs", "mod s;\n"),
+                    (
+                        "tests/it/s.rs",
+                        "#[test]\nfn t() { assert_eq!(include_str!(\"data.txt\"), \"x\"); }\n",
+                    ),
+                ],
+                &[("tests/it/data.txt", id)],
+            )
+        };
+        assert_ne!(tree("schema-r4-4-a", "1"), tree("schema-r4-4-b", "2"));
+        let nested = render_in(
+            "pub fn f() -> bool { assert_eq!(include_str!(\"x.txt\"), \"\"); true }\n",
+            &[],
+            &BTreeSet::new(),
+            Some(0),
+            &FileScope::of("src/lib.rs"),
+        );
+        assert_eq!(
+            nested.compiled.probe_includes,
+            [(0, [String::from("src/x.txt")].into())].into(),
+            "an include in a macro's arguments, in a probed file"
+        );
+    }
+
+    /// R4-5 (CLOUD-2904, round 4): a case whose function no source names as
+    /// listed (an `rstest` case, a macro's test, a `mod.rs` module) still
+    /// keys what its file names, as a found case keys what its own text does.
+    ///
+    /// Fails by: an unfound case's file starting no walk, so a `const` it
+    /// names in the crate under test is unkeyed.
+    #[test]
+    fn an_unfound_case_keys_what_its_file_names() {
+        let tree = |label: &str, value: &str| {
+            let lib = format!("pub const LIMIT: u8 = {value};\npub fn f() {{}}\n");
+            crate_case(
+                label,
+                ("r::t::case_1", "fix::it"),
+                &[
+                    ("src/lib.rs", &lib),
+                    ("tests/it/main.rs", "mod r;\n"),
+                    (
+                        "tests/it/r.rs",
+                        "#[rstest]\n#[case(1)]\nfn t(#[case] n: u8) { assert_eq!(n, fix::LIMIT); }\n",
+                    ),
+                ],
+                &[],
+            )
+        };
+        assert_ne!(tree("schema-r4-5-a", "1"), tree("schema-r4-5-b", "2"));
+    }
+
+    /// R4-6 (CLOUD-2904, round 4): a single-file target's own module beside
+    /// it, not named `common`, is keyed.
+    ///
+    /// Fails by: a single-file target's crate read as its `tests/<target>/`
+    /// directory and `tests/common/` alone.
+    #[test]
+    fn a_single_file_targets_own_module_keys_the_case() {
+        let tree = |label: &str, value: &str| {
+            let support = format!("pub fn v() -> u8 {{ {value} }}\n");
+            crate_case(
+                label,
+                ("t", "fix::foo"),
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    (
+                        "tests/foo.rs",
+                        "mod support;\n#[test]\nfn t() { assert_eq!(support::v(), 1); }\n",
+                    ),
+                    ("tests/support.rs", &support),
+                ],
+                &[],
+            )
+        };
+        assert_ne!(tree("schema-r4-6-a", "1"), tree("schema-r4-6-b", "2"));
+    }
+
+    /// R4-17 (CLOUD-2904, round 4): a `#[path]` module of a test crate and a
+    /// file it `include!`s are keyed.
+    ///
+    /// Fails by: a `#[path]` module outside the walked directories, or an
+    /// `include!`d file, unkeyed (`tests/policy_modules.rs`,
+    /// `tests/it/fuzz_corpus.rs`).
+    #[test]
+    fn a_test_crates_path_module_and_include_key_the_case() {
+        let pathed = |label: &str, value: &str| {
+            let helpers = format!("pub fn v() -> u8 {{ {value} }}\n");
+            crate_case(
+                label,
+                ("t", "fix::pm"),
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    (
+                        "tests/pm.rs",
+                        "#[path = \"shared/helpers.rs\"]\nmod helpers;\n\
+                         #[test]\nfn t() { assert_eq!(helpers::v(), 1); }\n",
+                    ),
+                    ("tests/shared/helpers.rs", &helpers),
+                ],
+                &[],
+            )
+        };
+        assert_ne!(
+            pathed("schema-r4-17-a", "1"),
+            pathed("schema-r4-17-b", "2"),
+            "the #[path] module"
+        );
+        let included = |label: &str, id: &str| {
+            crate_case(
+                label,
+                ("fz::t", "fix::it"),
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    ("tests/it/main.rs", "mod fz;\n"),
+                    (
+                        "tests/it/fz.rs",
+                        "include!(\"../../fuzz/p.rs\");\n#[test]\nfn t() { assert!(prop()); }\n",
+                    ),
+                ],
+                &[("fuzz/p.rs", id)],
+            )
+        };
+        assert_ne!(
+            included("schema-r4-17-c", "1"),
+            included("schema-r4-17-d", "2"),
+            "the include!d file"
+        );
+    }
+
     /// S3 (CLOUD-2904, round 3): a test's text carries the items of every
     /// module enclosing it that it reaches, so an edit to a top-level `const`
     /// a test in `mod tests` names moves the test's text, while an edit to a
@@ -17245,6 +17771,34 @@ pub fn repo() -> u8 {{ scratch() }}
         );
     }
 
+    /// R4-12 (CLOUD-2904, round 4): a marker word in a doc comment or a
+    /// string observes nothing, so a line added above its item moves no key.
+    ///
+    /// Fails by: markers found in an item's doc comments (`Compiled`'s own
+    /// docs name `line!` and `track_caller`), which keyed 91% of probed
+    /// functions at their position.
+    #[test]
+    fn a_marker_in_a_doc_comment_observes_nothing() {
+        let source = "/// Keyed where `line!()` or `#[track_caller]` reads it.\n\
+                      pub struct C {\n    /// `Location::caller` too.\n    pub at: u32,\n}\n\
+                      /// Calls `column!()`.\npub fn f() -> &'static str { \"line!\" }\n";
+        let render = |text: &str| {
+            render_in(
+                text,
+                &[],
+                &BTreeSet::new(),
+                Some(0),
+                &FileScope::of("src/lib.rs"),
+            )
+        };
+        let held = render(source);
+        assert!(held.compiled.observing.is_empty(), "{:?}", held.compiled);
+        assert!(held.compiled.observers.is_empty(), "{:?}", held.compiled);
+        let moved = render(&format!("\n{source}"));
+        assert_eq!(moved.items, held.items, "an item's digest");
+        assert_eq!(moved.probes, held.probes, "a function's digest");
+    }
+
     /// An include is charged to the innermost probed function holding it,
     /// and one starting where a function ends is not that function's.
     ///
@@ -17382,8 +17936,8 @@ pub fn repo() -> u8 {{ scratch() }}
     fn a_binary_without_a_plain_target_has_no_crate_sources() {
         let root = crate::scratch::scratch("schema-crate-sources-none");
         let dirs = [(String::from("p"), String::new())].into();
-        assert_eq!(crate_sources(&root, &dirs, "t", "p::"), None);
-        assert_eq!(crate_sources(&root, &dirs, "t", "p::a/b"), None);
+        assert_eq!(crate_sources(&root, &dirs, "p::"), None);
+        assert_eq!(crate_sources(&root, &dirs, "p::a/b"), None);
     }
 
     /// An edit to a sibling module's function no case reaches moves no case:
