@@ -2048,7 +2048,7 @@ fn seed_response(dir: &Path, home: &Path, document: &serde_json::Value) {
 
     let envelope = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "ready-suite",
+        "session_id": common::session_id("ready-suite"),
         "tool_name": "mcp__tracker__get_issue",
         "tool_input": {},
         "tool_response": [{ "type": "text", "text": document.to_string() }],

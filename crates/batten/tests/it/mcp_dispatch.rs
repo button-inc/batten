@@ -546,7 +546,7 @@ fn seed_write_response(dir: &Path, home: &Path, document: &serde_json::Value) {
 
     let envelope = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "mcp-suite",
+        "session_id": common::session_id("mcp-suite"),
         "tool_name": "mcp__tracker__save_issue",
         "tool_input": {},
         "tool_response": [{ "type": "text", "text": document.to_string() }],

@@ -41,8 +41,9 @@ fn fixture(name: &str, pattern: &str, filter: &str) -> PathBuf {
 fn payload(command: &str) -> String {
     let encoded = serde_json::to_string(command).expect("a command is encodable");
     format!(
-        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s1\",\"tool_name\":\"Bash\",\
-         \"tool_input\":{{\"command\":{encoded}}}}}"
+        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"{session}\",\"tool_name\":\"Bash\",\
+         \"tool_input\":{{\"command\":{encoded}}}}}",
+        session = common::session_id("s1")
     )
 }
 

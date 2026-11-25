@@ -76,7 +76,10 @@ fn fixture(name: &str, program: &str) -> std::path::PathBuf {
 
 /// One hook call on `event`, through the door the host uses.
 fn hook_on(dir: &Path, event: &str) -> Output {
-    let payload = format!(r#"{{"hook_event_name":"{event}","session_id":"s-health","cwd":"/w"}}"#);
+    let payload = format!(
+        r#"{{"hook_event_name":"{event}","session_id":"{session}","cwd":"/w"}}"#,
+        session = common::session_id("s-health")
+    );
     hook_with(dir, &payload)
 }
 
@@ -129,7 +132,7 @@ fn session_report(dir: &Path) -> Option<String> {
     let _ = crate::session_start::settle(dir);
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": "s-health",
+        "session_id": common::session_id("s-health"),
         "cwd": dir,
         "tool_name": "Read",
         "tool_input": {"file_path": "a.txt"},

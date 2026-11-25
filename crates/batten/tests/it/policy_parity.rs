@@ -97,7 +97,7 @@ fn fixture(name: &str) -> (PathBuf, PathBuf) {
 fn refused_live(dir: &Path, home: &Path, command: &str) -> bool {
     let envelope = serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": "parity",
+        "session_id": common::session_id("parity"),
         "tool_name": "Bash",
         "tool_input": { "command": command },
     })
@@ -183,7 +183,7 @@ fn the_policy_input_is_stored_and_pointed_at() {
     let (dir, home) = fixture("policy-parity-input");
     let envelope = serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": "parity",
+        "session_id": common::session_id("parity"),
         "tool_name": "Bash",
         "tool_input": { "command": "git commit -m \"fix: x\"" },
     })

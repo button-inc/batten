@@ -52,7 +52,7 @@ fn fixture(name: &str) -> PathBuf {
 fn edit(repo: &Path, session: &str, old: &str, new: &str) -> String {
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": session,
+        "session_id": common::session_id(session),
         "tool_name": "Edit",
         "tool_input": {
             "file_path": repo.join("batten.toml").display().to_string(),
@@ -79,7 +79,7 @@ fn edit_row(repo: &Path, session: &str) -> String {
 fn read_history(repo: &Path, session: &str) {
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": session,
+        "session_id": common::session_id(session),
         "tool_name": "Bash",
         "tool_input": { "command": format!("batten policy explain '{ROW}' --history") },
         "tool_response": { "stdout": "the history", "stderr": "", "interrupted": false },
@@ -178,7 +178,7 @@ fn a_history_read_with_no_result_does_not_admit() {
     let repo = fixture("history-no-result");
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "s1",
+        "session_id": common::session_id("s1"),
         "tool_name": "Bash",
         "tool_input": { "command": format!("batten policy explain '{ROW}' --history") },
     });
@@ -234,7 +234,7 @@ fn a_compaction_drops_the_history_receipt() {
     assert!(!refused(&edit_row(&repo, "s1")), "read, so admitted");
     let start = serde_json::json!({
         "hook_event_name": "SessionStart",
-        "session_id": "s1",
+        "session_id": common::session_id("s1"),
         "source": "compact",
     });
     let _ = run_with_stdin(
@@ -248,7 +248,7 @@ fn a_compaction_drops_the_history_receipt() {
     read_history(&repo, "s1");
     let resume = serde_json::json!({
         "hook_event_name": "SessionStart",
-        "session_id": "s1",
+        "session_id": common::session_id("s1"),
         "source": "resume",
     });
     let _ = run_with_stdin(

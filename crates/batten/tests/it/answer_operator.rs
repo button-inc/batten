@@ -50,7 +50,7 @@ target = "answer-the-operator.rego"
 /// The operator typing a prompt.
 fn prompt() -> serde_json::Value {
     serde_json::json!({
-        "type": "user", "sessionId": "s-1",
+        "type": "user", "sessionId": common::session_id("s-1"),
         "message": {"role": "user", "content": PROSE},
     })
 }
@@ -58,7 +58,7 @@ fn prompt() -> serde_json::Value {
 /// The operator sending a message while a turn runs, as the host records it.
 fn queued() -> serde_json::Value {
     serde_json::json!({
-        "type": "attachment", "sessionId": "s-1",
+        "type": "attachment", "sessionId": common::session_id("s-1"),
         "attachment": {"type": "queued_command", "prompt": PROSE,
                        "commandMode": "prompt", "origin": {"kind": "human"},
                        "humanTurn": true},
@@ -67,14 +67,14 @@ fn queued() -> serde_json::Value {
 
 fn said() -> serde_json::Value {
     serde_json::json!({
-        "type": "assistant", "sessionId": "s-1",
+        "type": "assistant", "sessionId": common::session_id("s-1"),
         "message": {"role": "assistant", "content": [{"type": "text", "text": PROSE}]},
     })
 }
 
 fn acted(index: usize) -> serde_json::Value {
     serde_json::json!({
-        "type": "assistant", "sessionId": "s-1",
+        "type": "assistant", "sessionId": common::session_id("s-1"),
         "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": format!("t{index}"), "name": "Bash",
              "input": {"command": PROSE}}
@@ -84,7 +84,7 @@ fn acted(index: usize) -> serde_json::Value {
 
 fn result(index: usize) -> serde_json::Value {
     serde_json::json!({
-        "type": "user", "sessionId": "s-1",
+        "type": "user", "sessionId": common::session_id("s-1"),
         "message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": format!("t{index}"), "content": PROSE}
         ]},
@@ -210,7 +210,7 @@ fn tool_results_are_not_the_operator_speaking() {
 /// string whose `origin.kind` is not `human`.
 fn notified() -> serde_json::Value {
     serde_json::json!({
-        "type": "user", "sessionId": "s-1", "origin": {"kind": "task-notification"},
+        "type": "user", "sessionId": common::session_id("s-1"), "origin": {"kind": "task-notification"},
         "message": {"role": "user", "content": PROSE},
     })
 }
@@ -232,7 +232,7 @@ fn a_queued_message_marked_only_by_origin_is_the_operator() {
         prompt(),
         said(),
         serde_json::json!({
-            "type": "attachment", "sessionId": "s-1",
+            "type": "attachment", "sessionId": common::session_id("s-1"),
             "attachment": {"type": "queued_command", "prompt": PROSE,
                            "commandMode": "prompt", "origin": {"kind": "human"}},
         }),
@@ -248,7 +248,7 @@ fn a_queued_message_marked_only_by_origin_is_the_operator() {
 fn stopped(dir: &Path, home: &Path, transcript: &Path, active: bool) -> (Option<i32>, String) {
     let envelope = serde_json::json!({
         "hook_event_name": "Stop",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "stop_hook_active": active,
         "transcript_path": transcript.display().to_string(),
     })
