@@ -405,7 +405,7 @@ mod tests {
         let dir = crate::scratch::scratch("cover-pristine-ignored");
         let repo = dir.join("repo");
         for (path, text) in [
-            (".gitignore", "src/gen.rs\n"),
+            (".gitignore", "src/gen.rs\ntarget/\nsrc/target/\n"),
             ("src/a.rs", "fn a() {}\n"),
             ("shared/s.rs", "fn s() {}\n"),
         ] {
@@ -426,9 +426,18 @@ mod tests {
         )
         .unwrap();
         std::fs::write(repo.join("src/gen.rs"), "fn g() {}\n").unwrap();
+        for path in ["target/out.bin", "src/target/t.rs"] {
+            std::fs::create_dir_all(repo.join(path).parent().unwrap()).unwrap();
+            std::fs::write(repo.join(path), "x").unwrap();
+        }
         let dest = dir.join("pristine");
         pristine(&repo, &dest).unwrap();
         assert!(dest.join("src/gen.rs").is_file(), "an ignored source");
+        assert!(
+            dest.join("src/target/t.rs").is_file(),
+            "a source dir named target"
+        );
+        assert!(!dest.join("target").exists(), "the root's build output");
         #[cfg(unix)]
         assert_eq!(
             std::fs::read_to_string(dest.join("src/linked/s.rs")).unwrap(),
