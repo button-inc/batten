@@ -825,6 +825,31 @@ pub fn smells(
     Ok(found)
 }
 
+/// Every policy rule's bundle, each loaded WHERE ITS SOURCES ARE (CLOUD-2840):
+/// at `base_ref` when they are there, else from the working tree, and a rule
+/// whose sources are in neither is left unloaded, as an absent file is said by
+/// the verbs that run the rule. ONE load, so every check across rules still
+/// sees every rule it can (`policy::Sourcing::WherePresent`).
+///
+/// A module the branch ADDS is absent at the base, and under claimed arming a
+/// bare `config lint` reads the fork point: loaded from the tree, it is still
+/// judged, so `engine gate` cannot pass a module its pinned release cannot
+/// evaluate (`install-gate.rego` calling the library, absent on main).
+fn loaded_where_present(
+    dir: &Path,
+    config: &crate::config_model::Config,
+    base_ref: Option<&str>,
+) -> Result<Vec<crate::policy::Bundle>> {
+    crate::policy::load_from(
+        dir,
+        &config.rules,
+        crate::policy::Vocabulary::from(config),
+        crate::policy::ModuleChecks::Run,
+        base_ref,
+        crate::policy::Sourcing::WherePresent,
+    )
+}
+
 /// Lint the config in `dir`, with `base_ref` naming the trusted base when the
 /// caller wants the comparison smells too.
 ///
@@ -894,36 +919,10 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
     // pinned engine could not evaluate — `data.batten.library.read_only`
     // under v0.0.221 — so every mediated call in that tree was then refused
     // `engine-cannot-adjudicate`. A config that will not PARSE has no bundles
-    // to load; `smells` refuses it below with its own message. A module FILE
-    // that is absent is a different fault, said by the verbs that run the
-    // rule, and a lint over a copied config alone stays the document it was.
+    // to load; `smells` refuses it below with its own message.
     let bundles = match config::parse(&text, &path.display().to_string()) {
         Err(_) => Vec::new(),
-        Ok(config) => {
-            // PRESENT WHERE THE SOURCES ARE READ: at the base ref when one is
-            // in play, which is where `policy::load` reads them. A module the
-            // working config adds and the base lacks is absent there, not
-            // unloadable — every branch adding a module meets it.
-            let present = config
-                .rules
-                .iter()
-                .filter_map(|rule| rule.module.as_deref())
-                .all(|module| match base_ref {
-                    Some(reference) => crate::git::show(dir, reference, module).is_ok(),
-                    None => dir.join(module).is_file(),
-                });
-            match crate::policy::load(
-                dir,
-                &config.rules,
-                crate::policy::Vocabulary::from(&config),
-                crate::policy::ModuleChecks::Run,
-                base_ref,
-            ) {
-                Ok(bundles) => bundles,
-                Err(err) if present => return Err(err),
-                Err(_) => Vec::new(),
-            }
-        }
+        Ok(config) => loaded_where_present(dir, &config, base_ref)?,
     };
     let found = smells(
         &text,

@@ -1033,6 +1033,45 @@ pub fn load(
     checks: ModuleChecks,
     reference: Option<&str>,
 ) -> Result<Vec<Bundle>> {
+    load_from(
+        root,
+        rules,
+        vocabulary,
+        checks,
+        reference,
+        Sourcing::AtReference,
+    )
+}
+
+/// Where a rule's module sources are read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sourcing {
+    /// At `reference` (the working tree for `None`), every rule alike: what
+    /// every verb that RUNS the rules reads, so a base's rules are never paired
+    /// with the tree's predicates.
+    AtReference,
+    /// Each rule where its sources are (CLOUD-2840, `config lint`): at
+    /// `reference` when they are there, else in the working tree, so a module a
+    /// branch ADDS is still judged; a rule whose sources are in neither is left
+    /// unloaded, and the checks that need EVERY rule (`check_registry_is_exhausted`,
+    /// `check_collapse`) stand down, since a set with a gap cannot answer them.
+    WherePresent,
+}
+
+/// [`load`] under a chosen [`Sourcing`].
+///
+/// # Errors
+///
+/// As [`load`]: a [`UsageError`] (exit `1`) for any module that will not read,
+/// compile or validate where it was read from.
+pub fn load_from(
+    root: &Path,
+    rules: &[Rule],
+    vocabulary: Vocabulary<'_>,
+    checks: ModuleChecks,
+    reference: Option<&str>,
+    sourcing: Sourcing,
+) -> Result<Vec<Bundle>> {
     let Vocabulary {
         patterns,
         verdicts,
@@ -1072,7 +1111,18 @@ pub fn load(
     // the value is what lets the collision refusal name BOTH sides, which is the
     // difference between a pointer and a complaint.
     let mut ids: BTreeMap<String, String> = BTreeMap::new();
+    // A rule left unloaded because its sources are nowhere (`WherePresent`).
+    let mut unloaded = false;
     for rule in rules.iter().filter(|r| r.kind == RuleKind::Policy) {
+        let reference = match sourcing {
+            Sourcing::AtReference => reference,
+            Sourcing::WherePresent if sources_present(root, rule, reference) => reference,
+            Sourcing::WherePresent if sources_present(root, rule, None) => None,
+            Sourcing::WherePresent => {
+                unloaded = true;
+                continue;
+            }
+        };
         let source_key = source_key(rule)?;
         // Two rows naming one source AT ONE SCOPE is dead config: the second
         // enablement decides nothing the first did not, and "which one denied
@@ -1247,8 +1297,10 @@ pub fn load(
 
     if checks == ModuleChecks::Run {
         check_no_vendored_collision(verdicts)?;
-        check_registry_is_exhausted(verdicts, &emitted)?;
-        check_collapse(rules, &per_rule, &tokens)?;
+        if !unloaded {
+            check_registry_is_exhausted(verdicts, &emitted)?;
+            check_collapse(rules, &per_rule, &tokens)?;
+        }
     }
     Ok(bundles)
 }
@@ -3739,6 +3791,22 @@ pub fn strings(bundle: &Bundle, input: &str, rule: &str) -> Look<Vec<String>> {
     };
     let answered = Answer::of(&answered);
     collect_string_list(&answered, &bundle.packages, rule).map_or(Look::CouldNotLook, Look::Is)
+}
+
+/// Are `rule`'s sources there to read at `reference` (the working tree for
+/// `None`)? A `module` row's file, a `bundle` row's members; a preset is read
+/// from the binary, so it is always there (CLOUD-2840, `lint::run`).
+#[must_use]
+pub fn sources_present(root: &Path, rule: &Rule, reference: Option<&str>) -> bool {
+    match (rule.module.as_deref(), rule.bundle.as_deref()) {
+        (Some(module), _) => match reference {
+            Some(reference) => crate::git::show(root, reference, module).is_ok(),
+            None => root.join(module).is_file(),
+        },
+        (None, Some(bundle)) => bundle_members(root, bundle, reference, &rule.id)
+            .is_ok_and(|members| !members.is_empty()),
+        (None, None) => true,
+    }
 }
 
 /// The `.rego` modules inside an enabled bundle root, in sorted order.
