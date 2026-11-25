@@ -242,14 +242,15 @@ fn the_ambient_state_root_never_reaches_the_binary_under_test() {
 
 /// THE ANTI-VACUITY MIRROR for the case above, and the same shape
 /// `the_hatch_is_load_bearing` uses one screen up: it shows an admission
-/// genuinely disarming the committed policy, so redirecting the store it lives in
-/// is load-bearing rather than tidy.
+/// genuinely disarming the protected policy, so redirecting the store it lives
+/// in is load-bearing rather than tidy.
 ///
-/// Over the REAL repository root, deliberately — a scratch fixture would prove
-/// the mechanism and miss the defect, because the defect IS that these suites
-/// share the real repository's segment. Contained only because the case above now
-/// holds: every spawn here writes into the suite's own state root, so issuing and
-/// spending a real admission cannot touch the developer's store.
+/// Over a FIXTURE checkout that guards a file of its own
+/// (CLOUD-2926, admitted by the owner): spending a `protected-mutation`
+/// admission needs the owner's own recorded yes in the guarded checkout's
+/// ledger, and a case must never write the real one. The fixture's ledger is
+/// the case's to seed. The admission still lands in the suite's own state root,
+/// which is the containment the case above holds.
 ///
 /// MEASURED 2026-09-02, before the redirect landed. A spent admission for
 /// `batten.toml` — taken by hand, for unrelated work, hours earlier in the same
@@ -260,11 +261,21 @@ fn the_ambient_state_root_never_reaches_the_binary_under_test() {
 /// while a record on the machine was admitting it.
 #[test]
 fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
-    let root = at_root("batten.toml");
-    let root = root.parent().expect("the committed config has a parent");
-    // Whatever the committed set guards today, so the case asserts while the
-    // owner's own set is switched off rather than returning (CLOUD-2059).
-    let subject = common::committed_protected_path();
+    // A GUARDED FILE OF ITS OWN, never the ledger: the owner's answer is
+    // written into `.batten/asked.jsonl`, and a guarded ledger would change
+    // under the admission that names it, which voids the admission.
+    let subject = "guarded.txt";
+    let root = common::Fixture::new("bypass-scrub-admission")
+        .config(&format!(
+            "version = 1\nprotected = [\"{subject}\"]\n\n\
+             [[verb]]\nverb = \"mv\"\neffect = \"write\"\n\
+             redirect = \"write through the surface that owns the file\"\n"
+        ))
+        .file(subject, "guarded\n")
+        .git()
+        .base_commit()
+        .build();
+    let root = root.as_path();
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
@@ -276,7 +287,7 @@ fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
     assert_eq!(
         refused,
         Some(2),
-        "the committed policy must refuse on its own, or the comparison below proves nothing"
+        "the policy must refuse on its own, or the comparison below proves nothing"
     );
 
     let answers = "precondition=the suite is demonstrating that this channel admits, which is \
@@ -311,21 +322,40 @@ fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
         .to_owned();
     assert!(!admission.is_empty(), "the request must name an address");
 
-    let spent = common::run(
-        root,
-        &[
-            "override",
-            "spend",
-            "--admission",
-            &admission,
-            "--rule",
-            "protected-mutation",
-            "--verdict",
-            "path write refused",
-            "--subject",
-            subject,
-        ],
+    let try_spend = || {
+        common::run(
+            root,
+            &[
+                "override",
+                "spend",
+                "--admission",
+                &admission,
+                "--rule",
+                "protected-mutation",
+                "--verdict",
+                "path write refused",
+                "--subject",
+                subject,
+            ],
+        )
+    };
+    // THE AGENT'S OWN ANSWERS NEVER SPEND IT (CLOUD-2926): before the owner's
+    // yes, the spend is could-not-look and the gate still refuses.
+    let unanswered = try_spend();
+    assert_eq!(
+        unanswered.status.code(),
+        Some(3),
+        "no owner answer, no spend: {}",
+        String::from_utf8_lossy(&unanswered.stderr)
     );
+    assert_eq!(
+        run(common::batten().current_dir(root), &payload),
+        Some(2),
+        "an unspent admission admits nothing"
+    );
+
+    common::owner_admits(root, "protected-mutation", "path write refused", subject);
+    let spent = try_spend();
     assert!(
         spent.status.success(),
         "the admission must spend: {}",

@@ -173,9 +173,11 @@ fn a_seed_at_a_later_event_reports_the_unmediated_start() {
 #[test]
 fn a_session_seeded_at_session_start_is_silent_and_stays_silent() {
     let dir = fixture("contract-seeded-at-start");
+    // THE SEEDING EVENT CARRIES THE DISPATCH NOTICE AND NOTHING ELSE
+    // (CLOUD-2840, admitted by the owner): no contract-drift notice rides it.
     assert_eq!(
         drift_on(&dir, "s1", "SessionStart", &[]).pipe_notice(),
-        None,
+        Some(batten::session_setup::instruction()),
         "the seeding event is the one the silence argument is about"
     );
     assert_eq!(
