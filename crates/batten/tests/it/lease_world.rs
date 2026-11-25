@@ -222,13 +222,16 @@ fn stop_terminates_the_holder_it_names() {
         .expect("a holder to stop");
     let pid = holder.id();
     // Reaped on its own thread, so a `stop` that sends nothing FAILS here within
-    // the bound rather than hanging out the holder's whole interval.
+    // the bound rather than hanging out the holder's whole interval. The bound
+    // sits under the mutation judge's 20 s floor per case (CLOUD-2911): at 30 s
+    // a `stop` made `()` was cut as a timeout, which decides nothing, before
+    // this case could fail it (CLOUD-2789).
     let (reaped, exited) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = reaped.send(holder.wait());
     });
     batten::lease::stop(pid);
-    let Ok(reaped) = exited.recv_timeout(std::time::Duration::from_secs(30)) else {
+    let Ok(reaped) = exited.recv_timeout(std::time::Duration::from_secs(10)) else {
         // Nothing stopped it: kill it so the reaping thread ends, then fail.
         #[expect(
             clippy::disallowed_types,
@@ -238,7 +241,7 @@ fn stop_terminates_the_holder_it_names() {
             .args(["-KILL", &pid.to_string()])
             .status();
         let _ = exited.recv();
-        panic!("stop sent no signal: the holder was still running after 30s");
+        panic!("stop sent no signal: the holder was still running after 10s");
     };
     let status = reaped.expect("the holder is reaped");
     #[cfg(unix)]

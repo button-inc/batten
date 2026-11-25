@@ -3898,11 +3898,13 @@ mod tests {
         /// The first write a child makes, waited for up to a fixed bound that
         /// is this case's input rather than its assertion. The read blocks on
         /// its own thread; a write that never comes fails the case at the
-        /// bound.
+        /// bound. The bound sits under the mutation judge's 20 s floor per case
+        /// (CLOUD-2911): at 20 s a `detached` made `()` raced that cut and was
+        /// read as a timeout, which decides nothing (CLOUD-2789).
         fn first(&self, what: &str) -> String {
             use std::io::Read as _;
 
-            let bound = Duration::from_secs(20);
+            let bound = Duration::from_secs(10);
 
             let mut reader = self.file.try_clone().expect("share the fifo");
             let (sent, answer) = std::sync::mpsc::channel();
