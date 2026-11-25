@@ -16,7 +16,6 @@
 
 use crate::common;
 use batten::capture::Streamed as _;
-use batten::capture::StreamedChild as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1387,6 +1386,9 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
 #[cfg(unix)]
 #[test]
 fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
+    // The one `streamed_wait` in the file, so its trait rides with this unix case.
+    use batten::capture::StreamedChild as _;
+
     let bash = ["/bin/bash", "/usr/bin/bash"]
         .into_iter()
         .map(PathBuf::from)
