@@ -1205,7 +1205,7 @@ fn linked(name: &str) -> PathBuf {
 /// The exit code and everything the engine wrote to stderr.
 #[expect(
     clippy::disallowed_types,
-    reason = "test-only: the step's command waits on a FIFO `mkfifo` makes, and the engine is read as it writes"
+    reason = "stays, and test-only: the step's command waits on a FIFO `mkfifo` makes, and the engine is read as it writes"
 )]
 fn step_released_at(case: &str, dir: &Path, event: &str) -> (Option<i32>, String) {
     use std::io::{BufRead as _, Write as _};
