@@ -1004,8 +1004,8 @@ type Grouped = (Vec<String>, blake3::Hasher, BTreeSet<String>);
 /// makes. A tree-wide skeleton in every key re-judged all 2386 viable mutants
 /// on #1276 after one commit of new tests; an impl, `use` or item macro that
 /// answered to its whole text moved every key on 304fa50b (CLOUD-2904). A
-/// name with several definitions, such as a type and its impls, is keyed on
-/// all of them but not followed further ([`Graph::new`]).
+/// name is followed through every definition visible where it is mentioned
+/// ([`Graph::new`]).
 fn probe_sites(
     root: &SyntaxNode,
     probe_from: Option<usize>,
@@ -1034,11 +1034,14 @@ fn probe_sites(
                 wraps: vec![Wrap::Probe(format!("crate::__batten_fn({next});"))],
                 children: Vec::new(),
             });
-            probed.probes.push(
-                blake3::hash(function.syntax().to_string().as_bytes())
-                    .to_hex()
-                    .to_string(),
-            );
+            let mut text = function.syntax().to_string();
+            if position_sensitive(&text) {
+                text.push('\x1f');
+                text.push_str(&position_of(function.syntax()));
+            }
+            probed
+                .probes
+                .push(blake3::hash(text.as_bytes()).to_hex().to_string());
             probed.names.push(mentions_in(function.syntax(), place));
             probed.fn_names.push(
                 ast::HasName::name(&function)
@@ -1081,16 +1084,9 @@ fn probe_sites(
         let at = owner.as_ref().map_or(usize::MAX, |item| {
             usize::from(item.syntax().text_range().start())
         });
-        let (_, hasher, mentions) = items.entry(at).or_insert_with(|| {
-            (
-                owner.as_ref().map_or_else(
-                    || vec![String::new()],
-                    |item| definitions(item, place, &widened),
-                ),
-                blake3::Hasher::new(),
-                BTreeSet::new(),
-            )
-        });
+        let (_, hasher, mentions) = items
+            .entry(at)
+            .or_insert_with(|| grouped(owner.as_ref(), place, &widened));
         hasher.update(token.text().as_bytes());
         hasher.update(b"\x1f");
         token_mentions(&token, place, mentions);
@@ -1106,6 +1102,24 @@ fn probe_sites(
     }
     probed.skeleton = skeleton.finalize().to_hex().to_string();
     probed
+}
+
+/// A new skeleton item's group ([`probe_sites`]): the keys it is defined
+/// under, `""` for tokens outside any item, and a hasher already holding
+/// its members' names ([`member_names`]) and, for text observing where it
+/// sits, its position ([`position_sensitive`]).
+fn grouped(owner: Option<&ast::Item>, place: &FileScope, widened: &BTreeSet<String>) -> Grouped {
+    let mut hasher = blake3::Hasher::new();
+    let Some(item) = owner else {
+        return (vec![String::new()], hasher, BTreeSet::new());
+    };
+    for member in member_names(item) {
+        hasher.update(format!("\x1d{member}").as_bytes());
+    }
+    if position_sensitive(&item.syntax().to_string()) {
+        hasher.update(format!("\x1c{}", position_of(item.syntax())).as_bytes());
+    }
+    (definitions(item, place, widened), hasher, BTreeSet::new())
 }
 
 /// Whether a token of `kind` changes no compiled behaviour, so no skeleton
@@ -1139,8 +1153,9 @@ fn owning_item(token: &ra_ap_syntax::SyntaxToken) -> Option<ast::Item> {
     })
 }
 
-/// The names a skeleton item answers to: its own where it has one; for an
-/// impl, its header's unqualified names and its members' own names; for a
+/// The free names a skeleton item answers to: its own where it has one, none
+/// for a member of an impl or trait (those are associated,
+/// [`associated_names`]); for an impl, its header's unqualified names; for a
 /// `use`, the names it binds; for an item-position macro, each name after an
 /// item keyword, or every name in it when it has none ([`impl_names`],
 /// [`use_names`], [`macro_names`]).
@@ -1366,6 +1381,25 @@ fn token_names(token: &ra_ap_syntax::SyntaxToken, names: &mut BTreeSet<String>) 
             names.insert(token.text().to_owned());
         }
         SyntaxKind::STRING => {
+            // A STRING IN AN ATTRIBUTE NAMES A CALLBACK: serde's `default =
+            // "…"`, `with`, `serialize_with` and `deserialize_with` call the
+            // path the string spells, so every word in it is a name.
+            if token
+                .parent_ancestors()
+                .any(|node| node.kind() == SyntaxKind::ATTR)
+            {
+                for word in token
+                    .text()
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .filter(|word| {
+                        word.chars()
+                            .next()
+                            .is_some_and(|c| c.is_alphabetic() || c == '_')
+                    })
+                {
+                    names.insert(word.to_owned());
+                }
+            }
             for captured in token.text().split('{').skip(1) {
                 let name: String = captured
                     .chars()
@@ -1413,6 +1447,9 @@ pub struct FileScope {
     /// Every definition workspace-wide and every mention seeing them all:
     /// what a name meant before scoping, for a file whose module is unknown.
     unscoped: bool,
+    /// No module scoping in this file's package: its private items are
+    /// visible to the whole package ([`flat_packages`]).
+    flat: bool,
 }
 
 impl FileScope {
@@ -1441,6 +1478,7 @@ impl FileScope {
             package: package.to_owned(),
             module: parts,
             unscoped: false,
+            flat: false,
         }
     }
 
@@ -1496,6 +1534,10 @@ fn visibility(item: &ast::Item) -> Visible {
         | ast::Item::MacroCall(_)
         | ast::Item::ExternBlock(_)
         | ast::Item::ExternCrate(_) => Visible::Workspace,
+        // A LINKED SYMBOL IS NAMED FROM ANYWHERE: `#[no_mangle]`,
+        // `#[unsafe(no_mangle)]` and `export_name` items are reached by their
+        // symbol, and an item an `extern` block declares by its link name.
+        _ if linked(item) => Visible::Workspace,
         _ => {
             let Some(visibility) = ast::AnyHasVisibility::cast(item.syntax().clone())
                 .and_then(|it| ast::HasVisibility::visibility(&it))
@@ -1520,6 +1562,20 @@ fn visibility(item: &ast::Item) -> Visible {
     }
 }
 
+/// Whether `item` is reached by a link name: an item declared in an `extern`
+/// block, or one exporting its symbol (`no_mangle`, `export_name`).
+fn linked(item: &ast::Item) -> bool {
+    item.syntax()
+        .parent()
+        .is_some_and(|parent| parent.kind() == SyntaxKind::EXTERN_ITEM_LIST)
+        || ast::AnyHasAttrs::cast(item.syntax().clone()).is_some_and(|it| {
+            ast::HasAttrs::attrs(&it).any(|attr| {
+                let text = attr.syntax().text().to_string();
+                text.contains("no_mangle") || text.contains("export_name")
+            })
+        })
+}
+
 /// The keys skeleton item `item` is defined under: each free name
 /// ([`item_names`]) with the scope it is visible in, and each associated name
 /// ([`associated_names`]) workspace-wide, apart from every free name. A
@@ -1527,7 +1583,7 @@ fn visibility(item: &ast::Item) -> Visible {
 fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) -> Vec<String> {
     let module = place.module_at(item.syntax().parent().as_ref());
     let visible = match visibility(item) {
-        Visible::Module if widened.contains(&module) => Visible::Package,
+        Visible::Module if place.flat || widened.contains(&module) => Visible::Package,
         other => other,
     };
     let free = item_names(item).into_iter().map(|name| {
@@ -1544,7 +1600,65 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
             .into_iter()
             .map(|name| format!("{ASSOCIATED}{name}")),
     )
+    .chain(owner_type_names(item))
     .collect()
+}
+
+/// An associated const or type's impl's free names, workspace-wide: a
+/// generic function outside the workspace reads `T::K` naming no `K`, so the
+/// const answers to the type it is defined under too (CLOUD-2904).
+fn owner_type_names(item: &ast::Item) -> Vec<String> {
+    if !(is_member(item) && matches!(item, ast::Item::Const(_) | ast::Item::TypeAlias(_))) {
+        return Vec::new();
+    }
+    item.syntax()
+        .parent()
+        .and_then(|list| list.parent())
+        .and_then(ast::Impl::cast)
+        .map(|it| impl_names(&it))
+        .unwrap_or_default()
+}
+
+/// The names of every member an impl or trait defines, probed functions
+/// included: an override of a default method the standard library calls
+/// unnamed (`fold` behind `sum()`) is reached through no name, so adding or
+/// dropping one moves the impl's own digest (CLOUD-2904).
+fn member_names(item: &ast::Item) -> Vec<String> {
+    let list = match item {
+        ast::Item::Impl(it) => it.assoc_item_list(),
+        ast::Item::Trait(it) => it.assoc_item_list(),
+        _ => None,
+    };
+    let mut names: Vec<String> = list
+        .iter()
+        .flat_map(ast::AssocItemList::assoc_items)
+        .filter_map(|member| ast::AnyHasName::cast(member.syntax().clone()))
+        .filter_map(|member| ast::HasName::name(&member))
+        .map(|name| name.text().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Whether `text` observes where it sits: `line!`, `column!`, a
+/// `#[track_caller]` function or `Location::caller`. Such text is keyed
+/// whole and with its position, since a line shift above it changes what it
+/// computes (CLOUD-2904).
+fn position_sensitive(text: &str) -> bool {
+    ["line!", "column!", "track_caller", "Location::caller"]
+        .iter()
+        .any(|marker| text.contains(marker))
+}
+
+/// Where `node` starts in its file, as `line:column`.
+fn position_of(node: &SyntaxNode) -> String {
+    let root = node.ancestors().last().unwrap_or_else(|| node.clone());
+    let text = root.text().to_string();
+    let at = usize::from(node.text_range().start()).min(text.len());
+    let before = text.get(..at).unwrap_or_default();
+    let line = before.matches('\n').count();
+    let column = before.len() - before.rfind('\n').map_or(0, |newline| newline + 1);
+    format!("{line}:{column}")
 }
 
 /// The modules of the file at `root` holding an `include!` or a `#[path]`
@@ -1712,19 +1826,130 @@ fn visible_from(mention: &str, definition: &str) -> bool {
 /// whitespace and plain and inner doc comments dropped ([`unkeyed`]). One
 /// token per line keeps it Rust a parser reads back, an outer doc comment
 /// ending at its own line.
+///
+/// TEXT THAT OBSERVES ITS POSITION IS KEYED WHOLE, AT ITS POSITION
+/// ([`position_sensitive`]); and inside a macro's token tree, where spacing is
+/// what the macro reads (`m!(a += b)` is not `m!(a + = b)`), a gap between
+/// two tokens is kept as a line of its own (CLOUD-2904).
 fn keyed_text(node: &SyntaxNode) -> String {
+    let whole = node.to_string();
+    if position_sensitive(&whole) {
+        return format!("//@{}\n{whole}", position_of(node));
+    }
     let mut text = String::new();
+    let mut gap = false;
     for token in node
         .descendants_with_tokens()
         .filter_map(ra_ap_syntax::NodeOrToken::into_token)
     {
         if unkeyed(token.kind()) {
+            gap = true;
             continue;
         }
+        if gap
+            && !text.is_empty()
+            && token
+                .parent_ancestors()
+                .any(|ancestor| ancestor.kind() == SyntaxKind::TOKEN_TREE)
+        {
+            text.push_str("\u{4}\n");
+        }
+        gap = false;
         text.push_str(token.text());
         text.push('\n');
     }
     text
+}
+
+/// The packages of the sources `files` under `root` whose module tree their
+/// paths do not say, so no item in them is scoped to its module
+/// ([`FileScope::flat`], CLOUD-2904): one with a `#[path]` module, plain or
+/// under `cfg_attr`, an `include!` no syntax resolves to a tree file or the
+/// build's output, or a `[lib]` or `[[bin]]` target at a path other than its
+/// default.
+fn flat_packages(root: &std::path::Path, files: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut flat = BTreeSet::new();
+    for file in files {
+        let package = package_dir_of(file).unwrap_or("").to_owned();
+        if flat.contains(&package) {
+            continue;
+        }
+        let Ok(source) = crate::fsio::read_to_string(root.join(file)) else {
+            continue;
+        };
+        if moves_modules(&source, file) || custom_target(root, &package) {
+            flat.insert(package);
+        }
+    }
+    flat
+}
+
+/// Whether `source` at `file` compiles code at a module its path does not
+/// say: a `#[path]` attribute, plain or under `cfg_attr`, or an `include!`
+/// that resolves to neither a tree file nor the build's output.
+fn moves_modules(source: &str, file: &str) -> bool {
+    if !(source.contains("path") || source.contains("include")) {
+        return false;
+    }
+    let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
+    let root = parse.tree().syntax().clone();
+    let pathed = root.descendants().filter_map(ast::Attr::cast).any(|attr| {
+        let text: String = attr
+            .syntax()
+            .text()
+            .to_string()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        text.starts_with("#[path") || (text.starts_with("#[cfg_attr(") && text.contains("path="))
+    });
+    pathed
+        || root
+            .descendants_with_tokens()
+            .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+            .filter(|token| token.kind() == SyntaxKind::IDENT && token.text() == "include")
+            .any(|token| {
+                let resolved = token
+                    .parent_ancestors()
+                    .find_map(ast::MacroCall::cast)
+                    .filter(|call| {
+                        call.path()
+                            .and_then(|path| path.segment())
+                            .and_then(|segment| segment.name_ref())
+                            .is_some_and(|name| name.syntax().text_range() == token.text_range())
+                    })
+                    .and_then(|call| include_path(&call, file));
+                !matches!(resolved, Some(Included::File(_) | Included::Built))
+            })
+}
+
+/// Whether `package`'s manifest under `root` puts its `[lib]` or a `[[bin]]`
+/// target at a path other than the default one.
+fn custom_target(root: &std::path::Path, package: &str) -> bool {
+    let manifest = root.join(package).join("Cargo.toml");
+    let Ok(text) = crate::fsio::read_to_string(&manifest) else {
+        return false;
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return true;
+    };
+    let lib = table
+        .get("lib")
+        .and_then(|lib| lib.get("path"))
+        .and_then(toml::Value::as_str)
+        .is_some_and(|path| path != "src/lib.rs");
+    let bins = table
+        .get("bin")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|bin| {
+            let name = bin.get("name").and_then(toml::Value::as_str).unwrap_or("");
+            bin.get("path")
+                .and_then(toml::Value::as_str)
+                .is_some_and(|path| path != "src/main.rs" && path != format!("src/bin/{name}.rs"))
+        });
+    lib || bins
 }
 
 /// The files the package sources `files` under `root` compile into another
@@ -2007,6 +2232,7 @@ pub fn write_schema(
     // not say, so its names are matched by spelling alone.
     let mut moved = included_sources(root, &sources);
     moved.extend(included.iter().cloned());
+    let flat = flat_packages(root, &sources);
     for file in sources {
         let source = crate::fsio::read_to_string(root.join(&file))?;
         let listed = by_file.get(file.as_str()).map_or(&[][..], Vec::as_slice);
@@ -2015,7 +2241,9 @@ pub fn write_schema(
         let place = if moved.contains(&file) {
             FileScope::unscoped()
         } else {
-            FileScope::of(&file)
+            let mut place = FileScope::of(&file);
+            place.flat = flat.contains(&place.package);
+            place
         };
         let rendered = render_in(&source, listed, skip, probe_from, &place);
         if probe_from.is_some() {
@@ -4878,24 +5106,15 @@ impl<'g> Graph<'g> {
                     .collect()
             })
             .collect();
-        // A NAME WITH MORE THAN ONE DEFINITION IS KEYED, NEVER EXPANDED
-        // (CLOUD-2904): its token holds every definition's digest, but its
-        // edges are empty. Expanded, a type joined its impls' mentions to its
-        // own, and with `item_names` fixed the real edits on 304fa50b still
-        // reached 11,523 of 11,744 probed functions; cut, 125. The cost: an
-        // edit reached only through such a name's definitions moves nothing.
-        // Counted PER MENTION, over the definitions visible where it is made:
-        // a private namesake in another module is not a second definition.
+        // EVERY DEFINITION A MENTION SEES IS FOLLOWED (CLOUD-2904). Cut at a
+        // name with more than one definition, an edit reached only through
+        // such a name's definitions (a type's impls, a `use` and its target)
+        // reused a stale verdict. What keeps the walk narrow is scoping: a
+        // mention sees only the definitions visible where it is made, and an
+        // impl's members only from an associated position.
         let edges = resolves
             .iter()
             .map(|found| {
-                let count: usize = found
-                    .iter()
-                    .map(|id| depends.items.get(definitions[*id]).map_or(0, BTreeSet::len))
-                    .sum();
-                if count > 1 {
-                    return Vec::new();
-                }
                 found
                     .iter()
                     .filter_map(|id| depends.mentions.get(definitions[*id]))
@@ -4987,10 +5206,9 @@ fn name_token(name: &str, items: &BTreeSet<String>) -> blake3::Hash {
 /// AND WHAT IT DEPENDS ON, NEVER THE TREE (Ekstazi, Gligoric et al., ISSTA
 /// 2015; RTS++; RustyRTS): each probed function the reach run saw the case
 /// run, by its digest; every skeleton item those functions name, followed
-/// through what each names while the name has one definition and keyed but
-/// not followed when it has several ([`Graph::new`], CLOUD-2904: a narrowing,
-/// not a soundness-preserving one); and each file it touched with that file's
-/// content id, absent included. A case the reach
+/// through what each names, every definition a mention sees included
+/// ([`Graph::new`]); and each file it touched with that file's content id,
+/// absent included. A case the reach
 /// run could not trace keys on every non-Rust file instead, which is what
 /// every case keyed on before and is never less sound. On #1276 a tree-wide
 /// digest in every key moved every pair on a commit that added tests and two
@@ -5121,16 +5339,16 @@ pub fn case_digests<'c>(
 /// The digest of the items of a shared test module (`common`) that `texts`
 /// reach by name, transitively: an item is reached when a reached text names
 /// it, and then everything it names is reached too. An item with no name of
-/// its own (an item macro) is always taken; an `impl` answers to its self
-/// type's name, so a reached type brings its methods; a `use` answers to the
-/// names it binds ([`use_names`]), and one binding no name (`as _`, a glob)
-/// is always taken.
+/// its own (an item macro) and every `use` are always taken: a trait a `use`
+/// imports is called by method with no name of it written (CLOUD-2904). An
+/// `impl` answers to every name in its self type, so a reached type brings
+/// its methods.
 ///
-/// A `use`'s path before each leaf names only modules and types, so a taken
-/// `use` takes by those segments only a module, struct, enum, union, trait or
-/// type alias: taken by every segment, `use batten::surface::ROOT;` took
-/// `fn batten`, and with it `pin_mise`, into every integration case's key
-/// (CLOUD-2904).
+/// A `use`'s path before each leaf names only modules and types, so a `use`
+/// takes by those segments only a module, struct, enum, union, trait or type
+/// alias, and by its leaves anything: taken by every segment, `use
+/// batten::surface::ROOT;` took `fn batten`, and with it `pin_mise`, into
+/// every integration case's key (CLOUD-2904).
 ///
 /// TOKENS, NOT TEXT ([`keyed_text`]): a comment or a blank line in a reached
 /// helper moved every case reaching it, and one comment in `pin_mise` moved
@@ -5146,7 +5364,7 @@ fn common_reached(common: &str, texts: &[String]) -> String {
         return blake3::hash(common.as_bytes()).to_hex().to_string();
     }
     let items: Vec<Shared> = parse.tree().items().map(|item| Shared::of(&item)).collect();
-    let mut wanted: BTreeSet<String> = texts
+    let wanted: BTreeSet<String> = texts
         .iter()
         .flat_map(|text| {
             names_in(
@@ -5155,6 +5373,11 @@ fn common_reached(common: &str, texts: &[String]) -> String {
             )
         })
         .collect();
+    reached_digest(&items, wanted)
+}
+
+/// The digest of `items` taken from `wanted`, transitively ([`common_reached`]).
+fn reached_digest(items: &[Shared], mut wanted: BTreeSet<String>) -> String {
     let mut wanted_types: BTreeSet<String> = BTreeSet::new();
     let mut taken = vec![false; items.len()];
     // BOUNDED BY THE ITEM COUNT (CLOUD-2789): a pass that grows takes at least
@@ -5215,10 +5438,7 @@ impl Shared {
             return Self::of_use(it, text);
         }
         let names = match item {
-            ast::Item::Impl(it) => it
-                .self_ty()
-                .and_then(|ty| names_in(ty.syntax()).into_iter().next_back())
-                .map(|name| BTreeSet::from([name])),
+            ast::Item::Impl(it) => it.self_ty().map(|ty| names_in(ty.syntax())),
             ast::Item::MacroCall(_) => None,
             other => ast::AnyHasName::cast(other.syntax().clone())
                 .and_then(|named| ast::HasName::name(&named))
@@ -5233,10 +5453,9 @@ impl Shared {
         }
     }
 
-    /// A `use`: it answers to the names it binds, every leaf takes any item
-    /// and every segment before a leaf a module or type only.
+    /// A `use`: always taken, every leaf takes any item and every segment
+    /// before a leaf a module or type only.
     fn of_use(it: &ast::Use, text: String) -> Self {
-        let mut always = false;
         let mut mentions = BTreeSet::new();
         let mut types = BTreeSet::new();
         for tree in it.syntax().descendants().filter_map(ast::UseTree::cast) {
@@ -5245,10 +5464,6 @@ impl Shared {
                 types.extend(tree.path().iter().flat_map(|path| names_in(path.syntax())));
                 continue;
             }
-            let anonymous = tree
-                .rename()
-                .is_some_and(|rename| rename.underscore_token().is_some());
-            always |= anonymous || tree.star_token().is_some();
             let Some(path) = tree.path() else {
                 continue;
             };
@@ -5265,7 +5480,7 @@ impl Shared {
             }
         }
         Self {
-            names: (!always).then(|| use_names(it).into_iter().collect()),
+            names: None,
             a_type: false,
             text,
             mentions,
@@ -5284,7 +5499,10 @@ impl Shared {
 
 /// Every `#[test]` function in `source` by name: its own keyed text, then the
 /// keyed text of the non-test functions of the module it sits in, which are
-/// its helpers ([`keyed_text`]: a comment or a blank line moves no key).
+/// its helpers ([`keyed_text`]: a comment or a blank line moves no key), then
+/// the digest of the module's other items it and its helpers reach by name,
+/// as a shared module's are ([`reached_digest`]): an edited `const` or `impl`
+/// beside a test moved no key (CLOUD-2904).
 fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
     use ast::{HasAttrs as _, HasName as _};
     let is_test = |function: &ast::Fn| {
@@ -5295,6 +5513,10 @@ fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
     let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
     let mut texts: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
+    // Per module, once: its helpers' keyed text, the names they mention, and
+    // its other items as a shared module's.
+    let mut modules: std::collections::HashMap<usize, (String, BTreeSet<String>, Vec<Shared>)> =
+        std::collections::HashMap::new();
     for function in parse
         .tree()
         .syntax()
@@ -5307,18 +5529,43 @@ fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
         if !is_test(&function) {
             continue;
         }
-        let helpers: String = function
-            .syntax()
-            .parent()
-            .into_iter()
-            .flat_map(|module| module.children().filter_map(ast::Fn::cast))
-            .filter(|sibling| !is_test(sibling))
-            .map(|sibling| keyed_text(sibling.syntax()))
-            .collect();
+        let Some(module) = function.syntax().parent() else {
+            continue;
+        };
+        let (helpers, helper_names, items) = modules
+            .entry(usize::from(module.text_range().start()))
+            .or_insert_with(|| {
+                let siblings: Vec<ast::Fn> = module
+                    .children()
+                    .filter_map(ast::Fn::cast)
+                    .filter(|sibling| !is_test(sibling))
+                    .collect();
+                let helpers = siblings
+                    .iter()
+                    .map(|sibling| keyed_text(sibling.syntax()))
+                    .collect();
+                let helper_names = siblings
+                    .iter()
+                    .flat_map(|sibling| names_in(sibling.syntax()))
+                    .collect();
+                let items = module
+                    .children()
+                    .filter_map(ast::Item::cast)
+                    .filter(|item| !matches!(item, ast::Item::Fn(_)))
+                    .map(|item| Shared::of(&item))
+                    .collect();
+                (helpers, helper_names, items)
+            });
+        let mut wanted = names_in(function.syntax());
+        wanted.extend(helper_names.iter().cloned());
+        let reached = reached_digest(items, wanted);
         texts
             .entry(name.text().to_string())
             .or_default()
-            .push(format!("{}\x1f{helpers}", keyed_text(function.syntax())));
+            .push(format!(
+                "{}\x1f{helpers}\x1f//{reached}\n",
+                keyed_text(function.syntax())
+            ));
     }
     texts
 }
@@ -11680,17 +11927,17 @@ mod tests {
         }
     }
 
-    /// T2 (CLOUD-2904): a name with one definition is followed, so an edit
-    /// one hop on moves the case naming it; a name with more than one
-    /// definition is keyed on all of them but never expanded through.
+    /// T2 (CLOUD-2904): a name is followed through every definition it has,
+    /// so an edit one hop on moves the case naming it, a name with several
+    /// definitions included: `S` is a struct and an impl, and an edit to the
+    /// `C` the struct names moves the case naming `S`.
     ///
-    /// Fails by: an ambiguous name expanded (a type's impls join its mentions
-    /// to the type's, and with fix 1 alone the real edits on 304fa50b still
-    /// reached 11,523 of 11,744 probed functions), a unique one not followed
-    /// (`B`'s edit reuses a stale verdict), or an ambiguous one's own
-    /// definitions dropped (a field added to `S` moves nothing).
+    /// Fails by: a name with more than one definition keyed but not expanded
+    /// (`C`'s edit reuses a stale verdict), a unique one not followed (`B`'s
+    /// edit reuses a stale verdict), or a definition dropped (a field added to
+    /// `S` moves nothing).
     #[test]
-    fn a_unique_name_is_followed_and_an_ambiguous_one_is_keyed_but_not_expanded() {
+    fn a_name_is_followed_through_every_definition() {
         let (f, g) = (case("f"), case("g"));
         let cases: BTreeSet<Case> = [f.clone(), g.clone()].into();
         let executed = [(f.clone(), [0].into()), (g.clone(), [1].into())].into();
@@ -11701,9 +11948,9 @@ mod tests {
         let hop = source_digests(&cases, &executed, &base.replace("B: u32 = 1", "B: u32 = 9"));
         assert_ne!(hop[&f], held[&f], "A's one definition names B");
         let beyond = source_digests(&cases, &executed, &base.replace("C(u32)", "C(u64)"));
-        assert_eq!(
+        assert_ne!(
             beyond[&g], held[&g],
-            "S has two definitions: not expanded to C"
+            "S has two definitions: expanded through both to C"
         );
         let own = source_digests(
             &cases,
@@ -11885,7 +12132,7 @@ mod tests {
         assert_eq!(reach.sites.keys().copied().collect::<Vec<_>>(), [3]);
     }
 
-    /// T1 (CLOUD-2904): a private item added to a module moves the cases whose
+    /// K1 (CLOUD-2904's key fix): a private item added to a module moves the cases whose
     /// functions name it from inside that module, and none naming its
     /// spelling from outside, where it is not visible. 1dc469d24 added a
     /// private `const fn covered` to `resume.rs`, and every case binding a
@@ -11920,7 +12167,7 @@ mod tests {
         );
     }
 
-    /// T2 (CLOUD-2904): a method added moves the case that calls it and no
+    /// K2 (CLOUD-2904's key fix): a method added moves the case that calls it and no
     /// case that only binds a local of its name. 6a5339e58 added
     /// `impl Host { fn here }`, and every case binding a local `here` moved.
     ///
@@ -11946,7 +12193,7 @@ mod tests {
         assert_ne!(added[&caller], held[&caller], "`h.here()` may call it");
     }
 
-    /// T3 (CLOUD-2904): a comment edit in a shared helper a case reaches moves
+    /// K3 (CLOUD-2904's key fix): a comment edit in a shared helper a case reaches moves
     /// no case, and a token edit does. 6df55d534 changed one comment in
     /// `pin_mise` and moved all 6,524 integration cases.
     ///
@@ -11973,8 +12220,8 @@ mod tests {
         );
     }
 
-    /// T4 (CLOUD-2904): a `use` answers to the names it binds, and its path
-    /// before the leaf takes only a module or type: a case reaching only the
+    /// K4 (CLOUD-2904's key fix): a `use` takes by its leaf anything, and by
+    /// its path before the leaf only a module or type: a case reaching only the
     /// `ROOT` that `use batten::surface::ROOT;` binds is not keyed on
     /// `fn batten`. `tests/it/common/mod.rs:48` pulled `fn batten`, and
     /// through it `pin_mise`, into every integration case.
@@ -12001,7 +12248,7 @@ mod tests {
         );
     }
 
-    /// T5 (CLOUD-2904): a chain through a skeleton item is followed where its
+    /// K5 (CLOUD-2904's key fix): a chain through a skeleton item is followed where its
     /// mentions are made: `pub const LIMIT = super::helper()` in one module
     /// reaches the private `helper` of its parent, so editing `helper` moves
     /// the case naming `LIMIT` from a third. A private `LIMIT` elsewhere,
@@ -12031,7 +12278,7 @@ mod tests {
         assert_eq!(edited[&other], held[&other], "and no other case moves");
     }
 
-    /// T6 (CLOUD-2904): a function moved whole moves no case that runs it, and
+    /// K6 (CLOUD-2904's key fix): a function moved whole moves no case that runs it, and
     /// an edit to it still does.
     ///
     /// Fails by: a case keyed on its probe digests in probe-id order, a
@@ -12050,8 +12297,655 @@ mod tests {
         assert_ne!(edited[&runs], held[&runs], "an edit to one it ran");
     }
 
-    /// An impl answers to its header's unqualified names and its members' own
-    /// names; a `use` to each leaf's last segment or rename, and to the
+    /// Each case's digest over one `source` rendered where `place` says.
+    fn placed_digests(
+        cases: &BTreeSet<Case>,
+        executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+        source: &str,
+        place: &FileScope,
+    ) -> std::collections::BTreeMap<Case, String> {
+        let root = crate::scratch::scratch("schema-placed-digests");
+        let rendered = render_in(source, &[], &BTreeSet::new(), Some(0), place);
+        let mut items: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (name, digest) in &rendered.items {
+            items
+                .entry(name.clone())
+                .or_default()
+                .insert(digest.clone());
+        }
+        let mut mentions: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (name, mentioned) in &rendered.mentions {
+            mentions
+                .entry(name.clone())
+                .or_default()
+                .extend(mentioned.iter().cloned());
+        }
+        let depends = Depends {
+            names: &rendered.names,
+            items: &items,
+            mentions: &mentions,
+            ..depends(&rendered.probes)
+        };
+        case_digests(
+            &root,
+            cases,
+            &std::collections::BTreeMap::new(),
+            executed,
+            &depends,
+        )
+    }
+
+    /// R1 (CLOUD-2904's soundness review): a `use` a shared helper imports a
+    /// trait by is taken though nothing names the trait, so an edit to the
+    /// module it imports from moves the case calling the trait's method.
+    ///
+    /// Fails by: a named `use` taken only when its bound name is wanted (a
+    /// trait called by method is never named, and the edit reuses a stale
+    /// verdict).
+    #[test]
+    fn a_use_importing_a_trait_called_by_method_moves_the_case() {
+        let test = [String::from("fn t() { greet(\"a\"); }")];
+        let common = |body: &str| {
+            format!(
+                "mod ext {{\n    pub trait Shout {{ fn shout(&self) -> String; }}\n    \
+                 impl Shout for str {{ fn shout(&self) -> String {{ {body} }} }}\n}}\n\
+                 use self::ext::Shout;\npub fn greet(n: &str) -> String {{ n.shout() }}\n"
+            )
+        };
+        assert_ne!(
+            common_reached(&common("self.to_uppercase()"), &test),
+            common_reached(&common("self.to_lowercase()"), &test),
+            "the trait's impl is what `n.shout()` runs"
+        );
+    }
+
+    /// R2 (CLOUD-2904's soundness review): a package whose files sit in
+    /// modules their paths do not say is not scoped by module, so a private
+    /// item is visible to its whole package; and what says so is a `#[path]`,
+    /// plain, raw or under `cfg_attr`, or an `include!` no syntax resolves.
+    ///
+    /// Fails by: a private item scoped by a module path read off a moved
+    /// file's path (the case naming it from elsewhere holds), or a layout
+    /// misread as plain.
+    #[test]
+    fn a_package_whose_modules_move_is_not_scoped_by_module() {
+        let names = case("names_helper");
+        let cases: BTreeSet<Case> = [names.clone()].into();
+        let executed = [(names.clone(), [0].into())].into();
+        let source = |value: &str| {
+            format!(
+                "mod a {{ const fn helper() -> u8 {{ {value} }} }}\n\
+                 mod b {{ pub fn names_helper() -> u8 {{ helper() }} }}\n"
+            )
+        };
+        let flat = FileScope {
+            flat: true,
+            ..FileScope::default()
+        };
+        let held = placed_digests(&cases, &executed, &source("1"), &flat);
+        let edited = placed_digests(&cases, &executed, &source("2"), &flat);
+        assert_ne!(
+            edited[&names], held[&names],
+            "helper is visible package-wide"
+        );
+        for moved in [
+            "#[path = \"x.rs\"]\nmod x;\n",
+            "#[path = r\"x.rs\"]\nmod x;\n",
+            "#[cfg_attr(test, path = \"x.rs\")]\nmod x;\n",
+            "mod outer {\n    #[path = \"x.rs\"]\n    mod x;\n}\n",
+            "include!(some_path());\n",
+            "m! { include!(\"x.rs\"); }\n",
+        ] {
+            assert!(moves_modules(moved, "src/lib.rs"), "{moved}");
+        }
+        for plain in [
+            "pub fn path() -> u8 { 1 }\n",
+            "include!(\"x.rs\");\n",
+            "include!(concat!(env!(\"OUT_DIR\"), \"/x.rs\"));\n",
+            "const S: &str = \"#[path = \\\"x.rs\\\"]\";\n",
+            "#[cfg_attr(test, derive(Debug))]\nstruct S;\nfn path() {}\n",
+        ] {
+            assert!(!moves_modules(plain, "src/lib.rs"), "{plain}");
+        }
+    }
+
+    /// R2 (CLOUD-2904's soundness review): a `[lib]` or `[[bin]]` target at a
+    /// path other than its default moves its crate root.
+    ///
+    /// Fails by: a custom root read as the default (its crate's modules are
+    /// scoped from the wrong root), or a default path read as custom.
+    #[test]
+    fn a_custom_target_path_moves_the_crate_root() {
+        let root = crate::scratch::scratch("schema-custom-target");
+        let manifest = |extra: &str| {
+            std::fs::create_dir_all(root.join("p")).unwrap();
+            std::fs::write(
+                root.join("p/Cargo.toml"),
+                format!("[package]\nname = \"p\"\n{extra}"),
+            )
+            .unwrap();
+        };
+        manifest("[lib]\npath = \"src/lib.rs\"\n[[bin]]\nname = \"p\"\npath = \"src/main.rs\"\n");
+        assert!(!custom_target(&root, "p"), "default paths");
+        manifest("[[bin]]\nname = \"q\"\npath = \"src/bin/q.rs\"\n");
+        assert!(!custom_target(&root, "p"), "a bin's default path");
+        manifest("[lib]\npath = \"lib/root.rs\"\n");
+        assert!(custom_target(&root, "p"), "a custom lib root");
+        manifest("[[bin]]\nname = \"p\"\npath = \"tools/p.rs\"\n");
+        assert!(custom_target(&root, "p"), "a custom bin root");
+    }
+
+    /// R3 (CLOUD-2904's soundness review): text that observes its position
+    /// moves its key when it moves, and spacing inside a macro's token tree
+    /// is keyed.
+    ///
+    /// Fails by: a helper calling `line!()` keyed by tokens alone (a line
+    /// shift above it changes what it returns and moves nothing), a probed
+    /// function doing the same, or `m!(a += b)` keyed as `m!(a + = b)`.
+    #[test]
+    fn text_that_observes_its_position_or_spacing_moves_its_key() {
+        let test = [String::from("fn t() { here(); }")];
+        let common = |prefix: &str| format!("{prefix}pub fn here() -> u32 {{ line!() }}\n");
+        assert_ne!(
+            common_reached(&common(""), &test),
+            common_reached(&common("\n"), &test),
+            "a line shift moves what line!() says"
+        );
+        let spaced = [String::from("fn t() { op(); }")];
+        let joint = |op: &str| format!("pub fn op() -> u8 {{ m!(a {op} b) }}\n");
+        assert_ne!(
+            common_reached(&joint("+="), &spaced),
+            common_reached(&joint("+ ="), &spaced),
+            "spacing inside a token tree"
+        );
+        let runs = case("here");
+        let cases: BTreeSet<Case> = [runs.clone()].into();
+        let executed = [(runs.clone(), [0].into())].into();
+        let probed = |prefix: &str| format!("{prefix}pub fn here() -> u32 {{ line!() }}\n");
+        assert_ne!(
+            source_digests(&cases, &executed, &probed(""))[&runs],
+            source_digests(&cases, &executed, &probed("\n\n"))[&runs],
+            "a probed function's line moves its digest"
+        );
+    }
+
+    /// R4 (CLOUD-2904's soundness review): an item exporting its symbol and
+    /// an item an `extern` block declares are visible workspace-wide, so an
+    /// edit to a `no_mangle` static moves the case reading it through an
+    /// `extern` declaration in another module.
+    ///
+    /// Fails by: a linked item scoped to its module (the reader holds).
+    #[test]
+    fn a_linked_symbol_is_visible_workspace_wide() {
+        let reads = case("read");
+        let cases: BTreeSet<Case> = [reads.clone()].into();
+        let executed = [(reads.clone(), [0].into())].into();
+        let source = |value: &str| {
+            format!(
+                "mod a {{ #[unsafe(no_mangle)] static TABLE: u8 = {value}; }}\n\
+                 mod b {{\n    unsafe extern \"C\" {{ static TABLE: u8; }}\n    \
+                 pub fn read() -> u8 {{ unsafe {{ TABLE }} }}\n}}\n"
+            )
+        };
+        let held = source_digests(&cases, &executed, &source("1"));
+        let edited = source_digests(&cases, &executed, &source("2"));
+        assert_ne!(edited[&reads], held[&reads], "TABLE is one symbol");
+    }
+
+    /// R6 (CLOUD-2904's soundness review): a test file's own items besides
+    /// its functions are keyed by what the test reaches, so an edit to a
+    /// `const` a test names moves its text and an edit to one it does not
+    /// leaves it.
+    ///
+    /// Fails by: only functions keyed (the `const` edit reuses a stale
+    /// verdict), or every item keyed (an unreached `const` moves it).
+    #[test]
+    fn a_test_files_items_it_reaches_are_in_its_text() {
+        let source = |limit: &str, other: &str| {
+            format!(
+                "const LIMIT: u8 = {limit};\nconst OTHER: u8 = {other};\n\
+                 #[test]\nfn t() {{ assert_eq!(LIMIT, 1); }}\n"
+            )
+        };
+        let held = test_texts(&source("1", "1"));
+        assert_ne!(
+            test_texts(&source("2", "1"))["t"],
+            held["t"],
+            "t names LIMIT"
+        );
+        assert_eq!(
+            test_texts(&source("1", "2"))["t"],
+            held["t"],
+            "t names no OTHER"
+        );
+    }
+
+    /// R7 (CLOUD-2904's soundness review): an impl in a shared module answers
+    /// to every name in its self type, so a case naming `Holder` takes
+    /// `impl Holder<Item>`.
+    ///
+    /// Fails by: an impl answering only to the alphabetically last name in
+    /// its self type (`Item`), so an edit to `Holder`'s method moves nothing.
+    #[test]
+    fn a_shared_impl_answers_to_every_name_in_its_self_type() {
+        let test = [String::from("fn t() { let _ = Holder::new(); }")];
+        let common = |body: &str| {
+            format!(
+                "pub struct Item;\npub struct Holder<T>(T);\n\
+                 impl Holder<Item> {{ pub fn new() -> Self {{ {body} }} }}\n"
+            )
+        };
+        assert_ne!(
+            common_reached(&common("Holder(Item)"), &test),
+            common_reached(&common("todo!()"), &test),
+            "the case calls Holder::new"
+        );
+    }
+
+    /// R8 (CLOUD-2904's soundness review): a callback an attribute names by a
+    /// string is a name, so an edit to serde's `default = "fallback"` moves
+    /// the case naming the struct that reads it.
+    ///
+    /// Fails by: a string in an attribute naming nothing (the edit reuses a
+    /// stale verdict).
+    #[test]
+    fn a_callback_an_attribute_names_by_string_is_a_name() {
+        let reads = case("read");
+        let cases: BTreeSet<Case> = [reads.clone()].into();
+        let executed = [(reads.clone(), [0].into())].into();
+        let source = |value: &str| {
+            format!(
+                "const fn fallback() -> u8 {{ {value} }}\n\
+                 #[derive(Deserialize)]\npub struct S {{ #[serde(default = \"fallback\")] x: u8 }}\n\
+                 pub fn read() -> Option<S> {{ None }}\n"
+            )
+        };
+        let held = source_digests(&cases, &executed, &source("1"));
+        let edited = source_digests(&cases, &executed, &source("2"));
+        assert_ne!(edited[&reads], held[&reads], "S's default calls fallback");
+    }
+
+    /// R9 (CLOUD-2904's soundness review): an impl is keyed on the names of
+    /// every method it defines, probed ones included, so overriding a default
+    /// method the standard library calls unnamed moves the case using it.
+    ///
+    /// Fails by: a probed override cut from its impl's digest whole (adding
+    /// `fold` changes what `sum()` runs and moves nothing).
+    #[test]
+    fn an_override_of_a_default_method_moves_the_impls_cases() {
+        let sums = case("total");
+        let cases: BTreeSet<Case> = [sums.clone()].into();
+        let executed = [(sums.clone(), [0].into())].into();
+        let source = |extra: &str| {
+            format!(
+                "pub fn total(c: Counter) -> u8 {{ c.sum() }}\npub struct Counter;\n\
+                 impl Iterator for Counter {{\n    type Item = u8;\n    \
+                 fn next(&mut self) -> Option<u8> {{ None }}\n{extra}}}\n"
+            )
+        };
+        let held = source_digests(&cases, &executed, &source(""));
+        let added = source_digests(
+            &cases,
+            &executed,
+            &source("    fn fold<B, F: FnMut(B, u8) -> B>(self, init: B, _f: F) -> B { init }\n"),
+        );
+        assert_ne!(added[&sums], held[&sums], "sum() now runs the override");
+    }
+
+    /// R10 (CLOUD-2904's soundness review): an associated const answers to
+    /// its impl's type too, so a case naming only the type moves when the
+    /// const does: a generic function outside the workspace reads `T::K`.
+    ///
+    /// Fails by: an associated const reached only from an associated position
+    /// (the case names `Unit` and no `K`, and the edit reuses a stale verdict).
+    #[test]
+    fn an_associated_const_answers_to_its_type() {
+        let reads = case("read");
+        let cases: BTreeSet<Case> = [reads.clone()].into();
+        let executed = [(reads.clone(), [0].into())].into();
+        let source = |value: &str| {
+            format!(
+                "pub fn read() -> u8 {{ external::<Unit>() }}\npub struct Unit;\n\
+                 impl Limit for Unit {{ const K: u8 = {value}; }}\n"
+            )
+        };
+        let held = source_digests(&cases, &executed, &source("1"));
+        let edited = source_digests(&cases, &executed, &source("2"));
+        assert_ne!(
+            edited[&reads], held[&reads],
+            "external::<Unit> reads Unit::K"
+        );
+    }
+
+    /// Every item `source` holds, members and nested items included.
+    fn every_item(source: &str) -> Vec<ast::Item> {
+        batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+            .tree()
+            .syntax()
+            .descendants()
+            .filter_map(ast::Item::cast)
+            .collect()
+    }
+
+    /// The parsed root of `source`.
+    fn parsed(source: &str) -> SyntaxNode {
+        batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+            .tree()
+            .syntax()
+            .clone()
+    }
+
+    /// A file's scope is its package and its module path, a crate root's
+    /// being its directory, so every file of the crate sits in it or below.
+    ///
+    /// Fails by: a crate root read as a module of its own (a `src/bin/*.rs`,
+    /// a `tests/*.rs` or a `build.rs` scoped apart from the files it holds),
+    /// or `mod.rs`, `lib.rs` or `main.rs` read as a module name.
+    #[test]
+    fn a_files_scope_is_its_package_and_module_path() {
+        let of = |file: &str| {
+            let scope = FileScope::of(file);
+            (scope.package, scope.module.join("::"))
+        };
+        let owned = |package: &str, module: &str| (package.to_owned(), module.to_owned());
+        assert_eq!(
+            of("crates/batten/src/lib.rs"),
+            owned("crates/batten", "src")
+        );
+        assert_eq!(
+            of("crates/batten/src/mutate/schema.rs"),
+            owned("crates/batten", "src::mutate::schema")
+        );
+        assert_eq!(
+            of("crates/batten/src/mutate/mod.rs"),
+            owned("crates/batten", "src::mutate")
+        );
+        assert_eq!(
+            of("crates/batten/src/bin/x.rs"),
+            owned("crates/batten", "src::bin")
+        );
+        assert_eq!(of("tests/it/main.rs"), owned("", "tests::it"));
+        assert_eq!(of("tests/primitives.rs"), owned("", "tests"));
+        assert_eq!(of("build.rs"), owned("", ""));
+        assert!(!FileScope::of("src/lib.rs").unscoped, "a source is scoped");
+        assert!(FileScope::unscoped().unscoped, "an unscoped file is not");
+    }
+
+    /// An item's visibility is its modifier's, whitespace aside, except an
+    /// impl, a macro or a linked symbol, which are workspace-wide.
+    ///
+    /// Fails by: an impl or macro scoped by its absent modifier, `pub` or
+    /// `pub(self)` misread, whitespace in a modifier read, or an `extern`
+    /// item or a `no_mangle` one scoped to its module.
+    #[test]
+    fn an_items_visibility_is_read_off_its_modifier_and_its_kind() {
+        let visible: Vec<Visible> = items_of(
+            "fn a() {}\npub fn b() {}\npub(crate) fn c() {}\npub(self) fn d() {}\n\
+             pub ( super ) fn e() {}\nimpl S {}\nmacro_rules! m { () => {} }\n\
+             #[unsafe(no_mangle)] fn f() {}\n",
+        )
+        .iter()
+        .map(visibility)
+        .collect();
+        assert_eq!(
+            visible,
+            [
+                Visible::Module,
+                Visible::Workspace,
+                Visible::Package,
+                Visible::Module,
+                Visible::Package,
+                Visible::Workspace,
+                Visible::Workspace,
+                Visible::Workspace,
+            ]
+        );
+        let declared = every_item("unsafe extern \"C\" { fn g(); }\n")
+            .into_iter()
+            .find(|item| matches!(item, ast::Item::Fn(_)))
+            .unwrap();
+        assert_eq!(visibility(&declared), Visible::Workspace);
+    }
+
+    /// A member of an impl or trait answers to its own name in an associated
+    /// position only; an associated const answers to its impl's type too, a
+    /// method and a free const do not; an impl or trait lists every member.
+    ///
+    /// Fails by: a member's name free, a member fn answering to its type, or
+    /// a trait's members left out of its digest.
+    #[test]
+    fn a_members_names_are_associated_and_a_const_answers_to_its_type() {
+        let items = every_item(
+            "impl Tr for S { const K: u8 = 1; fn f() {} }\n\
+             trait T { fn a(); const B: u8; }\nconst TOP: u8 = 2;\n",
+        );
+        let named = |name: &str| {
+            items
+                .iter()
+                .find(|item| {
+                    ast::AnyHasName::cast(item.syntax().clone())
+                        .and_then(|named| ast::HasName::name(&named))
+                        .is_some_and(|own| own.text() == name)
+                })
+                .unwrap()
+        };
+        let none: Vec<String> = Vec::new();
+        assert_eq!(item_names(named("K")), none);
+        assert_eq!(associated_names(named("K")), ["K"]);
+        assert_eq!(owner_type_names(named("K")), ["S", "Tr"]);
+        assert_eq!(owner_type_names(named("f")), none);
+        assert_eq!(owner_type_names(named("TOP")), none);
+        assert_eq!(member_names(named("T")), ["B", "a"]);
+        let block = items
+            .iter()
+            .find(|item| matches!(item, ast::Item::Impl(_)))
+            .unwrap();
+        assert_eq!(member_names(block), ["K", "f"]);
+    }
+
+    /// A node's position is its line and column, both from zero.
+    ///
+    /// Fails by: a column counted from the wrong end of the line.
+    #[test]
+    fn a_nodes_position_is_its_line_and_column() {
+        let items = items_of("fn a() {}\n  fn b() {}\n");
+        assert_eq!(position_of(items[0].syntax()), "0:0");
+        assert_eq!(position_of(items[1].syntax()), "1:2");
+    }
+
+    /// A module holding an `include!` or a `#[path]` module is widened, and
+    /// no other: not one holding a plain `mod x;`, nor another macro call.
+    ///
+    /// Fails by: any macro read as an include, a plain `mod x;` read as a
+    /// `#[path]` one, or a module needing both read as needing either.
+    #[test]
+    fn a_module_holding_an_include_or_a_path_module_is_widened() {
+        let root = parsed(
+            "mod a { include!(\"x.rs\"); }\nmod b {\n    #[path = \"y.rs\"]\n    mod y;\n}\n\
+             mod c { mod z; }\nfn f() { other!(); }\n",
+        );
+        assert_eq!(
+            widened_modules(&root, &FileScope::default()),
+            BTreeSet::from([String::from("a"), String::from("b")])
+        );
+        let paths: Vec<Option<String>> =
+            parsed("#[path = \"x.rs\"]\nmod x;\n#[path=\"y.rs\"]\nmod y;\n#[cfg(test)]\nmod z;\n")
+                .descendants()
+                .filter_map(ast::Attr::cast)
+                .map(|attr| path_attr(&attr))
+                .collect();
+        assert_eq!(
+            paths,
+            [Some(String::from("x.rs")), Some(String::from("y.rs")), None]
+        );
+    }
+
+    /// A mention carries the scope it is made in; an associated position, a
+    /// string's capture and a nested `use` leaf make it associated too; a
+    /// mention in a `macro_rules!` body or an unscoped file is bare.
+    ///
+    /// Fails by: a path's later segment, a nested `use` leaf or a capture
+    /// read as free only, a call's name read as associated, or a macro body's
+    /// or an unscoped file's mention scoped.
+    #[test]
+    fn a_mention_is_scoped_where_it_is_made_unless_nothing_scopes_it() {
+        let root = parsed(
+            "fn f() { helper(); Host::here(); use a::{b}; let s = \"{cap}\"; }\n\
+             macro_rules! m { () => { inside() } }\n",
+        );
+        let scoped = mentions_in(&root, &FileScope::of("src/lib.rs"));
+        let made = |name: &str| format!("{name}{MENTIONED_IN}{MENTIONED_IN}src");
+        for expected in [
+            made("helper"),
+            format!("{ASSOCIATED}here"),
+            format!("{ASSOCIATED}b"),
+            format!("{ASSOCIATED}cap"),
+            String::from("inside"),
+        ] {
+            assert!(scoped.contains(&expected), "{expected:?} in {scoped:?}");
+        }
+        assert!(
+            !scoped.contains(&format!("{ASSOCIATED}helper")),
+            "a call's name is free"
+        );
+        assert!(!scoped.contains("helper"), "a function's mention is scoped");
+        let bare = mentions_in(&root, &FileScope::unscoped());
+        assert!(
+            bare.contains("helper"),
+            "an unscoped file's mention is bare"
+        );
+    }
+
+    /// A string in an attribute names every word in it, an underscored one
+    /// included; a string elsewhere names only its captures.
+    ///
+    /// Fails by: a plain string's words read as names, or a callback whose
+    /// name starts with `_` dropped.
+    #[test]
+    fn an_attribute_strings_words_are_names_and_a_plain_strings_are_not() {
+        let names = names_in(&parsed(
+            "#[serde(default = \"_fallback\", with = \"a::b\")]\nstruct S;\n\
+             fn f() { g(\"plain words\"); }\n",
+        ));
+        for name in ["_fallback", "a", "b"] {
+            assert!(names.contains(name), "{name} in {names:?}");
+        }
+        assert!(!names.contains("plain"), "{names:?}");
+    }
+
+    /// Spacing is keyed inside a macro's token tree and nowhere else.
+    ///
+    /// Fails by: a gap marked outside a token tree (a reformatted function
+    /// moves its key), or none inside one.
+    #[test]
+    fn spacing_is_keyed_inside_a_token_tree_only() {
+        let text = |source: &str| keyed_text(items_of(source)[0].syntax());
+        assert_eq!(
+            text("fn f() { a + b }"),
+            text("fn f(){a+b}"),
+            "outside a token tree"
+        );
+        assert_ne!(
+            text("fn f() { m!(a+b) }"),
+            text("fn f() { m!(a + b) }"),
+            "inside one"
+        );
+    }
+
+    /// The files an `include!` or `#[path]` module names are found, nested
+    /// paths both ways, and a package with a `#[path]` or a custom target
+    /// root is not scoped by module, while one with a resolved `include!`
+    /// alone is.
+    ///
+    /// Fails by: a file holding only an `include!` skipped, a nested
+    /// `#[path]` read only one way, or a package needing either cause read as
+    /// needing both.
+    #[test]
+    fn the_sources_a_layout_moves_are_found_and_their_packages_unscoped() {
+        let root = crate::scratch::scratch("schema-layout");
+        let write = |path: &str, text: &str| {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        };
+        write(
+            "p/src/lib.rs",
+            "include!(\"gen.rs\");\nmod outer {\n    #[path = \"w.rs\"]\n    mod w;\n}\n",
+        );
+        write("q/src/lib.rs", "pub fn plain() {}\n");
+        write(
+            "r/Cargo.toml",
+            "[package]\nname = \"r\"\n[lib]\npath = \"lib/root.rs\"\n",
+        );
+        write("r/src/lib.rs", "pub fn plain() {}\n");
+        write("s/src/lib.rs", "include!(\"x.rs\");\n");
+        let files: BTreeSet<String> = [
+            "p/src/lib.rs",
+            "q/src/lib.rs",
+            "r/src/lib.rs",
+            "s/src/lib.rs",
+        ]
+        .map(String::from)
+        .into();
+        assert_eq!(
+            flat_packages(&root, &files),
+            BTreeSet::from([String::from("p"), String::from("r")])
+        );
+        assert_eq!(
+            included_sources(&root, &files),
+            BTreeSet::from([
+                String::from("p/src/gen.rs"),
+                String::from("p/src/outer/w.rs"),
+                String::from("p/src/w.rs"),
+                String::from("s/src/x.rs"),
+            ])
+        );
+    }
+
+    /// A type a shared module defines is taken only when a case or a taken
+    /// item names it, by any name or by a path's module or type segment.
+    ///
+    /// Fails by: a type no path names taken anyway, so an edit to it moves
+    /// every case reaching the module.
+    #[test]
+    fn a_shared_type_nothing_names_is_not_taken() {
+        let test = [String::from("fn t() { helper(); }")];
+        let common =
+            |field: &str| format!("pub struct Unused {{ x: {field} }}\npub fn helper() {{}}\n");
+        assert_eq!(
+            common_reached(&common("u8"), &test),
+            common_reached(&common("u16"), &test)
+        );
+    }
+
+    /// A sweep's tally counts the verdicts reused, the mutants a held kill
+    /// pair decided and the case runs a recorded outcome decided.
+    ///
+    /// Fails by: a judged mutant's skipped runs or held kill not counted.
+    #[test]
+    fn a_tally_counts_what_was_decided_without_a_run() {
+        let tally = Tally::default();
+        tally
+            .reused
+            .fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+        tally.judged(Judged {
+            verdict: Verdict::Caught,
+            skipped: 3,
+            held_kill: true,
+        });
+        tally.judged(Judged::ran(Verdict::Missed, 1));
+        assert_eq!(
+            tally.line(9),
+            "mutate schema: reused 2 of 9 verdict(s), 1 decided by a held kill pair, \
+             and 4 case run(s) a recorded outcome decided"
+        );
+    }
+
+    /// An impl answers to its header's unqualified names, and its members'
+    /// own names in an associated position only ([`associated_names`]); a
+    /// `use` to each leaf's last segment or rename, and to the
     /// module a glob globs; an item macro to each name after an item keyword,
     /// or to every name when it has none.
     ///
@@ -12209,22 +13103,39 @@ mod tests {
         assert!(!function.answers(&none, &wanted("shape")));
     }
 
-    /// A `use` answers to the names it binds; a glob or an `as _` import is
-    /// always taken, since what it brings in has no name of its own here.
+    /// Every `use` is taken, a named one too: a trait it imports is called by
+    /// method with no name of it written (CLOUD-2904's soundness review). Its
+    /// leaf takes any item, and its path before the leaf a module or type
+    /// only; a glob has no leaf, so its whole path is a module's.
     ///
-    /// Fails by: `always` never set (shard 3/8's `|=` to `&=` survivor), so a
-    /// glob answers only to its names, or the `!always` guard dropped (its
-    /// `delete !` survivor), so a named import is always taken (CLOUD-2789).
+    /// Replaces shard 3/8's `a_use_answers_to_its_bindings_and_a_glob_is_always_taken`
+    /// (CLOUD-2789), which pinned a named `use` taken only when its bound name
+    /// was wanted: the under-invalidation the review found.
+    ///
+    /// Fails by: a named `use` taken only by its bound name, a leaf read as a
+    /// module (so a function it imports is never taken), or a path segment
+    /// read as any item (so `use batten::x` takes `fn batten`).
     #[test]
-    fn a_use_answers_to_its_bindings_and_a_glob_is_always_taken() {
-        let names: Vec<Option<BTreeSet<String>>> =
-            items_of("use a::b;\nuse a::*;\nuse a::c as _;\n")
-                .iter()
-                .map(|item| Shared::of(item).names)
-                .collect();
+    fn a_use_is_always_taken_by_its_leaves_and_its_path() {
+        /// What one `use` answers to, takes by any item and takes by a type.
+        type Taken = (Option<BTreeSet<String>>, BTreeSet<String>, BTreeSet<String>);
+        let shared: Vec<Taken> = items_of("use a::b;\nuse a::*;\nuse a::c as _;\n")
+            .iter()
+            .map(|item| {
+                let it = Shared::of(item);
+                (it.names, it.mentions, it.types)
+            })
+            .collect();
+        let set = |names: &[&str]| -> BTreeSet<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
         assert_eq!(
-            names,
-            [Some(BTreeSet::from([String::from("b")])), None, None]
+            shared,
+            [
+                (None, set(&["b"]), set(&["a"])),
+                (None, set(&[]), set(&["a"])),
+                (None, set(&["c"]), set(&["a"])),
+            ]
         );
     }
 
