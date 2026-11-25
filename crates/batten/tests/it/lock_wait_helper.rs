@@ -21,9 +21,10 @@ use std::path::{Path, PathBuf};
 
 use batten::lock_wait::{Mode, Stop, wait_with_helper};
 
-/// The batten binary the helper is re-entered as.
-fn helper() -> &'static Path {
-    Path::new(env!("CARGO_BIN_EXE_batten"))
+/// The helper spawner, run as the real batten binary: `exec`'s placed spawn,
+/// the one the binary itself installs.
+fn helper(path: &Path, mode: Mode) -> std::io::Result<std::process::Child> {
+    batten::exec::spawn_lock_helper_as(Path::new(env!("CARGO_BIN_EXE_batten")), path, mode)
 }
 
 /// A fresh lock file under a case's own scratch directory, and a handle on it.
@@ -67,7 +68,7 @@ fn a_release_by_the_holder_ends_the_helper_and_hands_over_the_lock() {
         .try_lock()
         .expect("free in a fresh fixture");
     let mut helpers = Vec::new();
-    let taken = wait_with_helper(&file, &path, Mode::Exclusive, None, helper(), &mut |pid| {
+    let taken = wait_with_helper(&file, &path, Mode::Exclusive, None, &helper, &mut |pid| {
         helpers.push(pid);
         drop(holder.take());
     })
@@ -96,7 +97,7 @@ fn a_stop_mid_wait_ends_the_helper_and_returns_stopped() {
         &path,
         Mode::Exclusive,
         Some(&stop),
-        helper(),
+        &helper,
         &mut |pid| {
             helpers.push(pid);
             stop.raise();
@@ -138,7 +139,7 @@ fn a_holder_that_dies_hands_the_lock_over() {
         .read_line(&mut line)
         .expect("the holder says it holds");
     assert_eq!(line.trim(), "held");
-    let taken = wait_with_helper(&file, &path, Mode::Exclusive, None, helper(), &mut |_| {
+    let taken = wait_with_helper(&file, &path, Mode::Exclusive, None, &helper, &mut |_| {
         holder.kill().expect("kill the holder");
         holder.wait().expect("reap the holder");
     })
@@ -162,7 +163,7 @@ fn the_helper_waits_in_the_waiters_own_mode() {
         .try_lock()
         .expect("free in a fresh fixture");
     let mut argv = String::new();
-    let taken = wait_with_helper(&file, &path, Mode::Shared, None, helper(), &mut |pid| {
+    let taken = wait_with_helper(&file, &path, Mode::Shared, None, &helper, &mut |pid| {
         argv = std::fs::read_to_string(format!("/proc/{pid}/cmdline")).expect("read its argv");
         drop(holder.take());
     })
@@ -189,7 +190,7 @@ fn no_helper_outlives_a_waiter_that_panics() {
     holder.try_lock().expect("free in a fresh fixture");
     let seen = std::sync::Mutex::new(None);
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        wait_with_helper(&file, &path, Mode::Exclusive, None, helper(), &mut |pid| {
+        wait_with_helper(&file, &path, Mode::Exclusive, None, &helper, &mut |pid| {
             *seen.lock().unwrap() = Some(pid);
             panic!("the waiter fails while its helper is parked");
         })
