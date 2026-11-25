@@ -1932,7 +1932,7 @@ impl Staged {
         };
         copy_if_changed(&root.join(&path), &self.dir.join(&path))
             .with_context(|| format!("mutate: could not restore {path} in the staged tree"))?;
-        Ok(())
+        self.index(&path)
     }
 
     /// Put the committed bytes of `path` back and record it as this row's
@@ -1944,8 +1944,27 @@ impl Staged {
     pub fn stage_subject(&mut self, root: &Path, path: &str) -> Result<()> {
         copy_if_changed(&root.join(path), &self.dir.join(path))
             .with_context(|| format!("mutate: could not stage {path}"))?;
+        self.index(path)?;
         self.dirty = Some(path.to_owned());
         Ok(())
+    }
+
+    /// Stage `path`'s working bytes in the staged tree's index.
+    ///
+    /// **THE INDEX IS PART OF THE TREE UNDER JUDGEMENT** (CLOUD-2789). A gate
+    /// that reads the committed rule reads the index, never the checkout, by
+    /// design (`lock_complete`'s `the_index_answers_not_the_worktree_for_the_committed_rule`).
+    /// A mutation written to the working copy alone was invisible to it, so
+    /// `mise.toml`'s `settings-unlocked` row survived a suite that denies the
+    /// same bytes staged. Every write to the staged tree, mutant and restore
+    /// alike, is staged with it, so the index never disagrees with the copy.
+    ///
+    /// # Errors
+    ///
+    /// A failed stage is could-not-look (→ exit `3`).
+    fn index(&self, path: &str) -> Result<()> {
+        crate::gitwrite::stage_paths(&self.dir, &[path.to_owned()])
+            .with_context(|| format!("mutate: could not stage {path} in the staged tree's index"))
     }
 
     /// The staged tree's root.
@@ -3918,8 +3937,9 @@ fn apply(staged: &Staged, overlay: Option<&Overlay>, row: &Row) -> Result<Option
     }
     crate::durable::replace(&target, after)
         .with_context(|| format!("mutate: could not write the mutated {}", row.source))?;
-    if let Some((overlay, copy)) = copy {
-        overlay.mark(&copy)?;
+    match copy {
+        Some((overlay, copy)) => overlay.mark(&copy)?,
+        None => staged.index(&row.source)?,
     }
     Ok(None)
 }
