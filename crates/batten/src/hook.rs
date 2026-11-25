@@ -25095,19 +25095,15 @@ deny contains "refused by themodule" if {
 
     /// Fails by: the `watch` option walk's step multiplied rather than added
     /// (`at += …` as `at *= …`), so from 0 it never moves and the walk spins.
-    /// The walk runs on its own thread and the case fails at its deadline
-    /// rather than hanging with it.
+    /// The case waits on the walk's own return, never a deadline (CLOUD-2789):
+    /// under that mutant it never returns, which the mutation runner counts as
+    /// the mutant's kill (CLOUD-2911).
     #[test]
     fn a_watch_option_walk_steps_past_each_option() {
-        let (sent, received) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let scripts = inner_scripts("watch", &["-d", "-n", "2", "git", "push"], Stage::call());
-            sent.send(scripts).expect("the walk's receiver is alive");
-        });
-        let scripts = received
-            .recv_timeout(std::time::Duration::from_secs(30))
-            .unwrap_or_else(|_| panic!("the option walk never reached `git push`"));
-        assert_eq!(scripts, ["git push"]);
+        assert_eq!(
+            inner_scripts("watch", &["-d", "-n", "2", "git", "push"], Stage::call()),
+            ["git push"]
+        );
     }
 
     /// Fails by: git's option walk running to `<= end`, which with no
@@ -25123,19 +25119,6 @@ deny contains "refused by themodule" if {
             git_acting_dir(&["git", "--work-tree=w"], here),
             Some(PathBuf::from("/r/w"))
         );
-    }
-
-    /// [`git_pathspecs`] over `tokens` in `/r`, on a thread the case owns and
-    /// abandons at a deadline: a scan that stops advancing (`index *= 1`) is
-    /// this case's failure, never the runner's timeout (CLOUD-2789).
-    fn bounded_pathspecs(tokens: &'static [&'static str]) -> Pathspecs {
-        let (done, answer) = std::sync::mpsc::channel();
-        drop(std::thread::spawn(move || {
-            let _ = done.send(git_pathspecs(tokens, Path::new("/r")));
-        }));
-        answer
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("the pathspec scan advances past every word and returns")
     }
 
     /// Fails by: `restore`'s `-s <tree>` skip multiplied rather than added
@@ -25154,7 +25137,10 @@ deny contains "refused by themodule" if {
             }])
         );
         assert_eq!(
-            bounded_pathspecs(&["git", "restore", "-q", "-s", "HEAD", "f"]),
+            git_pathspecs(
+                &["git", "restore", "-q", "-s", "HEAD", "f"],
+                Path::new("/r")
+            ),
             Pathspecs::Placed(vec![PathspecCall {
                 dir: PathBuf::from("/r"),
                 pathspecs: vec![String::from("f")],
@@ -25163,7 +25149,7 @@ deny contains "refused by themodule" if {
         // The source as the first word: a skip multiplied (`index *= 2`) from
         // zero never leaves it.
         assert_eq!(
-            bounded_pathspecs(&["git", "restore", "-s", "HEAD", "f"]),
+            git_pathspecs(&["git", "restore", "-s", "HEAD", "f"], Path::new("/r")),
             Pathspecs::Placed(vec![PathspecCall {
                 dir: PathBuf::from("/r"),
                 pathspecs: vec![String::from("f")],
