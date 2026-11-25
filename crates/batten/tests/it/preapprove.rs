@@ -1230,20 +1230,23 @@ fn a_plan_mode_curl_get_is_allowed_and_its_writes_are_refused() {
 
 /// Only an http(s) URL is a read's operand (CLOUD-2840): curl sends mail, posts
 /// to a broker or opens a session under other schemes, and guesses one for a
-/// bare host.
+/// bare host whose first label names it (`ftp.`, `smtp.`); any other bare host
+/// is http.
 #[test]
 fn a_curl_read_is_http_only() {
     reads_and_writes(
         &[
             "curl -sS http://example.com",
             "curl -H 'Accept: x' -m 5 HTTPS://example.com",
+            "curl example.com",
         ],
         &[
             "curl smtp://example.com",
             "curl telnet://example.com",
             "curl dict://example.com/d:x",
             "curl ftp://example.com/x",
-            "curl example.com",
+            "curl ftp.example.com",
+            "curl smtp.example.com",
         ],
     );
 }
