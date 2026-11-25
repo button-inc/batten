@@ -17345,6 +17345,37 @@ pub fn repo() -> u8 {{ scratch() }}
         );
     }
 
+    /// The custom roots are found over the sweep's own snapshot, which the
+    /// keys read, not only over a checkout.
+    ///
+    /// Fails by: a snapshot carrying Rust sources alone, under which no
+    /// manifest names a custom root and neither reader finds one (CLOUD-2904).
+    #[test]
+    fn a_custom_root_is_found_over_the_sweeps_snapshot() {
+        let dir = crate::scratch::scratch("schema-custom-roots-snapshot");
+        let repo = dir.join("repo");
+        let files = [
+            (
+                "pkg/Cargo.toml",
+                "[package]\nname = \"pkg\"\n[lib]\npath = \"lib/lib.rs\"\n",
+            ),
+            ("pkg/lib/lib.rs", "pub fn l() {}\n"),
+        ];
+        for (path, text) in files {
+            std::fs::create_dir_all(repo.join(path).parent().unwrap()).unwrap();
+            std::fs::write(repo.join(path), text).unwrap();
+        }
+        crate::gitwrite::commit_paths(&repo, &files.map(|(path, _)| path.to_owned()), "fixture")
+            .unwrap();
+        let snapshot = dir.join("pristine");
+        super::super::cover::pristine(&repo, &snapshot).unwrap();
+        assert!(custom_target(&snapshot, "pkg"));
+        assert_eq!(
+            custom_root_sources(&snapshot, "pkg"),
+            [String::from("pkg/lib/lib.rs")].into()
+        );
+    }
+
     /// Fails by: a binary with no target, or a nested one, walked as a test
     /// crate (CLOUD-2904).
     #[test]

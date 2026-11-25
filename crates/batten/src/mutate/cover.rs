@@ -60,10 +60,16 @@ pub fn target_args(binaries: &BTreeSet<&str>, mutated_file: &str) -> Vec<String>
     targets.into_iter().flatten().collect()
 }
 
-/// The checkout's Rust sources as they stand, copied under `dest`: what each
-/// cargo-mutants copy is compared against to find its mutated line. Returns
-/// the [`source_digest`] of the bytes it copied, so a caller compares the
-/// snapshot itself, never a second read of the checkout.
+/// The checkout's files as they stand, copied under `dest`: what each
+/// cargo-mutants copy is compared against to find its mutated line, and what
+/// every key the sweep reads is read from. Returns the [`source_digest`] of
+/// the Rust sources it copied, so a caller compares the snapshot itself,
+/// never a second read of the checkout.
+///
+/// EVERY FILE, NOT ONLY THE RUST ONES (CLOUD-2904): the keys read manifests,
+/// the lockfile and build inputs from this snapshot, and over a copy of `.rs`
+/// files alone no `Cargo.toml` was found, so the unprobed-package digest was
+/// a constant and an edit to a helper crate moved no key.
 ///
 /// NOT THE LIVE CHECKOUT, which a sweep running for hours does not freeze:
 /// measured on #1276, one edit to `lib.rs` mid-sweep made its line the "first
@@ -76,14 +82,16 @@ pub fn target_args(binaries: &BTreeSet<&str>, mutated_file: &str) -> Vec<String>
 pub fn pristine(root: &Path, dest: &Path) -> Result<String> {
     let _ = std::fs::remove_dir_all(dest);
     let mut digest = blake3::Hasher::new();
-    for path in rust_sources(root)? {
+    for path in checkout_files(root)? {
         let bytes = std::fs::read(root.join(&path)).with_context(|| format!("read {path}"))?;
         let to = dest.join(&path);
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent)?;
         }
         crate::durable::replace(&to, &bytes).with_context(|| format!("copy {path}"))?;
-        digest_one(&mut digest, &path, &bytes);
+        if is_rust(&path) {
+            digest_one(&mut digest, &path, &bytes);
+        }
     }
     Ok(digest.finalize().to_hex().to_string())
 }
@@ -110,18 +118,28 @@ fn digest_one(digest: &mut blake3::Hasher, path: &str, bytes: &[u8]) {
     digest.update(&[0]);
 }
 
-/// Every Rust file the checkout tracks or has changed that exists, sorted.
-fn rust_sources(root: &Path) -> Result<Vec<String>> {
+/// Every file the checkout tracks or has changed that exists, sorted.
+fn checkout_files(root: &Path) -> Result<Vec<String>> {
     let mut paths: BTreeSet<String> = crate::git::tracked_paths(root)?.into_iter().collect();
     paths.extend(crate::git::changed_paths(root)?);
     Ok(paths
         .into_iter()
-        .filter(|path| {
-            Path::new(path)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
-                && root.join(path).is_file()
-        })
+        .filter(|path| root.join(path).is_file())
+        .collect())
+}
+
+/// Whether `path` is a Rust source.
+fn is_rust(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+}
+
+/// Every Rust file the checkout tracks or has changed that exists, sorted.
+fn rust_sources(root: &Path) -> Result<Vec<String>> {
+    Ok(checkout_files(root)?
+        .into_iter()
+        .filter(|path| is_rust(path))
         .collect())
 }
 
@@ -299,11 +317,11 @@ mod tests {
         );
     }
 
-    /// The snapshot holds the tree's Rust sources, tracked or not, and no
-    /// other file; a later edit to the checkout leaves it alone, so the
-    /// mutated line is found against what the sweep started from.
+    /// The snapshot holds the tree's files, tracked or not, and digests its
+    /// Rust sources alone; a later edit to the checkout leaves it alone, so
+    /// the mutated line is found against what the sweep started from.
     ///
-    /// Fails by: an untracked source left out, a non-source copied, the
+    /// Fails by: an untracked source left out, a non-source not carried, the
     /// comparison reading the live checkout, or a source edit since the
     /// listing leaving the digest the sweep checks unmoved.
     #[test]
@@ -332,7 +350,11 @@ mod tests {
             "fn a() {}\n"
         );
         assert!(dest.join("src/new.rs").is_file(), "an untracked source");
-        assert!(!dest.join("notes.txt").exists(), "a non-source");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("notes.txt")).unwrap(),
+            "n\n",
+            "a non-source is carried for the keys that read it"
+        );
         std::fs::write(repo.join("src/a.rs"), "fn a() {}\nfn b() {}\n").unwrap();
         assert_eq!(
             std::fs::read_to_string(dest.join("src/a.rs")).unwrap(),
