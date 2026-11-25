@@ -18656,6 +18656,34 @@ fn run_reach_seed(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Resu
 ///
 /// The disk floor is the collector's own, so the jobs never spend the room it
 /// exists to keep.
+/// cargo-mutants' pinned binary for `batten mutate cargo`, once both runners
+/// answer; `None` once each absent one is said as `runner-absent`.
+///
+/// BOTH RUNNERS ARE ASKED BEFORE ANYTHING IS LISTED OR BUILT (CLOUD-2881).
+/// Every mutant is judged under nextest, and a sweep without it used to find
+/// out only after the schema build, 7-20 minutes in.
+fn mutate_cargo_runner(
+    root: &Path,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<PathBuf>> {
+    let nextest_absent = mutate::nextest_absent(root);
+    if let Some(finding) = &nextest_absent {
+        writeln!(out, "{finding}")?;
+    }
+    // FROM THE PROVISION CACHE, NEVER `PATH`: the engine runs the pinned bytes
+    // itself, so the row needs no `link` (only the task runner's carries one).
+    let Some(runner) = provisioned_binary("cargo-mutants", &Overrides::default()) else {
+        writeln!(out, "{}", mutate::absent(mutate::RunnerKind::CargoMutants))?;
+        writeln!(
+            err,
+            "::error:: mutate cargo: no [[provision]] row ships cargo-mutants, or it could not be applied; run `batten provision apply`"
+        )?;
+        return Ok(None);
+    };
+    Ok(nextest_absent.is_none().then_some(runner))
+}
+
 fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     // THE REACH SEED IS DETACHED ON PURPOSE (CLOUD-2842): it outlives the step
     // that spawned it, so it is dispatched before the orphan watch below.
@@ -18733,27 +18761,9 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         }
         None => (String::from("the whole workspace"), None),
     };
-    // BOTH RUNNERS ARE ASKED BEFORE ANYTHING IS LISTED OR BUILT (CLOUD-2881).
-    // Every mutant is judged under nextest, and a sweep without it used to find
-    // out only after the schema build, 7-20 minutes in. Each absent runner is
-    // its own `runner-absent`, could-not-look.
-    let nextest_absent = mutate::nextest_absent(root);
-    if let Some(finding) = &nextest_absent {
-        writeln!(out, "{finding}")?;
-    }
-    // FROM THE PROVISION CACHE, NEVER `PATH`: the engine runs the pinned bytes
-    // itself, so the row needs no `link` (only the task runner's carries one).
-    let Some(runner) = provisioned_binary("cargo-mutants", &Overrides::default()) else {
-        writeln!(out, "{}", mutate::absent(mutate::RunnerKind::CargoMutants))?;
-        writeln!(
-            err,
-            "::error:: mutate cargo: no [[provision]] row ships cargo-mutants, or it could not be applied; run `batten provision apply`"
-        )?;
+    let Some(runner) = mutate_cargo_runner(root, out, err)? else {
         return Ok(ExitCode::Internal);
     };
-    if nextest_absent.is_some() {
-        return Ok(ExitCode::Internal);
-    }
     // CARGO-MUTANTS' OWN GENERATOR, THE SCHEMA'S BUILD (CLOUD-2253): one build
     // with every mutant switched in, one reach run, each mutant judged by the
     // cases that reach it. Measured on #1276: 3,132 mutants, the classic tool
