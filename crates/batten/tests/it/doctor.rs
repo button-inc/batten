@@ -1161,6 +1161,29 @@ fn an_unconfigured_transcript_emits_no_check_at_all() {
 /// reasoning `mise-tasks/egress-check.sh` follows by taking both values as
 /// arguments — and the reason `container-preflight` was wrong, since it read a
 /// value `mise` had already corrected.
+/// The `state` `doctor egress -J` names, under `proxy` and `no_proxy`.
+fn egress_state(dir: &Path, proxy: Option<&str>, no_proxy: Option<&str>) -> String {
+    let mut command = batten();
+    command.arg("doctor").arg("egress").arg("-J");
+    for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
+        command.env_remove(name);
+    }
+    if let Some(value) = proxy {
+        command.env("HTTPS_PROXY", value);
+    }
+    if let Some(value) = no_proxy {
+        command.env("NO_PROXY", value);
+    }
+    let json = command
+        .current_dir(dir)
+        .env_remove("BATTEN_CONFIG_FROM")
+        .streamed_output()
+        .expect("run batten doctor egress -J");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&json)).expect("the data channel is parseable");
+    parsed["state"].as_str().unwrap_or_default().to_owned()
+}
+
 fn egress(dir: &Path, proxy: Option<&str>, no_proxy: Option<&str>) -> Output {
     let mut command = batten();
     command.arg("doctor").arg("egress");
@@ -1279,6 +1302,51 @@ fn a_wildcard_entry_is_neither_a_total_bypass_nor_a_fence_for_the_bare_host() {
     let output = egress(&dir, Some("http://proxy:8080"), Some("*.api.github.com"));
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(stdout(&output).trim(), "egress ok");
+    // ROUTED, NOT A TOTAL BYPASS: both read `egress ok`, so the data channel's
+    // state is what still tells the substring-wildcard trap apart, which would
+    // read this list as bypassing everything (`unproxied`).
+    assert_eq!(
+        egress_state(&dir, Some("http://proxy:8080"), Some("*.api.github.com")),
+        "routed"
+    );
+}
+
+/// Fails by: an unfenced proxy passed while a LIVE credential would go
+/// direct, through the binary rather than `egress_of`'s closure. The credential
+/// is proved live by a fresh receipt for its value, which is what
+/// `credential_usable` reads before it would probe (#1276).
+#[test]
+fn a_live_credential_with_an_unfenced_proxy_still_fails() {
+    const TOKEN: &str = "egress-live-credential-token";
+    let config = "version = 1\n\n[credential]\n\
+                  probe_url = \"https://api.github.com/rate_limit\"\n\
+                  names = [\"BATTEN_EGRESS_TEST_TOKEN\"]\n";
+    let dir = scratch("egress-live-credential", true, Some(config));
+    let receipts = dir.join(".git").join("batten-receipts");
+    std::fs::create_dir_all(&receipts).expect("the receipt store");
+    std::fs::write(
+        receipts.join(format!(
+            "credential.{}",
+            batten::digest::sha256_hex(TOKEN.as_bytes())
+        )),
+        "live\n",
+    )
+    .expect("the receipt");
+    let mut command = batten();
+    command.arg("doctor").arg("egress");
+    for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
+        command.env_remove(name);
+    }
+    let output = command
+        .env("HTTPS_PROXY", "http://proxy:8080")
+        .env("NO_PROXY", "localhost,127.0.0.1")
+        .env("BATTEN_EGRESS_TEST_TOKEN", TOKEN)
+        .current_dir(&dir)
+        .env_remove("BATTEN_CONFIG_FROM")
+        .streamed_output()
+        .expect("run batten doctor egress");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
 }
 
 #[test]
