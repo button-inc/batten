@@ -36,7 +36,10 @@ use common::{Fixture, StateHome, batten, scratch};
 /// the event `Capabilities::degrade` selects — a `PostToolUse` there no longer
 /// wakes the drain at all, which `a_post_tool_use_is_silent_where_the_host_names_the_batch`
 /// pins deliberately rather than leaving as a surprise.
+///
+/// `session` is a NAME, qualified by the running case (`common::session_id`).
 fn post_tool_batch(session: &str) -> String {
+    let session = common::session_id(session);
     format!(r#"{{"hook_event_name":"PostToolBatch","session_id":"{session}","cwd":"/w"}}"#)
 }
 
@@ -45,6 +48,7 @@ fn post_tool_batch(session: &str) -> String {
 /// Still the drain's wake on the four surveyed hosts that emit no batch event,
 /// and no longer one on Claude Code. Both readings are asserted below.
 fn post_tool(session: &str) -> String {
+    let session = common::session_id(session);
     format!(
         r#"{{"hook_event_name":"PostToolUse","session_id":"{session}","cwd":"/w","tool_name":"Bash","tool_input":{{"command":"echo hi"}}}}"#
     )
@@ -179,7 +183,7 @@ fn forked_hook(dir: &Path, home: &Path, payload: &str, parent: &str) -> Output {
         .args(["adjudicate", "--harness", "claude-code"])
         .current_dir(dir)
         .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
-        .env("BATTEN_SESSION_PARENT", parent)
+        .env("BATTEN_SESSION_PARENT", common::session_id(parent))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -452,7 +456,10 @@ fn a_pre_tool_event_never_drains() {
     let output = hook(
         &repo,
         &home,
-        r#"{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/w","tool_name":"Bash","tool_input":{"command":"echo hi"}}"#,
+        &format!(
+            r#"{{"hook_event_name":"PreToolUse","session_id":"{}","cwd":"/w","tool_name":"Bash","tool_input":{{"command":"echo hi"}}}}"#,
+            common::session_id("s1")
+        ),
     );
     assert_eq!(output.status.code(), Some(0));
     assert!(payload(&output).is_empty(), "no advisory payload here");
@@ -623,7 +630,10 @@ fn a_session_start_relists_the_drain_payload() {
     let started = hook(
         &repo,
         &home,
-        r#"{"hook_event_name":"SessionStart","session_id":"s1","source":"startup","cwd":"/w"}"#,
+        &format!(
+            r#"{{"hook_event_name":"SessionStart","session_id":"{}","source":"startup","cwd":"/w"}}"#,
+            common::session_id("s1")
+        ),
     );
     assert_eq!(started.status.code(), Some(0));
     assert_eq!(
@@ -765,8 +775,8 @@ fn a_warm_fork_resumes_from_its_parents_watermark() {
         .args(["state", "record"])
         .current_dir(&repo)
         .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
-        .env("BATTEN_SESSION", "child")
-        .env("BATTEN_SESSION_PARENT", "parent")
+        .env("BATTEN_SESSION", common::session_id("child"))
+        .env("BATTEN_SESSION_PARENT", common::session_id("parent"))
         .streamed_output()
         .expect("run batten state record");
     assert_eq!(observed.status.code(), Some(0));

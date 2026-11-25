@@ -92,7 +92,7 @@ fn commit(dir: &Path, subject: &str) {
 fn record(dir: &Path, stdout_bytes: &str) -> Output {
     let envelope = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "sess-keying",
+        "session_id": common::session_id("sess-keying"),
         "cwd": "/repo",
         "tool_name": "Bash",
         "tool_input": {"command": COMMAND},

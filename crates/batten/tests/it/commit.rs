@@ -376,7 +376,7 @@ const FEAT_ONLY: &str = "version = 1\n\n[commit]\nsubject_pattern = '^feat: .+'\
 fn mediated(dir: &Path, command: &str) -> String {
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": "s1",
+        "session_id": common::session_id("s1"),
         "tool_name": "Bash",
         "cwd": dir,
         "tool_input": {"command": command},

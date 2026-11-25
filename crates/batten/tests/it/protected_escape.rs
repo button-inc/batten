@@ -52,8 +52,9 @@ fn payload(event: &str, call: &str, command: &str) -> String {
         ""
     };
     format!(
-        "{{\"hook_event_name\":\"{event}\",\"session_id\":\"s1\",\"tool_use_id\":\"{call}\",\
-         \"tool_name\":\"Bash\",\"tool_input\":{{\"command\":{escaped}}}{response}}}"
+        "{{\"hook_event_name\":\"{event}\",\"session_id\":\"{session}\",\"tool_use_id\":\"{call}\",\
+         \"tool_name\":\"Bash\",\"tool_input\":{{\"command\":{escaped}}}{response}}}",
+        session = common::session_id("s1")
     )
 }
 
@@ -251,9 +252,10 @@ fn only_an_executed_calls_post_hook_compares() {
     assert!(!stdout(&pre).contains("\"deny\""), "{}", stdout(&pre));
     std::fs::write(dir.join(GUARDED), "changed\n").expect("the write lands");
     let read = format!(
-        "{{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"s1\",\"tool_use_id\":\"call-shared\",\
+        "{{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"{session}\",\"tool_use_id\":\"call-shared\",\
          \"tool_name\":\"Read\",\"tool_input\":{{\"file_path\":{}}},\"tool_response\":{{}}}}",
-        serde_json::to_string(ORDINARY).expect("a path is encodable")
+        serde_json::to_string(ORDINARY).expect("a path is encodable"),
+        session = common::session_id("s1")
     );
     let other = run_with_stdin(&dir, &["adjudicate", "--harness", "claude-code"], &read);
     let said = format!(
@@ -361,9 +363,10 @@ fn only_a_shell_calls_pre_hook_snapshots() {
     let dir = fixture("protected-escape-read-snapshot");
     let watch = dir.join(".git/batten-facts/protected-watch");
     let read = format!(
-        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s1\",\"tool_use_id\":\"call-read\",\
+        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"{session}\",\"tool_use_id\":\"call-read\",\
          \"tool_name\":\"Read\",\"tool_input\":{{\"file_path\":{}}}}}",
-        serde_json::to_string(ORDINARY).expect("a path is encodable")
+        serde_json::to_string(ORDINARY).expect("a path is encodable"),
+        session = common::session_id("s1")
     );
     let pre = run_with_stdin(&dir, &["adjudicate", "--harness", "claude-code"], &read);
     assert!(!stdout(&pre).contains("\"deny\""), "{}", stdout(&pre));

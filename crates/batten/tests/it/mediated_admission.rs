@@ -89,8 +89,9 @@ fn fixture(name: &str) -> PathBuf {
 fn write_payload(path: &str) -> String {
     let escaped = serde_json::to_string(path).expect("a path is encodable");
     format!(
-        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s1\",\"tool_name\":\"Write\",\
-         \"tool_input\":{{\"file_path\":{escaped},\"content\":\"version = 1\\n\"}}}}"
+        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"{session}\",\"tool_name\":\"Write\",\
+         \"tool_input\":{{\"file_path\":{escaped},\"content\":\"version = 1\\n\"}}}}",
+        session = common::session_id("s1")
     )
 }
 

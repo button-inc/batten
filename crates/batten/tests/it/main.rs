@@ -448,6 +448,7 @@ mod secret_redaction;
 mod secrets_kind;
 mod semver_gate;
 mod session_drain;
+mod session_ids;
 mod session_provisioning;
 mod session_start;
 mod session_watch;

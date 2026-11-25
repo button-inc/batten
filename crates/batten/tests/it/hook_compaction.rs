@@ -34,7 +34,7 @@ fn prompt(repo: &Path, text: &str) {
         repo,
         &serde_json::json!({
             "hook_event_name": "UserPromptSubmit",
-            "session_id": "s1",
+            "session_id": common::session_id("s1"),
             "prompt": text,
         }),
     );
@@ -45,7 +45,7 @@ fn start(repo: &Path, source: &str) -> String {
         repo,
         &serde_json::json!({
             "hook_event_name": "SessionStart",
-            "session_id": "s1",
+            "session_id": common::session_id("s1"),
             "source": source,
         }),
     )
@@ -120,7 +120,7 @@ fn only_the_operator_is_journaled() {
         &repo,
         &serde_json::json!({
             "hook_event_name": "Stop",
-            "session_id": "s1",
+            "session_id": common::session_id("s1"),
             "last_assistant_message": "done",
         }),
     );

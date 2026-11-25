@@ -52,7 +52,7 @@ fn bench_with(name: &str, extra: &str) -> PathBuf {
 }
 
 fn bash(command: &str) -> String {
-    bash_in("s1", command)
+    bash_in(&common::session_id("s1"), command)
 }
 
 /// A Bash call in `session` (CLOUD-2075: the lifecycle is per context).
@@ -69,7 +69,7 @@ fn bash_in(session: &str, command: &str) -> String {
 fn tool(name: &str) -> String {
     serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": "s1",
+        "session_id": common::session_id("s1"),
         "tool_name": name,
         "tool_input": {},
     })
@@ -164,8 +164,9 @@ fn the_committed_policy_hands_a_gh_read_its_memory() {
 #[test]
 fn a_warn_advisory_is_full_once_then_a_pointer() {
     let dir = bench("forge-read-first-lifecycle");
-    let (first_code, first) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
-    let (second_code, second) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
+    let (first_code, first) = adjudicate(&dir, &bash_in(&common::session_id("s1"), "gh pr view 1"));
+    let (second_code, second) =
+        adjudicate(&dir, &bash_in(&common::session_id("s1"), "gh pr view 1"));
     assert_eq!((first_code, second_code), (Some(0), Some(0)));
     let labels = "batten warn forge read first";
     assert!(first.contains(labels) && first.contains(" —"), "{first}");

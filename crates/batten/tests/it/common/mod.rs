@@ -2168,6 +2168,24 @@ pub(crate) fn unassignable_pid() -> String {
         .map_or_else(|| "4194304".to_owned(), |max| max.to_string())
 }
 
+/// `name` qualified by the RUNNING CASE, so a session id a payload sends is
+/// that case's own (CLOUD-2789, `session_ids.rs`). A session's home is recorded
+/// in the state root by its id, and under plain `cargo test` every case of this
+/// binary shares one state root: two cases sending one fixed id were one
+/// session, and the later one was judged in the earlier one's repository
+/// (ca2f8b3e4).
+///
+/// The case is the name libtest gives the thread it runs each case on — the
+/// case's own path, in process and under nextest alike — so the id is
+/// deterministic run to run (no pid: see [`scratch`] for what a per-run value
+/// in an identity costs). One case calling this twice with one `name` gets one
+/// id back, which is what a case sending a start and then a stop needs.
+#[must_use]
+pub(crate) fn session_id(name: &str) -> String {
+    let current = std::thread::current();
+    format!("{name}@{}", current.name().unwrap_or("unnamed"))
+}
+
 /// An empty scratch directory under `target/`, wiped first.
 ///
 /// Wiping is unconditional: a fixture that inherits a previous run's files is a

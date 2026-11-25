@@ -128,7 +128,7 @@ fn repo(name: &str, severity: &str) -> PathBuf {
 fn command_payload(event: &str, command: &str) -> String {
     serde_json::json!({
         "hook_event_name": event,
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "tool_name": "Bash",
         "tool_input": {"command": command},
     })
@@ -472,13 +472,19 @@ fn stop_pair_repo(name: &str, first: &str, second: &str) -> PathBuf {
     dir
 }
 
-const STOP: &str = r#"{"hook_event_name":"Stop","session_id":"s-1","stop_hook_active":false}"#;
+/// A Stop payload whose session is the running case's own (CLOUD-2789).
+fn stop() -> String {
+    format!(
+        r#"{{"hook_event_name":"Stop","session_id":"{session}","stop_hook_active":false}}"#,
+        session = common::session_id("s-1")
+    )
+}
 
 /// An `allow` row nudges nothing at the end of a turn either.
 #[test]
 fn an_allow_row_nudges_nothing_at_stop() {
     let dir = stop_pair_repo("policy-severity-allow-stop", "allow", "allow");
-    let stdout = stdout_of(&hook(&dir, STOP));
+    let stdout = stdout_of(&hook(&dir, &stop()));
     assert!(!stdout.contains("fixture severity"), "{stdout}");
 }
 
@@ -487,7 +493,7 @@ fn an_allow_row_nudges_nothing_at_stop() {
 #[test]
 fn a_stop_carries_one_module_nudge_whatever_the_warn_count() {
     let dir = stop_pair_repo("policy-severity-warn-stop", "warn", "warn");
-    let stdout = stdout_of(&hook(&dir, STOP));
+    let stdout = stdout_of(&hook(&dir, &stop()));
     assert!(stdout.contains("fixture severity probe"), "{stdout}");
     assert!(!stdout.contains("fixture severity other"), "{stdout}");
 }
