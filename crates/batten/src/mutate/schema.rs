@@ -5690,6 +5690,10 @@ struct SealContext {
     /// so its leftovers are recorded again rather than carried.
     #[serde(default)]
     build: Option<String>,
+    /// Each package's unprobed fold the sweep keyed under
+    /// ([`super::resume::unprobed_folds`]).
+    #[serde(default)]
+    unprobed: std::collections::BTreeMap<String, String>,
     /// The [`tree_digest`] of `root` when the context was written. A seal is
     /// taken only while `root` still holds it: a run stopped after copying its
     /// own snapshot but before writing its own context leaves the previous
@@ -5792,7 +5796,7 @@ fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
         },
     );
     let digests = match &context.build {
-        Some(build) => under_build(digests, build),
+        Some(build) => under_build(digests, (build, &context.unprobed)),
         None => digests,
     };
     let mut reached: std::collections::BTreeMap<&Case, BTreeSet<u32>> =
@@ -9398,13 +9402,11 @@ fn sweep_build(
     compiler: &[u8],
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    for part in [
-        super::resume::build_digest_with(root, resources, compiler),
-        super::resume::unprobed_packages_digest(root, resources, format),
-    ] {
-        hasher.update(part.as_bytes());
-        hasher.update(b"\x1f");
-    }
+    // THE UNPROBED PACKAGES ARE EACH CASE'S OWN ([`under_build`]), never
+    // here, where every case would carry every one of them.
+    let _ = &format.probed;
+    hasher.update(super::resume::build_digest_with(root, resources, compiler).as_bytes());
+    hasher.update(b"\x1f");
     for (name, value) in &format.flags {
         hasher.update(format!("\x1e{name}\x1f{value}").as_bytes());
     }
@@ -9414,18 +9416,30 @@ fn sweep_build(
     hasher.finalize().to_hex().to_string()
 }
 
-/// Each case digest of `digests` taken under `build` ([`sweep_build`]).
+/// Each case digest of `digests` taken under `build` ([`sweep_build`]) and
+/// its package's unprobed fold ([`super::resume::unprobed_folds`]): a case of
+/// a package no fold names takes every unprobed package.
 fn under_build(
     digests: std::collections::BTreeMap<Case, String>,
-    build: &str,
+    (build, folds): (&str, &std::collections::BTreeMap<String, String>),
 ) -> std::collections::BTreeMap<Case, String> {
     digests
         .into_iter()
         .map(|(case, digest)| {
+            let package = case
+                .1
+                .split_once("::")
+                .map_or(case.1.as_str(), |(package, _)| package);
+            let fold = folds
+                .get(package)
+                .or_else(|| folds.get(super::resume::EVERY_UNPROBED))
+                .map_or("", String::as_str);
             let mut hasher = blake3::Hasher::new();
             hasher.update(digest.as_bytes());
             hasher.update(b"\x18");
             hasher.update(build.as_bytes());
+            hasher.update(b"\x18");
+            hasher.update(fold.as_bytes());
             (case, hasher.finalize().to_hex().to_string())
         })
         .collect()
@@ -9470,12 +9484,13 @@ fn reached(
         anyhow::anyhow!("the compiler cannot be asked, so no case's build can be keyed")
     })?;
     let build = sweep_build(root, ids.0, format, &compiler);
+    let unprobed = super::resume::unprobed_folds(root, ids.0, format);
     let recompute =
         |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
          read: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
             under_build(
                 digests_with(root, &dirs, schema, ids, executed, read),
-                &build,
+                (&build, &unprobed),
             )
         };
     let base = state.join("reach");
@@ -9498,6 +9513,7 @@ fn reached(
             classic: classic.clone(),
             format: Some(format.clone()),
             build: Some(build.clone()),
+            unprobed: unprobed.clone(),
             snapshot: Some(tree_digest(root)?),
         })?,
     )?;
@@ -9515,7 +9531,7 @@ fn reached(
     }
     let digests = under_build(
         digests_with(root, &dirs, schema, ids, &recorded, &reach.read),
-        &build,
+        (&build, &unprobed),
     );
     let seconds = measured_seconds(case_seconds(state)?, &reach);
     seal_reach(
@@ -11364,6 +11380,7 @@ mod tests {
             classic: BTreeSet::new(),
             format: None,
             build: None,
+            unprobed: std::collections::BTreeMap::new(),
         }
     }
 
@@ -13800,7 +13817,10 @@ mod tests {
         let digests = |ids: &std::collections::BTreeMap<String, String>, compiler: &[u8]| {
             under_build(
                 [(case.clone(), String::from("d"))].into(),
-                &sweep_build(&root, ids, &format, compiler),
+                (
+                    &sweep_build(&root, ids, &format, compiler),
+                    &super::super::resume::unprobed_folds(&root, ids, &format),
+                ),
             )
         };
         let held = digests(&ids, b"rustc 1");
