@@ -2486,7 +2486,14 @@ mod tests {
             // BOUNDED, SO NO MUTANT COPY IN THE SHARED TEMP DIRECTORY IS READ
             // ([`a_collection_frees_toward_max_in_mebibytes`], CLOUD-2789).
             let bound = std::time::Instant::now() + Duration::from_secs(3600);
-            super::collect_if_pressed(&repo, &config, Vec::new, &mut || Ok(free), Some(bound), false)
+            super::collect_if_pressed(
+                &repo,
+                &config,
+                Vec::new,
+                &mut || Ok(free),
+                Some(bound),
+                false,
+            )
         };
         assert!(pressed(10).is_none(), "at the minimum");
         assert!(pressed(9).is_some(), "below it");

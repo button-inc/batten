@@ -927,7 +927,7 @@ fn roots_entry(repo: &gix::Repository) -> Option<(PathBuf, String)> {
 /// The prior answer: `raw`, `tip` and `root` lines, each a hex id. Anything
 /// unreadable is a miss, and the full walk answers instead.
 fn read_roots(path: &Path, cache_key: &str) -> Option<RootsEntry> {
-    let body = String::from_utf8(batten_facts::cache::read(path, cache_key)?).ok()?;
+    let body = String::from_utf8(batten_facts::cache::read(path, cache_key)?.into_vec()).ok()?;
     let mut held = RootsEntry {
         raw: Vec::new(),
         tips: Vec::new(),

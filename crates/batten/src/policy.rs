@@ -1380,7 +1380,7 @@ fn compile_for(
             (id, sources),
             (pattern_data, text, digest),
             bundle,
-            true,
+            (true, origin),
         ))
     }
 }
@@ -2730,7 +2730,7 @@ fn compile_cached(
         (id, sources),
         (data, text, digest),
         bundle,
-        false,
+        (false, origin),
     ))
 }
 
@@ -2747,7 +2747,7 @@ fn with_bytecode(
     (id, sources): (&str, &[(String, String)]),
     (data, text, digest): (&serde_json::Value, &str, &[u8; 32]),
     bundle: Bundle,
-    keep_ast: bool,
+    (keep_ast, origin): (bool, Origin),
 ) -> Bundle {
     // ONE ENTRY PER ROW, WHOEVER LOADS IT. The hot path strips `test_` rules
     // before it keys ([`without_test_rules`]), so a checked load keys and
@@ -2766,7 +2766,7 @@ fn with_bytecode(
     } else {
         sources
     };
-    let key = cache_key(id, sources, digest);
+    let key = cache_key(id, sources, digest, origin);
     let path = cache_path(root, id);
     if keep_ast
         && let Some((_, compiled)) = path
@@ -6436,6 +6436,8 @@ fn suite_key(id: &str, engine: &regorus::Engine) -> Option<String> {
         &format!("{id}\0suite"),
         &sources,
         blake3::hash(data.as_bytes()).as_bytes(),
+        // The suite is judged over the modules' own text, whoever ships them.
+        Origin::Tree,
     ))
 }
 

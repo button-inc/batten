@@ -5323,7 +5323,7 @@ fn dispatch_session_endings(
     (mode, overrides): (Mode, &Overrides),
     err: &mut dyn Write,
 ) -> Result<()> {
-    let _memos = hook_call_memos();
+    let _memos = hook_call_memos(crate::config_model::Harness::ExitCode);
     for report in reports.iter().filter(|report| watch.ended(report)) {
         let key = session_watch::ending_key(report);
         match forge_event::unseen(ring, &key) {
@@ -34306,13 +34306,9 @@ pub fn land_ready_owes(
         }
     }
     resolved.rules = kept.into();
-    let built = hook::Policy::from_resolved(
-        &resolved,
-        harness,
-        root,
-        None,
-        &|server| mcp_answers(&resolved, root, server),
-    )?;
+    let built = hook::Policy::from_resolved(&resolved, harness, root, None, &|server| {
+        mcp_answers(&resolved, root, server)
+    })?;
     let policy = without_set_hatches(&built);
     // BARE, so no branch name is ever spliced into a command line to be parsed.
     let raw = serde_json::json!({
