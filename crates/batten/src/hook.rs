@@ -14637,6 +14637,23 @@ mod tests {
         assert!(!bounded_event(Harness::GeminiCli, "SessionStart"));
     }
 
+    /// `.cargo/mutants.toml` excludes `entry_timeout`'s `None` mutant as
+    /// equivalent, which it is only while [`BOUNDED_SINCE`] is `None`. Fails by:
+    /// a bound shipping with the exclusion still in place, which would leave a
+    /// killable mutant excluded unread (CLOUD-2789).
+    #[test]
+    fn entry_timeout_is_excluded_only_while_unbounded() {
+        let config = crate::fsio::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.cargo/mutants.toml"),
+        )
+        .unwrap();
+        let excluded = config.contains("replace entry_timeout -> Option<u64> with None");
+        assert!(
+            !excluded || BOUNDED_SINCE.is_none(),
+            "a bounded `entry_timeout` is killable: drop its exclusion"
+        );
+    }
+
     /// CLOUD-2509: a leading `/` is absolute on every host, and the host flag
     /// alone never makes a relative word absolute. Fails by: either operator
     /// flipped between `||` and `&&`.
