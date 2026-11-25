@@ -1157,27 +1157,17 @@ fn is_kept(path: &Path, kept: &[Kept]) -> bool {
             && identity(path).is_some_and(|id| kept.contains(&id)))
 }
 
-/// How long a waiting pass that no flag stops — `target prune --collect` —
-/// retries a held tree before it reports it held (CLOUD-2789): the stream's
-/// drain grace, the crate's bound on waiting for another process to let go.
-pub const HELD_TREE_PATIENCE: std::time::Duration = batten_stream::DRAIN_GRACE;
-
-/// Whether a waiting pass that has waited `waited` gives up on a held tree for
-/// want of patience: only a pass NO flag stops, and only past
-/// [`HELD_TREE_PATIENCE`]. A pass with a stop flag waits until it is set.
-fn patience_spent(halt: crate::prune::Halt<'_>, waited: std::time::Duration) -> bool {
-    halt.is_none() && waited >= HELD_TREE_PATIENCE
-}
-
-/// How often a waiting pass retries a held tree's lock.
-const HELD_TREE_RETRY: std::time::Duration = std::time::Duration::from_millis(5);
+/// One tree's collector lock as a pass holds it: the lock itself, or `None`
+/// where the platform could not lock the directory and the pass collects it
+/// without exclusion.
+type TreeLock = Option<crate::lock_wait::Held>;
 
 /// Take the collector's lock on `tree`: an exclusive `flock` on the directory
 /// itself, an existing inode, so taking it writes nothing at 0 bytes free.
-/// `None` when another collector holds it, or, for a waiting pass, still holds
-/// it when `give_up` says so.
+/// The outer `None` when another collector holds it — or, for a waiting pass,
+/// still holds it when `stop` is raised.
 ///
-/// A LOCK THE PLATFORM REFUSES IS NOT ANOTHER COLLECTOR'S. Only `WouldBlock`
+/// A LOCK THE PLATFORM REFUSES IS NOT ANOTHER COLLECTOR'S. Only contention
 /// says a collector holds the tree; an error from the lock call itself (a
 /// filesystem that cannot lock a directory) collects without exclusion, which
 /// [`remove_counted`] tolerates, rather than reading every tree as held and
@@ -1186,18 +1176,35 @@ const HELD_TREE_RETRY: std::time::Duration = std::time::Duration::from_millis(5)
 /// NEVER A BLOCKING `flock` (CLOUD-2789). A blocked call has no way back: the
 /// watcher's pass waited on a second handle to a tree it already held, and on
 /// any other holder, and the step it watched printed its result and never
-/// exited. The wait is `try_lock` retried on the crate's one clock, and it ends
-/// when `give_up` does.
-fn lock_tree(tree: &Path, wait: bool, give_up: &dyn Fn() -> bool) -> Option<std::fs::File> {
+/// exited. A waiting pass waits through [`crate::lock_wait`], on the holder's
+/// release or its `stop`, and a tree this process already holds is
+/// [`crate::lock_wait::Taken::Reentrant`] — held, never waited on. Each park is
+/// traced `disk-wait <tree>`, the event a case releases its holder on.
+fn lock_tree(tree: &Path, wait: bool, stop: crate::prune::Halt<'_>) -> Option<TreeLock> {
+    use crate::lock_wait::{Mode, Taken};
     let dir = crate::durable::open_handle(tree).ok()?;
-    loop {
-        match dir.try_lock() {
-            Ok(()) | Err(std::fs::TryLockError::Error(_)) => return Some(dir),
-            Err(std::fs::TryLockError::WouldBlock) if wait && !give_up() => {
-                crate::pr_watch::clock::hold(HELD_TREE_RETRY, None);
+    let taken = if wait {
+        let mut parked = || {
+            if tracing() {
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr(),
+                    format!("disk-wait {}\n", tree.display()).as_bytes(),
+                );
             }
-            Err(std::fs::TryLockError::WouldBlock) => return None,
-        }
+        };
+        crate::lock_wait::acquire_announced(dir, tree, Mode::Exclusive, stop, &mut parked).map(
+            |taken| match taken {
+                Taken::Held(held) => Some(held),
+                Taken::Stopped | Taken::Reentrant => None,
+            },
+        )
+    } else {
+        crate::lock_wait::try_acquire(dir, Mode::Exclusive)
+    };
+    match taken {
+        Ok(Some(held)) => Some(Some(held)),
+        Ok(None) => None,
+        Err(_) => Some(None),
     }
 }
 
@@ -1212,13 +1219,13 @@ fn lock_tree(tree: &Path, wait: bool, give_up: &dyn Fn() -> bool) -> Option<std:
 fn lock_trees(
     trees: &[PathBuf],
     wait: bool,
-    give_up: &dyn Fn() -> bool,
-) -> (Vec<(PathBuf, std::fs::File)>, Vec<PathBuf>) {
+    stop: crate::prune::Halt<'_>,
+) -> (Vec<(PathBuf, TreeLock)>, Vec<PathBuf>) {
     let mut order: Vec<usize> = (0..trees.len()).collect();
     order.sort_by_cached_key(|&at| (identity(&trees[at]), trees[at].clone()));
-    let mut taken: Vec<Option<std::fs::File>> = (0..trees.len()).map(|_| None).collect();
+    let mut taken: Vec<Option<TreeLock>> = (0..trees.len()).map(|_| None).collect();
     for at in order {
-        taken[at] = lock_tree(&trees[at], wait, give_up);
+        taken[at] = lock_tree(&trees[at], wait, stop);
     }
     let mut locks = Vec::new();
     let mut held = Vec::new();
@@ -1281,8 +1288,8 @@ pub struct Request<'a> {
     pub need_bytes: u64,
     /// Stop at the first unit boundary past this instant.
     pub deadline: Option<Instant>,
-    /// Retry another collector's lock rather than skipping the tree: while
-    /// `stop` is clear, or for [`HELD_TREE_PATIENCE`] where there is none.
+    /// Wait for another collector's lock rather than skipping the tree: until
+    /// its holder releases it, or `stop` is raised.
     pub wait: bool,
     /// The flag that ends the pass at its next unit (CLOUD-2789): the disk
     /// watcher's, set when the run it watches returns. A pass no one stops
@@ -1373,7 +1380,7 @@ pub fn collect(request: &Request<'_>) -> Pass {
 /// A STOPPED PASS RANKS WHAT IT HAS WALKED (CLOUD-2789): each walk ends at its
 /// next directory once `halt` is set, and the loop below it at its next unit.
 fn candidates(
-    locks: &[(PathBuf, std::fs::File)],
+    locks: &[(PathBuf, TreeLock)],
     copies: Option<&Path>,
     halt: crate::prune::Halt<'_>,
 ) -> Vec<Unit> {
@@ -1404,12 +1411,8 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
     let past = |deadline: Option<Instant>| {
         crate::prune::halted(halt) || deadline.is_some_and(|at| Instant::now() >= at)
     };
-    let opened = Instant::now();
-    // A WAIT NO FLAG ENDS IS BOUNDED BY PATIENCE: `target prune --collect`
-    // waited on a held tree for as long as its holder held it.
-    let give_up = || past(request.deadline) || patience_spent(halt, opened.elapsed());
     let mut held = Held::default();
-    let (locks, waited) = lock_trees(request.trees, request.wait, &give_up);
+    let (locks, waited) = lock_trees(request.trees, request.wait, halt);
     held.locks = waited;
     let mut freed: u64 = 0;
     let mut removed = 0usize;
@@ -1720,16 +1723,37 @@ fn await_locks(
     if locks.is_empty() {
         return false;
     }
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for lock in &locks {
-            if let Ok(file) = crate::durable::open_handle(lock) {
-                let _ = file.lock();
+    let Ok(stop) = crate::lock_wait::Stop::new() else {
+        return false;
+    };
+    // NO THREAD IS LEFT BLOCKED PAST THE BOUND (CLOUD-2789). The wait runs on
+    // the caller's thread through [`crate::lock_wait`], which ends on `stop`;
+    // the bound raises it from a scoped thread that ends the moment the wait
+    // does, because dropping `done` wakes it.
+    std::thread::scope(|scope| {
+        let (done, finished) = std::sync::mpsc::channel::<()>();
+        let stop = &stop;
+        scope.spawn(move || {
+            if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = finished.recv_timeout(bound) {
+                stop.raise();
             }
-        }
-        let _ = done.send(());
-    });
-    finished.recv_timeout(bound).is_ok()
+        });
+        let all = locks.iter().all(|lock| {
+            crate::durable::open_handle(lock).is_ok_and(|file| {
+                matches!(
+                    crate::lock_wait::acquire(
+                        file,
+                        lock,
+                        crate::lock_wait::Mode::Exclusive,
+                        Some(&stop)
+                    ),
+                    Ok(crate::lock_wait::Taken::Held(_))
+                )
+            })
+        });
+        drop(done);
+        all
+    })
 }
 
 #[cfg(test)]
@@ -2177,18 +2201,6 @@ mod tests {
         }
     }
 
-    /// Fails by: a pass with a stop flag giving up for patience (it waits for
-    /// its flag), or one without giving up at once or never.
-    #[test]
-    fn only_an_unstoppable_pass_runs_out_of_patience() {
-        let flag = std::sync::atomic::AtomicBool::new(false);
-        let long = super::HELD_TREE_PATIENCE * 2;
-        assert!(!super::patience_spent(Some(&flag), long));
-        assert!(!super::patience_spent(None, Duration::ZERO));
-        assert!(super::patience_spent(None, super::HELD_TREE_PATIENCE));
-        assert!(super::patience_spent(None, long));
-    }
-
     /// A STOPPED PASS IS ONE THAT FELL SHORT (CLOUD-2789): a pass whose stop
     /// flag is set but that needed nothing more reports `disk-collected`, and
     /// one that still needed bytes reports `disk-stopped`.
@@ -2198,7 +2210,8 @@ mod tests {
     fn a_pass_stopped_short_of_its_need_says_so() {
         let tree = scratch("stopped-short");
         let trees = vec![tree];
-        let flag = std::sync::atomic::AtomicBool::new(true);
+        let flag = crate::lock_wait::Stop::new().expect("a stop");
+        flag.raise();
         let mut met = ask(&trees, &[], 0);
         met.stop = Some(&flag);
         assert!(
@@ -2632,7 +2645,11 @@ mod tests {
             Duration::from_millis(50)
         ));
         assert!(!super::await_collectors(&[], Duration::from_millis(50)));
-        let held = super::lock_tree(&tree, false, &|| true).expect("first holder");
+        // ANOTHER PROCESS'S HOLD, as a plain `flock` the waiter does not know
+        // is its own: a `lock_wait` hold would be refused as re-entry and
+        // never waited on.
+        let held = crate::durable::open_handle(&tree).expect("open the tree");
+        held.try_lock().expect("first holder");
         let (taken, released) = std::sync::mpsc::channel::<()>();
         let holder = std::thread::spawn(move || {
             let _ = released.recv();
