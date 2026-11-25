@@ -19018,23 +19018,20 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
     // refused with nothing it might remove — the lap's own background type-check
     // starving the lap. While a live singleton other than this process holds its
     // lock and the pass was passed over by a build lock, the step blocks on that
-    // lock and collects again; past `SINGLETON_WAIT`, or with no such singleton,
-    // it refuses as before.
+    // lock and collects again; once a wait frees nothing, or with no such
+    // singleton, it refuses as before. A COUNT, NEVER A CLOCK (CLOUD-2789): each
+    // wait ends on a holder's release, and a wait that bought nothing ends the
+    // loop, since the next would wait on the same holders.
     //
     // A TREE ANOTHER COLLECTOR HOLDS IS ALWAYS WAITED FOR: that pass is freeing
     // space, so refusing beside it reads a collection in flight as a full disk.
     // Measured on #1276: the lap's own disk watcher held both trees, this step
     // refused at 3,864 MB against 4,096, and the watcher then freed 4,746 MB.
-    let waiting_since = std::time::Instant::now();
     while after < min {
-        let left = SINGLETON_WAIT.saturating_sub(waiting_since.elapsed());
-        if left.is_zero() {
-            break;
-        }
-        let waited = if collect::await_collectors(&held, left) {
+        let waited = if collect::await_collectors(&held) {
             "a collector".to_owned()
         } else if let Some(task) = foreign_singleton(root)
-            && collect::await_builds(&held, left)
+            && collect::await_builds(&held)
         {
             task
         } else {
@@ -19052,8 +19049,12 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
         for line in done.lines() {
             writeln!(err, "{step}: {line}")?;
         }
+        let gained = done.freed_bytes > 0 || done.free_after_mb > after;
         after = done.free_after_mb;
         held = done.held.locks;
+        if !gained {
+            break;
+        }
     }
     if after >= min {
         return Ok(true);
@@ -19065,13 +19066,6 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
     )?;
     Ok(false)
 }
-
-/// How long a below-floor step waits on a batten singleton's build before it
-/// refuses (CLOUD-2286). A singleton declares no bound of its own, and a
-/// `[prune]` key for one would be refused by every release before the one that
-/// reads it, so the engine carries it: `cross-check` measured 54s re-deriving,
-/// and twenty minutes covers a cold run of every triple.
-const SINGLETON_WAIT: std::time::Duration = std::time::Duration::from_mins(20);
 
 /// A batten singleton held by a live process other than this one, by task
 /// name: the background build a below-floor step may wait for. This process's
