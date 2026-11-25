@@ -118,10 +118,31 @@ fn digest_one(digest: &mut blake3::Hasher, path: &str, bytes: &[u8]) {
     digest.update(&[0]);
 }
 
-/// Every file the checkout tracks or has changed that exists, sorted.
+/// Every file the checkout tracks or has changed that exists, and every
+/// other file under it but its root's `target` and `.git`, through symlinked
+/// directories, sorted.
+///
+/// IGNORED AND LINKED FILES TOO (CLOUD-2927 item 2): a git-ignored source a
+/// build compiles, or a file under a symlinked directory, was in no snapshot
+/// and so in no key.
 fn checkout_files(root: &Path) -> Result<Vec<String>> {
     let mut paths: BTreeSet<String> = crate::git::tracked_paths(root)?.into_iter().collect();
     paths.extend(crate::git::changed_paths(root)?);
+    for entry in ignore::WalkBuilder::new(root)
+        .standard_filters(false)
+        .follow_links(true)
+        .filter_entry(|entry| {
+            entry.depth() != 1 || !matches!(entry.file_name().to_str(), Some("target" | ".git"))
+        })
+        .build()
+        .flatten()
+    {
+        if let Ok(relative) = entry.path().strip_prefix(root)
+            && !relative.as_os_str().is_empty()
+        {
+            paths.insert(relative.to_string_lossy().replace('\\', "/"));
+        }
+    }
     Ok(paths
         .into_iter()
         .filter(|path| root.join(path).is_file())
@@ -372,6 +393,47 @@ mod tests {
             source_digest(&repo).unwrap(),
             listed_over,
             "a non-source edit does not"
+        );
+    }
+
+    /// CLOUD-2927 item 2 (in #1276): the snapshot carries a git-ignored file
+    /// and a file under a symlinked directory, as files.
+    ///
+    /// Fails by: a snapshot of tracked and changed paths alone.
+    #[test]
+    fn a_snapshot_carries_ignored_and_linked_files() {
+        let dir = crate::scratch::scratch("cover-pristine-ignored");
+        let repo = dir.join("repo");
+        for (path, text) in [
+            (".gitignore", "src/gen.rs\n"),
+            ("src/a.rs", "fn a() {}\n"),
+            ("shared/s.rs", "fn s() {}\n"),
+        ] {
+            std::fs::create_dir_all(repo.join(path).parent().unwrap()).unwrap();
+            std::fs::write(repo.join(path), text).unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("../shared", repo.join("src/linked")).unwrap();
+        crate::gitwrite::commit_paths(
+            &repo,
+            &[
+                String::from(".gitignore"),
+                String::from("src/a.rs"),
+                String::from("shared/s.rs"),
+                String::from("src/linked"),
+            ],
+            "fixture",
+        )
+        .unwrap();
+        std::fs::write(repo.join("src/gen.rs"), "fn g() {}\n").unwrap();
+        let dest = dir.join("pristine");
+        pristine(&repo, &dest).unwrap();
+        assert!(dest.join("src/gen.rs").is_file(), "an ignored source");
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::read_to_string(dest.join("src/linked/s.rs")).unwrap(),
+            "fn s() {}\n",
+            "a file under a symlinked directory"
         );
     }
 
