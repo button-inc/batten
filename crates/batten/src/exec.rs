@@ -1285,7 +1285,8 @@ struct ForwardingThread {
     /// The signal Batten was sent, or `0` for none. Read once, after the join.
     received: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// The group to forward to, published by [`Forwarding::adopt`] once the
-    /// child exists. `0` until then.
+    /// child exists, or abandoned when the forwarder ends without one
+    /// ([`Adoption`]).
     ///
     /// This slot is what lets the registry be installed BEFORE the spawn
     /// (CLOUD-746 S3). The worker can be parked on the signal stream while the
@@ -1293,7 +1294,7 @@ struct ForwardingThread {
     /// the alternative orders the two the other way and leaves a window in
     /// which the child is a group leader and Batten still holds the default
     /// dispositions.
-    pgid: std::sync::Arc<std::sync::atomic::AtomicI32>,
+    adoption: AdoptionGuard,
     /// This forwarder's place in [`forwarding`]'s count, released on every path:
     /// with the forwarder on an early `?` (one used to leave the count raised for
     /// the rest of the process), and in [`Forwarding::finish_reporting`] BEFORE
@@ -1320,42 +1321,103 @@ impl Drop for Live {
     }
 }
 
-/// How long the worker waits for a pgid after taking a signal.
+/// Where the armed forwarder learns its group: [`Forwarding::adopt`] publishes
+/// it, and the forwarder ending without one abandons it (CLOUD-2789).
 ///
-/// Only reachable when a signal lands in the window between arming and the
-/// spawn, which is the case CLOUD-746 S3 exists for: the child is about to
-/// exist, so waiting a moment for it is what makes the signal reach it instead
-/// of racing past it. A spawn that never happens ends the wait at this bound and
-/// the signal is simply recorded — there is no group to forward to.
-#[cfg(unix)]
-const ADOPT_GRACE: Duration = Duration::from_secs(2);
+/// A signal can land between arming and the spawn, which is the case CLOUD-746
+/// S3 exists for: the child is about to exist, so the worker waits for it
+/// rather than racing past it. It waits on THE EVENT, never a clock. Both ends
+/// are in this process: the spawn's `adopt`, or every way the forwarder can end
+/// first (an early `?` dropping it, `finish_reporting`), each of which drops
+/// the [`AdoptionGuard`] and so abandons it. A grace bound stood here and
+/// guarded no hang the guard does not end.
+#[cfg_attr(
+    all(not(unix), not(test)),
+    expect(
+        dead_code,
+        reason = "the forwarder it serves is unix-only; compiled everywhere so its cases are"
+    )
+)]
+#[derive(Debug, Default)]
+struct Adoption {
+    state: std::sync::Mutex<Adopted>,
+    changed: std::sync::Condvar,
+}
 
-/// Wait for [`Forwarding::adopt`] to publish a group, bounded by [`ADOPT_GRACE`].
-///
-/// `None` when no group ever arrived, which means the spawn failed or never
-/// happened — there is nothing to forward to and the signal stays recorded.
-#[cfg(unix)]
-fn await_group(
-    slot: &std::sync::Arc<std::sync::atomic::AtomicI32>,
-) -> Option<rustix::process::Pid> {
-    use std::sync::atomic::Ordering;
+/// Where an [`Adoption`] stands.
+#[cfg_attr(
+    all(not(unix), not(test)),
+    expect(
+        dead_code,
+        reason = "the forwarder it serves is unix-only; compiled everywhere so its cases are"
+    )
+)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Adopted {
+    /// No group yet, and the forwarder still lives.
+    #[default]
+    Pending,
+    /// The group led by this pid.
+    Group(i32),
+    /// The forwarder ended without one: there is nothing to forward to.
+    Abandoned,
+}
 
-    let deadline = std::time::Instant::now() + ADOPT_GRACE;
-    loop {
-        let raw = slot.load(Ordering::SeqCst);
-        if raw != 0 {
-            return rustix::process::Pid::from_raw(raw);
+#[cfg_attr(
+    all(not(unix), not(test)),
+    expect(
+        dead_code,
+        reason = "the forwarder it serves is unix-only; compiled everywhere so its cases are"
+    )
+)]
+impl Adoption {
+    /// Settle it, once: a later publish or abandonment changes nothing.
+    fn settle(&self, to: Adopted) {
+        if let Ok(mut state) = self.state.lock()
+            && *state == Adopted::Pending
+        {
+            *state = to;
+            self.changed.notify_all();
         }
-        if std::time::Instant::now() >= deadline {
-            return None;
+    }
+
+    /// Block until it is settled: the group's id, or `None` when it was
+    /// abandoned.
+    fn wait(&self) -> Option<i32> {
+        let state = self.state.lock().ok()?;
+        let settled = self
+            .changed
+            .wait_while(state, |state| *state == Adopted::Pending)
+            .ok()?;
+        match *settled {
+            Adopted::Group(raw) => Some(raw),
+            Adopted::Pending | Adopted::Abandoned => None,
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of the poll this loop is: it exits the moment `adopt` publishes \
-                      a group, and its outer bound is `ADOPT_GRACE`, past which it gives up rather \
-                      than waits longer (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The forwarder's hold on its [`Adoption`]: dropping it abandons whatever was
+/// never published, so a worker waiting on it always wakes.
+#[cfg_attr(
+    all(not(unix), not(test)),
+    expect(
+        dead_code,
+        reason = "the forwarder it serves is unix-only; compiled everywhere so its cases are"
+    )
+)]
+#[derive(Debug)]
+struct AdoptionGuard(std::sync::Arc<Adoption>);
+
+#[cfg_attr(
+    all(not(unix), not(test)),
+    expect(
+        dead_code,
+        reason = "the forwarder it serves is unix-only; compiled everywhere so its cases are"
+    )
+)]
+impl Drop for AdoptionGuard {
+    fn drop(&mut self) {
+        self.0.settle(Adopted::Abandoned);
     }
 }
 
@@ -1461,10 +1523,10 @@ impl Forwarding {
             .context("install the signal forwarder for the wrapped command")?;
         let handle = signals.handle();
         let received = std::sync::Arc::new(AtomicI32::new(0));
-        let pgid = std::sync::Arc::new(AtomicI32::new(0));
+        let adoption = std::sync::Arc::new(Adoption::default());
 
         let seen = std::sync::Arc::clone(&received);
-        let group = std::sync::Arc::clone(&pgid);
+        let group = std::sync::Arc::clone(&adoption);
         let worker = std::thread::spawn(move || {
             let first = {
                 let mut stream = signals.forever();
@@ -1480,7 +1542,7 @@ impl Forwarding {
             // The signal may have arrived before the spawn published a group.
             // Wait for one rather than dropping the signal on the floor, since
             // that window is precisely what arming early exists to cover.
-            let pgid = await_group(&group)?;
+            let pgid = group.wait().and_then(rustix::process::Pid::from_raw)?;
             if let Some(sig) = rustix::process::Signal::from_named_raw(first) {
                 signal_group(pgid, sig);
             }
@@ -1531,7 +1593,7 @@ impl Forwarding {
                 handle,
                 worker,
                 received,
-                pgid,
+                adoption: AdoptionGuard(adoption),
                 live: Live::count(),
             }),
         })
@@ -1548,8 +1610,6 @@ impl Forwarding {
     /// Returns an error when the child's pid is not a usable group id — the same
     /// refuse-rather-than-downgrade posture arming has, and for the same reason.
     pub(crate) fn adopt(&self, child_pid: u32) -> Result<()> {
-        use std::sync::atomic::Ordering;
-
         let Some(active) = self.active.as_ref() else {
             return Ok(());
         };
@@ -1561,7 +1621,7 @@ impl Forwarding {
                 "exec: the spawned child reported an unusable pid, so its group cannot be owned"
             ));
         };
-        active.pgid.store(pgid, Ordering::SeqCst);
+        active.adoption.0.settle(Adopted::Group(pgid));
         Ok(())
     }
 
@@ -1591,6 +1651,9 @@ impl Forwarding {
         // forwarder answers no signal, so a count still raised through the join
         // below would have the land watcher leave the re-raise to nobody.
         drop(active.live);
+        // Abandoned before the join: a worker still waiting for a group that
+        // never came wakes on it rather than holding the join.
+        drop(active.adoption);
         active.handle.close();
         // A worker that panicked has still recorded what it saw before it could,
         // and a panic on the way out is not worth failing a completed command for.
@@ -4311,6 +4374,36 @@ mod tests {
             alive.first("the background job outliving the clean run"),
             "yes"
         );
+    }
+
+    /// Fails by: a published group not reaching the waiter, or a later
+    /// abandonment overwriting it (`settle` changing a settled slot).
+    #[test]
+    fn an_adoption_publishes_its_group_once() {
+        let adoption = std::sync::Arc::new(super::Adoption::default());
+        let waiter = {
+            let adoption = std::sync::Arc::clone(&adoption);
+            std::thread::spawn(move || adoption.wait())
+        };
+        adoption.settle(super::Adopted::Group(4242));
+        assert_eq!(waiter.join().expect("the waiter returns"), Some(4242));
+        adoption.settle(super::Adopted::Abandoned);
+        assert_eq!(adoption.wait(), Some(4242), "a settled slot stays settled");
+    }
+
+    /// Fails by: a forwarder ending without a group leaving its worker waiting
+    /// for one — the guard's drop is the event that wakes it, where a grace
+    /// clock used to be (CLOUD-2789).
+    #[test]
+    fn a_forwarder_that_ends_unadopted_wakes_its_waiter() {
+        let adoption = std::sync::Arc::new(super::Adoption::default());
+        let guard = super::AdoptionGuard(std::sync::Arc::clone(&adoption));
+        let waiter = {
+            let adoption = std::sync::Arc::clone(&adoption);
+            std::thread::spawn(move || adoption.wait())
+        };
+        drop(guard);
+        assert_eq!(waiter.join().expect("the waiter returns"), None);
     }
 
     /// Fails by: a stat line's group read from the wrong field, or from inside
