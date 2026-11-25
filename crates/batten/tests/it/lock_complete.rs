@@ -417,7 +417,7 @@ fn a_lockfile_without_locked_mode_is_reported() {
     // proxy refuses. `policy/lock-complete.rego`'s `locked-mode-unread` row
     // names this case.
     let (code, said) = judge_repo(
-        "lock-complete-unlocked",
+        "lock-complete-locked-mode-unread",
         &complete_lock(),
         "[settings]\nlockfile = true\n\n[tools]\n\"t\" = \"1.0.0\"\n",
         &[],
