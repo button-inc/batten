@@ -44,8 +44,9 @@ hk = "1.56.1"                                                # git-hook runner (
 # release assets for every `lock-complete` platform.
 #
 # `http:`, NOT `github:` or `aqua:`. The proxy serves a third-party asset by URL
-# but refuses its release listing, and `[settings] lockfile = false` (below) means
-# a plain `mise install` never reads `mise.lock` — so a `github:` pin resolves its
+# but refuses its release listing, and under the `[settings] lockfile = false`
+# this file held until CLOUD-2881 a plain `mise install` never read `mise.lock` —
+# so a `github:` pin resolved its
 # version through `api.github.com/repos/mstange/samply/releases` on every cold
 # install, and `aqua:` has no samply entry and falls back to the same call. In a
 # container carrying no PAT (CLOUD-2688) that 403 killed every `mise` call, and so
@@ -3447,12 +3448,11 @@ description = "Session start: provision the mise toolchain, purely — the step 
 # the handshake did not complete, and MCP servers are not retried mid-session.
 # This is what makes that `exec` a pure exec.
 #
-# `MISE_LOCKFILE=false` makes it a PURE install (CLOUD-223). A cold install of
-# `ubi:rust-cross/cargo-zigbuild` otherwise appends a platform key `mise lock`
+# A PURE install (CLOUD-223). A cold unlocked install of
+# `ubi:rust-cross/cargo-zigbuild` once appended a platform key `mise lock`
 # cannot produce, which `lock-complete` rejects by name — so every session opened
-# with a dirty tree and a red gate no branch had caused. `[settings] lockfile =
-# false` is the authority; this is the belt to that suspenders, and it keeps the
-# install pure even under an ambient `MISE_LOCKFILE`.
+# with a dirty tree and a red gate no branch had caused. Locked mode never
+# writes the lock, and `[settings]` now hold every install to it (CLOUD-2881).
 #
 # THE `||` ARM CANNOT FIRE ON A ZERO, WHICH IS WHAT THE INSTALLER RETURNS WHEN IT
 # FAILS (CLOUD-1683). Measured three times in one container: the install wrote
@@ -3482,12 +3482,17 @@ silent = "stdout"
 #
 # LOCKED, AND STILL PURE (CLOUD-2688). Locked mode installs every tool from the
 # URL and checksum `mise.lock` pins and never writes the lock, so the residue
-# `MISE_LOCKFILE=false` existed to stop cannot arise; it needs the lockfile ON to
-# read it, the opt-in every CI workflow already makes. It also needs no GitHub
+# `MISE_LOCKFILE=false` existed to stop cannot arise. It also needs no GitHub
 # API: measured 2026-11-11 in a cloud session with no PAT, a locked install of
 # the whole manifest into an empty data directory went through the agent proxy,
 # installed all 38 tools and left `mise.lock` byte-identical, where an unlocked
 # resolve is refused 403 for every third-party repository.
+#
+# THE TASK ENV ALONE WAS NOT ENOUGH (CLOUD-2881): `mise run` installs missing
+# tools BEFORE the body, without this `env`, so under `lockfile = false` that
+# pre-task install 403'd and the locked body never ran. `[settings]` now lock
+# every install; these two stay so the step is locked under any `[settings]`
+# and so `toolchain-check` below decides under the same env the job resolves in.
 #
 # NO ATTESTATION READ, EITHER BACKEND (CLOUD-2395, CLOUD-2845). Verifying
 # provenance reads api.github.com for the upstream repo, which the proxy refuses
@@ -4081,20 +4086,22 @@ description = "Currency only: would regenerating mise.lock change it? Runs on a 
 # regenerated file; CI installs with `--locked` and needs complete per-platform
 # URLs.
 #
-# `MISE_LOCKFILE = "true"` is the task's `env` rather than a `VAR=` prefix. The
-# single sanctioned lockfile writer, so it says so. Measured on mise 2026.8.2:
-# `mise lock` writes regardless of `[settings] lockfile`, so this assignment is
-# not what makes the regeneration work — it is the declaration that this task,
-# alone in the repo, is allowed to write the file that `[settings] lockfile =
-# false` denies to everything else (CLOUD-223). It also holds the currency job
-# upright if a later mise gates `lock` on the setting.
+# `MISE_LOCKFILE = "true"` and `MISE_LOCKED = "false"` are the task's `env`
+# rather than a `VAR=` prefix. The single sanctioned lockfile writer, so it says
+# so. Measured: `mise lock` writes regardless of `[settings] lockfile` (mise
+# 2026.8.2) and under `MISE_LOCKED=true` (mise 2026.9.1, a stripped node entry
+# restored either way), so neither assignment is what makes the regeneration
+# work — together they declare that this task, alone in the repo, writes the
+# file `[settings] locked = true` holds every install to (CLOUD-223,
+# CLOUD-2881), and `lock-complete` admits the off-switch here and nowhere else.
+# They also hold the currency job upright if a later mise gates `lock` on either.
 #
 # ATTESTATIONS OFF FOR THE WRITE (CLOUD-2395). A lock that records
 # `github-attestations` provenance makes every locked install verify it through
 # api.github.com, which a cloud session's proxy refuses for a third party, so the
 # toolchain repair cannot install. The writer records none; installs that can
 # reach the API still verify under mise's own default.
-env = { MISE_LOCKFILE = "true", MISE_AQUA_GITHUB_ATTESTATIONS = "false" }
+env = { MISE_LOCKFILE = "true", MISE_LOCKED = "false", MISE_AQUA_GITHUB_ATTESTATIONS = "false" }
 run = [
   "mise lock",
   "git --no-pager diff --stat --exit-code -- mise.lock",
@@ -5387,27 +5394,31 @@ run = "release-plz release-pr"
 # workflow, so nothing could call the task and nothing should.
 
 [settings]
-# OFF, so that installing is never a write (CLOUD-223). With it on, any cold
-# `mise install` appends install residue to the tracked lockfile — a
-# `platforms.<platform>-<exe>` key carrying a checksum and no url, which `mise
-# lock` can neither produce nor repair and `mise run lock-complete` rejects by
-# name. The session-start hook was taught to install with MISE_LOCKFILE=false,
-# and that fixed exactly one caller: the sandbox's own provisioning runs before
-# the hook, so a session still opened on a dirty tree. A per-caller opt-out
-# cannot cover callers this repo does not own.
+# ON AND LOCKED, so that every install reads `mise.lock` and none writes it
+# (CLOUD-2881). Locked mode installs each tool from the URL and checksum the lock
+# pins, makes no release-API call, and never writes the file, so the purity
+# `lockfile = false` bought for CLOUD-223 still holds: a cold `mise install` leaves
+# no residue key for `lock-complete` to reject. What the old setting cost was the
+# read: with the lockfile off, EVERY install path other than a task that opted in
+# by env resolved through api.github.com — `mise run`'s pre-task install, which
+# does not see the task's `env`, `mise exec`'s auto-install, a by-hand `mise
+# install` — and a cloud session's proxy refuses that for every third-party repo.
+# Measured cold on mise 2026.9.1 (empty data, cache and state dirs): unlocked,
+# `GET api.github.com/repos/<o>/<r>/releases` was refused 403 and the install
+# exited 1; locked, a plain `mise install` and a `mise run` pre-task install each
+# installed all 32 tools from the lock's `releases/download` URLs with zero
+# api.github.com requests, no attestation setting, and the lock byte-identical.
 #
-# Measured, cold data/cache/state dirs, this tool alone: with the setting true a
-# `mise install` grew the lockfile by 163 bytes and produced exactly one
-# `linux-x64-cargo-zigbuild` key; with it false the file was byte-identical
-# afterwards and the key was absent.
-#
-# Inverting it does: the default is now "no writer", and the one writer that
-# should touch the lockfile opts in — `[tasks.lock-check]` sets MISE_LOCKFILE=true
-# for its `mise lock`, on the schedule that owns currency
-# (.github/workflows/lock-currency.yml), against a disposable checkout. Nothing
-# on the landing path writes at all. Gated by `mise run lock-complete`, which
-# fails if this is ever set back to true.
-lockfile = false
+# The one writer opts out, by name: `[tasks.lock-check]` (`mise lock`, run by
+# `lock-currency.yml`) sets `MISE_LOCKED=false` in its own env. Nothing else may,
+# and `lock-complete` refuses a tree where `lockfile` or `locked` is off, or where
+# any other task, handler, startup row or workflow turns either off.
+#MUTANT-SUITE crates/batten/tests/it/lock_complete.rs
+#MUTANT settings-lockfile-off|s@^lockfile = true$@lockfile = false@|the_committed_config_installs_locked_everywhere
+#MUTANT settings-unlocked|s@^locked = true$@locked = false@|the_committed_config_installs_locked_everywhere
+#MUTANT task-env-unlocked|s@^env = { MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent"@env = { MISE_LOCKFILE = "true", MISE_LOCKED = "false", MISE_ENV = "agent"@|the_committed_config_installs_locked_everywhere
+lockfile = true
+locked = true
 # EVERY TASK REPORTS ITS OWN WALL CLOCK (CLOUD-1891). A 38-minute `verify` had no
 # per-step record anywhere — hk logs none — so where the time went was inferred
 # from CI job durations on different hardware. A lap that loses to `main`

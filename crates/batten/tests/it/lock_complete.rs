@@ -123,9 +123,9 @@ fn complete_lock() -> String {
     tool_with("t", &["linux-x64", "linux-arm64", "macos-arm64"])
 }
 
-/// A manifest pinning `t` and nothing else, with the write setting off.
+/// A manifest pinning `t` and nothing else, every install locked (CLOUD-2881).
 fn manifest(tools: &str) -> String {
-    format!("[settings]\nlockfile = false\n\n[tools]\n{tools}")
+    format!("[settings]\nlockfile = true\nlocked = true\n\n[tools]\n{tools}")
 }
 
 /// Materialize a repository carrying the committed module and this row.
@@ -393,21 +393,102 @@ fn a_partial_pin_the_lock_extends_is_untouched() {
 }
 
 #[test]
-fn re_enabled_lockfile_writes_are_reported() {
-    // CLOUD-223: the other half of the residue predicate rather than a separate
-    // concern. Every residue key this gate rejects was written by an install, so
-    // the gate is half a mechanism while any `mise install` can produce one.
+fn a_lockfile_without_locked_mode_is_reported() {
+    // CLOUD-223 and CLOUD-2881: a lockfile that is read but not enforced lets an
+    // install write residue and resolve through the release APIs, which a cloud
+    // session's proxy refuses. Only the conjunction installs from the lock alone.
     let (code, said) = judge_repo(
         "lock-complete-writes",
         &complete_lock(),
         "[settings]\nlockfile = true\n\n[tools]\n\"t\" = \"1.0.0\"\n",
         &[],
     );
-    assert_eq!(code, Some(2), "re-enabled writes are a finding\n{said}");
+    assert_eq!(code, Some(2), "an unlocked install is a finding\n{said}");
     assert!(
         said.contains("lock write unsafe"),
         "the finding names its rule\n{said}"
     );
+}
+
+#[test]
+fn the_lockfile_off_is_reported() {
+    // The setting this repository held until CLOUD-2881: with the lockfile off,
+    // locked mode cannot even be asked for, and every install path resolved
+    // through api.github.com.
+    let (code, said) = judge_repo(
+        "lock-complete-lockfile-off",
+        &complete_lock(),
+        "[settings]\nlockfile = false\nlocked = true\n\n[tools]\n\"t\" = \"1.0.0\"\n",
+        &[],
+    );
+    assert_eq!(code, Some(2), "the lockfile off is a finding\n{said}");
+    assert!(
+        said.contains("lock write unsafe"),
+        "the finding names its rule\n{said}"
+    );
+}
+
+#[test]
+fn a_task_env_switching_the_lock_off_is_reported() {
+    // An env assignment outranks `[settings]` for the command it wraps, so a
+    // task turning locked mode off is the unlocked path back, one task wide.
+    // The declared writer's table is the one exception; this one is not it.
+    let mise = format!(
+        "{}\n[tasks.build]\nenv = {{ MISE_LOCKED = \"false\" }}\nrun = \"true\"\n",
+        manifest("\"t\" = \"1.0.0\"\n")
+    );
+    let (code, said) = judge_repo("lock-complete-switch", &complete_lock(), &mise, &[]);
+    assert_eq!(code, Some(2), "an off-switch is a finding\n{said}");
+    assert!(
+        said.contains("mise.toml:9") && said.contains("lock write unsafe"),
+        "the finding points at the switch\n{said}"
+    );
+}
+
+#[test]
+fn the_declared_lock_writer_may_switch_it_off() {
+    let mise = format!(
+        "{}\n[tasks.lock-check]\n# MISE_LOCKED = \"false\" in prose is not a switch\nenv = {{ MISE_LOCKFILE = \"true\", MISE_LOCKED = \"false\" }}\nrun = \"mise lock\"\n",
+        manifest("\"t\" = \"1.0.0\"\n")
+    );
+    let (code, said) = judge_repo("lock-complete-writer", &complete_lock(), &mise, &[]);
+    assert_eq!(code, Some(0), "the declared writer is clean\n{said}");
+}
+
+/// THE COMMITTED CONFIG INSTALLS LOCKED EVERYWHERE (CLOUD-2881): this
+/// repository's own `mise.toml`, `mise.lock`, agent overlay, `renovate.json5`
+/// and every workflow, judged by this rule. `mise.toml`'s `#MUTANT` rows flip
+/// `lockfile` and `locked` off and this case reddens on each.
+#[test]
+fn the_committed_config_installs_locked_everywhere() {
+    let committed = |path: &str| {
+        std::fs::read_to_string(common::at_root(path))
+            .unwrap_or_else(|why| panic!("read {path}: {why}"))
+    };
+    let mut files: Vec<(String, String)> = [
+        "mise.toml",
+        "mise.lock",
+        "mise.agent.toml",
+        "renovate.json5",
+    ]
+    .iter()
+    .map(|path| ((*path).to_owned(), committed(path)))
+    .collect();
+    let workflows = common::at_root(".github/workflows");
+    for entry in std::fs::read_dir(&workflows).expect("read the workflows") {
+        let name = entry.expect("a workflow entry").file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with(".yml") {
+            let path = format!(".github/workflows/{name}");
+            files.push((path.clone(), committed(&path)));
+        }
+    }
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, body)| (path.as_str(), body.as_str()))
+        .collect();
+    let (code, said) = judge(&fixture("lock-complete-committed", &borrowed));
+    assert_eq!(code, Some(0), "the committed config installs locked\n{said}");
 }
 
 #[test]
@@ -511,7 +592,7 @@ fn an_unreadable_lockfile_no_manifest_depends_on_is_silent() {
     // config. A repository declaring no tools has no subject.
     let (code, said) = judge(&fixture(
         "lock-complete-no-subject",
-        &[("mise.toml", "[settings]\nlockfile = false\n")],
+        &[("mise.toml", "[settings]\nlockfile = true\nlocked = true\n")],
     ));
     assert_eq!(code, Some(0), "no subject means nothing to report\n{said}");
 }
@@ -549,6 +630,10 @@ pub(crate) const CONFIG: &str = r#"version = 1
 id = "plain-dotted-version"
 regex = '^[0-9]+(\.[0-9]+)*$'
 
+[[pattern]]
+id = "mise-lock-switched-off"
+regex = '''MISE_LOCK(ED|FILE)["']?\s*[:=]\s*["']?(?i:false|0|no|off)\b'''
+
 [[rule]]
 id = "lock cover partial"
 kind = "policy"
@@ -557,7 +642,7 @@ module = "policy/lock-complete.rego"
 severity = "deny"
 staged = ["mise.lock", "mise.toml"]
 format = "toml"
-line_sources = ["mise.lock", "mise.toml", ".github/workflows/*.yml"]
+line_sources = ["mise.lock", "mise.toml", "mise.*.toml", "batten.toml", "renovate.json5", ".github/workflows/*.yml"]
 
 [[verdict]]
 id = "lock write other"
