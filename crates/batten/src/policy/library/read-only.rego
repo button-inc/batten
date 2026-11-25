@@ -38,6 +38,9 @@
 #MUTANT curl-flag-unread|s@^\tcurl_reads(program.arguments)$@\ttrue@|a_plan_mode_curl_get_is_allowed_and_its_writes_are_refused
 #MUTANT git-fetch-refspec-unread|s@^\tnot writes_a_local_ref(rest)$@\ttrue@|a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused
 #MUTANT git-fetch-refused|s@^\t"fetch",$@@|a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused
+#MUTANT git-upload-pack-unread|s@^\tnot git_runs_program(verb.rest)$@\ttrue@|a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused
+#MUTANT read-builtin-refused|s@^\t\t"read",$@@|a_plan_mode_read_loop_is_allowed_and_a_writing_loop_is_refused
+#MUTANT skill-refused|s@^\t\t"Skill",$@@|a_plan_mode_skill_is_allowed_and_a_write_tool_is_not
 #MUTANT-SUITE crates/batten/tests/it/reach_review.rs
 #MUTANT inert-name-widened|s@^\tinert_name(assignment_name(assignment))$@\ttrue@|only_an_inert_assignment_or_a_bare_program_name_is_a_read
 #MUTANT pager-value-unread|s@^\tassignment_value(assignment) == "cat"$@\ttrue@|only_an_inert_assignment_or_a_bare_program_name_is_a_read
@@ -51,9 +54,6 @@
 #MUTANT test-lookup-unread|s@^\tword in {"-v", "-R"}$@\tfalse@|a_reader_assigning_a_sensitive_or_subscripted_name_is_a_write
 #MUTANT curl-bare-host-guess-unread|s@^\tnot regex.match(`^(?i:(ftp@\tnot regex.match(`^(?i:(nothing@|a_bare_http_host_or_a_system_path_program_is_a_read
 #MUTANT system-directory-widened|s@^\tprogram.program == concat("", \[directory, program.name\])$@\ttrue@|a_bare_http_host_or_a_system_path_program_is_a_read
-#MUTANT git-upload-pack-unread|s@^\tnot git_runs_program(verb.rest)$@\ttrue@|a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused
-#MUTANT read-builtin-refused|s@^\t\t"read",$@@|a_plan_mode_read_loop_is_allowed_and_a_writing_loop_is_refused
-#MUTANT skill-refused|s@^\t\t"Skill",$@@|a_plan_mode_skill_is_allowed_and_a_write_tool_is_not
 #
 # THE READ-ONLY ALLOWLIST, ONE PREDICATE IN ONE PLACE (CLOUD-2840). Every bundle
 # the engine compiles carries this package (`policy::LIBRARY`), whatever presets
