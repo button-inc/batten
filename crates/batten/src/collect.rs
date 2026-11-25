@@ -2450,7 +2450,7 @@ mod tests {
             4096,
         );
         let lock = std::fs::File::create(held.join(".cargo-lock")).expect("create the lock");
-        lock.lock().expect("hold the build lock");
+        lock.try_lock().expect("hold the build lock");
         let stamp = debug.join(".fingerprint/old-1111111111111111/lib-old");
         let expected = 8 + allocated(&stamp) + allocated(&old);
         let kept = super::kept(std::slice::from_ref(&engine));
@@ -2566,7 +2566,7 @@ mod tests {
                 4096,
             );
             let lock = std::fs::File::create(profile.join(".cargo-lock")).expect("create");
-            lock.lock().expect("hold the build lock");
+            lock.try_lock().expect("hold the build lock");
             let trees = [tree];
             let mut request = ask(&trees, &[], u64::MAX);
             request.live_since = Some(since(SystemTime::now()));

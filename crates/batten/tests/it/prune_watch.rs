@@ -1319,7 +1319,7 @@ fn a_held_tree_does_not_hold_a_watched_step_open() {
     let dir = hooked("step-run-held", true);
     let holder = std::fs::File::open(dir.join("target")).expect("open the tree");
     holder
-        .lock()
+        .try_lock()
         .expect("hold the tree as another collector would");
     let (code, said) = step_released_at_the_pass("step-run-held", &dir);
     drop(holder);
@@ -1373,7 +1373,7 @@ fn a_forced_collection_exits_from_a_worktree_and_past_a_held_tree() {
     let dir = hooked("prune-held", true);
     let holder = std::fs::File::open(dir.join("target")).expect("open the tree");
     holder
-        .lock()
+        .try_lock()
         .expect("hold the tree as another collector would");
     let ran = forced(&dir);
     drop(holder);
