@@ -2159,6 +2159,49 @@ mod tests {
         );
     }
 
+    /// The key read over the sweep's own snapshot ([`super::cover::pristine`])
+    /// still sees an unprobed package: the snapshot carries the manifests
+    /// that say which directory is a package.
+    ///
+    /// Fails by: a snapshot of Rust sources alone, under which no manifest is
+    /// found, the digest is a constant, and an edit to a helper crate a case
+    /// links moves no key (CLOUD-2904).
+    #[test]
+    fn the_snapshot_keys_an_unprobed_package_as_the_checkout_does() {
+        let dir = crate::scratch::scratch("test-run-unprobed-snapshot");
+        let repo = dir.join("repo");
+        let files = [
+            ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n"),
+            ("crates/app/Cargo.toml", "[package]\nname = \"app\"\n"),
+            ("crates/app/src/lib.rs", "pub fn a() {}\n"),
+            ("crates/helper/Cargo.toml", "[package]\nname = \"helper\"\n"),
+            ("crates/helper/src/lib.rs", "pub fn h() -> u8 { 1 }\n"),
+        ];
+        for (path, text) in files {
+            std::fs::create_dir_all(repo.join(path).parent().unwrap()).unwrap();
+            std::fs::write(repo.join(path), text).unwrap();
+        }
+        crate::gitwrite::commit_paths(&repo, &files.map(|(path, _)| path.to_owned()), "fixture")
+            .unwrap();
+        let format = schema::Format {
+            probed: [String::from("crates/app/src/lib.rs")].into(),
+            ..schema::Format::default()
+        };
+        let keyed = || {
+            let snapshot = dir.join("pristine");
+            super::super::cover::pristine(&repo, &snapshot).unwrap();
+            let ids = schema::resource_ids(&repo).unwrap();
+            unprobed_packages_digest(&snapshot, &ids, &format)
+        };
+        let held = keyed();
+        std::fs::write(
+            repo.join("crates/helper/src/lib.rs"),
+            "pub fn h() -> u8 { 2 }\n",
+        )
+        .unwrap();
+        assert_ne!(held, keyed(), "the helper's edit moves the key");
+    }
+
     /// Fails by: a stale input state's journal kept (the store grows a run per
     /// head), or the live one removed (every pass lost).
     #[test]
