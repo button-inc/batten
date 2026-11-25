@@ -5416,6 +5416,7 @@ run = "release-plz release-pr"
 #MUTANT-SUITE crates/batten/tests/it/lock_complete.rs
 #MUTANT settings-lockfile-off|s@^lockfile = true$@lockfile = false@|the_committed_config_installs_locked_everywhere
 #MUTANT settings-unlocked|s@^locked = true$@locked = false@|the_committed_config_installs_locked_everywhere
+#MUTANT settings-split-verdicts|s@^lockfile = true$@lockfile = false@|the_toolchain_checks_decide_as_the_job_resolves
 #MUTANT task-env-unlocked|s@^env = { MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent"@env = { MISE_LOCKFILE = "true", MISE_LOCKED = "false", MISE_ENV = "agent"@|the_committed_config_installs_locked_everywhere
 lockfile = true
 locked = true
