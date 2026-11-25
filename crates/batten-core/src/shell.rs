@@ -235,6 +235,53 @@ pub fn runnable_prefix(command: &str) -> crate::facts::Look<Vec<Segment>> {
     crate::facts::Look::CouldNotLook
 }
 
+/// The names of the shell functions `command` defines (CLOUD-2840): a call to
+/// one runs the function's body, which the reach already reads, and nothing on
+/// `PATH`. Empty where `command` does not parse.
+#[must_use]
+pub fn function_names(command: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Ok(nodes) = rable::parse(command, false) {
+        for node in &nodes {
+            defined_in(node, &mut names);
+        }
+    }
+    names
+}
+
+/// The functions `node` defines, at any depth a definition is written in
+/// practice: the top level, a list, and a compound command's bodies.
+fn defined_in(node: &rable::Node, names: &mut Vec<String>) {
+    match &node.kind {
+        rable::NodeKind::Function { name, body } => {
+            names.push(name.clone());
+            defined_in(body, names);
+        }
+        rable::NodeKind::List { items, .. } => {
+            for item in items {
+                defined_in(&item.command, names);
+            }
+        }
+        rable::NodeKind::BraceGroup { body, .. }
+        | rable::NodeKind::Subshell { body, .. }
+        | rable::NodeKind::While { body, .. }
+        | rable::NodeKind::Until { body, .. }
+        | rable::NodeKind::For { body, .. }
+        | rable::NodeKind::Select { body, .. } => defined_in(body, names),
+        rable::NodeKind::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            defined_in(then_body, names);
+            if let Some(body) = else_body {
+                defined_in(body, names);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Split a command into shell-separated segments, over a real bash PARSE.
 ///
 /// **This was a character walk until CLOUD-1381, and the replacement is the

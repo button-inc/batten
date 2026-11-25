@@ -5191,6 +5191,7 @@ pub fn call_input_schema() -> Result<String> {
         },
     });
     extend_call_schema(&mut document);
+    segment_schema_keys(&mut document);
     Ok(serde_json::to_string_pretty(&document)?)
 }
 
@@ -5224,6 +5225,21 @@ fn lap_held_schema() -> serde_json::Value {
     })
 }
 
+/// CLOUD-2840: a segment's variable names assigned before its program,
+/// wrappers included. Added here rather than in the literal, which is at
+/// `json!`'s recursion limit.
+fn segment_schema_keys(document: &mut serde_json::Value) {
+    if let Some(segment) = document
+        .pointer_mut("/properties/call/properties/segments/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        segment.insert(
+            "assigns".to_owned(),
+            serde_json::json!({"type": "array", "items": {"type": "string"}}),
+        );
+    }
+}
+
 /// The keys `call_input_schema` adds after its `json!` document is built: one
 /// more key inline exceeds the macro's recursion limit.
 ///
@@ -5248,18 +5264,6 @@ fn extend_call_schema(document: &mut serde_json::Value) {
             "key": {"type": ["string", "null"]},
         },
     });
-    // CLOUD-2840: a segment's variable names assigned before its program,
-    // wrappers included. Here rather than in the literal, which is at
-    // `json!`'s recursion limit.
-    if let Some(segment) = document
-        .pointer_mut("/properties/call/properties/segments/items/properties")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        segment.insert(
-            "assigns".to_owned(),
-            serde_json::json!({"type": "array", "items": {"type": "string"}}),
-        );
-    }
     if let Some(call) = document
         .pointer_mut("/properties/call/properties")
         .and_then(serde_json::Value::as_object_mut)

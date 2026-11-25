@@ -10483,6 +10483,15 @@ fn reach_into(
     // it is unplaced, and the stages outside keep their directory.
     let mut enclosed_unplaced = false;
     let mut reached: Vec<serde_json::Value> = Vec::new();
+    // A CALL TO A FUNCTION THE TEXT DEFINES RUNS NOTHING ON `PATH` (CLOUD-2840):
+    // its body is reached as segments of its own, and read as a program its
+    // name held a sourced script's run on a "tool" no install provides. The
+    // second parse is paid only where a definition can be written.
+    let functions = if command.contains("()") || command.contains("function ") {
+        crate::shell::function_names(command)
+    } else {
+        Vec::new()
+    };
     for segment in &parsed {
         let enclosed = segment.grouped || segment.nested;
         let last = segment.lines.len().saturating_sub(1);
@@ -10505,6 +10514,11 @@ fn reach_into(
             };
             reached.extend(
                 effective_program(argv)
+                    .filter(|&index| {
+                        !functions
+                            .iter()
+                            .any(|function| function == program_token(argv[index]))
+                    })
                     .map(|index| reach_argv(argv, index, outer_mediated, via, false, depth, stage))
                     .unwrap_or_default(),
             );
