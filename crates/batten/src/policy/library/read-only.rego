@@ -46,6 +46,11 @@
 #MUTANT awk-debug-unread|s@"pretty-print", "profile", "debug"@"pretty-print", "profile"@|an_awk_directive_or_long_debug_is_a_write
 #MUTANT date-cluster-value-unread|s@^\tregex.match(`^-\[uR\]\*\[drf\]$`, arguments\[i - 1\])$@\tfalse@|an_honest_read_the_tip_refused_is_granted
 #MUTANT gh-method-rest-ambiguous|s@^\tgh_method_rest(arguments\[i\]) == ""$@\ttrue@|a_gh_method_argument_has_one_reading
+#MUTANT reader-name-widened|s@^\tlocal_name(word)$@\ttrue@|a_reader_assigning_a_sensitive_or_subscripted_name_is_a_write
+#MUTANT printf-assignment-unread|s@^\tnot printf_local_assignment(program.arguments)$@\tfalse@|a_reader_assigning_a_sensitive_or_subscripted_name_is_a_write
+#MUTANT test-lookup-unread|s@^\tword in {"-v", "-R"}$@\tfalse@|a_reader_assigning_a_sensitive_or_subscripted_name_is_a_write
+#MUTANT curl-bare-host-guess-unread|s@^\tnot regex.match(`^(?i:(ftp@\tnot regex.match(`^(?i:(nothing@|a_bare_http_host_or_a_system_path_program_is_a_read
+#MUTANT system-directory-widened|s@^\tprogram.program == concat("", \[directory, program.name\])$@\ttrue@|a_bare_http_host_or_a_system_path_program_is_a_read
 #MUTANT git-upload-pack-unread|s@^\tnot git_runs_program(verb.rest)$@\ttrue@|a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused
 #MUTANT read-builtin-refused|s@^\t\t"read",$@@|a_plan_mode_read_loop_is_allowed_and_a_writing_loop_is_refused
 #MUTANT skill-refused|s@^\t\t"Skill",$@@|a_plan_mode_skill_is_allowed_and_a_write_tool_is_not
@@ -252,9 +257,75 @@ read_only(call) if {
 	every program in call.programs {
 		reads(program)
 		not spelled_with_a_path(program)
+		not assigns_a_live_name(program)
 	}
 	not some_output_redirect(call)
 	not some_live_assignment(call)
+}
+
+# A READER THAT ASSIGNS (CLOUD-2840, ca2f8b3e4 review finding 1): `read` and
+# `printf -v` set a shell variable, and the next program on the line runs under
+# it — `read PATH`, `printf -v HOME …`. And a name with a subscript is evaluated
+# as arithmetic, which runs a command substitution: `printf -v 'a[$(id)]' x`,
+# `test -v 'a[$(id)]'`. So a name one of these assigns must be a LOWERCASE
+# identifier: every variable that makes a shell or program load something
+# (`PATH`, `HOME`, `IFS`, `BASH_ENV`, `LD_*`, `PS4`) is uppercase, and no
+# subscript is one. `mapfile` and `readarray` are on no list, so stay refused.
+local_name(word) if regex.match(`^[a-z_][a-z0-9_]*$`, word)
+
+assigns_a_live_name(program) if {
+	program.name == "read"
+	some i, word in program.arguments
+	not read_word(program.arguments, i, word)
+}
+
+# `read`'s switches; `-a` and the value flags only LAST in a cluster, with their
+# value the next word. A value never starts with `-`, so a value's flag is never
+# itself a value and the left-to-right reading is the only one.
+read_word(_, _, word) if regex.match(`^-[ers]+$`, word)
+
+read_word(arguments, i, word) if {
+	regex.match(`^-[ers]*[adinNptu]$`, word)
+	not startswith(arguments[i + 1], "-")
+}
+
+read_word(arguments, i, word) if {
+	read_value(arguments, i)
+	not startswith(word, "-")
+}
+
+read_word(arguments, i, word) if {
+	local_name(word)
+	not read_value(arguments, i)
+}
+
+read_value(arguments, i) if {
+	i > 0
+	regex.match(`^-[ers]*[dinNptu]$`, arguments[i - 1])
+}
+
+# `printf` takes its options before the format: `-v NAME` is the only one, and
+# `--` ends them.
+assigns_a_live_name(program) if {
+	program.name == "printf"
+	first := program.arguments[0]
+	startswith(first, "-")
+	first != "--"
+	not printf_local_assignment(program.arguments)
+}
+
+printf_local_assignment(arguments) if {
+	arguments[0] == "-v"
+	local_name(arguments[1])
+	not startswith(arguments[2], "-")
+}
+
+# `test -v NAME` and `-R NAME` look the name up, subscript and all.
+assigns_a_live_name(program) if {
+	program.name in {"test", "["}
+	some i, word in program.arguments
+	word in {"-v", "-R"}
+	not regex.match(`^[A-Za-z_][A-Za-z0-9_]*$`, program.arguments[i + 1])
 }
 
 # AN ASSIGNMENT BEFORE THE PROGRAM IS A READ'S ONLY IF IT IS INERT (CLOUD-2840
@@ -295,7 +366,21 @@ assignment_value(assignment) := substring(assignment, indexof(assignment, "=") +
 # review M4): `./ls`, `/tmp/x/ls` and `bin/cat` run whatever sits there, and the
 # allowlist above is a list of names `PATH` resolves. `program` is the token as
 # written; `name` is its last path component.
-spelled_with_a_path(program) if contains(program.program, "/")
+spelled_with_a_path(program) if {
+	contains(program.program, "/")
+	not in_a_system_directory(program)
+}
+
+# EXCEPT A SYSTEM DIRECTORY (ca2f8b3e4 review finding 4): `/usr/bin/cat` is the
+# file a bare `cat` resolves to through any `PATH` worth trusting, so it is no
+# less the program than the name is. Exactly one directory, from a fixed list,
+# with no `..`: `/usr/bin/../../tmp/ls` and `/tmp/usr/bin/ls` stay paths.
+in_a_system_directory(program) if {
+	some directory in {"/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/", "/usr/local/bin/"}
+	program.program == concat("", [directory, program.name])
+	not contains(program.name, "/")
+	program.name != ".."
+}
 
 # GUARDED: `segments` is `null` on a non-shell call, and iterating null faults
 # the whole query, which reads as could-not-look for every module here.
@@ -732,6 +817,16 @@ curl_value_flag(word) if word in {
 }
 
 curl_allowed(_, _, word) if regex.match(`^(?i:https?)://`, word)
+
+# A BARE HOST IS HTTP (ca2f8b3e4 review finding 4): curl guesses the protocol
+# from a scheme-less URL's first label, and only `ftp.`, `dict.`, `ldap.`,
+# `imap.`, `smtp.` and `pop3.` guess anything else (`lib/urlapi.c`). A host is
+# letters, digits, dots and hyphens; an unexpanded `$URL` is none of those, so
+# it stays unproven.
+curl_allowed(_, _, word) if {
+	regex.match(`^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[^ ]*)?$`, word)
+	not regex.match(`^(?i:(ftp|dict|ldap|imap|smtp|pop3)\.)`, word)
+}
 
 curl_allowed(_, _, word) if curl_word(word)
 

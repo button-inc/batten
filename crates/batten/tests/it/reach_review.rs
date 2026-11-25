@@ -198,3 +198,83 @@ fn a_gh_method_argument_has_one_reading() {
         ],
     );
 }
+
+/// Finding 1 of the ca2f8b3e4 review: a reader that ASSIGNS sets a variable a
+/// later program on the line reads (`PATH`, `HOME`), and an array subscript in
+/// the name it assigns or tests runs code. Only a lowercase name with no
+/// subscript is a reader's honest target.
+#[test]
+fn a_reader_assigning_a_sensitive_or_subscripted_name_is_a_write() {
+    reads_and_writes(
+        &[
+            "read line",
+            "read -r line",
+            "read -rp prompt line",
+            "read",
+            "read -a parts",
+            "printf -v out '%s' x",
+            "printf '%s' x",
+            "test -v name",
+            "[ -v name ]",
+            "test -f f",
+        ],
+        &[
+            "read PATH",
+            "read -r HOME",
+            "read line PATH",
+            "read -a PATH",
+            "read -ra PATH",
+            "read -p -r PATH",
+            "read 'a[$(id)]'",
+            "printf -v PATH '%s' x",
+            "printf -vPATH x",
+            "printf -v 'a[$(id)]' x",
+            "mapfile PATH",
+            "readarray PATH",
+            "test -v 'a[$(id)]'",
+            "[ -v 'a[$(id)]' ]",
+            "test -R 'a[$(id)]'",
+        ],
+    );
+}
+
+/// Findings 2 and 3 of the ca2f8b3e4 review, in the piped shapes they were
+/// found in: tool config carried by the environment, and an awk program
+/// included from standard input.
+#[test]
+fn a_piped_config_or_included_program_is_a_write() {
+    reads_and_writes(
+        &["echo x | rg x"],
+        &[
+            "echo --pre=rm | RIPGREP_CONFIG_PATH=/dev/stdin rg x .",
+            "echo 'BEGIN{system(\"touch x\")}' | awk '@include \"/dev/stdin\"'",
+        ],
+    );
+}
+
+/// Finding 4 of the ca2f8b3e4 review: a bare host is HTTP unless its first
+/// label names another protocol, and a program in a system directory is the
+/// program `PATH` would have found. An unexpanded URL and any other path stay
+/// unproven.
+#[test]
+fn a_bare_http_host_or_a_system_path_program_is_a_read() {
+    reads_and_writes(
+        &[
+            "curl example.com",
+            "curl -s example.com/a",
+            "curl -s localhost:8080/health",
+            "/usr/bin/cat f",
+            "/bin/ls",
+            "/usr/local/bin/rg x",
+        ],
+        &[
+            "curl ftp.example.com",
+            "curl smtp.example.com",
+            "curl DICT.example.com",
+            "curl -s \"$URL\"",
+            "/tmp/usr/bin/cat f",
+            "/usr/bin/../../tmp/ls",
+            "./usr/bin/ls",
+        ],
+    );
+}
