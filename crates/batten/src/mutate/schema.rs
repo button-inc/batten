@@ -398,6 +398,9 @@ pub struct Rendered {
     /// Each probed function's keyed-text digest, in probe-id order: what a
     /// selection keys a same-named function on ([`keyed_text`]).
     pub keyed: Vec<String>,
+    /// What the file reads at compile time, by probe ids from its first
+    /// ([`Compiled`]).
+    pub compiled: Compiled,
 }
 
 impl Rendered {
@@ -931,6 +934,7 @@ pub fn render_in(
         fn_names: probed.fn_names,
         fn_spans: probed.functions.into_iter().map(|(span, _)| span).collect(),
         keyed: probed.keyed,
+        compiled: probed.compiled,
     }
 }
 
@@ -973,11 +977,77 @@ struct Probed {
     /// Each probed function's keyed-text digest, in probe-id order
     /// ([`keyed_text`]).
     keyed: Vec<String>,
+    /// What the file reads at compile time, by probe ids from the file's
+    /// first ([`Compiled`]).
+    compiled: Compiled,
+}
+
+/// What a case's key reads at compile time besides the names it reaches
+/// (CLOUD-2904): each include's target, owned by the probed function or the
+/// skeleton item it sits in; each probed function's position; and which
+/// functions and items observe where they are called from. Probe ids are the
+/// schema's.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Compiled {
+    /// Each probed function's include targets, `?` for one no syntax names.
+    pub probe_includes: std::collections::BTreeMap<usize, BTreeSet<String>>,
+    /// Each skeleton item's include targets, by each key it is defined under.
+    pub item_includes: std::collections::BTreeMap<String, BTreeSet<String>>,
+    /// Each probed function's position, `line:column`.
+    pub positions: std::collections::BTreeMap<usize, String>,
+    /// The probed functions that observe their caller's position:
+    /// `#[track_caller]`, `Location::caller`.
+    pub observers: BTreeSet<usize>,
+    /// The skeleton items that observe a position, by each key: a macro
+    /// expanding `line!` or `column!` reads its caller's.
+    pub observing: BTreeSet<String>,
+}
+
+/// No compile-time input: what a [`Depends`] carries where none is known.
+static NO_COMPILED: Compiled = Compiled {
+    probe_includes: std::collections::BTreeMap::new(),
+    item_includes: std::collections::BTreeMap::new(),
+    positions: std::collections::BTreeMap::new(),
+    observers: BTreeSet::new(),
+    observing: BTreeSet::new(),
+};
+
+impl Compiled {
+    /// Fold one rendering's, whose probe ids start at `first`.
+    fn fold(&mut self, rendered: &Compiled, first: usize) {
+        for (id, targets) in &rendered.probe_includes {
+            self.probe_includes
+                .entry(first + id)
+                .or_default()
+                .extend(targets.iter().cloned());
+        }
+        for (key, targets) in &rendered.item_includes {
+            self.item_includes
+                .entry(key.clone())
+                .or_default()
+                .extend(targets.iter().cloned());
+        }
+        self.positions.extend(
+            rendered
+                .positions
+                .iter()
+                .map(|(id, position)| (first + id, position.clone())),
+        );
+        self.observers
+            .extend(rendered.observers.iter().map(|id| first + id));
+        self.observing.extend(rendered.observing.iter().cloned());
+    }
 }
 
 /// One skeleton item as [`probe_sites`] gathers it: the names it answers
 /// to, its tokens' hasher and the names those tokens mention.
-type Grouped = (Vec<String>, blake3::Hasher, BTreeSet<String>, String);
+type Grouped = (
+    Vec<String>,
+    blake3::Hasher,
+    BTreeSet<String>,
+    String,
+    Range<usize>,
+);
 
 /// A probe site in every function body that runs at run time, ids counted
 /// from `probe_from` (none when it is `None`), each with its function's
@@ -1021,6 +1091,7 @@ fn probe_sites(
 ) -> Probed {
     let mut probed = Probed::default();
     let widened = widened_modules(root, place);
+    let whole = root.text().to_string();
     let mut cuts: Vec<Range<usize>> = Vec::new();
     if let Some(mut next) = probe_from {
         for function in root.descendants().filter_map(ast::Fn::cast) {
@@ -1042,9 +1113,18 @@ fn probe_sites(
                 children: Vec::new(),
             });
             let mut text = function.syntax().to_string();
+            let start = usize::from(function.syntax().text_range().start());
+            let local = probed.probes.len();
+            probed
+                .compiled
+                .positions
+                .insert(local, position_in(&whole, start));
+            if text.contains("track_caller") || text.contains("Location::caller") {
+                probed.compiled.observers.insert(local);
+            }
             if position_sensitive(&text) {
                 text.push('\x1f');
-                text.push_str(&position_of(function.syntax()));
+                text.push_str(&position_in(&whole, start));
             }
             probed
                 .probes
@@ -1069,7 +1149,9 @@ fn probe_sites(
         }
     }
     cuts.sort_by_key(|cut| cut.start);
+    record_includes(root, place, &widened, &mut probed);
     let mut skeleton = blake3::Hasher::new();
+    let mut gap = false;
     // EACH ITEM ITS OWN DIGEST, keyed by where it starts so its tokens gather
     // in one hasher wherever the walk meets them.
     let mut items: std::collections::BTreeMap<usize, Grouped> = std::collections::BTreeMap::new();
@@ -1079,6 +1161,7 @@ fn probe_sites(
         .filter_map(ra_ap_syntax::NodeOrToken::into_token)
     {
         if unkeyed(token.kind()) {
+            gap = true;
             continue;
         }
         let start = usize::from(token.text_range().start());
@@ -1088,7 +1171,17 @@ fn probe_sites(
             cut.next();
         }
         if cut.peek().is_some_and(|c| c.start <= start) {
+            gap = false;
             continue;
+        }
+        // SPACING IN A TOKEN TREE IS WHAT A MACRO READS (CLOUD-2904): keyed as
+        // a mark of its own, as [`keyed_text`] keys it.
+        let spaced = std::mem::take(&mut gap)
+            && token
+                .parent_ancestors()
+                .any(|ancestor| ancestor.kind() == SyntaxKind::TOKEN_TREE);
+        if spaced {
+            skeleton.update(b"\x04");
         }
         skeleton.update(token.text().as_bytes());
         skeleton.update(b"\x1f");
@@ -1096,9 +1189,12 @@ fn probe_sites(
         let at = owner.as_ref().map_or(usize::MAX, |item| {
             usize::from(item.syntax().text_range().start())
         });
-        let (_, hasher, mentions, own) = items
+        let (_, hasher, mentions, own, _) = items
             .entry(at)
             .or_insert_with(|| grouped(owner.as_ref(), place, &widened));
+        if spaced {
+            hasher.update(b"\x04");
+        }
         hasher.update(token.text().as_bytes());
         hasher.update(b"\x1f");
         own.push_str(token.text());
@@ -1107,11 +1203,19 @@ fn probe_sites(
     // AN ITEM'S POSITION ONLY WHERE ITS OWN TOKENS OBSERVE IT (CLOUD-2904):
     // keyed by its whole text, a `mod tests` holding one `line!()` case moved
     // with every line above it, and with it every case reaching the module.
-    let mut whole: Option<String> = None;
-    for (at, (names, mut hasher, mentions, own)) in items {
+    // AND THEN ITS WHOLE TEXT, whitespace included: a line added inside it
+    // moves what `line!()` says as surely as one added above it.
+    for (at, (names, mut hasher, mentions, own, range)) in items {
         if at != usize::MAX && position_sensitive(&own) {
-            let text = whole.get_or_insert_with(|| root.text().to_string());
-            hasher.update(format!("\x1c{}", position_in(text, at)).as_bytes());
+            hasher.update(format!("\x1c{}", position_in(&whole, at)).as_bytes());
+            hasher.update(whole.get(range).unwrap_or_default().as_bytes());
+        }
+        if own.contains("line!")
+            || own.contains("column!")
+            || own.contains("track_caller")
+            || own.contains("Location::caller")
+        {
+            probed.compiled.observing.extend(names.iter().cloned());
         }
         let digest = hasher.finalize().to_hex().to_string();
         probed
@@ -1125,6 +1229,92 @@ fn probe_sites(
     probed
 }
 
+/// Each include in the file at `root` into `probed`'s compile-time inputs
+/// ([`Compiled`]): an `include!`, `include_str!` or `include_bytes!`, and a
+/// `#[path]` module's file, owned by the innermost probed function holding
+/// it or else by the item it sits in. The build's own output is left to the
+/// build key; an argument no syntax names is `?`.
+fn record_includes(
+    root: &SyntaxNode,
+    place: &FileScope,
+    widened: &BTreeSet<String>,
+    probed: &mut Probed,
+) {
+    let dir = place
+        .file
+        .rsplit_once('/')
+        .map_or("", |(dir, _)| dir)
+        .to_owned();
+    for node in root.descendants() {
+        let target = if let Some(call) = ast::MacroCall::cast(node.clone()) {
+            let named = call
+                .path()
+                .and_then(|path| path.segment())
+                .and_then(|segment| segment.name_ref())
+                .map(|name| name.text().to_string());
+            if !matches!(
+                named.as_deref(),
+                Some("include" | "include_str" | "include_bytes")
+            ) {
+                continue;
+            }
+            match include_path(&call, &place.file) {
+                Some(Included::Built) => continue,
+                Some(Included::File(path)) => path,
+                Some(Included::Unknown) | None => String::from("?"),
+            }
+        } else if let Some(module) = ast::Module::cast(node.clone()) {
+            let Some(value) = ast::HasAttrs::attrs(&module).find_map(|attr| path_attr(&attr))
+            else {
+                continue;
+            };
+            tree_join(&dir, &value).unwrap_or_else(|| String::from("?"))
+        } else {
+            continue;
+        };
+        let at = usize::from(node.text_range().start());
+        let owner = probed
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(_, (span, _))| span.start <= at && at < span.end)
+            .min_by_key(|(_, (span, _))| span.end - span.start)
+            .map(|(id, _)| id);
+        if let Some(id) = owner {
+            probed
+                .compiled
+                .probe_includes
+                .entry(id)
+                .or_default()
+                .insert(target);
+            continue;
+        }
+        let item = if ast::Module::can_cast(node.kind()) {
+            ast::Item::cast(node.clone())
+        } else {
+            node.ancestors().skip(1).find_map(ast::Item::cast)
+        };
+        let keys = item.map_or_else(
+            || vec![String::new()],
+            |item| definitions(&item, place, widened),
+        );
+        for key in keys {
+            probed
+                .compiled
+                .item_includes
+                .entry(key)
+                .or_default()
+                .insert(target.clone());
+        }
+    }
+}
+
+/// The key of the `use` scope of `module` in `place`'s package
+/// ([`USE_SCOPE`]).
+fn use_scope(place: &FileScope, module: &str) -> String {
+    format!("{USE_SCOPE}{}{DEFINED_IN}{module}", place.package)
+}
+
 /// A new skeleton item's group ([`probe_sites`]): the keys it is defined
 /// under, `""` for tokens outside any item, a hasher already holding its
 /// members' names ([`member_names`]), and its own tokens' text, which says
@@ -1132,16 +1322,24 @@ fn probe_sites(
 fn grouped(owner: Option<&ast::Item>, place: &FileScope, widened: &BTreeSet<String>) -> Grouped {
     let mut hasher = blake3::Hasher::new();
     let Some(item) = owner else {
-        return (vec![String::new()], hasher, BTreeSet::new(), String::new());
+        return (
+            vec![String::new()],
+            hasher,
+            BTreeSet::new(),
+            String::new(),
+            0..0,
+        );
     };
     for member in member_names(item) {
         hasher.update(format!("\x1d{member}").as_bytes());
     }
+    let range = item.syntax().text_range();
     (
         definitions(item, place, widened),
         hasher,
         BTreeSet::new(),
         String::new(),
+        usize::from(range.start())..usize::from(range.end()),
     )
 }
 
@@ -1453,6 +1651,10 @@ const MENTIONED_IN: char = '\u{3}';
 /// After an impl's definition key: an impl is keyed wherever its names are,
 /// and followed only where it is a name's one definition ([`Graph::new`]).
 const IMPL_DEFINED: char = '\u{5}';
+/// The prefix of a module's `use` scope: every module-level `use` is defined
+/// under it, and every mention made in the module reaches it, keyed but never
+/// followed ([`use_scope`]).
+const USE_SCOPE: char = '\u{6}';
 
 /// Where one source file's items are defined and its names mentioned: its
 /// package and module path, or nowhere in particular.
@@ -1476,6 +1678,8 @@ pub struct FileScope {
     /// No module scoping in this file's package: its private items are
     /// visible to the whole package ([`flat_packages`]).
     flat: bool,
+    /// The file's tree path, which an include in it resolves against.
+    file: String,
 }
 
 impl FileScope {
@@ -1505,6 +1709,7 @@ impl FileScope {
             module: parts,
             unscoped: false,
             flat: false,
+            file: file.to_owned(),
         }
     }
 
@@ -1515,6 +1720,14 @@ impl FileScope {
             unscoped: true,
             ..Self::default()
         }
+    }
+
+    /// This scope, for the tree file `file` an include in it resolves
+    /// against.
+    #[must_use]
+    pub fn at(mut self, file: &str) -> Self {
+        file.clone_into(&mut self.file);
+        self
     }
 
     /// The module path at `node` in this file: the file's own, then each
@@ -1621,6 +1834,48 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
             format!("{name}{DEFINED_IN}{}{DEFINED_IN}{module}", place.package)
         }
     });
+    let mut linked_names: Vec<String> = Vec::new();
+    for attr in ast::AnyHasAttrs::cast(item.syntax().clone())
+        .iter()
+        .flat_map(ast::HasAttrs::attrs)
+    {
+        let text: String = attr
+            .syntax()
+            .text()
+            .to_string()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        // AN EXPORTED SYMBOL IS NAMED BY ITS EXPORT, AND AN ITEM AN ATTRIBUTE
+        // REGISTERS BY NOTHING (CLOUD-2904): the allocator, a linkme slice or a
+        // constructor runs with no name of it written, so it is keyed with the
+        // tokens every case carries.
+        if let Some(value) = text
+            .split_once("export_name=\"")
+            .and_then(|(_, rest)| rest.split_once('"'))
+        {
+            linked_names.push(value.0.to_owned());
+        }
+        if [
+            "#[global_allocator",
+            "#[used",
+            "#[distributed_slice",
+            "#[linkme::distributed_slice",
+            "#[ctor",
+            "#[dtor",
+            "#[panic_handler",
+            "#[unsafe(link_section",
+            "#[link_section",
+        ]
+        .iter()
+        .any(|registered| text.starts_with(registered))
+        {
+            linked_names.push(String::new());
+        }
+    }
+    if matches!(item, ast::Item::Use(_)) && !place.unscoped && !is_member(item) {
+        linked_names.push(use_scope(place, &module));
+    }
     let impl_mark = if matches!(item, ast::Item::Impl(_)) {
         IMPL_DEFINED.to_string()
     } else {
@@ -1633,6 +1888,7 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
     )
     .map(|key| format!("{key}{impl_mark}"))
     .chain(owner_type_names(item))
+    .chain(linked_names)
     .collect()
 }
 
@@ -1768,12 +2024,13 @@ fn token_mentions(
         || token
             .parent_ancestors()
             .any(|node| matches!(node.kind(), SyntaxKind::MACRO_RULES | SyntaxKind::MACRO_DEF));
+    let module = place.module_at(token.parent().as_ref());
     let scope = (!unscoped).then(|| {
-        format!(
-            "{MENTIONED_IN}{}{MENTIONED_IN}{}",
-            place.package,
-            place.module_at(token.parent().as_ref())
-        )
+        // EVERY MENTION REACHES ITS MODULE'S `use`S (CLOUD-2904): swapping the
+        // trait or glob in scope changes what a call dispatches to with no
+        // name of the `use` written.
+        mentions.insert(use_scope(place, &module));
+        format!("{MENTIONED_IN}{}{MENTIONED_IN}{module}", place.package)
     });
     for name in names {
         if associated {
@@ -1970,6 +2227,49 @@ fn moves_modules(source: &str, file: &str) -> bool {
                     .and_then(|call| include_path(&call, file));
                 !matches!(resolved, Some(Included::File(_) | Included::Built))
             })
+}
+
+/// Every Rust source under the directory of each custom target root of the
+/// package at `dir` ([`custom_target`]), as tree paths.
+fn custom_root_sources(root: &std::path::Path, dir: &str) -> BTreeSet<String> {
+    let mut sources = BTreeSet::new();
+    let Ok(text) = crate::fsio::read_to_string(root.join(dir).join("Cargo.toml")) else {
+        return sources;
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return sources;
+    };
+    let lib = table
+        .get("lib")
+        .and_then(|lib| lib.get("path"))
+        .and_then(toml::Value::as_str)
+        .filter(|path| *path != "src/lib.rs");
+    let bins = table
+        .get("bin")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|bin| bin.get("path").and_then(toml::Value::as_str))
+        .filter(|path| !path.starts_with("src/"));
+    for target in lib.into_iter().chain(bins) {
+        let parent = std::path::Path::new(target)
+            .parent()
+            .map_or_else(String::new, |parent| parent.to_string_lossy().into_owned());
+        let walk = root.join(dir).join(&parent);
+        for entry in ignore::WalkBuilder::new(&walk)
+            .hidden(false)
+            .build()
+            .flatten()
+        {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "rs")
+                && let Ok(relative) = path.strip_prefix(root)
+            {
+                sources.insert(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    sources
 }
 
 /// Whether `package`'s manifest under `root` puts its `[lib]` or a `[[bin]]`
@@ -2194,6 +2494,9 @@ pub struct Schema {
     /// The files rendered with a probe in every runtime function: what a
     /// reach record's functions can come from ([`Format::probed`]).
     pub probed: BTreeSet<String>,
+    /// What every rendered file reads at compile time, by schema probe id
+    /// ([`Compiled`]).
+    pub compiled: Compiled,
 }
 
 impl Schema {
@@ -2276,7 +2579,13 @@ pub fn write_schema(
     let included = build_script_includes(root, mutants);
     let mut schema = Schema::default();
     let mut skeleton = blake3::Hasher::new();
-    let sources = package_sources(root, mutants);
+    let mut sources = package_sources(root, mutants);
+    // A CUSTOM TARGET ROOT'S MODULES ARE SOURCES TOO (CLOUD-2904): read from
+    // `src/` alone, a `[lib] path` elsewhere left its whole crate unprobed and
+    // unkeyed.
+    for dir in package_dirs(mutants).values() {
+        sources.extend(custom_root_sources(root, dir));
+    }
     // A FILE ANOTHER INCLUDES IS IN ITS INCLUDER'S MODULE, which its path does
     // not say, so its names are matched by spelling alone.
     let mut moved = included_sources(root, &sources);
@@ -2288,7 +2597,7 @@ pub fn write_schema(
         let probe_from =
             (!unprobed.contains(&file) && !included.contains(&file)).then_some(schema.probes.len());
         let place = if moved.contains(&file) {
-            FileScope::unscoped()
+            FileScope::unscoped().at(&file)
         } else {
             let mut place = FileScope::of(&file);
             place.flat = flat.contains(&place.package);
@@ -2299,6 +2608,10 @@ pub fn write_schema(
             schema.probed.insert(file.clone());
         }
         schema.probes.extend(rendered.probes.iter().cloned());
+        schema.compiled.fold(
+            &rendered.compiled,
+            probe_from.unwrap_or(schema.probes.len()),
+        );
         schema.names.extend(rendered.names.iter().cloned());
         schema
             .mutant_fns
@@ -2321,6 +2634,26 @@ pub fn write_schema(
         schema.files.insert(file, rendered);
     }
     schema.skeleton = skeleton.finalize().to_hex().to_string();
+    // A BUILD SCRIPT AND WHAT IT `#[path]`-INCLUDES SHAPE EVERY BUILD
+    // (CLOUD-2904): their text is keyed with the tokens every case carries.
+    for dir in package_dirs(mutants).values() {
+        let script = std::path::Path::new(dir).join("build.rs");
+        let mut files = vec![script.to_string_lossy().replace('\\', "/")];
+        files.extend(
+            build_script_includes(root, &mutants[..])
+                .into_iter()
+                .filter(|file| file.starts_with(dir.as_str())),
+        );
+        for file in files {
+            if let Ok(bytes) = crate::fsio::read(root.join(&file)) {
+                schema
+                    .items
+                    .entry(String::new())
+                    .or_default()
+                    .insert(format!("build:{file}:{}", blake3::hash(&bytes).to_hex()));
+            }
+        }
+    }
     let prelude = prelude(schema.probes.len());
     for (file, rendered) in &schema.files {
         let mut text = rendered.text.clone();
@@ -4623,6 +4956,10 @@ const CONTEXT: &str = "context.json";
 struct SealContext {
     root: std::path::PathBuf,
     dirs: std::collections::BTreeMap<String, String>,
+    /// What each case's key reads at compile time ([`Compiled`]). A context
+    /// written before it existed reads none.
+    #[serde(default)]
+    compiled: Compiled,
     probes: Vec<String>,
     names: Vec<BTreeSet<String>>,
     items: std::collections::BTreeMap<String, BTreeSet<String>>,
@@ -4722,6 +5059,7 @@ fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
             read: &reach.read,
             resources: &context.resources,
             untraced: &context.untraced,
+            compiled: &context.compiled,
         },
     );
     let digests = match &context.build {
@@ -5171,6 +5509,9 @@ pub struct Depends<'a> {
     /// What an untraced case keys on in place of its reads: every non-Rust
     /// file's content ([`resource_digest`]).
     pub untraced: &'a str,
+    /// What each probed function and skeleton item reads at compile time
+    /// ([`Compiled`]).
+    pub compiled: &'a Compiled,
 }
 
 /// Every name reachable from `start` through what each named item mentions:
@@ -5210,6 +5551,10 @@ struct Graph<'g> {
     ids: std::collections::HashMap<&'g str, usize>,
     names: Vec<&'g str>,
     edges: Vec<Vec<usize>>,
+    /// Each definition id by the name it is keyed under ([`key_base`]).
+    by_base: std::collections::HashMap<&'g str, Vec<usize>>,
+    /// Each definition's mentions, by node id.
+    def_mentions: Vec<Vec<usize>>,
     /// Each node's visible definitions, by definition id.
     resolves: Vec<Vec<usize>>,
     /// Every definition key, ranked by key.
@@ -5275,19 +5620,29 @@ impl<'g> Graph<'g> {
         // functions. So an impl is keyed wherever its names are and followed
         // only where it is a name's one definition: its header names traits
         // and bounds, and its bodies are probed functions run or not.
-        let edges = resolves
+        let def_mentions: Vec<Vec<usize>> = definitions
             .iter()
-            .map(|found| {
-                let count: usize = found
-                    .iter()
-                    .map(|id| depends.items.get(definitions[*id]).map_or(0, BTreeSet::len))
-                    .sum();
-                found
-                    .iter()
-                    .filter(|id| count <= 1 || !definitions[**id].ends_with(IMPL_DEFINED))
-                    .filter_map(|id| depends.mentions.get(definitions[*id]))
+            .map(|key| {
+                depends
+                    .mentions
+                    .get(*key)
+                    .into_iter()
                     .flatten()
                     .filter_map(|next| ids.get(next.as_str()).copied())
+                    .collect()
+            })
+            .collect();
+        // A MODULE'S `use` SCOPE IS KEYED, NEVER FOLLOWED: followed, every
+        // function would reach everything its module imports.
+        let edges = names
+            .iter()
+            .zip(&resolves)
+            .map(|(name, found)| {
+                if name.starts_with(USE_SCOPE) {
+                    return Vec::new();
+                }
+                followed(found, &definitions, depends.items)
+                    .flat_map(|id| def_mentions[id].iter().copied())
                     .collect()
             })
             .collect();
@@ -5301,10 +5656,35 @@ impl<'g> Graph<'g> {
             ids,
             names,
             edges,
+            by_base,
+            def_mentions,
             resolves,
             definitions,
             tokens,
         }
+    }
+
+    /// Where a mention no rendered file makes starts the walk: the
+    /// definitions it resolves to, keyed, and the nodes those it follows
+    /// mention ([`followed`]). What a case's own test text names, which no
+    /// probe records, starts here (CLOUD-2904).
+    fn outside(
+        &self,
+        mention: &str,
+        items: &std::collections::BTreeMap<String, BTreeSet<String>>,
+    ) -> (Vec<usize>, Vec<usize>) {
+        let found: Vec<usize> = self
+            .by_base
+            .get(key_base(mention))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|id| visible_from(mention, self.definitions[*id]))
+            .collect();
+        let nodes = followed(&found, &self.definitions, items)
+            .flat_map(|id| self.def_mentions[id].iter().copied())
+            .collect();
+        (found, nodes)
     }
 
     fn id(&self, name: &str) -> Option<usize> {
@@ -5353,6 +5733,23 @@ impl<'g> Graph<'g> {
     }
 }
 
+/// The definitions among `found` a walk follows: every one when they hold
+/// one item between them, else every one but an impl ([`Graph::new`]).
+fn followed<'f>(
+    found: &'f [usize],
+    definitions: &'f [&str],
+    items: &std::collections::BTreeMap<String, BTreeSet<String>>,
+) -> impl Iterator<Item = usize> + 'f {
+    let count: usize = found
+        .iter()
+        .map(|id| items.get(definitions[*id]).map_or(0, BTreeSet::len))
+        .sum();
+    found
+        .iter()
+        .copied()
+        .filter(move |id| count <= 1 || !definitions[*id].ends_with(IMPL_DEFINED))
+}
+
 /// One reached name's contribution to a case's digest.
 fn name_token(name: &str, items: &BTreeSet<String>) -> blake3::Hash {
     let mut own = blake3::Hasher::new();
@@ -5391,9 +5788,13 @@ pub fn case_digests<'c>(
 ) -> std::collections::BTreeMap<Case, String> {
     type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<String>>)>;
     let mut parsed: std::collections::BTreeMap<String, Parsed> = std::collections::BTreeMap::new();
-    let mut digests = std::collections::BTreeMap::new();
-    let mut named_parts: std::collections::HashMap<Vec<usize>, blake3::Hash> =
+    let mut shared: std::collections::HashMap<String, (Vec<u8>, Vec<Shared>)> =
         std::collections::HashMap::new();
+    let mut digests = std::collections::BTreeMap::new();
+    let mut named_parts: std::collections::HashMap<
+        (Vec<usize>, BTreeSet<String>),
+        (blake3::Hash, Vec<usize>),
+    > = std::collections::HashMap::new();
     let graph = Graph::new(depends);
     let mut walk = Walk::default();
     for case in cases {
@@ -5413,50 +5814,13 @@ pub fn case_digests<'c>(
             hasher.update(b"\x1c");
             hasher.update(digest.as_bytes());
         }
-        // ONCE PER DISTINCT PROBE SET, OVER A GRAPH INDEXED ONCE PER SWEEP
-        // (#1276). Measured: the union of every reached name's items, built and
-        // sorted per case, held one core for 20 minutes over 6236 cases before
-        // a single mutant was judged; memoised per probe set, the string-keyed
-        // closure alone still held it, because nearly every probe set is
-        // distinct. The walk is now over integer ids with one reused visited
-        // map, ids are ranked in name order so the walk's order is the names',
-        // and each name's items are hashed once.
-        let key: Vec<usize> = ran.into_iter().flatten().copied().collect();
-        let named = *named_parts.entry(key).or_insert_with(|| {
-            let starts = ran
-                .into_iter()
-                .flatten()
-                .filter_map(|probe| depends.names.get(*probe))
-                .flatten()
-                .filter_map(|name| graph.id(name));
-            let reached = graph.reach(starts, &mut walk);
-            let defined = graph.defined(reached);
-            let mut part = blake3::Hasher::new();
-            if let Some(token) = depends.items.get("").map(|items| name_token("", items)) {
-                part.update(token.as_bytes());
-            }
-            for id in defined {
-                if let Some(token) = graph.token_of(id) {
-                    part.update(token.as_bytes());
-                }
-            }
-            part.finalize()
-        });
-        hasher.update(b"\x1b");
-        hasher.update(named.as_bytes());
-        if let Some(paths) = depends.read.get(case) {
-            for path in paths {
-                hasher.update(format!("\x1a{path}\x1f").as_bytes());
-                hasher.update(resource_id(depends.resources, path).as_bytes());
-            }
-        } else {
-            hasher.update(b"\x19");
-            hasher.update(depends.untraced.as_bytes());
-        }
         // The test's own text and its module's helpers, from the first source
         // that holds it: what a shared module is reached FROM.
         let mut own: Option<Vec<String>> = None;
         for file in case_sources(package_dirs, name, binary) {
+            if file.ends_with("common/mod.rs") {
+                continue;
+            }
             let held = parsed.entry(file.clone()).or_insert_with(|| {
                 let bytes = crate::fsio::read(root.join(&file)).ok()?;
                 let tests = test_texts(&String::from_utf8_lossy(&bytes));
@@ -5466,25 +5830,6 @@ pub fn case_digests<'c>(
             let Some((bytes, tests)) = held else {
                 continue;
             };
-            if file.ends_with("common/mod.rs") {
-                // THE SHARED HELPERS A CASE REACHES, NEVER THE WHOLE FILE: keyed
-                // on its bytes, one edit to `common/mod.rs` moved the key of
-                // every integration case and re-judged every mutant one
-                // reaches (#1276, lap 24's TLS port retry). Without a text to
-                // reach from, the whole file stands, as before.
-                match own.as_deref() {
-                    Some(reached_from) => {
-                        hasher.update(
-                            common_reached(&String::from_utf8_lossy(bytes), reached_from)
-                                .as_bytes(),
-                        );
-                    }
-                    None => {
-                        hasher.update(bytes);
-                    }
-                }
-                continue;
-            }
             match tests.get(test) {
                 Some(bodies) => {
                     for text in bodies {
@@ -5499,9 +5844,242 @@ pub fn case_digests<'c>(
                 }
             }
         }
+        // EVERY OTHER FILE OF THE TEST'S CRATE, BY WHAT IT REACHES (CLOUD-2904):
+        // `common/mod.rs` alone left a sibling module a case calls into, the
+        // crate root's `#[global_allocator]` and `common`'s own submodules
+        // unkeyed. Without a text to reach from, every such file stands whole.
+        let wanted: BTreeSet<String> = own
+            .iter()
+            .flatten()
+            .flat_map(|text| {
+                names_in(
+                    &batten_facts::source::rust_parse(text, ra_ap_syntax::Edition::Edition2024)
+                        .syntax_node(),
+                )
+            })
+            .collect();
+        if let Some(files) = crate_sources(root, package_dirs, name, binary) {
+            let (bytes, items) = shared.entry(binary.clone()).or_insert_with(|| {
+                let mut bytes = Vec::new();
+                let mut items = Vec::new();
+                for file in &files {
+                    let Ok(source) = crate::fsio::read_to_string(root.join(file)) else {
+                        continue;
+                    };
+                    bytes.extend(format!("\x1d{file}\x1f").as_bytes());
+                    bytes.extend(source.as_bytes());
+                    use ra_ap_syntax::ast::HasModuleItem as _;
+                    let parse = batten_facts::source::rust_parse(
+                        &source,
+                        ra_ap_syntax::Edition::Edition2024,
+                    );
+                    if !parse.errors().is_empty() {
+                        items.push(Shared::whole(file, &source));
+                        continue;
+                    }
+                    items.extend(parse.tree().items().map(|item| Shared::of(&item)));
+                }
+                (bytes, items)
+            });
+            hasher.update(b"\x17");
+            if own.is_some() {
+                hasher.update(reached_digest(items, wanted.clone()).as_bytes());
+            } else {
+                hasher.update(bytes);
+            }
+        }
+        // ONCE PER DISTINCT PROBE SET AND OWN-TEXT NAMES, OVER A GRAPH INDEXED
+        // ONCE PER SWEEP (#1276). Measured: the union of every reached name's
+        // items, built and sorted per case, held one core for 20 minutes over
+        // 6236 cases before a single mutant was judged. The walk is over
+        // integer ids with one reused visited map, ids are ranked in name order
+        // so the walk's order is the names', and each name's items are hashed
+        // once. A case's own text starts the walk too (CLOUD-2904): a `const`
+        // a test names directly is in no probe's names.
+        let outside: BTreeSet<String> = own
+            .iter()
+            .flatten()
+            .flat_map(|text| {
+                mentions_in(
+                    &batten_facts::source::rust_parse(text, ra_ap_syntax::Edition::Edition2024)
+                        .syntax_node(),
+                    &FileScope::unscoped(),
+                )
+            })
+            .collect();
+        let key: Vec<usize> = ran.into_iter().flatten().copied().collect();
+        let (named, defined) = named_parts
+            .entry((key, outside.clone()))
+            .or_insert_with(|| {
+                let mut direct: Vec<usize> = Vec::new();
+                let mut starts: Vec<usize> = ran
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|probe| depends.names.get(*probe))
+                    .flatten()
+                    .filter_map(|name| graph.id(name))
+                    .collect();
+                for mention in &outside {
+                    let (found, nodes) = graph.outside(mention, depends.items);
+                    direct.extend(found);
+                    starts.extend(nodes);
+                }
+                let reached = graph.reach(starts.into_iter(), &mut walk);
+                let mut defined = graph.defined(reached);
+                defined.extend(direct);
+                defined.sort_unstable();
+                defined.dedup();
+                let mut part = blake3::Hasher::new();
+                if let Some(token) = depends.items.get("").map(|items| name_token("", items)) {
+                    part.update(token.as_bytes());
+                }
+                for id in &defined {
+                    if let Some(token) = graph.token_of(*id) {
+                        part.update(token.as_bytes());
+                    }
+                }
+                (part.finalize(), defined)
+            })
+            .clone();
+        hasher.update(b"\x1b");
+        hasher.update(named.as_bytes());
+        compiled_part(&mut hasher, depends, &graph, ran, &defined);
+        if let Some(paths) = depends.read.get(case) {
+            for path in paths {
+                hasher.update(format!("\x1a{path}\x1f").as_bytes());
+                hasher.update(resource_id(depends.resources, path).as_bytes());
+            }
+        } else {
+            hasher.update(b"\x19");
+            hasher.update(depends.untraced.as_bytes());
+        }
         digests.insert(case.clone(), hasher.finalize().to_hex().to_string());
     }
     digests
+}
+
+/// What a case's key reads at compile time ([`Compiled`]): each include
+/// target of a function it ran or an item it reached, by content (`?` keys
+/// every non-Rust file), and the position of every function it ran when one
+/// of them, or an item it reached, observes where it is called from.
+fn compiled_part(
+    hasher: &mut blake3::Hasher,
+    depends: &Depends<'_>,
+    graph: &Graph<'_>,
+    ran: Option<&BTreeSet<usize>>,
+    defined: &[usize],
+) {
+    let compiled = depends.compiled;
+    let keys: Vec<&str> = defined.iter().map(|id| graph.definitions[*id]).collect();
+    let mut targets: BTreeSet<&str> = BTreeSet::new();
+    for probe in ran.into_iter().flatten() {
+        targets.extend(
+            compiled
+                .probe_includes
+                .get(probe)
+                .into_iter()
+                .flatten()
+                .map(String::as_str),
+        );
+    }
+    for key in &keys {
+        targets.extend(
+            compiled
+                .item_includes
+                .get(*key)
+                .into_iter()
+                .flatten()
+                .map(String::as_str),
+        );
+    }
+    targets.extend(
+        compiled
+            .item_includes
+            .get("")
+            .into_iter()
+            .flatten()
+            .map(String::as_str),
+    );
+    for target in targets {
+        hasher.update(format!("\x16{target}\x1f").as_bytes());
+        if target == "?" {
+            hasher.update(depends.untraced.as_bytes());
+        } else {
+            hasher.update(resource_id(depends.resources, target).as_bytes());
+        }
+    }
+    let observed = ran
+        .into_iter()
+        .flatten()
+        .any(|probe| compiled.observers.contains(probe))
+        || keys.iter().any(|key| compiled.observing.contains(*key));
+    if observed {
+        let positions: BTreeSet<String> = ran
+            .into_iter()
+            .flatten()
+            .map(|probe| {
+                format!(
+                    "{}@{}",
+                    depends.probes.get(*probe).map_or("", String::as_str),
+                    compiled.positions.get(probe).map_or("", String::as_str)
+                )
+            })
+            .collect();
+        for position in positions {
+            hasher.update(b"\x15");
+            hasher.update(position.as_bytes());
+        }
+    }
+}
+
+/// Every source of an integration case's test crate besides its own module
+/// file: the crate root, sibling modules and `common` with its submodules
+/// under `tests/<target>/`, and a Rust-book `tests/common/` beside a
+/// single-file target. `None` for a unit case.
+fn crate_sources(
+    root: &std::path::Path,
+    package_dirs: &std::collections::BTreeMap<String, String>,
+    name: &str,
+    binary: &str,
+) -> Option<Vec<String>> {
+    let (package, target) = binary.split_once("::")?;
+    if target.is_empty() || target.contains('/') {
+        return None;
+    }
+    let dir = package_dirs.get(package)?;
+    let prefix = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{dir}/")
+    };
+    let own: BTreeSet<String> = case_sources(package_dirs, name, binary)
+        .into_iter()
+        .filter(|file| !file.ends_with("common/mod.rs"))
+        .collect();
+    let mut files = BTreeSet::new();
+    for walked in [
+        format!("{prefix}tests/{target}"),
+        format!("{prefix}tests/common"),
+    ] {
+        for entry in ignore::WalkBuilder::new(root.join(&walked))
+            .hidden(false)
+            .build()
+            .flatten()
+        {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "rs")
+                && let Ok(relative) = path.strip_prefix(root)
+            {
+                files.insert(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    Some(
+        files
+            .into_iter()
+            .filter(|file| !own.contains(file))
+            .collect(),
+    )
 }
 
 /// The digest of the items of a shared test module (`common`) that `texts`
@@ -5545,7 +6123,17 @@ fn common_reached(common: &str, texts: &[String]) -> String {
 }
 
 /// The digest of `items` taken from `wanted`, transitively ([`common_reached`]).
-fn reached_digest(items: &[Shared], mut wanted: BTreeSet<String>) -> String {
+fn reached_digest(items: &[Shared], wanted: BTreeSet<String>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for text in reached_texts(items, wanted) {
+        hasher.update(text.as_bytes());
+        hasher.update(b"\x1e");
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// The keyed texts of `items` taken from `wanted`, transitively, in order.
+fn reached_texts(items: &[Shared], mut wanted: BTreeSet<String>) -> Vec<&str> {
     let mut wanted_types: BTreeSet<String> = BTreeSet::new();
     let mut taken = vec![false; items.len()];
     // BOUNDED BY THE ITEM COUNT (CLOUD-2789): a pass that grows takes at least
@@ -5567,12 +6155,12 @@ fn reached_digest(items: &[Shared], mut wanted: BTreeSet<String>) -> String {
             break;
         }
     }
-    let mut hasher = blake3::Hasher::new();
-    for (item, _) in items.iter().zip(&taken).filter(|(_, taken)| **taken) {
-        hasher.update(item.text.as_bytes());
-        hasher.update(b"\x1e");
-    }
-    hasher.finalize().to_hex().to_string()
+    items
+        .iter()
+        .zip(&taken)
+        .filter(|(_, taken)| **taken)
+        .map(|(item, _)| item.text.as_str())
+        .collect()
 }
 
 /// One item of a shared test module as [`common_reached`] takes it.
@@ -5591,6 +6179,17 @@ struct Shared {
 }
 
 impl Shared {
+    /// A source no parser reads: always taken, keyed on its whole text.
+    fn whole(file: &str, source: &str) -> Self {
+        Self {
+            names: None,
+            a_type: false,
+            text: format!("{file}\x1f{source}"),
+            mentions: BTreeSet::new(),
+            types: BTreeSet::new(),
+        }
+    }
+
     fn of(item: &ast::Item) -> Self {
         let a_type = matches!(
             item,
@@ -5605,8 +6204,46 @@ impl Shared {
         if let ast::Item::Use(it) = item {
             return Self::of_use(it, text);
         }
+        let registered = ast::AnyHasAttrs::cast(item.syntax().clone()).is_some_and(|it| {
+            ast::HasAttrs::attrs(&it).any(|attr| {
+                let text: String = attr
+                    .syntax()
+                    .text()
+                    .to_string()
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                [
+                    "#[global_allocator",
+                    "#[used",
+                    "#[distributed_slice",
+                    "#[linkme::",
+                    "#[ctor",
+                    "#[dtor",
+                    "#[export_name",
+                    "#[no_mangle",
+                    "#[unsafe(",
+                ]
+                .iter()
+                .any(|registered| text.starts_with(registered))
+            })
+        });
+        // AN IMPL ANSWERS TO ITS SELF TYPE, ITS TRAIT AND ITS METHODS
+        // (CLOUD-2904): a trait impl for `()` or `str` has no self-type name a
+        // case writes, and is reached by the method it calls; one naming
+        // nothing at all is always taken.
         let names = match item {
-            ast::Item::Impl(it) => it.self_ty().map(|ty| names_in(ty.syntax())),
+            _ if registered => None,
+            ast::Item::Impl(it) => {
+                let mut names: BTreeSet<String> = it
+                    .self_ty()
+                    .iter()
+                    .flat_map(|ty| names_in(ty.syntax()))
+                    .collect();
+                names.extend(it.trait_().iter().flat_map(|ty| names_in(ty.syntax())));
+                names.extend(impl_members(it));
+                (!names.is_empty()).then_some(names)
+            }
             ast::Item::MacroCall(_) => None,
             other => ast::AnyHasName::cast(other.syntax().clone())
                 .and_then(|named| ast::HasName::name(&named))
@@ -5700,11 +6337,22 @@ fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
         let Some(module) = function.syntax().parent() else {
             continue;
         };
+        // EVERY ENCLOSING MODULE'S HELPERS AND ITEMS, NOT ONLY ITS OWN
+        // (CLOUD-2904): a test in `mod tests` calls the file's top-level
+        // helpers too.
         let (helpers, helper_names, items) = modules
             .entry(usize::from(module.text_range().start()))
             .or_insert_with(|| {
-                let siblings: Vec<ast::Fn> = module
-                    .children()
+                let enclosing: Vec<SyntaxNode> = module
+                    .ancestors()
+                    .filter(|node| {
+                        node.kind() == SyntaxKind::ITEM_LIST
+                            || node.kind() == SyntaxKind::SOURCE_FILE
+                    })
+                    .collect();
+                let siblings: Vec<ast::Fn> = enclosing
+                    .iter()
+                    .flat_map(SyntaxNode::children)
                     .filter_map(ast::Fn::cast)
                     .filter(|sibling| !is_test(sibling))
                     .collect();
@@ -5716,22 +6364,31 @@ fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
                     .iter()
                     .flat_map(|sibling| names_in(sibling.syntax()))
                     .collect();
-                let items = module
-                    .children()
+                let items = enclosing
+                    .iter()
+                    .flat_map(SyntaxNode::children)
                     .filter_map(ast::Item::cast)
                     .filter(|item| !matches!(item, ast::Item::Fn(_)))
+                    .filter(|item| {
+                        !item
+                            .syntax()
+                            .descendants()
+                            .any(|inner| inner.text_range() == module.text_range())
+                    })
                     .map(|item| Shared::of(&item))
                     .collect();
                 (helpers, helper_names, items)
             });
         let mut wanted = names_in(function.syntax());
         wanted.extend(helper_names.iter().cloned());
-        let reached = reached_digest(items, wanted);
+        // THE REACHED ITEMS' TEXT, NOT A DIGEST OF IT: what they name reaches a
+        // shared module as the test's own words do (CLOUD-2904).
+        let reached = reached_texts(items, wanted).concat();
         texts
             .entry(name.text().to_string())
             .or_default()
             .push(format!(
-                "{}\x1f{helpers}\x1f//{reached}\n",
+                "{}\x1f{helpers}\x1f{reached}",
                 keyed_text(function.syntax())
             ));
     }
@@ -7325,6 +7982,7 @@ fn digests_with(
         read,
         resources,
         untraced,
+        compiled: &schema.compiled,
     };
     case_digests(root, executed.keys(), dirs, executed, &depends)
 }
@@ -7433,6 +8091,7 @@ fn reached(
         serde_json::to_string(&SealContext {
             root: root.to_path_buf(),
             dirs: dirs.clone(),
+            compiled: schema.compiled.clone(),
             probes: schema.probes.clone(),
             names: schema.names.clone(),
             items: schema.items.clone(),
@@ -7672,6 +8331,7 @@ fn build_flags_in(
 pub struct DependencyIndex {
     probes: Vec<String>,
     keyed: Vec<String>,
+    compiled: Compiled,
     names: Vec<BTreeSet<String>>,
     own_names: std::collections::BTreeMap<String, BTreeSet<usize>>,
     items: std::collections::BTreeMap<String, BTreeSet<String>>,
@@ -7878,7 +8538,13 @@ pub fn dependency_index(
         let probe_from = format.probed.contains(&file).then_some(first);
         // SELECTION MATCHES BY SPELLING, as it did before scoping: it reads the
         // whole tree, tests included, whose modules no package source says.
-        let rendered = render_in(&source, &[], &none, probe_from, &FileScope::unscoped());
+        let rendered = render_in(
+            &source,
+            &[],
+            &none,
+            probe_from,
+            &FileScope::unscoped().at(&file),
+        );
         for (offset, name) in rendered.fn_names.iter().enumerate() {
             index
                 .own_names
@@ -7886,6 +8552,7 @@ pub fn dependency_index(
                 .or_default()
                 .insert(first + offset);
         }
+        index.compiled.fold(&rendered.compiled, first);
         index.probes.extend(rendered.probes.iter().cloned());
         index.keyed.extend(rendered.keyed.iter().cloned());
         index.names.extend(rendered.names.iter().cloned());
@@ -8063,6 +8730,7 @@ pub fn test_digests(
         read: &read,
         resources,
         untraced: &untraced,
+        compiled: &index.compiled,
     };
     let base = case_digests(root, executed.keys(), dirs, &executed, &depends);
     // ONE INDEXED GRAPH FOR EVERY CASE'S SELECTION WALK, as `case_digests`
@@ -8398,6 +9066,7 @@ mod tests {
             read: &read,
             resources: &std::collections::BTreeMap::new(),
             untraced: "",
+            compiled: &NO_COMPILED,
         };
         let graph = Graph::new(&depends);
         let mut walk = Walk::default();
@@ -9233,6 +9902,7 @@ mod tests {
         SealContext {
             root: crate::scratch::scratch("schema-seal-case-root"),
             dirs: std::collections::BTreeMap::new(),
+            compiled: Compiled::default(),
             probes: vec![String::from("fa"), String::from("fb")],
             names: vec![BTreeSet::new(), BTreeSet::new()],
             items: std::collections::BTreeMap::new(),
@@ -9324,6 +9994,7 @@ mod tests {
                 read: &reach.read,
                 resources: &context.resources,
                 untraced: &context.untraced,
+                compiled: &context.compiled,
             },
         );
         seal_reach(
@@ -11930,6 +12601,7 @@ mod tests {
             read: &READ,
             resources: &IDS,
             untraced: "",
+            compiled: &NO_COMPILED,
         }
     }
 
@@ -12043,6 +12715,7 @@ mod tests {
             names: &rendered.names,
             items: &items,
             mentions: &mentions,
+            compiled: &rendered.compiled,
             ..depends(&rendered.probes)
         };
         case_digests(
@@ -12550,6 +13223,7 @@ mod tests {
             names: &rendered.names,
             items: &items,
             mentions: &mentions,
+            compiled: &rendered.compiled,
             ..depends(&rendered.probes)
         };
         case_digests(
@@ -13286,6 +13960,392 @@ mod tests {
             "src/lib.rs"
         ));
         assert!(moves_modules("include !(some_path());\n", "src/lib.rs"));
+    }
+
+    /// Each case's digest over a tree at a scratch root holding `files`, the
+    /// first of them rendered and probed as the package's `src/lib.rs`, each
+    /// case of package `fix` (at the root) running the probe ids `executed`
+    /// gives it, and every path's content id from `resources`.
+    fn tree_digests(
+        name: &str,
+        cases: &BTreeSet<Case>,
+        executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+        files: &[(&str, &str)],
+        resources: &std::collections::BTreeMap<String, String>,
+    ) -> std::collections::BTreeMap<Case, String> {
+        let root = crate::scratch::scratch(name);
+        for (path, text) in files {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        }
+        let (lib, source) = files[0];
+        let rendered = render_in(source, &[], &BTreeSet::new(), Some(0), &FileScope::of(lib));
+        let mut items: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (name, digest) in &rendered.items {
+            items
+                .entry(name.clone())
+                .or_default()
+                .insert(digest.clone());
+        }
+        let mut mentions: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (name, mentioned) in &rendered.mentions {
+            mentions
+                .entry(name.clone())
+                .or_default()
+                .extend(mentioned.iter().cloned());
+        }
+        let read = std::collections::BTreeMap::new();
+        let depends = Depends {
+            probes: &rendered.probes,
+            names: &rendered.names,
+            items: &items,
+            mentions: &mentions,
+            read: &read,
+            resources,
+            untraced: "",
+            compiled: &rendered.compiled,
+        };
+        let dirs = [(String::from("fix"), String::new())].into();
+        case_digests(&root, cases, &dirs, executed, &depends)
+    }
+
+    /// S1 (CLOUD-2904, round 3): a file an `include_str!` reads at compile
+    /// time is keyed by content, for the function holding the include and for
+    /// the item holding it a case reaches.
+    ///
+    /// Fails by: an include's target unkeyed (an edited `.rego` preset that a
+    /// function `include_str!`s reuses a stale verdict).
+    #[test]
+    fn a_file_an_include_reads_keys_the_cases_reaching_it() {
+        let (runs, names) = (case("preset"), case("names"));
+        let cases: BTreeSet<Case> = [runs.clone(), names.clone()].into();
+        let executed = [(runs.clone(), [0].into()), (names.clone(), [1].into())].into();
+        let lib = "pub fn preset() -> &'static str { include_str!(\"policy/a.rego\") }\n\
+                   pub fn names() -> &'static str { TEXT }\n\
+                   const TEXT: &str = include_str!(\"b.txt\");\n";
+        let ids = |a: &str, b: &str| -> std::collections::BTreeMap<String, String> {
+            [
+                (String::from("src/policy/a.rego"), a.to_owned()),
+                (String::from("src/b.txt"), b.to_owned()),
+            ]
+            .into()
+        };
+        let digests = |label: &str, a: &str, b: &str| {
+            tree_digests(label, &cases, &executed, &[("src/lib.rs", lib)], &ids(a, b))
+        };
+        let held = digests("schema-include-a", "1", "1");
+        let preset = digests("schema-include-b", "2", "1");
+        assert_ne!(preset[&runs], held[&runs], "the function's include");
+        assert_eq!(preset[&names], held[&names], "no include of names'");
+        let text = digests("schema-include-c", "1", "2");
+        assert_ne!(text[&names], held[&names], "the const's include");
+    }
+
+    /// S2 (CLOUD-2904, round 3): every other file of an integration case's
+    /// test crate is keyed by what the case reaches in it: a sibling module it
+    /// calls into, and the crate root's attribute-registered items.
+    ///
+    /// Fails by: `common/mod.rs` the only shared file (an edit to the sibling
+    /// `claim.rs` a case calls, or to `main.rs`'s `#[global_allocator]`, reuses
+    /// a stale verdict).
+    #[test]
+    fn a_sibling_module_a_case_calls_keys_the_case() {
+        let plans = (String::from("plan::plans"), String::from("fix::it"));
+        let cases: BTreeSet<Case> = [plans.clone()].into();
+        let executed = [(plans.clone(), BTreeSet::new())].into();
+        let none = std::collections::BTreeMap::new();
+        let tree = |label: &str, check: &str, alloc: &str| {
+            let main = format!(
+                "mod claim;\nmod plan;\n#[global_allocator]\nstatic ALLOC: Alloc = Alloc({alloc});\n"
+            );
+            let claim =
+                format!("pub fn check() -> u8 {{ {check} }}\npub fn unused() -> u8 {{ 0 }}\n");
+            tree_digests(
+                label,
+                &cases,
+                &executed,
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    ("tests/it/main.rs", &main),
+                    ("tests/it/claim.rs", &claim),
+                    (
+                        "tests/it/plan.rs",
+                        "#[test]\nfn plans() { assert_eq!(crate::claim::check(), 1); }\n",
+                    ),
+                ],
+                &none,
+            )[&plans]
+                .clone()
+        };
+        let held = tree("schema-sibling-a", "1", "1");
+        assert_ne!(tree("schema-sibling-b", "2", "1"), held, "claim::check");
+        assert_ne!(
+            tree("schema-sibling-c", "1", "2"),
+            held,
+            "the global allocator"
+        );
+    }
+
+    /// S3 (CLOUD-2904, round 3): a test's text carries the helpers of every
+    /// module enclosing it, so an edit to a top-level helper a test in `mod
+    /// tests` calls moves the test's text.
+    ///
+    /// Fails by: only the test's own module's helpers keyed.
+    #[test]
+    fn a_tests_text_carries_its_enclosing_modules_helpers() {
+        let source = |value: &str| {
+            format!(
+                "fn top() -> u8 {{ {value} }}\nmod tests {{\n    #[test]\n    \
+                 fn t() {{ assert_eq!(super::top(), 1); }}\n}}\n"
+            )
+        };
+        assert_ne!(test_texts(&source("1"))["t"], test_texts(&source("2"))["t"]);
+    }
+
+    /// S4 (CLOUD-2904, round 3): what a case's own test text names starts the
+    /// skeleton walk, so an edit to a `const` a test names directly, which no
+    /// function the case ran names, moves the case.
+    ///
+    /// Fails by: only the functions a case ran starting the walk.
+    #[test]
+    fn what_a_test_names_directly_keys_its_case() {
+        let t = (String::from("tests::t"), String::from("fix"));
+        let cases: BTreeSet<Case> = [t.clone()].into();
+        let executed = [(t.clone(), BTreeSet::new())].into();
+        let none = std::collections::BTreeMap::new();
+        let digest = |label: &str, value: &str| {
+            let lib = format!(
+                "pub const LIMIT: u8 = {value};\n#[cfg(test)]\nmod tests {{\n    #[test]\n    \
+                 fn t() {{ assert_eq!(super::LIMIT, 1); }}\n}}\n"
+            );
+            tree_digests(label, &cases, &executed, &[("src/lib.rs", &lib)], &none)[&t].clone()
+        };
+        assert_ne!(digest("schema-own-a", "1"), digest("schema-own-b", "2"));
+    }
+
+    /// S5/S6 (CLOUD-2904, round 3): an impl in a shared module answers to its
+    /// trait and methods too, so a trait impl for `()` or `str` a case calls
+    /// by method is taken.
+    ///
+    /// Fails by: an impl answering only to its self type's names (`()` names
+    /// none, and `str` is not what the case writes).
+    #[test]
+    fn a_shared_impl_answers_to_its_trait_and_methods() {
+        let unit = [String::from("fn t() { ().go(); }")];
+        let common = |value: &str| {
+            format!(
+                "pub trait Tr {{ fn go(&self) -> u8; }}\n\
+                 impl Tr for () {{ fn go(&self) -> u8 {{ {value} }} }}\n"
+            )
+        };
+        assert_ne!(
+            common_reached(&common("1"), &unit),
+            common_reached(&common("2"), &unit),
+            "impl Tr for ()"
+        );
+        let text = [String::from("fn t() { \"a\".shout(); }")];
+        let shout = |value: &str| {
+            format!(
+                "pub trait Shout {{ fn shout(&self) -> u8; }}\n\
+                 impl Shout for str {{ fn shout(&self) -> u8 {{ {value} }} }}\n"
+            )
+        };
+        assert_ne!(
+            common_reached(&shout("1"), &text),
+            common_reached(&shout("2"), &text),
+            "impl Shout for str"
+        );
+    }
+
+    /// S7 (CLOUD-2904, round 3): what a test module's own items name reaches
+    /// the shared module, so a `static` a test calls through, which names a
+    /// `common` helper, takes that helper.
+    ///
+    /// Fails by: only the test's and its helpers' words reaching `common`.
+    #[test]
+    fn a_test_modules_items_reach_the_shared_module() {
+        let t = (String::from("x::t"), String::from("fix::it"));
+        let cases: BTreeSet<Case> = [t.clone()].into();
+        let executed = [(t.clone(), BTreeSet::new())].into();
+        let none = std::collections::BTreeMap::new();
+        let digest = |label: &str, value: &str| {
+            let common = format!("pub fn helper() -> u8 {{ {value} }}\n");
+            tree_digests(
+                label,
+                &cases,
+                &executed,
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    ("tests/it/main.rs", "mod common;\nmod x;\n"),
+                    ("tests/it/common/mod.rs", &common),
+                    (
+                        "tests/it/x.rs",
+                        "use crate::common::helper;\nstatic CALL: fn() -> u8 = helper;\n\
+                         #[test]\nfn t() { assert_eq!(CALL(), 1); }\n",
+                    ),
+                ],
+                &none,
+            )[&t]
+                .clone()
+        };
+        assert_ne!(digest("schema-items-a", "1"), digest("schema-items-b", "2"));
+    }
+
+    /// S8 (CLOUD-2904, round 3): every mention reaches its module's `use`s,
+    /// so swapping the trait a module imports moves the case calling its
+    /// method there, though nothing names the trait.
+    ///
+    /// Fails by: a `use` reached only through the name it binds.
+    #[test]
+    fn swapping_a_modules_trait_import_moves_its_cases() {
+        let run = case("run");
+        let cases: BTreeSet<Case> = [run.clone()].into();
+        let executed = [(run.clone(), [0].into())].into();
+        let source = |from: &str| {
+            format!(
+                "pub fn run(x: u8) -> u8 {{ x.go() }}\nuse {from}::Ext;\n\
+                 mod a {{ pub trait Ext {{ fn go(&self) -> u8; }} }}\n\
+                 mod b {{ pub trait Ext {{ fn go(&self) -> u8; }} }}\n"
+            )
+        };
+        assert_ne!(
+            source_digests(&cases, &executed, &source("a"))[&run],
+            source_digests(&cases, &executed, &source("b"))[&run]
+        );
+    }
+
+    /// S9/S15 (CLOUD-2904, round 3): a case that runs a `#[track_caller]`
+    /// function or reaches a macro expanding `line!()` is keyed on where the
+    /// functions it ran sit, so a line added above the caller moves it.
+    ///
+    /// Fails by: only the callee's or the macro's own position keyed.
+    #[test]
+    fn a_callers_position_keys_a_case_observing_it() {
+        let runs = case("runs");
+        let cases: BTreeSet<Case> = [runs.clone()].into();
+        let executed = [(runs.clone(), [0, 1].into())].into();
+        let tracked = |gap: &str| {
+            format!(
+                "#[track_caller]\npub fn here() -> u32 {{ std::panic::Location::caller().line() }}\n\
+                 {gap}pub fn caller() -> u32 {{ here() }}\n"
+            )
+        };
+        assert_ne!(
+            source_digests(&cases, &executed, &tracked(""))[&runs],
+            source_digests(&cases, &executed, &tracked("\n"))[&runs],
+            "a track_caller callee"
+        );
+        let one = [(runs.clone(), [0].into())].into();
+        let expanded = |gap: &str| {
+            format!(
+                "macro_rules! at {{ () => {{ line!() }} }}\n{gap}pub fn caller() -> u32 {{ at!() }}\n"
+            )
+        };
+        assert_ne!(
+            source_digests(&cases, &one, &expanded(""))[&runs],
+            source_digests(&cases, &one, &expanded("\n"))[&runs],
+            "a macro expanding line!()"
+        );
+    }
+
+    /// S10/S14 (CLOUD-2904, round 3): a skeleton item keys spacing inside a
+    /// macro's token tree, and one observing its position keys its whole
+    /// text, so a line added inside it moves the case naming it.
+    ///
+    /// Fails by: a skeleton item keyed on its tokens alone.
+    #[test]
+    fn a_skeleton_item_keys_token_tree_spacing_and_its_inner_lines() {
+        let names = case("names");
+        let cases: BTreeSet<Case> = [names.clone()].into();
+        let executed = [(names.clone(), [0].into())].into();
+        let spaced =
+            |op: &str| format!("pub fn names() -> u8 {{ X }}\nconst X: u8 = m!(1 {op} 2);\n");
+        assert_ne!(
+            source_digests(&cases, &executed, &spaced("+="))[&names],
+            source_digests(&cases, &executed, &spaced("+ ="))[&names],
+            "spacing in a token tree"
+        );
+        let inner = |gap: &str| {
+            format!("pub fn names() -> u32 {{ L }}\nconst L: u32 = {{\n{gap}    line!()\n}};\n")
+        };
+        assert_ne!(
+            source_digests(&cases, &executed, &inner(""))[&names],
+            source_digests(&cases, &executed, &inner("\n"))[&names],
+            "a line inside the const"
+        );
+    }
+
+    /// S11 (CLOUD-2904, round 3): an item an attribute registers is keyed into
+    /// every case, and an exported symbol answers to its export name.
+    ///
+    /// Fails by: a `#[global_allocator]` reached by no name, or a static
+    /// exported as `table` reached only as `T`.
+    #[test]
+    fn a_registered_or_exported_item_is_keyed_where_it_is_reached() {
+        let run = case("run");
+        let cases: BTreeSet<Case> = [run.clone()].into();
+        let executed = [(run.clone(), [0].into())].into();
+        let allocator = |value: &str| {
+            format!(
+                "pub fn run() -> u8 {{ 1 }}\n#[global_allocator]\nstatic A: Alloc = Alloc({value});\n"
+            )
+        };
+        assert_ne!(
+            source_digests(&cases, &executed, &allocator("1"))[&run],
+            source_digests(&cases, &executed, &allocator("2"))[&run],
+            "the global allocator"
+        );
+        let exported = |value: &str| {
+            format!(
+                "pub fn run() -> u8 {{ unsafe {{ table }} }}\n\
+                 unsafe extern \"C\" {{ static table: u8; }}\n\
+                 #[unsafe(export_name = \"table\")]\nstatic T: u8 = {value};\n"
+            )
+        };
+        assert_ne!(
+            source_digests(&cases, &executed, &exported("1"))[&run],
+            source_digests(&cases, &executed, &exported("2"))[&run],
+            "the static exported as table"
+        );
+    }
+
+    /// S13 (CLOUD-2904, round 3): the schema applies a package's flat scoping,
+    /// so a private item of a package holding a `#[path]` module is keyed at
+    /// the package, not at its module.
+    ///
+    /// Fails by: the production line setting [`FileScope::flat`] dropped (the
+    /// suite stayed green without it).
+    #[test]
+    fn the_schema_scopes_a_moved_package_flat() {
+        let root = crate::scratch::scratch("schema-flat-write");
+        let work = crate::scratch::scratch("schema-flat-work");
+        std::fs::create_dir_all(root.join("p/src")).unwrap();
+        std::fs::write(root.join("p/Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+        std::fs::write(
+            root.join("p/src/lib.rs"),
+            "#[path = \"x.rs\"]\nmod x;\nconst fn helper() -> u8 { 1 }\npub fn f() -> bool { helper() == 1 }\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("p/src/x.rs"), "pub fn g() {}\n").unwrap();
+        let mutant = Listed {
+            file: String::from("p/src/lib.rs"),
+            ..listed("BinaryOperator", "!=", (4, 32), (4, 34))
+        };
+        let schema =
+            write_schema(&root, &work, &[mutant], &BTreeSet::new(), &BTreeSet::new()).unwrap();
+        assert!(
+            schema.items.contains_key(&format!("helper{DEFINED_IN}p")),
+            "{:?}",
+            schema.items.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !schema
+                .items
+                .contains_key(&format!("helper{DEFINED_IN}p{DEFINED_IN}src"))
+        );
     }
 
     /// An impl answers to its header's unqualified names, and its members'
