@@ -397,13 +397,9 @@ pub fn unprobed_packages_digest(
         .filter_map(|file| owner(file))
         .collect();
     let mut hasher = blake3::Hasher::new();
+    // EVERY FILE OF AN UNPROBED PACKAGE, NOT ITS RUST ALONE (CLOUD-2904,
+    // round 4b): an `include_str!` there reads data no other key holds.
     for (path, id) in resources {
-        if std::path::Path::new(path)
-            .extension()
-            .is_none_or(|extension| extension != "rs")
-        {
-            continue;
-        }
         let Some(dir) = owner(path).filter(|dir| !probed.contains(dir)) else {
             continue;
         };
@@ -2156,6 +2152,21 @@ mod tests {
         assert_eq!(
             held,
             unprobed_packages_digest(&root, &ids("1", "1", "2"), &format)
+        );
+        let mut data = ids("1", "1", "1");
+        data.insert(
+            String::from("crates/helper/src/table.txt"),
+            String::from("1"),
+        );
+        let data_held = unprobed_packages_digest(&root, &data, &format);
+        data.insert(
+            String::from("crates/helper/src/table.txt"),
+            String::from("2"),
+        );
+        assert_ne!(
+            data_held,
+            unprobed_packages_digest(&root, &data, &format),
+            "a non-Rust file an unprobed package includes"
         );
     }
 

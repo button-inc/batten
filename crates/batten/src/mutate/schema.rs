@@ -7292,6 +7292,25 @@ impl Shared {
                 names.extend(impl_members(it));
                 (!names.is_empty()).then_some(names)
             }
+            // A TRAIT ANSWERS TO ITS MEMBERS TOO (round 4b minor): a provided
+            // method a case calls by name is the trait's text.
+            ast::Item::Trait(it) => {
+                let mut names: BTreeSet<String> = ast::HasName::name(it)
+                    .map(|name| name.text().to_string())
+                    .into_iter()
+                    .collect();
+                names.extend(
+                    it.assoc_item_list()
+                        .into_iter()
+                        .flat_map(|list| list.assoc_items())
+                        .filter_map(|member| {
+                            ast::AnyHasName::cast(member.syntax().clone())
+                                .and_then(|named| ast::HasName::name(&named))
+                        })
+                        .map(|name| name.text().to_string()),
+                );
+                Some(names)
+            }
             ast::Item::MacroCall(_) => None,
             other => ast::AnyHasName::cast(other.syntax().clone())
                 .and_then(|named| ast::HasName::name(&named))
@@ -15779,6 +15798,49 @@ mod tests {
             by_crate("schema-r4b-9-d", "2"),
             "an integration case's crate"
         );
+    }
+
+    /// R4b minor (CLOUD-2904, round 4b): a trait's provided method is taken
+    /// by its own name, as a case calls it.
+    ///
+    /// Fails by: a trait answering only to its own name, so a provided
+    /// method a case calls by name kept its edit out of the key.
+    #[test]
+    fn a_traits_provided_method_is_taken_by_its_name() {
+        let text = [String::from("fn t() { x.helper(); }")];
+        let common =
+            |value: &str| format!("pub trait T {{ fn helper(&self) -> u8 {{ {value} }} }}\n");
+        assert_ne!(
+            common_reached(&common("1"), &text),
+            common_reached(&common("2"), &text)
+        );
+    }
+
+    /// R4b minor (CLOUD-2904, round 4b): a test crate's own position marker
+    /// keys where the case that reaches it sits.
+    ///
+    /// Fails by: caller positions keyed only for an observer the case ran,
+    /// so a line added above a test using a common macro that expands
+    /// `line!()` moved no key.
+    #[test]
+    fn a_test_crates_own_marker_keys_the_case_reaching_it() {
+        let tree = |label: &str, above: &str| {
+            let test = format!("{above}#[test]\nfn t() {{ assert_eq!(here!(), 3); }}\n");
+            crate_case(
+                label,
+                ("o::t", "fix::it"),
+                &[
+                    ("src/lib.rs", "pub fn f() {}\n"),
+                    (
+                        "tests/it/main.rs",
+                        "macro_rules! here { () => { line!() } }\nmod o;\n",
+                    ),
+                    ("tests/it/o.rs", &test),
+                ],
+                &[],
+            )
+        };
+        assert_ne!(tree("schema-r4b-obs-a", ""), tree("schema-r4b-obs-b", "\n"));
     }
 
     /// One integration case's digest over `files`, with `src/lib.rs` the
