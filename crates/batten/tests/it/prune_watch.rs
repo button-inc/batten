@@ -1336,10 +1336,10 @@ fn a_held_tree_does_not_hold_a_watched_step_open() {
 /// Fails by: a duplicated tree, or a blocking wait on a held one.
 #[test]
 fn a_forced_collection_exits_from_a_worktree_and_past_a_held_tree() {
+    use batten::capture::Streamed as _;
     if !cfg!(target_os = "linux") {
         return;
     }
-    use batten::capture::Streamed as _;
     let forced = |dir: &Path| {
         let mut prune = common::batten();
         prune
