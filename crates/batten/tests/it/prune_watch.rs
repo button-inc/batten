@@ -1319,8 +1319,8 @@ fn a_held_tree_does_not_hold_a_watched_step_open() {
     let (code, said) = step_released_at("step-run-held", &dir, "disk-wait ");
     drop(holder);
     assert_eq!(code, Some(0), "{said}");
-    // STOPPED, NEVER ABANDONED: the pass ends because it observed the stop,
-    // and the grace that abandons one is a last resort no case should reach.
+    // STOPPED: the pass ends because it observed the stop, and the step's
+    // exit waits on nothing else.
     assert!(
         said.contains("step run probe: disk-stopped "),
         "the pass observed the stop and said so: {said}"
