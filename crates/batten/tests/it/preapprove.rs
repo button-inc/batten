@@ -1228,6 +1228,167 @@ fn a_plan_mode_curl_get_is_allowed_and_its_writes_are_refused() {
     );
 }
 
+/// Only an http(s) URL is a read's operand (CLOUD-2840): curl sends mail, posts
+/// to a broker or opens a session under other schemes, and guesses one for a
+/// bare host.
+#[test]
+fn a_curl_read_is_http_only() {
+    reads_and_writes(
+        &[
+            "curl -sS http://example.com",
+            "curl -H 'Accept: x' -m 5 HTTPS://example.com",
+        ],
+        &[
+            "curl smtp://example.com",
+            "curl telnet://example.com",
+            "curl dict://example.com/d:x",
+            "curl ftp://example.com/x",
+            "curl example.com",
+        ],
+    );
+}
+
+/// A reader whose output reaches a FILE by a duplicating spelling, or that is
+/// handed a program to run, is not a read (CLOUD-2840).
+#[test]
+fn a_duplicating_redirect_or_a_handed_program_is_not_a_read() {
+    reads_and_writes(
+        &["cat f 2>&1", "cat f >&2"],
+        &[
+            "cat f >&out.txt",
+            "cat f &>out.txt",
+            "cat f 1<>out.txt",
+            "rg --pre sh x src/",
+            "rg --pre=./run x src/",
+        ],
+    );
+}
+
+/// A curl flag taken as a value is not also a flag (CLOUD-2840): `-A -A -o`
+/// is a user agent of `-A` and then `-o`, so the left-to-right reading is the
+/// only one, and a shape that needs another is refused.
+#[test]
+fn a_curl_flag_consumed_as_a_value_is_not_also_a_flag() {
+    reads_and_writes(
+        &["curl -A ua -H 'X: y' http://example.com"],
+        &[
+            "curl -A -A -o -s http://example.com",
+            "curl -v -A -A -d -s http://example.com",
+        ],
+    );
+}
+
+/// A writing option under a spelling the full name misses (CLOUD-2840): a GNU
+/// long option by any prefix, and a short flag inside a cluster.
+#[test]
+fn an_abbreviated_or_clustered_writing_option_is_refused() {
+    reads_and_writes(
+        &[
+            "date --utc +%F",
+            "gh api -i repos/a/b",
+            "gh api -iXGET repos/a/b",
+            "sort -r f",
+            "file README",
+        ],
+        &[
+            "date --s=2020-01-01",
+            "date --se=2020-01-01",
+            "awk --ex p.awk",
+            "awk --fil=p.awk f",
+            "awk --pro=out 1 f",
+            "gh api -iXDELETE repos/a/b",
+            "gh api -iX DELETE repos/a/b",
+            "sort --ou=out f",
+            "sort --compress=sh f",
+            "rg --hostname-bin=./x y src/",
+            "file -C -m magic",
+            "file --comp -m magic",
+        ],
+    );
+}
+
+/// A `GIT_*` variable assigned before git makes it run a program (CLOUD-2840),
+/// so `git diff` or `git status` under one is not a read.
+#[test]
+fn a_git_variable_assigned_before_the_program_is_not_a_read() {
+    reads_and_writes(
+        &["LC_ALL=C git status"],
+        &[
+            "GIT_EXTERNAL_DIFF=./x git diff",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=./x git status",
+            "env GIT_PAGER=./x git log",
+        ],
+    );
+}
+
+/// A quoted operator is an argument, never a redirect (CLOUD-2840): searching
+/// for `>&`, `&>` or `<>` is a read.
+#[test]
+fn a_quoted_operator_is_an_argument_not_a_redirect() {
+    reads_and_writes(
+        &[
+            "grep -n '>&' README.md",
+            "grep -n '&>' README.md",
+            "grep -n '<>' README.md",
+        ],
+        &["cat f >&out.txt"],
+    );
+}
+
+/// A joined field is a field (CLOUD-2840): `-ftitle=x` sends a body, and a
+/// body makes `gh api` POST.
+#[test]
+fn a_joined_gh_api_field_is_a_write() {
+    reads_and_writes(
+        &["gh api repos/a/b --jq .name"],
+        &["gh api repos/a/b -ftitle=x", "gh api repos/a/b -Fn=1"],
+    );
+}
+
+/// awk's extension door and gawk's file-writing options (CLOUD-2840).
+#[test]
+fn an_awk_option_that_writes_or_runs_is_refused() {
+    reads_and_writes(
+        &["awk -F: '{print $1}' f", "awk -v n=1 '{print n}' f"],
+        &[
+            "awk -W exec p.awk",
+            "awk -We p.awk",
+            "awk --file=p.awk f",
+            "awk --exec p.awk",
+            "awk -d 1 f",
+            "awk -o 1 f",
+            "awk -p 1 f",
+            "awk --profile=out 1 f",
+        ],
+    );
+}
+
+/// `date`, `hostname` and `tree` read until an argument sets something
+/// (CLOUD-2840): the clock, the host's name, or a file of the listing.
+#[test]
+fn a_setting_date_hostname_or_tree_output_is_refused() {
+    reads_and_writes(
+        &[
+            "date",
+            "date -u +%F",
+            "date -d yesterday +%s",
+            "hostname",
+            "hostname -f",
+            "tree",
+            "tree -L 2 src",
+        ],
+        &[
+            "date -s 2020-01-01",
+            "date --set=2020-01-01",
+            "date 010100002020",
+            "hostname x",
+            "hostname -F f",
+            "tree -o out",
+            "tree -R -H . src",
+        ],
+    );
+}
+
 #[test]
 fn a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused() {
     reads_and_writes(

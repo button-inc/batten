@@ -1591,6 +1591,18 @@ fn without_test_rules(source: &str) -> String {
     kept
 }
 
+/// The engine-default library every bundle carries (CLOUD-2840): one place
+/// for a predicate more than one module asks, so none restates it. Today it
+/// is the read-only allowlist, `data.batten.library.read_only(call)`, which
+/// the `claude-code-cloud` preset grants on and the install gate admits on.
+/// Added to every bundle whose sources REFERENCE it (`data.batten.library.`),
+/// whatever presets the consumer enables, so a module calling it never meets
+/// an undefined function and a bundle that never asks pays nothing.
+pub const LIBRARY: &[(&str, &str)] = &[(
+    "crates/batten/src/policy/library/read-only.rego",
+    include_str!("policy/library/read-only.rego"),
+)];
+
 /// Compose `sources` into **one** bundle: one engine, one compile, one smoke
 /// query (CLOUD-837).
 ///
@@ -1641,6 +1653,21 @@ pub fn compile(
                 "the declared pattern table could not be loaded: {err}"
             ))
         })?;
+    // THE LIBRARY FIRST, and outside `modules`/`packages`: it declares no
+    // `rules` and raises no `violation`, so it is reachable from every module
+    // that calls it and decides nothing itself.
+    let asks = sources
+        .iter()
+        // `import data.batten.library` then `library.read_only(…)` asks too.
+        .any(|(_, source)| source.contains("data.batten.library"));
+    for (path, source) in LIBRARY {
+        if !asks || sources.iter().any(|(given, _)| given == path) {
+            continue;
+        }
+        engine
+            .add_policy((*path).to_owned(), (*source).to_owned())
+            .map_err(|err| UsageError::raise(format!("`{path}` does not compile: {err}")))?;
+    }
     let mut modules = Vec::new();
     let mut packages = BTreeSet::new();
     for (path, source) in sources {
@@ -4854,6 +4881,12 @@ fn describe_of(ast: &Ast) -> Option<Vec<Described>> {
         // `source.file` and nothing else. The sibling `source.contents` carries
         // the whole policy body, and this function never touches it — rule 4.
         let path = policy.get("source")?.get("file")?.as_str()?.to_owned();
+        // THE ENGINE'S OWN LIBRARY IS NOT A CONSUMER MODULE (CLOUD-2840): the
+        // lints over what a consumer registered do not read it, as they do not
+        // read a preset.
+        if LIBRARY.iter().any(|(library, _)| *library == path) {
+            continue;
+        }
         let ast = policy.get("ast")?;
         let package = reference_path(ast.get("package")?.get("refr")?)?;
 
@@ -5215,6 +5248,18 @@ fn extend_call_schema(document: &mut serde_json::Value) {
             "key": {"type": ["string", "null"]},
         },
     });
+    // CLOUD-2840: a segment's variable names assigned before its program,
+    // wrappers included. Here rather than in the literal, which is at
+    // `json!`'s recursion limit.
+    if let Some(segment) = document
+        .pointer_mut("/properties/call/properties/segments/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        segment.insert(
+            "assigns".to_owned(),
+            serde_json::json!({"type": "array", "items": {"type": "string"}}),
+        );
+    }
     if let Some(call) = document
         .pointer_mut("/properties/call/properties")
         .and_then(serde_json::Value::as_object_mut)
