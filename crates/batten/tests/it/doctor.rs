@@ -1416,20 +1416,33 @@ fn the_lowercase_spellings_are_honoured() {
     // Every client in this class resolves lower case first, then upper. A reader
     // that only knew the upper-case names would report a proxied container as
     // unproxied.
+    //
+    // No live credential, so the proxy is the route (#1276, admitted): `ok`,
+    // and the data channel names it `routed` — a reader blind to the lower-case
+    // names would say `unproxied` instead.
     let dir = scratch("egress-lowercase", true, Some("version = 1\n"));
-    let mut command = batten();
-    command.arg("doctor").arg("egress");
-    for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
-        command.env_remove(name);
-    }
-    let output = command
-        .env("https_proxy", "http://proxy:8080")
-        .env("no_proxy", "localhost")
-        .current_dir(&dir)
-        .streamed_output()
-        .expect("run batten doctor egress");
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+    let run = |json: bool| {
+        let mut command = batten();
+        command.arg("doctor").arg("egress");
+        if json {
+            command.arg("-J");
+        }
+        for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
+            command.env_remove(name);
+        }
+        command
+            .env("https_proxy", "http://proxy:8080")
+            .env("no_proxy", "localhost")
+            .current_dir(&dir)
+            .streamed_output()
+            .expect("run batten doctor egress")
+    };
+    let output = run(false);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&run(true))).expect("the data channel is parseable");
+    assert_eq!(parsed["state"], "routed", "{parsed:?}");
 }
 
 #[test]
