@@ -68,11 +68,15 @@ refusal names when one exists.",
             // judgement the gate makes (non-negotiable rule 3). It names the owning
             // surface deliberately, so the first question forces the asker to say
             // why the route they were already given does not reach.
+            // THE OWNER OPENS IT (CLOUD-2926): `override spend` of this class
+            // needs the owner's own recorded yes to one question naming the
+            // rule and the path, so the precondition says so rather than
+            // reading as a promise the agent alone can make.
             admit(
                 "articulate the write",
                 "the surface this class names cannot express the change, so writing the \
-protected path directly is the only route left, and the write is one a reviewer will see \
-in the diff it lands in",
+protected path directly is the only route left, the diff shows the write, and the owner \
+said yes to a question naming the rule and path",
             ),
         ],
         applicability: Applicability::Advice,
