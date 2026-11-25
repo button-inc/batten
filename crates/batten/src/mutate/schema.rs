@@ -3519,82 +3519,54 @@ fn case_bound(
     )
 }
 
-/// The least one case is given before nextest cuts it as hung, in seconds.
-///
-/// MEASURED: the fastest `batten::it` case on #1276 ran in 0.029 s under
-/// nextest, its process spawn included, so two seconds is some seventy times a
-/// case's own overhead. A floor this low cuts a slow case wrongly at worst,
-/// which reads as a timeout (exit 3), never as a kill.
-const CUT_FLOOR_SECONDS: f64 = 2.0;
-
 /// How long nextest gives a case it cuts to exit before killing it, in
 /// seconds: the `grace-period` of every per-case cut ([`judge_config`]).
 const CUT_GRACE_SECONDS: f64 = 1.0;
 
-/// How long the runner gives a run its own bound ended to exit, in seconds
-/// ([`super::TERMINATE_GRACE`]); none where the runner kills at once.
-fn run_grace() -> f64 {
-    #[cfg(unix)]
-    {
-        super::TERMINATE_GRACE.as_secs_f64()
-    }
-    #[cfg(not(unix))]
-    {
-        0.0
-    }
-}
-
 /// The longest one case may run under the judge before nextest cuts it as
 /// hung: [`TIMEOUT_MULTIPLIER`] times its measured seconds, never under
-/// [`CUT_FLOOR_SECONDS`] (CLOUD-2911).
+/// [`MINIMUM_TIMEOUT_SECONDS`] (CLOUD-2911).
+///
+/// NO CASE IS CUT BEFORE IT CAN FAIL AT ITS OWN PACE: a mutant can make a fast
+/// case fail only after an internal wait (`exec.rs`'s 5 s `GROUP_GRACE` and
+/// 10 s `PIPE_DRAIN_TIMEOUT`, `disk_watch.rs`'s 10 s), and a cut sooner than
+/// that files a kill a timeout. A 2 s floor did.
 fn case_limit(case: &Case, seconds: &std::collections::BTreeMap<Case, f64>) -> f64 {
     let measured = seconds.get(case).copied().unwrap_or(UNMEASURED_SECONDS);
-    (TIMEOUT_MULTIPLIER * measured).max(CUT_FLOOR_SECONDS)
+    (TIMEOUT_MULTIPLIER * measured).max(MINIMUM_TIMEOUT_SECONDS)
 }
 
-/// How long one judging run over `cases` may take, in seconds: its startup,
-/// [`TIMEOUT_MULTIPLIER`] times its cases' measured seconds summed, never
-/// under [`MINIMUM_TIMEOUT_SECONDS`] for the whole run, and the grace of the
-/// one cut that stops a fail-fast run ([`CUT_GRACE_SECONDS`]).
+/// How long a batch's first, fail-fast run over `cases` may take, in seconds:
+/// its startup, [`TIMEOUT_MULTIPLIER`] times its cases' measured seconds
+/// summed, [`MINIMUM_TIMEOUT_SECONDS`] once for the whole run, and the grace
+/// of the one cut that stops it (CLOUD-2911).
 ///
-/// THE FLOOR IS THE RUN'S, NEVER EACH CASE'S (CLOUD-2911): a hundred 0.1 s
-/// cases are bounded at 30 + 50 + 1 s, as cargo-mutants bounds a run, where a
-/// per-case floor of 20 s made them 2,030 s.
-fn run_bound(cases: &BTreeSet<Case>, seconds: &std::collections::BTreeMap<Case, f64>) -> f64 {
+/// THE ONE CUT THAT STOPS IT ALWAYS LANDS: on one thread, the cases ahead of a
+/// hung case h take at most their measured seconds, and h's cut is at most
+/// five times its own plus the floor, so the two together are within five
+/// times the batch's seconds plus the floor. A hundred 0.1 s cases are bounded
+/// at 101 s, never one floor per case.
+fn first_bound(cases: &BTreeSet<Case>, seconds: &std::collections::BTreeMap<Case, f64>) -> f64 {
     let measured: f64 = cases
         .iter()
         .map(|case| seconds.get(case).copied().unwrap_or(UNMEASURED_SECONDS))
         .sum();
-    STARTUP_SECONDS
-        + (TIMEOUT_MULTIPLIER * measured).max(MINIMUM_TIMEOUT_SECONDS)
-        + CUT_GRACE_SECONDS
+    STARTUP_SECONDS + TIMEOUT_MULTIPLIER * measured + MINIMUM_TIMEOUT_SECONDS + CUT_GRACE_SECONDS
 }
 
-/// What one judging run over `cases` is charged against its mutant's budget,
-/// in seconds: its bound, never past `cap` (the runner's own), and the grace a
-/// run the bound ends is given to exit ([`run_grace`]).
-fn run_charge(
-    cases: &BTreeSet<Case>,
-    seconds: &std::collections::BTreeMap<Case, f64>,
-    cap: f64,
-) -> f64 {
-    run_bound(cases, seconds).min(cap) + run_grace()
-}
-
-/// What a batch's budget holds besides its first run's charge, in seconds:
-/// a second run's startup and grace, the run floor, and one cut's floor and
-/// grace, never past `cap` (CLOUD-2911).
+/// How long a batch's second run over `cases`, the ones its first run left
+/// unrun, may take, in seconds: its startup and every case's own cut and its
+/// grace, end to end (CLOUD-2911).
 ///
-/// FUNDED, SO THE SECOND RUN ALWAYS FITS: a first run that stopped at a cut
-/// of case h spent at most its startup, the cases it finished, h's cut and
-/// its grace, and with this fund what is left covers the second run's charge
-/// over the rest, since 5·Σm over the batch is at least the finished cases,
-/// five times h, and five times the rest. Unfunded, a batch of unmeasured
-/// cases had 30 s left for a second run charged 66 s, and a killer behind a
-/// hang was filed a timeout.
-fn rerun_fund(cap: f64) -> f64 {
-    (STARTUP_SECONDS + MINIMUM_TIMEOUT_SECONDS + CUT_FLOOR_SECONDS + CUT_GRACE_SECONDS).min(cap)
-        + run_grace()
+/// EVERY CASE GETS ITS TURN: the second run is not fail-fast, and on one
+/// thread a killer behind any number of hung cases still starts within this
+/// bound.
+fn second_bound(cases: &BTreeSet<Case>, seconds: &std::collections::BTreeMap<Case, f64>) -> f64 {
+    STARTUP_SECONDS
+        + cases
+            .iter()
+            .map(|case| case_limit(case, seconds) + CUT_GRACE_SECONDS)
+            .sum::<f64>()
 }
 
 /// Each case's measured seconds, from a nextest `JUnit` report: the `name`,
@@ -3651,7 +3623,6 @@ fn phases(
 /// The nextest argv that runs exactly `cases` against `mutant`: the cases'
 /// own packages and targets, and a filter naming each case.
 fn nextest_args(mutant: &Listed, cases: &BTreeSet<Case>) -> Vec<String> {
-    let tests: BTreeSet<&str> = cases.iter().map(|(name, _)| name.as_str()).collect();
     let binaries: BTreeSet<&str> = cases.iter().map(|(_, binary)| binary.as_str()).collect();
     let mut args: Vec<String> = [
         "nextest",
@@ -3684,10 +3655,33 @@ fn nextest_args(mutant: &Listed, cases: &BTreeSet<Case>) -> Vec<String> {
     }
     args.extend([
         String::from("-E"),
-        super::cover::filterset(&tests),
+        pair_filterset(cases),
         String::from("--no-tests=pass"),
     ]);
     args
+}
+
+/// One case's nextest filter: its binary and its name, so a same-named case in
+/// another selected binary never runs with it (CLOUD-2911); its name alone
+/// when its binary went unrecorded.
+fn pair_filter(name: &str, binary: &str) -> String {
+    if binary.is_empty() {
+        format!("test(={name})")
+    } else {
+        format!("(binary_id(={binary}) & test(={name}))")
+    }
+}
+
+/// The nextest filterset that selects exactly `cases` ([`pair_filter`]).
+fn pair_filterset(cases: &BTreeSet<Case>) -> String {
+    if cases.is_empty() {
+        return String::from("none()");
+    }
+    cases
+        .iter()
+        .map(|(name, binary)| pair_filter(name, binary))
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// The schema build's test binaries, recorded once after it built clean, as
@@ -3963,19 +3957,12 @@ fn judge_args(
         args.extend(cargo_dirs(target));
         return args;
     };
-    let tests: BTreeSet<&str> = cases.iter().map(|(name, _)| name.as_str()).collect();
-    let binaries: BTreeSet<&str> = cases.iter().map(|(_, binary)| binary.as_str()).collect();
-    let by_binary = binaries
-        .iter()
-        .map(|binary| format!("binary_id(={binary})"))
-        .collect::<Vec<_>>()
-        .join(" | ");
     let mut args: Vec<String> = ["nextest", "run", "--profile", "mutants", "--color", "never"]
         .map(String::from)
         .to_vec();
     args.extend([
         String::from("-E"),
-        format!("({by_binary}) and ({})", super::cover::filterset(&tests)),
+        pair_filterset(cases),
         String::from("--no-tests=pass"),
         String::from("--binaries-metadata"),
         reuse.binaries.to_string_lossy().into_owned(),
@@ -3999,8 +3986,7 @@ fn run_cases(
     cases: &BTreeSet<Case>,
     fail_fast: bool,
 ) -> anyhow::Result<Turn> {
-    let started = std::time::Instant::now();
-    let (ran, xml) = judge_run(judging, &id.to_string(), mutant, cases, fail_fast, true);
+    let (ran, xml) = judge_run(judging, &id.to_string(), mutant, cases, fail_fast);
     // ONLY THE CASES THIS RUN SELECTED (CLOUD-2911): a same-named case in a
     // co-selected binary also runs, and its row neither kills, nor is cut,
     // nor leaves a case unrun.
@@ -4022,7 +4008,6 @@ fn run_cases(
         killer,
         passed,
         hung: hung_in(report.as_deref()),
-        spent: started.elapsed().as_secs_f64(),
     })
 }
 
@@ -4037,6 +4022,28 @@ fn selected(rows: Vec<(Case, CaseEnd)>, cases: &BTreeSet<Case>) -> Vec<(Case, Ca
 /// answers it, so no mutant is active ([`control_red`]).
 const NULL_MUTANT: &str = "none";
 
+/// Whether a judging run with `BATTEN_MUTANT=active` cuts each case at its own
+/// limit: every mutant's run does, and the control's never (CLOUD-2911), since
+/// a slow case passing with no mutant active is the baseline, and a cut would
+/// file it red.
+fn cuts(active: &str) -> bool {
+    active != NULL_MUTANT
+}
+
+/// The bound of a run over `cases`: a batch's first, fail-fast run's, or the
+/// second run's over the cases the first left unrun.
+fn run_bound(
+    cases: &BTreeSet<Case>,
+    seconds: &std::collections::BTreeMap<Case, f64>,
+    fail_fast: bool,
+) -> f64 {
+    if fail_fast {
+        first_bound(cases, seconds)
+    } else {
+        second_bound(cases, seconds)
+    }
+}
+
 /// One judging run of `cases` with `BATTEN_MUTANT=active`, under its own
 /// fixture scratch inside the mirror and its own temp beside it
 /// ([`judge_temp`]), and its `JUnit` report, if it wrote one. The
@@ -4047,7 +4054,6 @@ fn judge_run(
     mutant: &Listed,
     cases: &BTreeSet<Case>,
     fail_fast: bool,
-    cut: bool,
 ) -> (anyhow::Result<super::Ran>, Option<String>) {
     let mut args = judge_args(mutant, cases, judging.target, judging.reuse);
     if !fail_fast {
@@ -4061,7 +4067,7 @@ fn judge_run(
     // run's own temp so no two workers share one (#1276), and never under the
     // mirror's `target/tmp` ([`judge_files`]).
     let (store, config) = judge_files(&temp);
-    if let Err(why) = run_config(judging, &store, cases, cut)
+    if let Err(why) = run_config(judging, &store, cases, cuts(active))
         .and_then(|text| Ok(crate::durable::replace(&config, text)?))
     {
         return (Err(why), None);
@@ -4078,7 +4084,7 @@ fn judge_run(
         super::Program::Cargo,
         &args,
         &env,
-        std::time::Duration::from_secs_f64(run_bound(cases, judging.seconds))
+        std::time::Duration::from_secs_f64(run_bound(cases, judging.seconds, fail_fast))
             .min(super::runner_bound()),
         super::Said::Kept,
     );
@@ -4222,7 +4228,7 @@ fn control_red(judging: &Judging<'_>, out: &mut dyn std::io::Write) -> anyhow::R
     for batch in batches(&cases) {
         // THE CONTROL IS NEVER CUT (CLOUD-2911): a slow case passing with no
         // mutant active is the baseline, and a cut would file it red.
-        let (ran, xml) = judge_run(judging, NULL_MUTANT, mutant, &batch, true, false);
+        let (ran, xml) = judge_run(judging, NULL_MUTANT, mutant, &batch, true);
         let ran = ran?;
         let found = xml.as_deref().and_then(junit_failures).unwrap_or_default();
         anyhow::ensure!(
@@ -4271,20 +4277,34 @@ fn run_config(
     judge_config(judging.work, store, &limits)
 }
 
-/// A humantime period of whole units (`500ms`, `10s`, `2m`, `1h`) in seconds.
+/// A humantime period in seconds: one or more numbers each with its unit
+/// (`500ms`, `1.5s`, `1m 30s`, `2min`, `1h`), any other text none.
 fn period_seconds(text: &str) -> Option<f64> {
-    let text = text.trim();
-    let digits = text.find(|c: char| !c.is_ascii_digit() && c != '.')?;
-    let (number, unit) = text.split_at(digits);
-    let number: f64 = number.parse().ok()?;
-    let scale = match unit.trim() {
-        "ms" => 0.001,
-        "s" => 1.0,
-        "m" => 60.0,
-        "h" => 3600.0,
-        _ => return None,
-    };
-    Some(number * scale)
+    let mut rest = text.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    let mut total = 0.0;
+    while !rest.is_empty() {
+        let digits = rest.find(|c: char| !c.is_ascii_digit() && c != '.')?;
+        let (number, tail) = rest.split_at(digits);
+        let number: f64 = number.parse().ok()?;
+        let tail = tail.trim_start();
+        let letters = tail
+            .find(|c: char| !c.is_ascii_alphabetic())
+            .unwrap_or(tail.len());
+        let (unit, tail) = tail.split_at(letters);
+        let scale = match unit {
+            "ms" | "msec" | "msecs" | "millis" | "millisecond" | "milliseconds" => 0.001,
+            "s" | "sec" | "secs" | "second" | "seconds" => 1.0,
+            "m" | "min" | "mins" | "minute" | "minutes" => 60.0,
+            "h" | "hr" | "hrs" | "hour" | "hours" => 3600.0,
+            _ => return None,
+        };
+        total += number * scale;
+        rest = tail.trim_start();
+    }
+    Some(total)
 }
 
 /// When the judging profile's own `slow-timeout` cuts a case, in seconds: its
@@ -4300,12 +4320,12 @@ fn profile_cut(doc: &toml_edit::DocumentMut) -> Option<f64> {
     })
 }
 
-/// The overrides the judging profile already has, as tables, whether written
-/// as an array of tables or an inline array.
-fn held_overrides(doc: &toml_edit::DocumentMut) -> Vec<toml_edit::Table> {
+/// The overrides `profile` already has, as tables, whether written as an array
+/// of tables or an inline array.
+fn held_overrides(doc: &toml_edit::DocumentMut, profile: &str) -> Vec<toml_edit::Table> {
     let Some(held) = doc
         .get("profile")
-        .and_then(|profiles| profiles.get(JUDGE_PROFILE))
+        .and_then(|profiles| profiles.get(profile))
         .and_then(|profile| profile.get("overrides"))
     else {
         return Vec::new();
@@ -4325,11 +4345,17 @@ fn held_overrides(doc: &toml_edit::DocumentMut) -> Vec<toml_edit::Table> {
 /// the judging profile, and each case in `limits` cut at its own seconds.
 ///
 /// EACH CASE CUT ALONE (CLOUD-2911): a `slow-timeout` override per case, by
-/// its binary and name, ahead of every override the profile already has
-/// (nextest takes the first that matches), so a case the mutant hangs is
+/// its binary and name ([`pair_filter`]), so a case the mutant hangs is
 /// reported `test timeout` at its own limit while its siblings run, rather
 /// than holding the run until the run's own bound ends it with no report.
-/// A profile whose own `slow-timeout` cuts sooner keeps its cut.
+///
+/// THE CONSUMER'S OWN CUTS COME FIRST: nextest takes, for each setting, the
+/// first override that matches a case and sets it, and a judging profile's
+/// overrides precede the default profile's. So the judging profile's and the
+/// default profile's own overrides are placed ahead of these cuts, and a case
+/// the consumer gave its own `slow-timeout`, looser or tighter, keeps it. A
+/// profile-level `slow-timeout` that cuts sooner than a case's limit, which
+/// no override outranks, still cuts it there.
 ///
 /// # Errors
 ///
@@ -4359,8 +4385,16 @@ fn judge_config(
         .or_insert_with(toml_edit::table);
     doc["profile"][JUDGE_PROFILE]["junit"]["path"] = toml_edit::value(JUDGE_REPORT);
     let tighter = profile_cut(&doc);
-    let held = held_overrides(&doc);
     let mut overrides = toml_edit::ArrayOfTables::new();
+    if limits.is_empty() {
+        return Ok(doc.to_string());
+    }
+    for row in held_overrides(&doc, JUDGE_PROFILE)
+        .into_iter()
+        .chain(held_overrides(&doc, "default"))
+    {
+        overrides.push(row);
+    }
     for ((name, binary), limit) in limits {
         let limit = tighter.map_or(*limit, |tighter| limit.min(tighter));
         let mut cut = toml_edit::InlineTable::new();
@@ -4370,14 +4404,8 @@ fn judge_config(
         cut.insert("terminate-after", 1.into());
         cut.insert("grace-period", format!("{CUT_GRACE_SECONDS}s").into());
         let mut row = toml_edit::Table::new();
-        row["filter"] = toml_edit::value(format!("binary_id(={binary}) & test(={name})"));
+        row["filter"] = toml_edit::value(pair_filter(name, binary));
         row["slow-timeout"] = toml_edit::value(cut);
-        overrides.push(row);
-    }
-    if overrides.is_empty() {
-        return Ok(doc.to_string());
-    }
-    for row in held {
         overrides.push(row);
     }
     doc["profile"][JUDGE_PROFILE]["overrides"] = toml_edit::Item::ArrayOfTables(overrides);
@@ -4537,8 +4565,6 @@ struct Turn {
     passed: Vec<Case>,
     /// Every case nextest cut at its own limit ([`hung_in`]).
     hung: Vec<Case>,
-    /// How long the run took, in seconds.
-    spent: f64,
 }
 
 /// Keep what an erring run of mutant `id` said under the sweep's `errors/`,
@@ -4626,8 +4652,7 @@ fn judge(
         |cases: &BTreeSet<Case>, fail_fast: bool| run_cases(judging, id, mutant, cases, fail_fast);
     // EVERY CASE'S OUTCOME, AS IT LANDS: a run killed mid-sweep keeps each
     // pass and kill it already proved.
-    let cap = super::runner_bound().as_secs_f64();
-    let decided = decide(&runs, judging.seconds, cap, &mut run, |case| {
+    let decided = decide(&runs, &mut run, |case| {
         record(case, PASSED);
     });
     match decided {
@@ -4651,46 +4676,43 @@ fn judge(
     }
 }
 
-/// A mutant's verdict from its batch `runs` in order, within one budget for
-/// the whole mutant (CLOUD-2911).
+/// A mutant's verdict from its batch `runs` in order (CLOUD-2911).
 ///
 /// A KILL IS NEVER A TIMEOUT FOR WANT OF ITS TURN: every run cuts each case at
-/// its own [`case_limit`] ([`judge_config`]), so a case the mutant hangs is
-/// reported hung while its siblings run. A batch's first run is fail-fast:
-/// nextest starts no case after its first failure or cut, and lets the cases
-/// already running finish. The cases it left unrun are run once more without
-/// fail-fast, every one to its end or its own cut. A kill decides; a cut
-/// decides only when nothing kills, and a batch every case of which passed is
-/// survived.
+/// its own [`case_limit`] ([`judge_config`]), never before it can fail at its
+/// own pace, so a case the mutant hangs is reported hung while its siblings
+/// run. A batch's first run is fail-fast: nextest starts no case after its
+/// first failure or cut, and lets the cases already running finish. The cases
+/// it left unrun are run once more without fail-fast, every one to its end or
+/// its own cut, within a bound that holds every one of their cuts end to end
+/// ([`second_bound`]), so on one thread or under the runner's cap the second
+/// run is never refused. A kill decides; a cut decides only when nothing
+/// kills, and a batch every case of which passed is survived.
 ///
-/// ONE BUDGET PER MUTANT: each batch's [`run_charge`] and its [`rerun_fund`],
-/// summed. Each run is charged its whole charge before it starts and runs only
-/// if that fits what is left; what a run did not spend is kept. A mutant every
-/// case of which hangs costs at most its batches' bounds, their second runs'
-/// funds and their grace, never one run per case.
+/// BOUNDED PER MUTANT BY CONSTRUCTION: a batch runs at most twice, its first
+/// run within [`first_bound`] over the batch and its second within
+/// [`second_bound`] over the cases the first left, each capped by the
+/// runner's own bound and given its grace ([`judge_run`]). A mutant every case
+/// of which hangs costs at most those two bounds per batch, never one run per
+/// case.
 ///
 /// A BATCH WITH A CUT, OR A RUN ITS BOUND ENDED, KEEPS NO PASS: a hang that
 /// needs a sibling would otherwise find that sibling journaled passed on the
 /// next sweep, run alone, pass, and file a survivor. Each pass of a batch
-/// that finished clean is handed to `on_pass`.
+/// that finished clean, by a kill or with every case passed, is handed to
+/// `on_pass`.
 ///
 /// # Errors
 ///
 /// A run could not be started.
 fn decide<R>(
     runs: &[BTreeSet<Case>],
-    seconds: &std::collections::BTreeMap<Case, f64>,
-    cap: f64,
     run: &mut R,
     mut on_pass: impl FnMut(&Case),
 ) -> anyhow::Result<(Verdict, Option<Case>)>
 where
     R: FnMut(&BTreeSet<Case>, bool) -> anyhow::Result<Turn>,
 {
-    let mut budget: f64 = runs
-        .iter()
-        .map(|batch| run_charge(batch, seconds, cap) + rerun_fund(cap))
-        .sum();
     let mut hung = false;
     for batch in runs {
         let mut open = batch.clone();
@@ -4698,18 +4720,20 @@ where
         let mut passes: Vec<Case> = Vec::new();
         let mut clean = true;
         while !open.is_empty() {
-            let charge = run_charge(&open, seconds, cap);
-            if charge > budget {
-                return Ok((Verdict::Timeout, None));
-            }
             let turn = run(&open, fail_fast)?;
-            budget -= turn.spent.min(charge);
             clean &= turn.verdict != Verdict::Timeout;
             passes.extend(turn.passed.iter().cloned());
             match turn.verdict {
                 Verdict::Missed => break,
                 Verdict::Timeout => hung = true,
-                _ => return Ok((turn.verdict, turn.killer)),
+                _ => {
+                    if clean {
+                        for case in &passes {
+                            on_pass(case);
+                        }
+                    }
+                    return Ok((turn.verdict, turn.killer));
+                }
             }
             let rest: BTreeSet<Case> = open
                 .iter()
@@ -4784,8 +4808,8 @@ fn batches(phase: &BTreeSet<Case>) -> Vec<BTreeSet<Case>> {
     let mut runs: Vec<BTreeSet<Case>> = Vec::new();
     let mut bytes = 0;
     for case in phase {
-        // `test(=<name>) | ` per case (`cover::filterset`).
-        let cost = case.0.len() + 10;
+        // `<pair> | ` per case ([`pair_filterset`]).
+        let cost = pair_filter(&case.0, &case.1).len() + 3;
         match runs.last_mut() {
             Some(run) if bytes + cost <= FILTER_BYTES => {
                 bytes += cost;
@@ -13340,13 +13364,15 @@ mod tests {
     /// phase spending a run.
     #[test]
     fn a_phase_is_cut_into_runs_whose_filters_fit_one_argument() {
-        // 1,024 bytes a case, so exactly 96 fill a run to the cap.
-        let long = "x".repeat(1_011);
-        let phase: BTreeSet<Case> = (0..193).map(|n| case(&format!("{long}{n:03}"))).collect();
+        // 100 bytes a case (`(binary_id(=batten::it) & test(=…)) | `, a
+        // 63-byte name), so exactly 983 fill a run to the cap; without the
+        // separator's three bytes, 1,045 would.
+        let long = "x".repeat(59);
+        let phase: BTreeSet<Case> = (0..1_967).map(|n| case(&format!("{long}{n:04}"))).collect();
         let runs = batches(&phase);
         assert_eq!(
             runs.iter().map(BTreeSet::len).collect::<Vec<_>>(),
-            [96, 96, 1],
+            [983, 983, 1],
             "a run is filled to the cap and no further"
         );
         assert_eq!(
@@ -17688,7 +17714,7 @@ pub fn repo() -> u8 {{ scratch() }}
             );
         }
         let filter = held.windows(2).find(|pair| pair[0] == "-E").unwrap()[1].clone();
-        assert_eq!(filter, "(binary_id(=batten::cli)) and (test(=t))");
+        assert_eq!(filter, "(binary_id(=batten::cli) & test(=t))");
         assert!(
             held.windows(2)
                 .any(|pair| pair[0] == "--binaries-metadata" && pair[1] == "/r/binaries.json")
@@ -18544,20 +18570,13 @@ pub fn repo() -> u8 {{ scratch() }}
     /// Every run a scripted judge was handed, with its `fail_fast`, in order.
     type Asked = std::rc::Rc<std::cell::RefCell<Vec<(BTreeSet<Case>, bool)>>>;
 
-    /// A run's [`Turn`], spending `spent` seconds.
-    fn turn(
-        verdict: Verdict,
-        killer: Option<Case>,
-        passed: &[Case],
-        hung: &[Case],
-        spent: f64,
-    ) -> Turn {
+    /// A run's [`Turn`].
+    fn turn(verdict: Verdict, killer: Option<Case>, passed: &[Case], hung: &[Case]) -> Turn {
         Turn {
             verdict,
             killer,
             passed: passed.to_vec(),
             hung: hung.to_vec(),
-            spent,
         }
     }
 
@@ -18582,85 +18601,112 @@ pub fn repo() -> u8 {{ scratch() }}
         (run, asked)
     }
 
-    /// No runner cap: every run is charged its whole bound.
-    const UNCAPPED: f64 = f64::INFINITY;
-
-    /// What a first run that stopped at the cut of `hung` spends: its startup,
-    /// `before` seconds of cases finished first, the cut and its grace.
-    fn cut_at(hung: &Case, before: f64, seconds: &std::collections::BTreeMap<Case, f64>) -> f64 {
-        STARTUP_SECONDS + before + case_limit(hung, seconds) + CUT_GRACE_SECONDS
-    }
-
     fn near(left: f64, right: f64) -> bool {
         (left - right).abs() < 1e-9
     }
 
-    /// A case is cut at five times its measured seconds, never under two; a
-    /// run is bounded by its startup, five times its cases' seconds summed,
-    /// never under twenty for the whole run, and one cut's grace; a run is
-    /// charged that, never past the runner's cap, with the runner's grace; and
-    /// a batch's second run is funded the same way (CLOUD-2911).
+    /// No case is cut before twenty seconds, so a killer that fails only after
+    /// an internal wait of ten (`exec.rs`'s `PIPE_DRAIN_TIMEOUT`) still fails;
+    /// a slow case is cut at five times its seconds; a first run is bounded by
+    /// five times its cases' seconds and one floor; a second run by its cases'
+    /// cuts end to end (CLOUD-2911).
     ///
-    /// Fails by: the floor applied per case again, so a hundred 0.1 s cases
-    /// are bounded at 2,030 s; a limit off its baseline; or a charge or fund
-    /// that ignores the cap or a grace.
+    /// Fails by: a floor below a case's internal waits, so a kill is filed a
+    /// timeout (review of `c8ccefd87`, major 1); the floor applied per case in
+    /// the first run, so a hundred 0.1 s cases are bounded at 2,030 s; or a
+    /// second run bounded below its cases' cuts end to end.
     #[test]
-    fn a_case_is_cut_at_its_own_limit_and_a_run_floored_as_a_whole() {
+    fn no_case_is_cut_before_it_can_fail_at_its_own_pace() {
         let (slow, quick, unmeasured) = (case("slow"), case("quick"), case("new"));
-        let seconds = [(slow.clone(), 10.0), (quick.clone(), 0.1)].into();
+        let seconds = [(slow.clone(), 10.0), (quick.clone(), 0.4)].into();
         assert!(near(case_limit(&slow, &seconds), 50.0), "5x 10 s");
-        assert!(near(case_limit(&quick, &seconds), 2.0), "the case floor");
+        assert!(near(case_limit(&quick, &seconds), 20.0), "the floor");
+        assert!(near(case_limit(&unmeasured, &seconds), 20.0), "unmeasured");
         assert!(
-            near(case_limit(&unmeasured, &seconds), 5.0),
-            "5x unmeasured"
+            case_limit(&quick, &seconds) > 10.0,
+            "past PIPE_DRAIN_TIMEOUT"
         );
         let hundred: BTreeSet<Case> = (0..100).map(|n| case(&format!("c{n}"))).collect();
         let tenth = hundred.iter().map(|one| (one.clone(), 0.1)).collect();
-        assert!(near(run_bound(&hundred, &tenth), 81.0), "30 + 5x 10 s + 1");
+        assert!(
+            near(first_bound(&hundred, &tenth), 101.0),
+            "30 + 5x 10 s + 20 + 1"
+        );
         let both: BTreeSet<Case> = [quick, unmeasured].into();
         assert!(
-            near(run_bound(&both, &seconds), 51.0),
-            "30 + the run floor + 1"
+            near(second_bound(&both, &seconds), 72.0),
+            "30 + 2 x (20 + 1)"
         );
-        let grace = run_grace();
-        assert!(near(run_charge(&both, &seconds, UNCAPPED), 51.0 + grace));
-        assert!(
-            near(run_charge(&both, &seconds, 40.0), 40.0 + grace),
-            "capped"
-        );
-        assert!(near(rerun_fund(UNCAPPED), 53.0 + grace));
-        assert!(near(rerun_fund(40.0), 40.0 + grace), "a capped fund");
-        #[cfg(unix)]
-        assert!(near(grace, 15.0), "the runner's own grace");
+        assert!(near(
+            run_bound(&both, &seconds, true),
+            first_bound(&both, &seconds)
+        ));
+        assert!(near(run_bound(&both, &seconds, false), 72.0));
     }
 
-    /// A humantime period in whole units reads as its seconds; anything else
-    /// reads as none (CLOUD-2911).
+    /// A humantime period in seconds, whole or fractional, in one unit or
+    /// several; anything else reads as none (CLOUD-2911).
     ///
-    /// Fails by: a unit read at the wrong scale, or a bare number read as one.
+    /// Fails by: a unit read at the wrong scale; a multi-part or fractional
+    /// period read as none, so a consumer's tighter cut is lost; or a bare
+    /// number read as one.
     #[test]
     fn a_period_reads_as_its_seconds() {
         assert_eq!(period_seconds("500ms"), Some(0.5));
         assert_eq!(period_seconds("10s"), Some(10.0));
         assert_eq!(period_seconds(" 2m "), Some(120.0));
         assert_eq!(period_seconds("1h"), Some(3600.0));
+        assert_eq!(period_seconds("1.5s"), Some(1.5));
+        assert_eq!(period_seconds("1m 30s"), Some(90.0));
+        assert_eq!(period_seconds("1m30s"), Some(90.0));
+        assert_eq!(period_seconds("2min"), Some(120.0));
+        assert_eq!(period_seconds("3secs"), Some(3.0));
         assert_eq!(period_seconds("10"), None);
         assert_eq!(period_seconds("10d"), None);
         assert_eq!(period_seconds("s"), None);
+        assert_eq!(period_seconds(""), None);
+    }
+
+    /// A judging run selects each case by its binary and name, so a same-named
+    /// case in another selected binary never runs; a case whose binary went
+    /// unrecorded by its name; and a batch is cut by those filters' bytes
+    /// (CLOUD-2911).
+    ///
+    /// Fails by: a selection by name alone, so a twin runs uncut and
+    /// uncharged, as often as four times; `binary_id(=)` written for an
+    /// unrecorded binary, which nextest refuses; or a batch sized by the old,
+    /// shorter filter, past one argument.
+    #[test]
+    fn a_run_selects_each_case_by_its_binary_and_name() {
+        let cases: BTreeSet<Case> = [
+            (String::from("m::a"), String::from("batten::it")),
+            (String::from("m::b"), String::new()),
+        ]
+        .into();
+        assert_eq!(
+            pair_filterset(&cases),
+            "(binary_id(=batten::it) & test(=m::a)) | test(=m::b)"
+        );
+        assert_eq!(pair_filterset(&BTreeSet::new()), "none()");
+        let mutant = listed("BinaryOperator", "!=", (2, 7), (2, 9));
+        let args = nextest_args(&mutant, &cases);
+        let filter = args.windows(2).find(|pair| pair[0] == "-E").unwrap()[1].clone();
+        assert_eq!(filter, pair_filterset(&cases));
     }
 
     /// Each case a judging run selects is cut at its own limit, by binary and
-    /// name, with its own grace, ahead of the overrides the profile already
-    /// has in either form; a profile whose `slow-timeout` cuts sooner keeps
-    /// its cut; and a run with no limits writes no override (CLOUD-2911).
+    /// name, with its own grace; the consumer's own overrides, the judging
+    /// profile's and then the default profile's, in either form, come first;
+    /// a profile-level `slow-timeout` that cuts sooner still cuts; and a run
+    /// with no limits writes no override (CLOUD-2911).
     ///
-    /// Fails by: a cut by name alone, which also cuts a same-named case in a
-    /// co-selected binary; a cut placed behind an override nextest would match
-    /// first; the profile's overrides dropped, inline ones above all; a cut
-    /// looser than the consumer's own; or the grace left at nextest's ten
-    /// seconds.
+    /// Fails by: a cut placed ahead of a consumer's own per-test
+    /// `slow-timeout`, shadowing a looser one (review of `c8ccefd87`, major
+    /// 4); the default profile's overrides outranked; an override form
+    /// dropped; a cut looser than the profile's; or the grace left at
+    /// nextest's ten seconds.
     #[test]
-    fn each_case_is_cut_at_its_own_limit_ahead_of_the_profiles_overrides() {
+    fn each_case_is_cut_behind_the_consumers_own_overrides() {
         let config = |toml: &str, limits: &[(&Case, f64)]| {
             let work = crate::scratch::scratch("schema-judge-config-limits");
             std::fs::create_dir_all(work.join(".config")).unwrap();
@@ -18686,78 +18732,66 @@ pub fn repo() -> u8 {{ scratch() }}
             rows
         };
         let (a, b) = (case("m::a"), (String::from("m::a"), String::from("other")));
-        let cut =
+        let ours =
             |millis: &str| format!("{{period=\"{millis}\",terminate-after=1,grace-period=\"1s\"}}");
-        let tables = "[[profile.mutants.overrides]]\nfilter = \"test(=held)\"\nretries = 1\n";
+        let row = |filter: &str, cut: &str| (filter.to_owned(), cut.to_owned());
+        let consumer = "[profile.mutants]\nslow-timeout = { period = \"5s\", terminate-after = 2 }\n\
+                        [[profile.mutants.overrides]]\nfilter = \"test(=m::a)\"\n\
+                        slow-timeout = { period = \"60s\", terminate-after = 2 }\n\
+                        [[profile.default.overrides]]\nfilter = \"test(=held)\"\nretries = 1\n";
         assert_eq!(
-            config(tables, &[(&a, 20.0), (&b, 50.5)]),
+            config(consumer, &[(&a, 50.0), (&b, 4.0)]),
             [
-                (
-                    String::from("binary_id(=batten::it) & test(=m::a)"),
-                    cut("20000ms")
-                ),
-                (
-                    String::from("binary_id(=other) & test(=m::a)"),
-                    cut("50500ms")
-                ),
-                (String::from("test(=held)"), String::new()),
+                row("test(=m::a)", "{period=\"60s\",terminate-after=2}"),
+                row("test(=held)", ""),
+                row("(binary_id(=batten::it) & test(=m::a))", &ours("10000ms")),
+                row("(binary_id(=other) & test(=m::a))", &ours("4000ms")),
             ]
         );
         let inline = "[profile.mutants]\noverrides = [{ filter = \"test(=held)\", retries = 1 }]\n";
         assert_eq!(
             config(inline, &[(&a, 20.0)]),
             [
-                (
-                    String::from("binary_id(=batten::it) & test(=m::a)"),
-                    cut("20000ms")
-                ),
-                (String::from("test(=held)"), String::new()),
-            ]
-        );
-        let tight = "[profile.mutants]\nslow-timeout = { period = \"5s\", terminate-after = 2 }\n";
-        assert_eq!(
-            config(tight, &[(&a, 50.0), (&b, 4.0)]),
-            [
-                (
-                    String::from("binary_id(=batten::it) & test(=m::a)"),
-                    cut("10000ms")
-                ),
-                (
-                    String::from("binary_id(=other) & test(=m::a)"),
-                    cut("4000ms")
-                ),
+                row("test(=held)", ""),
+                row("(binary_id(=batten::it) & test(=m::a))", &ours("20000ms")),
             ]
         );
         let inherited =
             "[profile.default]\nslow-timeout = { period = \"3s\", terminate-after = 3 }\n";
         assert_eq!(
             config(inherited, &[(&a, 50.0)]),
-            [(
-                String::from("binary_id(=batten::it) & test(=m::a)"),
-                cut("9000ms")
+            [row(
+                "(binary_id(=batten::it) & test(=m::a))",
+                &ours("9000ms")
             )]
         );
         let unbounded = "[profile.mutants]\nslow-timeout = \"5s\"\n";
         assert_eq!(
             config(unbounded, &[(&a, 50.0)]),
-            [(
-                String::from("binary_id(=batten::it) & test(=m::a)"),
-                cut("50000ms")
+            [row(
+                "(binary_id(=batten::it) & test(=m::a))",
+                &ours("50000ms")
             )]
         );
+        let unrecorded = (String::from("m::u"), String::new());
         assert_eq!(
-            config(tables, &[]),
-            [(String::from("test(=held)"), String::new())]
+            config("", &[(&unrecorded, 20.0)]),
+            [row("test(=m::u)", &ours("20000ms"))]
         );
+        let tables = "[[profile.mutants.overrides]]\nfilter = \"test(=held)\"\nretries = 1\n";
+        assert_eq!(config(tables, &[]), [row("test(=held)", "")]);
     }
 
-    /// A judging run's config cuts each of its cases at the limit its measured
-    /// seconds give, and the control run's cuts none (CLOUD-2911).
+    /// Every mutant's run cuts its cases and the control's never: the wiring
+    /// `judge_run` takes from `BATTEN_MUTANT`, and the config each gets
+    /// (CLOUD-2911).
     ///
-    /// Fails by: a judging run handed no limits, so a hung case holds the run
-    /// to its bound; or the control run cut, filing a slow baseline red.
+    /// Fails by: a mutant's run handed no cuts, so a hung case holds it to its
+    /// bound; or the control cut, filing a slow baseline case red.
     #[test]
     fn a_judging_run_is_cut_and_the_control_is_not() {
+        assert!(cuts("7"));
+        assert!(!cuts(NULL_MUTANT));
         let work = crate::scratch::scratch("schema-run-config");
         std::fs::create_dir_all(work.join(".config")).unwrap();
         std::fs::write(work.join(".config").join("nextest.toml"), "").unwrap();
@@ -18784,20 +18818,21 @@ pub fn repo() -> u8 {{ scratch() }}
             reuse: None,
         };
         let cases: BTreeSet<Case> = [case("m::slow")].into();
-        let judged = run_config(&judging, &work.join("store"), &cases, true).expect("config");
+        let store = work.join("store");
+        let judged = run_config(&judging, &store, &cases, cuts("7")).expect("config");
         assert!(
-            judged.contains("binary_id(=batten::it) & test(=m::slow)"),
+            judged.contains("(binary_id(=batten::it) & test(=m::slow))"),
             "{judged}"
         );
         assert!(judged.contains("50000ms"), "{judged}");
-        let control = run_config(&judging, &work.join("store"), &cases, false).expect("config");
+        let control = run_config(&judging, &store, &cases, cuts(NULL_MUTANT)).expect("config");
         assert!(!control.contains("slow-timeout"), "{control}");
     }
 
-    /// The rows a judging run's report holds for cases it did not select, a
-    /// same-named case in a co-selected binary, are dropped (CLOUD-2911).
+    /// The rows a judging run's report holds for cases it did not select are
+    /// dropped (CLOUD-2911).
     ///
-    /// Fails by: such a twin's failure read as this mutant's kill, or its cut
+    /// Fails by: such a row's failure read as this mutant's kill, or its cut
     /// as a hang among this run's cases.
     #[test]
     fn only_the_selected_cases_rows_are_read() {
@@ -18828,131 +18863,68 @@ pub fn repo() -> u8 {{ scratch() }}
         assert!(hung_in(None).is_empty());
     }
 
-    /// A killer sorted behind a case the mutant hangs still has its turn, its
-    /// second run funded: three unmeasured cases charge 66 s, a first run cut
-    /// at five seconds spends 36 s, and only the fund leaves room for the
-    /// second run's 66 s (CLOUD-2911, `engine.rs:281:53`).
+    /// A killer sorted behind ten fast hangs still has its turn: the first run
+    /// stops at the first cut, and the second runs the other nine hangs to
+    /// their cuts and the killer after them, all within its bound
+    /// (CLOUD-2911, review of `c8ccefd87`, major 2).
     ///
-    /// Fails by: a cut read as the mutant's verdict, so the case the cut left
-    /// unrun never runs; the second run stopped at a cut again; or the second
-    /// run unfunded and refused.
+    /// Fails by: a cut read as the mutant's verdict, so the cases a cut left
+    /// unrun never run; the second run stopped at a cut again; or a second
+    /// run bounded below its cases' cuts end to end, which ends before the
+    /// killer starts.
     #[test]
-    fn a_killer_sorted_last_is_still_caught() {
-        let (slow, mid, killer) = (case("a_slow"), case("m_mid"), case("z_killer"));
-        let batch: BTreeSet<Case> = [slow.clone(), mid.clone(), killer.clone()].into();
-        let rest: BTreeSet<Case> = [mid.clone(), killer.clone()].into();
+    fn a_killer_behind_many_fast_hangs_is_still_caught() {
+        let hangs: Vec<Case> = (0..10).map(|n| case(&format!("a{n}"))).collect();
+        let killer = case("z_killer");
+        let batch: BTreeSet<Case> = hangs.iter().cloned().chain([killer.clone()]).collect();
+        let rest: BTreeSet<Case> = hangs[1..].iter().cloned().chain([killer.clone()]).collect();
         let seconds = std::collections::BTreeMap::new();
-        let spent = cut_at(&slow, 0.0, &seconds);
+        // On one thread the nine hangs run to their cuts, then the killer.
+        let serial = STARTUP_SECONDS + 9.0 * (20.0 + CUT_GRACE_SECONDS) + 1.0;
+        assert!(
+            serial <= second_bound(&rest, &seconds),
+            "{serial} s within the bound"
+        );
         let (mut run, asked) = scripted(vec![
             (
                 (batch.clone(), true),
-                turn(
-                    Verdict::Timeout,
-                    None,
-                    &[],
-                    std::slice::from_ref(&slow),
-                    spent,
-                ),
+                turn(Verdict::Timeout, None, &[], &hangs[..1]),
             ),
             (
                 (rest.clone(), false),
-                turn(Verdict::Caught, Some(killer.clone()), &[mid], &[], 2.0),
+                turn(Verdict::Caught, Some(killer.clone()), &[], &hangs[1..]),
             ),
         ]);
-        let decided = decide(
-            std::slice::from_ref(&batch),
-            &seconds,
-            UNCAPPED,
-            &mut run,
-            |_| {},
-        );
+        let decided = decide(std::slice::from_ref(&batch), &mut run, |_| {});
         assert_eq!(decided.expect("runs"), (Verdict::Caught, Some(killer)));
         assert_eq!(*asked.borrow(), [(batch, true), (rest, false)]);
     }
 
-    /// With one test thread, the cases ahead of a hang run first and its cut
-    /// ends the first run: four 10 s cases, one finished and one cut, spend
-    /// 91 s, and the killer left unrun is still caught (CLOUD-2911).
+    /// On one thread, or under the runner's cap, a first run can spend its
+    /// whole bound before its cut lands, and the second run over what it left
+    /// still runs: no budget left over from the first ever refuses it
+    /// (CLOUD-2911, review of `c8ccefd87`, majors 3 and 5).
     ///
-    /// Fails by: the serial run's spend leaving the second run no room.
+    /// Fails by: a second run funded only from what the first run left, which
+    /// a serial or capped first run spends to nothing, refused; or the cases
+    /// a cut left never run.
     #[test]
     fn a_killer_behind_a_hang_on_one_thread_is_still_caught() {
         let (done, hang, left, killer) = (case("a"), case("b"), case("c"), case("z"));
         let batch: BTreeSet<Case> =
             [done.clone(), hang.clone(), left.clone(), killer.clone()].into();
         let rest: BTreeSet<Case> = [left.clone(), killer.clone()].into();
-        let seconds = batch.iter().map(|one| (one.clone(), 10.0)).collect();
-        let spent = cut_at(&hang, 10.0, &seconds);
-        assert!(near(spent, 91.0));
         let (mut run, asked) = scripted(vec![
             (
                 (batch.clone(), true),
-                turn(
-                    Verdict::Timeout,
-                    None,
-                    &[done],
-                    std::slice::from_ref(&hang),
-                    spent,
-                ),
+                turn(Verdict::Timeout, None, &[done], std::slice::from_ref(&hang)),
             ),
             (
                 (rest.clone(), false),
-                turn(Verdict::Caught, Some(killer.clone()), &[left], &[], 20.0),
+                turn(Verdict::Caught, Some(killer.clone()), &[left], &[]),
             ),
         ]);
-        let decided = decide(
-            std::slice::from_ref(&batch),
-            &seconds,
-            UNCAPPED,
-            &mut run,
-            |_| {},
-        );
-        assert_eq!(decided.expect("runs"), (Verdict::Caught, Some(killer)));
-        assert_eq!(asked.borrow().len(), 2);
-    }
-
-    /// Under a runner cap below a batch's bound, a first run that spends its
-    /// whole capped charge leaves exactly the second run's capped charge, and
-    /// the second run still runs (CLOUD-2911).
-    ///
-    /// Fails by: a run whose charge equals what is left refused, or a capped
-    /// charge or fund read uncapped.
-    #[test]
-    fn a_capped_second_run_that_exactly_fits_still_runs() {
-        let (slow, killer, other) = (case("a"), case("z"), case("m"));
-        let batch: BTreeSet<Case> = [slow.clone(), killer.clone(), other.clone()].into();
-        let rest: BTreeSet<Case> = [killer.clone(), other].into();
-        let seconds = std::collections::BTreeMap::new();
-        let cap = 40.0;
-        let charge = run_charge(&batch, &seconds, cap);
-        assert!(near(charge, run_charge(&rest, &seconds, cap)));
-        assert!(
-            near(charge, rerun_fund(cap)),
-            "the fund is exactly the second run"
-        );
-        let (mut run, asked) = scripted(vec![
-            (
-                (batch.clone(), true),
-                turn(
-                    Verdict::Timeout,
-                    None,
-                    &[],
-                    std::slice::from_ref(&slow),
-                    charge,
-                ),
-            ),
-            (
-                (rest.clone(), false),
-                turn(Verdict::Caught, Some(killer.clone()), &[], &[], 1.0),
-            ),
-        ]);
-        let decided = decide(
-            std::slice::from_ref(&batch),
-            &seconds,
-            cap,
-            &mut run,
-            |_| {},
-        );
+        let decided = decide(std::slice::from_ref(&batch), &mut run, |_| {});
         assert_eq!(decided.expect("runs"), (Verdict::Caught, Some(killer)));
         assert_eq!(asked.borrow().len(), 2);
     }
@@ -18960,30 +18932,23 @@ pub fn repo() -> u8 {{ scratch() }}
     /// A case the mutant hangs, cut with nothing killing, is a timeout, and no
     /// pass of its batch is journaled; a run the bound ended with no case cut
     /// keeps no pass and runs nothing again; a batch every case of which
-    /// passes hands on every pass; and a clean batch beside a cut one keeps
-    /// its own (CLOUD-2911).
+    /// passes, or that ends in a kill with no cut, hands on its passes; and a
+    /// clean batch beside a cut one keeps its own (CLOUD-2911).
     ///
     /// Fails by: a genuine hang filed a survivor; a sibling of a cut case
     /// journaled passed, so the next sweep runs the hang alone, sees it pass,
     /// and files a reusable survivor; a run that reported nothing run again;
-    /// or a clean batch's passes lost.
+    /// or a clean batch's passes lost, a killed one's above all.
     #[test]
     fn a_genuine_hang_stays_a_timeout_and_its_batch_keeps_no_pass() {
         let (hang, ok) = (case("hang"), case("ok"));
         let batch: BTreeSet<Case> = [hang.clone(), ok.clone()].into();
-        let seconds = std::collections::BTreeMap::new();
         let decided_with = |answer: Turn| {
             let (mut run, asked) = scripted(vec![((batch.clone(), true), answer)]);
             let mut passes = Vec::new();
-            let decided = decide(
-                std::slice::from_ref(&batch),
-                &seconds,
-                UNCAPPED,
-                &mut run,
-                |case| {
-                    passes.push(case.clone());
-                },
-            );
+            let decided = decide(std::slice::from_ref(&batch), &mut run, |case| {
+                passes.push(case.clone());
+            });
             let runs = asked.borrow().len();
             (decided.expect("runs"), passes, runs)
         };
@@ -18992,27 +18957,36 @@ pub fn repo() -> u8 {{ scratch() }}
             None,
             std::slice::from_ref(&ok),
             std::slice::from_ref(&hang),
-            10.0,
         );
         assert_eq!(decided_with(cut), ((Verdict::Timeout, None), Vec::new(), 1));
         for passed in [vec![ok.clone(), hang.clone()], Vec::new()] {
-            let uncut = turn(Verdict::Timeout, None, &passed, &[], 10.0);
+            let uncut = turn(Verdict::Timeout, None, &passed, &[]);
             assert_eq!(
                 decided_with(uncut),
                 ((Verdict::Timeout, None), Vec::new(), 1)
             );
         }
-        let clean = turn(Verdict::Missed, None, &[hang.clone(), ok.clone()], &[], 1.0);
+        let clean = turn(Verdict::Missed, None, &[hang.clone(), ok.clone()], &[]);
         assert_eq!(
             decided_with(clean),
             ((Verdict::Missed, None), vec![hang.clone(), ok.clone()], 1)
+        );
+        let killed = turn(
+            Verdict::Caught,
+            Some(hang.clone()),
+            std::slice::from_ref(&ok),
+            &[],
+        );
+        assert_eq!(
+            decided_with(killed),
+            ((Verdict::Caught, Some(hang.clone())), vec![ok.clone()], 1)
         );
         let (first, second): (BTreeSet<Case>, BTreeSet<Case>) =
             ([case("fine")].into(), batch.clone());
         let (mut run, _) = scripted(vec![
             (
                 (first.clone(), true),
-                turn(Verdict::Missed, None, &[case("fine")], &[], 1.0),
+                turn(Verdict::Missed, None, &[case("fine")], &[]),
             ),
             (
                 (second.clone(), true),
@@ -19021,16 +18995,32 @@ pub fn repo() -> u8 {{ scratch() }}
                     None,
                     std::slice::from_ref(&ok),
                     std::slice::from_ref(&hang),
-                    10.0,
                 ),
             ),
         ]);
         let mut passes = Vec::new();
-        let decided = decide(&[first, second], &seconds, UNCAPPED, &mut run, |case| {
+        let decided = decide(&[first, second], &mut run, |case| {
             passes.push(case.clone());
         });
         assert_eq!(decided.expect("runs"), (Verdict::Timeout, None));
         assert_eq!(passes, [case("fine")]);
+        let rest: BTreeSet<Case> = [ok.clone()].into();
+        let (mut run, _) = scripted(vec![
+            (
+                (batch.clone(), true),
+                turn(Verdict::Timeout, None, &[], std::slice::from_ref(&hang)),
+            ),
+            (
+                (rest, false),
+                turn(Verdict::Caught, Some(ok.clone()), &[], &[]),
+            ),
+        ]);
+        let mut passes = Vec::new();
+        let decided = decide(std::slice::from_ref(&batch), &mut run, |case| {
+            passes.push(case.clone());
+        });
+        assert_eq!(decided.expect("runs"), (Verdict::Caught, Some(ok)));
+        assert!(passes.is_empty(), "a kill after a cut keeps no pass");
     }
 
     /// A hang in one batch decides only when no later batch kills: the runs
@@ -19046,99 +19036,74 @@ pub fn repo() -> u8 {{ scratch() }}
             [ok.clone()].into(),
             [killer.clone()].into(),
         ];
-        let seconds = std::collections::BTreeMap::new();
         let script = |last: Turn| {
             scripted(vec![
                 (
                     (runs[0].clone(), true),
-                    turn(
-                        Verdict::Timeout,
-                        None,
-                        &[],
-                        std::slice::from_ref(&hang),
-                        36.0,
-                    ),
+                    turn(Verdict::Timeout, None, &[], std::slice::from_ref(&hang)),
                 ),
                 (
                     (runs[1].clone(), true),
-                    turn(Verdict::Missed, None, std::slice::from_ref(&ok), &[], 1.0),
+                    turn(Verdict::Missed, None, std::slice::from_ref(&ok), &[]),
                 ),
                 ((runs[2].clone(), true), last),
             ])
         };
-        let (mut run, _) = script(turn(Verdict::Caught, Some(killer.clone()), &[], &[], 1.0));
-        let decided = decide(&runs, &seconds, UNCAPPED, &mut run, |_| {});
+        let (mut run, _) = script(turn(Verdict::Caught, Some(killer.clone()), &[], &[]));
+        let decided = decide(&runs, &mut run, |_| {});
         assert_eq!(decided.expect("runs"), (Verdict::Caught, Some(killer)));
-        let (mut run, _) = script(turn(Verdict::Missed, None, &[], &[], 1.0));
+        let (mut run, _) = script(turn(Verdict::Missed, None, &[], &[]));
         assert_eq!(
-            decide(&runs, &seconds, UNCAPPED, &mut run, |_| {}).expect("runs"),
+            decide(&runs, &mut run, |_| {}).expect("runs"),
             (Verdict::Timeout, None)
         );
     }
 
-    /// A mutant every case of which hangs spends no more than its one budget:
-    /// tiny batches each get their two runs however far each run overran; and
-    /// batches of slow cases whose runs each spend their whole charge
-    /// (246 s, 196 s, 246 s, 196 s of 942 s) leave no room for the third
-    /// batch, so the mutant stops there a timeout (CLOUD-2911).
+    /// A mutant every case of which hangs is bounded per mutant by
+    /// construction: each batch runs at most twice, first over the batch and
+    /// then over the cases its first run left, so the runs' bounds sum to no
+    /// more than each batch's first bound and its second bound over the whole
+    /// batch (CLOUD-2911).
     ///
-    /// Fails by: a budget per batch, or none, so a mutant hanging every case
-    /// runs without end; an overrun charged past its charge; or a run's spend
-    /// added to the budget.
+    /// Fails by: a third run of a batch, or one per hung case, so a mutant
+    /// hanging every case runs without end; or a second run that never ends a
+    /// batch.
     #[test]
     fn a_mutant_hanging_every_case_is_bounded_per_mutant() {
-        let hanging = |batches: &[BTreeSet<Case>],
-                       seconds: &std::collections::BTreeMap<Case, f64>| {
-            let asked: Asked = std::rc::Rc::default();
-            let log = std::rc::Rc::clone(&asked);
-            let measured = seconds.clone();
-            // EVERY RUN CUTS ITS FIRST CASE, OR ALL WITHOUT FAIL-FAST, AND
-            // OVERRUNS ITS CHARGE TENFOLD.
-            let mut run = move |cases: &BTreeSet<Case>, fail_fast: bool| {
-                log.borrow_mut().push((cases.clone(), fail_fast));
-                let hung: Vec<Case> = if fail_fast {
-                    cases.iter().take(1).cloned().collect()
-                } else {
-                    cases.iter().cloned().collect()
-                };
-                let spent = run_charge(cases, &measured, UNCAPPED) * 10.0;
-                Ok(turn(Verdict::Timeout, None, &[], &hung, spent))
+        let batches: Vec<BTreeSet<Case>> = (0..3)
+            .map(|b| (0..4).map(|n| case(&format!("b{b}c{n}"))).collect())
+            .collect();
+        let seconds = std::collections::BTreeMap::new();
+        let asked: Asked = std::rc::Rc::default();
+        let log = std::rc::Rc::clone(&asked);
+        // EVERY RUN CUTS ITS FIRST CASE, OR ALL WITHOUT FAIL-FAST.
+        let mut run = move |cases: &BTreeSet<Case>, fail_fast: bool| {
+            log.borrow_mut().push((cases.clone(), fail_fast));
+            let hung: Vec<Case> = if fail_fast {
+                cases.iter().take(1).cloned().collect()
+            } else {
+                cases.iter().cloned().collect()
             };
-            let decided = decide(batches, seconds, UNCAPPED, &mut run, |_| {});
-            assert_eq!(decided.expect("runs"), (Verdict::Timeout, None));
-            let budget: f64 = batches
-                .iter()
-                .map(|batch| run_charge(batch, seconds, UNCAPPED) + rerun_fund(UNCAPPED))
-                .sum();
-            let charged: f64 = asked
-                .borrow()
-                .iter()
-                .map(|(cases, _)| run_charge(cases, seconds, UNCAPPED))
-                .sum();
-            assert!(
-                charged <= budget,
-                "{charged} s charged of a {budget} s budget"
-            );
-            let fast: Vec<bool> = asked.borrow().iter().map(|(_, fast)| *fast).collect();
-            fast
+            Ok(turn(Verdict::Timeout, None, &[], &hung))
         };
-        let tiny: Vec<BTreeSet<Case>> = (0..3)
-            .map(|b| (0..3).map(|n| case(&format!("b{b}c{n}"))).collect())
-            .collect();
-        let unmeasured = std::collections::BTreeMap::new();
-        assert_eq!(
-            hanging(&tiny, &unmeasured),
-            [true, false, true, false, true, false]
-        );
-        let slow: Vec<BTreeSet<Case>> = (0..3)
-            .map(|b| (0..4).map(|n| case(&format!("s{b}c{n}"))).collect())
-            .collect();
-        let measured = slow
+        let decided = decide(&batches, &mut run, |_| {});
+        assert_eq!(decided.expect("runs"), (Verdict::Timeout, None));
+        let fast: Vec<bool> = asked.borrow().iter().map(|(_, fast)| *fast).collect();
+        assert_eq!(fast, [true, false, true, false, true, false]);
+        let bound: f64 = batches
             .iter()
-            .flatten()
-            .map(|one| (one.clone(), 10.0))
-            .collect();
-        assert_eq!(hanging(&slow, &measured), [true, false, true, false]);
+            .map(|batch| first_bound(batch, &seconds) + second_bound(batch, &seconds))
+            .sum();
+        let ran: f64 = asked
+            .borrow()
+            .iter()
+            .map(|(cases, fast)| run_bound(cases, &seconds, *fast))
+            .sum();
+        assert!(ran <= bound, "{ran} s of runs within {bound} s");
+        // EACH SECOND RUN HOLDS ONLY WHAT ITS FIRST LEFT: three of four cases.
+        for (cases, fast) in asked.borrow().iter() {
+            assert_eq!(cases.len(), if *fast { 4 } else { 3 });
+        }
     }
 
     /// A judging run's fixture scratch and temp start empty, whatever the run
