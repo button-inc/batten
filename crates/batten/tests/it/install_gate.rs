@@ -1,7 +1,9 @@
-//! The install gate (CLOUD-2840), over the compiled binary: while the session's
-//! setup task runs, a call naming a program it may still be installing is held
-//! as could-not-look, pointing at the task; it runs once the task says `ok`; and
-//! a failed or dead task is refused naming what happened.
+//! The install gate (CLOUD-2840), over the compiled binary. Before the agent
+//! dispatches the session's install task, every call but a read and the
+//! dispatch is held, and the refusal names the dispatch. While the task runs, a
+//! call naming a program it may still be installing is held as could-not-look,
+//! pointing at the task; it runs once the task says `ok`; and a failed or dead
+//! task is refused naming what happened.
 //!
 //! The setup task is a record in the fixture's registry, written the way
 //! `batten task register` writes one. A RUNNING task is this test process itself,
@@ -36,7 +38,9 @@ fn bench(name: &str) -> PathBuf {
              gloss = \"a program this call runs may still be installing\"\n\
              class = \"held while the session's setup task installs\"\n\n\
              [[verdict.route]]\nid = \"task watch first\"\nkind = \"command\"\n\
-             target = \"batten task alive\"\n",
+             target = \"batten task alive\"\n\n\
+             [[hook.handler]]\nid = \"setup\"\non = \"session-start\"\nrun = [\"true\"]\n\
+             timeout_ms = 5000\n",
         )
         .file("policy/install-gate.rego", &module)
         .git()
@@ -69,11 +73,52 @@ fn setup(dir: &Path, pid: &str, phase: &str) {
 
 /// A `PreToolUse` Bash call running `command` in `dir`: what the door said.
 fn call(dir: &Path, command: &str) -> String {
+    call_with(dir, command, &[])
+}
+
+/// [`call`], backgrounded as the dispatch instruction asks, with `envs` set.
+fn call_with(dir: &Path, command: &str, envs: &[(&str, &std::ffi::OsStr)]) -> String {
+    tool_call(
+        dir,
+        "Bash",
+        &serde_json::json!({"command": command, "run_in_background": true}),
+        envs,
+    )
+}
+
+/// A `PreToolUse` call to `tool` with `input`: what the door said.
+fn tool_call(
+    dir: &Path,
+    tool: &str,
+    input: &serde_json::Value,
+    envs: &[(&str, &std::ffi::OsStr)],
+) -> String {
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
         "cwd": dir,
-        "tool_name": "Bash",
-        "tool_input": {"command": command},
+        "tool_name": tool,
+        "tool_input": input,
+    })
+    .to_string();
+    let mut command = common::batten();
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let answer = common::stdin_run(
+        &mut command,
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    format!("{}{}", common::stdout(&answer), common::stderr(&answer))
+}
+
+/// The session's `SessionStart` through the door: what it said.
+fn session_start(dir: &Path) -> String {
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "cwd": dir,
     })
     .to_string();
     let answer = common::stdin_run(
@@ -83,6 +128,25 @@ fn call(dir: &Path, command: &str) -> String {
         &payload,
     );
     format!("{}{}", common::stdout(&answer), common::stderr(&answer))
+}
+
+/// A `cargo` under a fixture environment manager's install root, first on
+/// `PATH`: the shim an install may not have filled yet. Answers the
+/// environment a call needs to see it so.
+fn shimmed(dir: &Path) -> Vec<(&'static str, std::ffi::OsString)> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let data = dir.join("mise-data");
+    let bin = data.join("installs/rust/1.0/bin");
+    std::fs::create_dir_all(&bin).expect("the install root");
+    let cargo = bin.join("cargo");
+    std::fs::write(&cargo, "#!/bin/sh\n").expect("the shim");
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755))
+        .expect("the shim is runnable");
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&common::ambient_path())),
+    )
+    .expect("a joinable PATH");
+    vec![("MISE_DATA_DIR", data.into_os_string()), ("PATH", path)]
 }
 
 /// The policy input `adjudicate --show-input` stored for this Bash call at
@@ -132,6 +196,77 @@ fn a_pending_program_is_held_while_the_setup_task_runs() {
         said.contains("session-setup running") && said.contains("batten task alive"),
         "the hold names the task, says it is still running, and points at it: {said}"
     );
+    let env = shimmed(&dir);
+    let env: Vec<(&str, &std::ffi::OsStr)> = env
+        .iter()
+        .map(|(key, value)| (*key, value.as_os_str()))
+        .collect();
+    let said = call_with(&dir, "cargo build", &env);
+    assert!(
+        held(&said) && said.contains("session-setup running"),
+        "a program under the install root is held: {said}"
+    );
+    let said = call_with(&dir, "mise run x", &env);
+    assert!(
+        held(&said) && said.contains("mise"),
+        "the manager itself is held, wherever it resolves: {said}"
+    );
+    assert!(
+        !held(&call_with(&dir, "git status", &env)),
+        "git is admitted"
+    );
+}
+
+/// Fails by: a call made before the install task is dispatched admitted —
+/// mutant `dispatch-gate-open` — so the session runs on a container nothing
+/// set up; a read refused, so the session cannot even look; the dispatch
+/// itself refused, so the hold can never end; or a refusal that does not say
+/// what to dispatch.
+#[test]
+fn a_call_before_the_dispatch_is_held_and_a_read_is_not() {
+    let dir = bench("install-gate-undispatched");
+    let said = call(&dir, "cargo build");
+    assert!(!held(&said), "no session prepared setup yet: {said}");
+    let started = session_start(&dir);
+    assert!(
+        started.contains("batten startup --session"),
+        "the door names the dispatch: {started}"
+    );
+    let said = call(&dir, "cargo build");
+    assert!(
+        held(&said)
+            && said.contains("session-setup undispatched")
+            && said.contains("batten startup --session"),
+        "a mutating call is held with the dispatch as its remedy: {said}"
+    );
+    let target = dir.join("x").display().to_string();
+    let said = tool_call(
+        &dir,
+        "Write",
+        &serde_json::json!({"file_path": target, "content": "x"}),
+        &[],
+    );
+    assert!(held(&said), "a write tool is held: {said}");
+    let source = dir.join("README").display().to_string();
+    let said = tool_call(&dir, "Read", &serde_json::json!({"file_path": source}), &[]);
+    assert!(!held(&said), "a read is admitted: {said}");
+    assert!(!held(&call(&dir, "git status")), "git status is a read");
+    assert!(!held(&call(&dir, "cat README")), "a reader is a read");
+    assert!(
+        held(&call(&dir, "cat README > copy")),
+        "a reader that writes a file is not"
+    );
+    assert!(
+        !held(&call(&dir, "batten startup --session")),
+        "the dispatch is admitted"
+    );
+    let foreground = tool_call(
+        &dir,
+        "Bash",
+        &serde_json::json!({"command": "batten startup --session", "run_in_background": false}),
+        &[],
+    );
+    assert!(held(&foreground), "but never in the foreground: {foreground}");
 }
 
 /// Only a call about to run can be held, so only one is asked about the

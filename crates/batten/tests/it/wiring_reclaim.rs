@@ -372,6 +372,18 @@ fn session_start_in(bench: &Bench, environment: &str) -> std::process::Output {
     child.streamed_wait().expect("wait for batten")
 }
 
+/// The engine invocation the agent's dispatch runs under, in the same home and
+/// environment kind as [`session_start_in`]'s door (CLOUD-2840): the task, not
+/// the door, runs the repair, so the fact must reach the task.
+#[cfg(unix)]
+fn dispatched_in(bench: &Bench, environment: &str) -> common::Batten {
+    let mut command = common::batten();
+    command
+        .at_home(&bench.home)
+        .env("BATTEN_ENVIRONMENT", environment);
+    command
+}
+
 /// A consumer that DECLARED the repair as a `[[startup]]` row gets it at session
 /// start, without invoking the verb (CLOUD-1324).
 ///
@@ -407,11 +419,11 @@ fn a_declared_repair_takes_the_siblings_at_session_start() {
     );
     let outcome = session_start(&bench);
     assert!(outcome.status.success(), "{}", stderr(&outcome));
-    // THE REPAIR IS THE SETUP TASK'S (CLOUD-2840): the door starts it and
-    // returns, so the surface is read once the task has finished.
-    // `session_start` is unix-only, as is the detached setup task it waits on.
+    // THE REPAIR IS THE SETUP TASK'S (CLOUD-2840): the agent dispatches it, in
+    // the session's environment, and the surface is read once it has finished.
+    // `session_start` is unix-only, as is the setup task it dispatches.
     #[cfg(unix)]
-    let _ = crate::session_start::settle(&bench.repo);
+    let _ = crate::session_start::settle_with(&bench.repo, dispatched_in(&bench, "disposable"));
 
     let surface = bench.surface_text();
     // The same load-bearing positive the verb's own case carries: a `retain` at
@@ -453,9 +465,9 @@ fn a_declared_repair_takes_nothing_on_an_undeclared_machine() {
     assert!(outcome.status.success(), "{}", stderr(&outcome));
     // Read only once the setup task finished, or this mirror passes before the
     // repair could have run at all.
-    // `session_start` is unix-only, as is the detached setup task it waits on.
+    // `session_start` is unix-only, as is the setup task it dispatches.
     #[cfg(unix)]
-    let _ = crate::session_start::settle(&bench.repo);
+    let _ = crate::session_start::settle_with(&bench.repo, dispatched_in(&bench, ""));
 
     let surface = bench.surface_text();
     assert!(

@@ -234,9 +234,10 @@ impl Bench {
         }
     }
 
-    /// What the session hears once the setup task has finished: the first call
-    /// after it, which carries the recorded outcome (CLOUD-2840). The door's
-    /// own reply no longer can, because it returns before any row runs.
+    /// What the session hears once the setup task the agent dispatches has
+    /// finished: the first call after it, which carries the recorded outcome
+    /// (CLOUD-2840). The door's own reply never can: it runs no row, and starts
+    /// nothing that would.
     fn settled(&self) -> String {
         let _ = crate::session_start::settle(&self.repo);
         crate::session_start::pre_tool(&self.repo)

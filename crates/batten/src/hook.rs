@@ -2057,16 +2057,28 @@ pub(crate) fn wiring_command(harness: Harness) -> String {
     parts.join(" ")
 }
 
-/// The bound, in seconds, Claude Code's `SessionStart` entry carries
-/// (CLOUD-2840).
+/// The first released engine whose `SessionStart` does in-process work only,
+/// or `None` while no release does (CLOUD-2840).
 ///
-/// The hook only starts the setup task and returns, inside its 100 ms ceiling.
-/// With no `timeout` the host waits up to its 600 s default for a hook that has
-/// gone wrong, and that wait is the first response's. Claude Code only: it
-/// reads `timeout` in seconds, and the other nested hosts do not share that
-/// unit, so a number planted there would mean something else.
+/// UNTIL ONE DOES, NO ENTRY CARRIES A BOUND. A consumer's hook runs the engine
+/// its `batten.toml` pins, and v0.0.221 runs the locked toolchain install
+/// INLINE at `SessionStart`: a 10 s bound killed that install on a cold
+/// container, the tools were missing, and the next `mise` call auto-installed
+/// unlocked into api.github.com's 403 (CLOUD-2881). The pin bump that ships
+/// this engine (CLOUD-2840's step 14) sets this, and the bound returns with it.
+pub(crate) const BOUNDED_SINCE: Option<&str> = None;
+
+/// The bound, in seconds, Claude Code's `SessionStart` entry carries
+/// (CLOUD-2840), or `None` where the entry must carry none.
+///
+/// The hook spools a payload and returns, inside its 100 ms ceiling, so a bound
+/// is safe ONLY once the engine every registration runs is one that does no
+/// more: [`BOUNDED_SINCE`]. Claude Code only: it reads `timeout` in seconds,
+/// and the other nested hosts do not share that unit, so a number planted
+/// there would mean something else.
 pub(crate) fn entry_timeout(harness: Harness, spelling: &str) -> Option<u64> {
-    (harness == Harness::ClaudeCode && spelling == "SessionStart").then_some(10)
+    (BOUNDED_SINCE.is_some() && harness == Harness::ClaudeCode && spelling == "SessionStart")
+        .then_some(10)
 }
 
 /// Render one harness's registrations as the JSON its host reads.

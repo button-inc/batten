@@ -2207,20 +2207,6 @@ pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
     let _ = spawn_detached(program, args, env, None);
 }
 
-/// [`detached`] in `dir`, answering the child's pid (CLOUD-2840).
-///
-/// The pid is what a caller REGISTERS: a task the hook starts must be in the
-/// registry before the hook returns, so the next call can read whether it
-/// still runs. Still no handle kept — the pid is a name, not a wait.
-pub(crate) fn detached_in(
-    program: &Path,
-    args: &[String],
-    env: &[(&str, &str)],
-    dir: &Path,
-) -> Option<u32> {
-    spawn_detached(program, args, env, Some(dir))
-}
-
 #[expect(
     clippy::disallowed_types,
     reason = "stays: the detached child IS the point (CLOUD-1480). `piped` above is the waiting path and is exactly what this must not be; both spawns are the placed adapter's"
@@ -2932,6 +2918,22 @@ impl Streamed for std::process::Command {
         }
         self.spawn()?.streamed_wait()
     }
+}
+
+/// [`detached`] in `dir`, answering the child's pid (CLOUD-2840).
+///
+/// TEST-ONLY since the hook stopped spawning the session's setup (CLOUD-2840,
+/// the owner's ruling): the agent dispatches that task, and no production path
+/// starts a child whose pid it must register. The registry's zombie and pid
+/// cases still need a child they can name.
+#[cfg(test)]
+pub(crate) fn detached_in(
+    program: &Path,
+    args: &[String],
+    env: &[(&str, &str)],
+    dir: &Path,
+) -> Option<u32> {
+    spawn_detached(program, args, env, Some(dir))
 }
 
 #[cfg(test)]

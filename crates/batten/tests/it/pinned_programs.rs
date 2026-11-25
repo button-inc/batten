@@ -496,18 +496,22 @@ fn a_session_start_records_the_programs_the_pin_composes() {
         serde_json::to_string(&dir.display().to_string()).expect("a path is encodable")
     );
     let mut command = common::batten();
-    command.env("PATH", path);
+    command.env("PATH", &path);
     let _ = common::stdin_run(
         &mut command,
         &dir,
         &["adjudicate", "--harness", "claude-code"],
         &payload,
     );
-    // THE PIN RECORD IS THE SETUP TASK'S (CLOUD-2840): the door starts it, and
-    // the task inherits the door's `PATH`, so the stub still answers.
-    // `session_start` is unix-only, as is the detached setup task it waits on.
+    // THE PIN RECORD IS THE SETUP TASK'S (CLOUD-2840): the agent dispatches it
+    // under the session's `PATH`, so the stub still answers.
+    // `session_start` is unix-only, as is the setup task it dispatches.
     #[cfg(unix)]
-    let _ = crate::session_start::settle(&dir);
+    {
+        let mut task = common::batten();
+        task.env("PATH", &path);
+        let _ = crate::session_start::settle_with(&dir, task);
+    }
 
     match pinned::cached(&dir) {
         Look::Is(programs) => assert_eq!(
