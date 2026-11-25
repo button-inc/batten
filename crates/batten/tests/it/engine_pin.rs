@@ -385,8 +385,11 @@ fn a_config_without_a_pin_gains_one_after_a_clean_load() {
     );
 }
 
+/// Fails by: the hook writing the pin itself, which runs the adoption inline at
+/// `SessionStart` (CLOUD-2840 moved it into the setup task), or the dispatched
+/// task not writing it.
 #[test]
-fn the_session_start_writes_the_pin() {
+fn the_setup_task_writes_the_pin_and_the_hook_does_not() {
     if !cfg!(target_os = "linux") {
         return;
     }
@@ -401,7 +404,7 @@ fn the_session_start_writes_the_pin() {
         "source": "startup",
     })
     .to_string();
-    let _ = following(
+    let hook = following(
         &dir,
         &["adjudicate", "--harness", "claude-code"],
         &served_env(&served),
@@ -410,6 +413,13 @@ fn the_session_start_writes_the_pin() {
     // THE SETUP TASK WRITES IT, NEVER THE HOOK (CLOUD-2840): `SessionStart`
     // does in-process work only and advises the dispatch, and the task the
     // agent dispatches adopts the engine key.
+    let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
+    assert_eq!(
+        pinned(&config),
+        None,
+        "the hook writes no pin: {config} {}",
+        text(&hook)
+    );
     let output = following(&dir, &["startup", "--session"], &served_env(&served), None);
     let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
     assert_eq!(
