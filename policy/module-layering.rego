@@ -792,6 +792,10 @@ declared_modules := {
 	# functions over `std::fs` and a path. Every module that mutates a file calls
 	# it, so it must sit below all of them, which a leaf does by construction.
 	"durable",
+	# `kill` arrived with CLOUD-2722 and reaches NOTHING: the thread-local
+	# kill-at-a-step hook a crash-only case arms. `durable` calls it before each
+	# replace, so it sits beside that leaf, below every module that writes.
+	"kill",
 	# `forge_query` arrived with CLOUD-843's forge-read foundation. It is a
 	# PRODUCER in `record`'s class, and it sits directly above the three modules
 	# it composes: it walks `forge`'s window over `rest`'s transport and writes
