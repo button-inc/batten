@@ -110,6 +110,7 @@ fn request<'a>(
         need_bytes: need,
         deadline: None,
         wait: false,
+        stop: None,
         live_since: None,
         copies: None,
         fixtures_since: None,
@@ -1178,6 +1179,219 @@ fn a_step_run_build_is_watched() {
     );
     assert!(!present(&profile, "aged", "dddddddddddddddd"), "{said}");
     assert!(said.contains("step run probe: disk-collected "), "{said}");
+}
+
+/// How long a case lets a watched engine run before it is killed: six
+/// [`batten::collect::HELD_TREE_PATIENCE`]s, far past every bound the engine
+/// keeps, so a kill is a hang and never a slow pass.
+const HANG_SECONDS: u64 = 60;
+
+/// `command` under coreutils `timeout`, so a run that never exits fails its
+/// case with 124 instead of hanging the suite (CLOUD-2789).
+#[expect(
+    clippy::disallowed_types,
+    reason = "test-only: the engine's own spawn door cannot put `timeout` in front of the binary it runs"
+)]
+fn bounded(command: &std::process::Command) -> std::process::Command {
+    let mut bounded = std::process::Command::new("timeout");
+    bounded
+        .args(["-k", "5", &HANG_SECONDS.to_string()])
+        .arg(command.get_program())
+        .args(command.get_args());
+    for (key, value) in command.get_envs() {
+        match value {
+            Some(value) => bounded.env(key, value),
+            None => bounded.env_remove(key),
+        };
+    }
+    if let Some(dir) = command.get_current_dir() {
+        bounded.current_dir(dir);
+    }
+    bounded
+}
+
+/// [`hooked`]'s checkout with a linked worktree beside it, holding an aged
+/// unit of its own; the worktree.
+fn linked(name: &str) -> PathBuf {
+    let repo = hooked(name, true);
+    common::git_in(&repo, &["worktree", "add", "-q", "../linked"]);
+    let linked = repo
+        .parent()
+        .expect("the fixture has a parent")
+        .join("linked");
+    unit(
+        &linked.join("target/debug"),
+        "aged",
+        "eeeeeeeeeeeeeeee",
+        7200,
+        4096,
+    );
+    linked
+}
+
+/// `batten step run probe -- sleep 2` in `dir` below the floor, bounded.
+fn step_under_pressure(dir: &Path) -> std::process::Output {
+    use batten::capture::Streamed as _;
+    let mut step = common::batten();
+    step.current_dir(dir)
+        .env("TMPDIR", own_temp(dir))
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .args(["step", "run", "probe", "--", "sleep", "2"]);
+    bounded(&step)
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs")
+}
+
+/// FROM A LINKED WORKTREE, EACH TREE ONCE (CLOUD-2789): git lists the worktree
+/// a command runs in among the linked ones, so its `target/` came twice, and
+/// a pass locked it and then waited on itself.
+///
+/// Fails by: the trees not deduplicated by identity.
+#[test]
+fn trees_from_a_linked_worktree_name_each_directory_once() {
+    let linked = linked("trees-once");
+    let trees = batten::collect::trees(&linked, &rules("target"));
+    let mut seen: Vec<PathBuf> = trees
+        .iter()
+        .map(|tree| std::fs::canonicalize(tree).expect("a listed tree exists"))
+        .collect();
+    let listed = seen.len();
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), listed, "a directory listed twice: {trees:?}");
+    assert!(
+        seen.contains(&std::fs::canonicalize(linked.join("target")).unwrap()),
+        "the worktree's own tree is ranked: {trees:?}"
+    );
+}
+
+/// A WATCHED STEP IN A LINKED WORKTREE EXITS (CLOUD-2789). Shard 6 printed a
+/// step's result and hung until it was killed: the watcher's pass locked the
+/// worktree's tree under one name and blocked on its second.
+///
+/// Fails by: a pass that holds one lock while it blocks on another, or a
+/// watcher whose join waits on a pass without bound.
+#[test]
+fn a_step_run_in_a_linked_worktree_exits_under_pressure() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let linked = linked("step-run-linked");
+    let ran = step_under_pressure(&linked);
+    let said = common::stderr(&ran);
+    assert_ne!(
+        ran.status.code(),
+        Some(124),
+        "the step never exited: {said}"
+    );
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    assert!(said.contains("step run probe: disk-watch-armed "), "{said}");
+}
+
+/// A TREE ANOTHER PROCESS HOLDS DOES NOT HOLD THE STEP (CLOUD-2789): the
+/// watcher's pass waits on it only while the step runs, then stops and says
+/// so, and the step exits.
+///
+/// Fails by: a blocking wait on the tree's lock, a pass that ignores its stop
+/// flag, or a stopped pass that reports nothing.
+#[test]
+fn a_held_tree_does_not_hold_a_watched_step_open() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = hooked("step-run-held", true);
+    let holder = std::fs::File::open(dir.join("target")).expect("open the tree");
+    holder
+        .lock()
+        .expect("hold the tree as another collector would");
+    let ran = step_under_pressure(&dir);
+    drop(holder);
+    let said = common::stderr(&ran);
+    assert_ne!(
+        ran.status.code(),
+        Some(124),
+        "the step never exited: {said}"
+    );
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    assert!(
+        said.contains("step run probe: disk-stopped ")
+            || said.contains("step run probe: disk-abandoned "),
+        "the pass says why it ended: {said}"
+    );
+    assert!(
+        present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
+        "nothing under a held tree is collected: {said}"
+    );
+}
+
+/// `target prune` under the same two conditions (CLOUD-2789): from a linked
+/// worktree it collects and exits, and a tree another process holds is waited
+/// on for its patience, then reported held.
+///
+/// Fails by: a duplicated tree, or a blocking wait on a held one.
+#[test]
+fn a_forced_collection_exits_from_a_worktree_and_past_a_held_tree() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    use batten::capture::Streamed as _;
+    let forced = |dir: &Path| {
+        let mut prune = common::batten();
+        prune
+            .current_dir(dir)
+            .env("TARGET_PRUNE_FREE_MB", "50")
+            .args(["target", "prune", "-y"]);
+        bounded(&prune)
+            .stdin(std::process::Stdio::null())
+            .streamed_output_keeping(batten::capture::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
+            .expect("the binary runs")
+    };
+    let linked = linked("prune-linked");
+    let ran = forced(&linked);
+    let said = format!("{}{}", common::stdout(&ran), common::stderr(&ran));
+    assert_ne!(
+        ran.status.code(),
+        Some(124),
+        "the prune never exited: {said}"
+    );
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    assert!(
+        !present(&linked.join("target/debug"), "aged", "eeeeeeeeeeeeeeee"),
+        "the worktree's unit was collected: {said}"
+    );
+
+    let dir = hooked("prune-held", true);
+    let holder = std::fs::File::open(dir.join("target")).expect("open the tree");
+    holder
+        .lock()
+        .expect("hold the tree as another collector would");
+    let ran = forced(&dir);
+    drop(holder);
+    let said = format!("{}{}", common::stdout(&ran), common::stderr(&ran));
+    assert_ne!(
+        ran.status.code(),
+        Some(124),
+        "the prune never exited: {said}"
+    );
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    assert!(
+        said.contains("disk-held "),
+        "the held tree is named: {said}"
+    );
+    assert!(present(
+        &dir.join("target/debug"),
+        "aged",
+        "dddddddddddddddd"
+    ));
 }
 
 /// `BATTEN_DISK_TRACE=1` writes each sample the watcher takes to stderr, the

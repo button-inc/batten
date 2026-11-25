@@ -53,6 +53,9 @@ pub struct Held {
     pub locks: Vec<PathBuf>,
     /// The pass reached a unit a live build has used and stopped there.
     pub live: bool,
+    /// The pass ended on its stop flag before it met its need (CLOUD-2789):
+    /// the run its watcher watched returned, so it reports what it did by then.
+    pub stopped: bool,
 }
 
 /// What one [`collect`] pass did.
@@ -72,15 +75,18 @@ impl Collected {
     /// lock that declined and `disk-live` where a live build stopped the pass.
     #[must_use]
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![
+        let freed_mb = self.freed_bytes / (1024 * 1024);
+        // A STOPPED PASS SAYS SO rather than vanishing (CLOUD-2789): it reports
+        // what it freed before its watcher's run returned, and no reading after.
+        let first = if self.held.stopped {
+            format!("disk-stopped {freed_mb} {}", self.units)
+        } else {
             format!(
-                "disk-collected {} {} {}",
-                self.freed_bytes / (1024 * 1024),
-                self.units,
-                self.free_after_mb
-            ),
-            format!("disk-unlink-ms {}", self.wall_ms),
-        ];
+                "disk-collected {freed_mb} {} {}",
+                self.units, self.free_after_mb
+            )
+        };
+        let mut lines = vec![first, format!("disk-unlink-ms {}", self.wall_ms)];
         lines.extend(
             self.held
                 .locks
@@ -121,7 +127,7 @@ pub fn trace_line(kind: &str, fields: &[u64]) -> String {
 
 /// A file that must never be collected: the installed engine, the running
 /// executable, and every name hardlinked to them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Kept {
     /// A file, by device and inode, which names it across its hardlinks.
     File {
@@ -869,7 +875,7 @@ fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
             units.push(Unit {
                 tree: tree.to_path_buf(),
                 profile: whole.clone(),
-                last_use: newest_write_within(whole),
+                last_use: newest_write_within(whole, None),
                 fingerprint: whole.clone(),
                 artifacts: Vec::new(),
                 whole: true,
@@ -937,7 +943,7 @@ fn within_mutant_copy(repo: &Path) -> bool {
 /// A LIVE SWEEP'S COPY IS ITS ROOT: cargo-mutants is a [`BUILD_PROGRAMS`] entry,
 /// so a running sweep's start is at or before [`live_since`] and every write to
 /// its copy is after it.
-fn mutant_copies(dir: &Path) -> Vec<Unit> {
+fn mutant_copies(dir: &Path, halt: crate::prune::Halt<'_>) -> Vec<Unit> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -951,10 +957,11 @@ fn mutant_copies(dir: &Path) -> Vec<Unit> {
                 .to_str()
                 .is_some_and(|name| name.starts_with(prefix) && name.ends_with(suffix))
         })
+        .take_while(|_| !crate::prune::halted(halt))
         .map(|entry| Unit {
             tree: dir.to_path_buf(),
             profile: entry.path(),
-            last_use: newest_write_within(&entry.path()),
+            last_use: newest_write_within(&entry.path(), halt),
             fingerprint: entry.path(),
             artifacts: Vec::new(),
             whole: true,
@@ -964,12 +971,19 @@ fn mutant_copies(dir: &Path) -> Vec<Unit> {
 }
 
 /// The newest mtime anywhere under `path`, never following a link.
-fn newest_write_within(path: &Path) -> SystemTime {
+///
+/// A WALK STOPPED BY `halt` DATES THE COPY NOW (CLOUD-2789): what it has not
+/// read may be newer, so a copy it could not finish reading is never older
+/// than it is.
+fn newest_write_within(path: &Path, halt: crate::prune::Halt<'_>) -> SystemTime {
     let mut newest = std::fs::symlink_metadata(path)
         .and_then(|meta| meta.modified())
         .unwrap_or(SystemTime::UNIX_EPOCH);
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if crate::prune::halted(halt) {
+            return SystemTime::now();
+        }
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -1143,40 +1157,99 @@ fn is_kept(path: &Path, kept: &[Kept]) -> bool {
             && identity(path).is_some_and(|id| kept.contains(&id)))
 }
 
+/// How long a waiting pass that no flag stops — `target prune --collect` —
+/// retries a held tree before it reports it held (CLOUD-2789): the stream's
+/// drain grace, the crate's bound on waiting for another process to let go.
+pub const HELD_TREE_PATIENCE: std::time::Duration = batten_stream::DRAIN_GRACE;
+
+/// How often a waiting pass retries a held tree's lock.
+const HELD_TREE_RETRY: std::time::Duration = std::time::Duration::from_millis(5);
+
 /// Take the collector's lock on `tree`: an exclusive `flock` on the directory
 /// itself, an existing inode, so taking it writes nothing at 0 bytes free.
-/// `None` when another collector holds it.
+/// `None` when another collector holds it, or, for a waiting pass, still holds
+/// it when `give_up` says so.
 ///
 /// A LOCK THE PLATFORM REFUSES IS NOT ANOTHER COLLECTOR'S. Only `WouldBlock`
 /// says a collector holds the tree; an error from the lock call itself (a
 /// filesystem that cannot lock a directory) collects without exclusion, which
 /// [`remove_counted`] tolerates, rather than reading every tree as held and
 /// freeing nothing.
-fn lock_tree(tree: &Path, wait: bool) -> Option<std::fs::File> {
+///
+/// NEVER A BLOCKING `flock` (CLOUD-2789). A blocked call has no way back: the
+/// watcher's pass waited on a second handle to a tree it already held, and on
+/// any other holder, and the step it watched printed its result and never
+/// exited. The wait is `try_lock` retried on the crate's one clock, and it ends
+/// when `give_up` does.
+fn lock_tree(tree: &Path, wait: bool, give_up: &dyn Fn() -> bool) -> Option<std::fs::File> {
     let dir = crate::durable::open_handle(tree).ok()?;
-    let taken = if wait {
-        dir.lock().map_err(std::fs::TryLockError::Error)
-    } else {
-        dir.try_lock()
-    };
-    match taken {
-        Ok(()) | Err(std::fs::TryLockError::Error(_)) => Some(dir),
-        Err(std::fs::TryLockError::WouldBlock) => None,
+    loop {
+        match dir.try_lock() {
+            Ok(()) | Err(std::fs::TryLockError::Error(_)) => return Some(dir),
+            Err(std::fs::TryLockError::WouldBlock) if wait && !give_up() => {
+                crate::pr_watch::clock::hold(HELD_TREE_RETRY, None);
+            }
+            Err(std::fs::TryLockError::WouldBlock) => return None,
+        }
     }
+}
+
+/// Lock each of `trees` ([`lock_tree`]) in ONE GLOBAL ORDER, their identities
+/// sorted, and hand them back in `trees`' own order with the ones that stayed
+/// held.
+///
+/// NO HOLD-AND-WAIT CYCLE (CLOUD-2789): two collectors whose tree lists differ
+/// in order — one run from the main checkout, one from a linked worktree —
+/// each holding the tree the other waits for would wait for each other, and
+/// the order every collector takes is the same one.
+fn lock_trees(
+    trees: &[PathBuf],
+    wait: bool,
+    give_up: &dyn Fn() -> bool,
+) -> (Vec<(PathBuf, std::fs::File)>, Vec<PathBuf>) {
+    let mut order: Vec<usize> = (0..trees.len()).collect();
+    order.sort_by_cached_key(|&at| (identity(&trees[at]), trees[at].clone()));
+    let mut taken: Vec<Option<std::fs::File>> = (0..trees.len()).map(|_| None).collect();
+    for at in order {
+        taken[at] = lock_tree(&trees[at], wait, give_up);
+    }
+    let mut locks = Vec::new();
+    let mut held = Vec::new();
+    for (tree, lock) in trees.iter().zip(taken) {
+        match lock {
+            Some(lock) => locks.push((tree.clone(), lock)),
+            // Another collector holds this tree; its own pass reports it.
+            None => held.push(tree.clone()),
+        }
+    }
+    (locks, held)
 }
 
 /// Set every fingerprint file's atime to its mtime under `tree`, so the next
 /// read by cargo records a fresh atime despite `relatime`.
 pub fn rearm(tree: &Path) {
-    for fingerprints in crate::prune::directories_named(tree, ".fingerprint") {
+    rearm_until(tree, None);
+}
+
+/// [`rearm`], ending at the next unit once `halt` is set (CLOUD-2789).
+pub(crate) fn rearm_until(tree: &Path, halt: crate::prune::Halt<'_>) {
+    for fingerprints in crate::prune::directories_named(tree, ".fingerprint", halt) {
         let Ok(units) = std::fs::read_dir(&fingerprints) else {
             continue;
         };
         for unit in units.filter_map(Result::ok) {
+            if crate::prune::halted(halt) {
+                return;
+            }
             let Ok(files) = std::fs::read_dir(unit.path()) else {
                 continue;
             };
-            for entry in files.filter_map(Result::ok) {
+            // A REGULAR FILE ONLY: opening a FIFO a fixture left blocks until a
+            // writer comes, which no writer ever does (CLOUD-2789).
+            for entry in files
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            {
                 let _ = rearm_file(&entry.path());
             }
         }
@@ -1201,8 +1274,13 @@ pub struct Request<'a> {
     pub need_bytes: u64,
     /// Stop at the first unit boundary past this instant.
     pub deadline: Option<Instant>,
-    /// Block on another collector's lock rather than skipping the tree.
+    /// Retry another collector's lock rather than skipping the tree: while
+    /// `stop` is clear, or for [`HELD_TREE_PATIENCE`] where there is none.
     pub wait: bool,
+    /// The flag that ends the pass at its next unit (CLOUD-2789): the disk
+    /// watcher's, set when the run it watches returns. A pass no one stops
+    /// passes `None`.
+    pub stop: crate::prune::Halt<'a>,
     /// Every unit used at or after this instant is live: [`live_since`].
     pub live_since: Option<SystemTime>,
     /// The directory cargo-mutants stages its copies in — the temp directory, its
@@ -1284,17 +1362,27 @@ pub fn collect(request: &Request<'_>) -> Pass {
 ///
 /// ONE WALK PER TREE: the fingerprint directories both name the nested build
 /// trees whose scratch is taken whole and are the units themselves.
-fn candidates(locks: &[(PathBuf, std::fs::File)], copies: Option<&Path>) -> Vec<Unit> {
+///
+/// A STOPPED PASS RANKS WHAT IT HAS WALKED (CLOUD-2789): each walk ends at its
+/// next directory once `halt` is set, and the loop below it at its next unit.
+fn candidates(
+    locks: &[(PathBuf, std::fs::File)],
+    copies: Option<&Path>,
+    halt: crate::prune::Halt<'_>,
+) -> Vec<Unit> {
     let mut units = Vec::new();
     let mut scratch = Vec::new();
     for (tree, _) in locks {
-        let fingerprints = crate::prune::directories_named(tree, ".fingerprint");
+        if crate::prune::halted(halt) {
+            break;
+        }
+        let fingerprints = crate::prune::directories_named(tree, ".fingerprint", halt);
         let wholes = wholes_in(tree, &fingerprints);
         scratch.extend(whole_units(tree, &wholes));
         units.extend(units_in(tree, fingerprints, &wholes));
     }
     if let Some(dir) = copies {
-        scratch.extend(mutant_copies(dir));
+        scratch.extend(mutant_copies(dir, halt));
     }
     ranked(units, scratch)
 }
@@ -1302,16 +1390,21 @@ fn candidates(locks: &[(PathBuf, std::fs::File)], copies: Option<&Path>) -> Vec<
 /// [`collect`]'s pass and its `disk-pass` trace line, composed whether or not
 /// the trace is asked for, so a case reads the counts the trace reports.
 fn pass_of(request: &Request<'_>) -> (Pass, String) {
-    let past = |deadline: Option<Instant>| deadline.is_some_and(|at| Instant::now() >= at);
+    let halt = request.stop;
+    // THE PASS ENDS ON ITS DEADLINE OR ITS STOP FLAG, whichever comes first
+    // (CLOUD-2789): the watcher's pass has no deadline, and past(None) alone
+    // let it outlive the run it watched.
+    let past = |deadline: Option<Instant>| {
+        crate::prune::halted(halt) || deadline.is_some_and(|at| Instant::now() >= at)
+    };
+    let opened = Instant::now();
+    // A WAIT NO FLAG ENDS IS BOUNDED BY PATIENCE: `target prune --collect`
+    // waited on a held tree for as long as its holder held it.
+    let give_up =
+        || past(request.deadline) || (halt.is_none() && opened.elapsed() >= HELD_TREE_PATIENCE);
     let mut held = Held::default();
-    let mut locks: Vec<(PathBuf, std::fs::File)> = Vec::new();
-    for tree in request.trees {
-        match lock_tree(tree, request.wait) {
-            Some(lock) => locks.push((tree.clone(), lock)),
-            // Another collector holds this tree; its own pass reports it.
-            None => held.locks.push(tree.clone()),
-        }
-    }
+    let (locks, waited) = lock_trees(request.trees, request.wait, &give_up);
+    held.locks = waited;
     let mut freed: u64 = 0;
     let mut removed = 0usize;
     // A KILLED STEP'S TRACE FIRST (CLOUD-2783): it is no build output, so no
@@ -1322,14 +1415,14 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
         freed += bytes;
     }
     for (tree, _) in &locks {
-        if freed >= request.need_bytes {
+        if freed >= request.need_bytes || crate::prune::halted(halt) {
             break;
         }
-        let (units, bytes) = crate::prune::reclaim_superseded(tree, request.keep_generations);
+        let (units, bytes) = crate::prune::reclaim_superseded(tree, request.keep_generations, halt);
         removed += units;
         freed += bytes;
     }
-    let live = candidates(&locks, request.copies);
+    let live = candidates(&locks, request.copies, halt);
     // WHY A PASS REMOVED WHAT IT DID, counted (CLOUD-2197's trace): measured on
     // #1132, a pass over hundreds of units older than the working set removed
     // none, and nothing said which guard stopped it.
@@ -1398,7 +1491,7 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
         }
     }
     for (tree, _) in &locks {
-        rearm(tree);
+        rearm_until(tree, halt);
     }
     let traced = trace_line(
         "disk-pass",
@@ -1413,6 +1506,7 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
         ],
     );
     held.live = why.live;
+    held.stopped = crate::prune::halted(halt) && freed < request.need_bytes;
     let done = Pass {
         freed_bytes: freed,
         removed,
@@ -1459,11 +1553,35 @@ pub fn collect_if_pressed(
 /// #1276 (`mutate::schema::mirror_target`).
 #[must_use]
 pub fn trees(repo: &Path, prune: &crate::config_model::Prune) -> Vec<PathBuf> {
-    std::iter::once(repo.to_path_buf())
-        .chain(crate::git::linked_worktree_dirs(repo))
-        .map(|dir| dir.join(&prune.root))
-        .chain(crate::mutate::schema::mirror_target(repo).ok())
-        .filter(|tree| tree.is_dir())
+    distinct(
+        worktree_trees(repo, &prune.root)
+            .into_iter()
+            .chain(crate::mutate::schema::mirror_target(repo).ok())
+            .filter(|tree| tree.is_dir()),
+    )
+}
+
+/// The checkout's `root` and each linked worktree's, each directory ONCE.
+///
+/// FROM INSIDE A LINKED WORKTREE git lists that worktree among the linked ones,
+/// so its tree came twice (CLOUD-2789): a pass locked the first name and then
+/// waited, forever, on a second handle to the same directory.
+#[must_use]
+pub fn worktree_trees(repo: &Path, root: &str) -> Vec<PathBuf> {
+    distinct(
+        std::iter::once(repo.to_path_buf())
+            .chain(crate::git::linked_worktree_dirs(repo))
+            .map(|dir| dir.join(root))
+            .filter(|tree| tree.is_dir()),
+    )
+}
+
+/// `dirs` with every directory after its first name dropped: one identity
+/// ([`identity`]) is one directory, however it is spelled. A directory whose
+/// identity cannot be read is compared by its path.
+fn distinct(dirs: impl Iterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    dirs.filter(|dir| seen.insert(identity(dir).ok_or_else(|| dir.clone())))
         .collect()
 }
 
@@ -1487,7 +1605,7 @@ pub fn collect_toward_max(
         kept,
         free,
         free_mb,
-        (deadline, wait),
+        (deadline, wait, None),
         &std::env::temp_dir(),
     )
 }
@@ -1502,7 +1620,7 @@ pub(crate) fn collect_toward_max_in(
     kept: &[Kept],
     free: u64,
     free_mb: &mut dyn FnMut() -> anyhow::Result<u64>,
-    (deadline, wait): (Option<Instant>, bool),
+    (deadline, wait, stop): (Option<Instant>, bool, crate::prune::Halt<'_>),
     temp: &Path,
 ) -> Option<Collected> {
     if within_mutant_copy(repo) {
@@ -1544,6 +1662,7 @@ pub(crate) fn collect_toward_max_in(
         need_bytes,
         deadline,
         wait,
+        stop,
         live_since: Some(no_later_than(live_since(&trees), scanned)),
         fixtures_since: Some(no_later_than(fixtures_since(&trees, &kept), scanned)),
     });
@@ -2044,6 +2163,7 @@ mod tests {
             need_bytes: need,
             deadline: None,
             wait: false,
+            stop: None,
             live_since: None,
             copies: None,
             fixtures_since: None,
@@ -2075,6 +2195,7 @@ mod tests {
             held: super::Held {
                 locks: vec![PathBuf::from("/t/debug/.cargo-lock")],
                 live: true,
+                stopped: false,
             },
         };
         assert_eq!(
@@ -2309,6 +2430,7 @@ mod tests {
             super::Held {
                 locks: vec![held.join(".cargo-lock")],
                 live: false,
+                stopped: false,
             }
         );
         if kept_count == 1 {
@@ -2468,7 +2590,7 @@ mod tests {
             Duration::from_millis(50)
         ));
         assert!(!super::await_collectors(&[], Duration::from_millis(50)));
-        let held = super::lock_tree(&tree, false).expect("first holder");
+        let held = super::lock_tree(&tree, false, &|| true).expect("first holder");
         let (taken, released) = std::sync::mpsc::channel::<()>();
         let holder = std::thread::spawn(move || {
             let _ = released.recv();
@@ -2584,7 +2706,7 @@ mod tests {
             &[],
             0,
             &mut || Ok(5),
-            (None, false),
+            (None, false, None),
             &temp,
         )
         .expect("a declared band collects");

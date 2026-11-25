@@ -41,8 +41,8 @@
 
 use crate::prune::PruneExt as _;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 /// How long the hook may collect before admitting (CLOUD-2197): a sixth of the
 /// harness's 60 s default command-hook timeout, so a killed hook is never the
@@ -58,8 +58,17 @@ use crate::low_water::reset as reset_low_water;
 /// Where a watcher hands each collection's lines as it ends (CLOUD-2782).
 pub type RecordSink<'a> = Box<dyn Fn(&[String]) + Send + Sync + 'a>;
 
-/// A free-space reader both the watcher and its collection thread take turns on.
-type Reader<'a> = Arc<Mutex<Box<dyn FnMut() -> anyhow::Result<u64> + Send + 'a>>>;
+/// How long a watcher waits, once the run it watched has returned, for the
+/// collection still running to answer (CLOUD-2789): the stream's drain grace,
+/// the crate's bound on waiting for work the run no longer needs.
+///
+/// A pass that outlives it is ABANDONED, never joined: the watcher records
+/// `disk-abandoned <grace_ms>` and returns, and the pass ends at its next unit
+/// on the stop flag it was handed, releasing its tree locks as it does. A pass
+/// wedged in one system call holds them until the process exits, which is the
+/// one release left; joining it was a step that printed its result and never
+/// exited.
+pub const PASS_GRACE: std::time::Duration = batten_stream::DRAIN_GRACE;
 
 /// What a watcher needs: the repository whose trees it collects, the committed
 /// `[prune]` rules, how free space is read, and what is never collected.
@@ -105,37 +114,95 @@ type Sink<'a> = Arc<dyn Fn(&[String]) + Send + Sync + 'a>;
 
 /// What one wake does, shared by the timer loop and the event loop: read the
 /// volume, and start a collection when the reading is below the floor.
-struct Sampler<'scope, 'env> {
-    scope: &'scope std::thread::Scope<'scope, 'env>,
+struct Sampler<'a> {
     repo: PathBuf,
-    config: &'scope crate::config_model::Prune,
+    config: &'a crate::config_model::Prune,
     kept: Vec<crate::collect::Kept>,
     copies: PathBuf,
     min: u64,
-    reader: Reader<'scope>,
-    lines: Arc<Mutex<Vec<String>>>,
-    sink: Option<Sink<'scope>>,
-    collecting: Arc<AtomicBool>,
+    reader: std::cell::RefCell<Box<dyn FnMut() -> anyhow::Result<u64> + Send + 'a>>,
+    lines: std::cell::RefCell<Vec<String>>,
+    sink: Option<Sink<'a>>,
     /// The reading the last pass ended on while still below the floor, or
     /// `u64::MAX`: what the next pass must see the volume fall below.
-    settled: Arc<std::sync::atomic::AtomicU64>,
-    pending: std::cell::RefCell<Option<std::thread::ScopedJoinHandle<'scope, ()>>>,
+    settled: std::cell::Cell<u64>,
+    /// Where the running collection's answer arrives, if one is running.
+    pending:
+        std::cell::RefCell<Option<std::sync::mpsc::Receiver<Option<crate::collect::Collected>>>>,
+    /// The flag every collection ends on, set once the watcher stops.
+    halt: Arc<AtomicBool>,
     trace: bool,
     started: std::time::Instant,
     last_wake: std::cell::Cell<Option<std::time::Instant>>,
 }
 
-impl Sampler<'_, '_> {
+impl Sampler<'_> {
     /// Keep `new` in the watcher's record and hand it to the sink at once.
     fn emit(&self, new: &[String]) {
         if new.is_empty() {
             return;
         }
-        if let Ok(mut lines) = self.lines.lock() {
-            lines.extend_from_slice(new);
-        }
+        self.lines.borrow_mut().extend_from_slice(new);
         if let Some(sink) = &self.sink {
             sink(new);
+        }
+    }
+
+    /// One reading of the volume, or `None` where it could not be read.
+    fn read(&self) -> Option<u64> {
+        (self.reader.borrow_mut())().ok()
+    }
+
+    /// Take a finished collection's answer, if one has arrived.
+    fn reap(&self) {
+        let answer = match self
+            .pending
+            .borrow()
+            .as_ref()
+            .map(std::sync::mpsc::Receiver::try_recv)
+        {
+            None | Some(Err(std::sync::mpsc::TryRecvError::Empty)) => return,
+            Some(Ok(done)) => done,
+            // A pass that panicked answers nothing; the next sample judges.
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => None,
+        };
+        self.pending.borrow_mut().take();
+        self.finish(answer);
+    }
+
+    /// Record a collection's lines — AS IT HAPPENS (CLOUD-2782), the sink
+    /// getting them when it ends, not when the landing does — and where it
+    /// left the volume.
+    fn finish(&self, done: Option<crate::collect::Collected>) {
+        let after = self.read();
+        if let Some(mut done) = done {
+            if let Some(after) = after {
+                done.free_after_mb = after;
+            }
+            self.emit(&done.lines());
+        }
+        // WHERE THIS PASS LEFT THE VOLUME: what the next pass waits to see the
+        // volume fall under. A reading at or above the floor needs no case of
+        // its own: the next sample there resets it, and any sample below the
+        // floor is below it too.
+        if let Some(after) = after {
+            self.settled.set(after);
+        }
+    }
+
+    /// Stop every collection, and wait for the running one's answer for at
+    /// most [`PASS_GRACE`]; a pass that outlives it is recorded abandoned.
+    fn settle(&self) {
+        self.halt.store(true, Ordering::Release);
+        let Some(answered) = self.pending.borrow_mut().take() else {
+            return;
+        };
+        match answered.recv_timeout(PASS_GRACE) {
+            Ok(done) => self.finish(done),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                self.emit(&[format!("disk-abandoned {}", PASS_GRACE.as_millis())])
+            }
         }
     }
 
@@ -151,8 +218,8 @@ impl Sampler<'_, '_> {
                 trace(&crate::collect::trace_line("disk-wake", &[us]));
             }
         }
-        let reading = self.reader.lock().ok().and_then(|mut read| read().ok());
-        let Some(free) = reading else {
+        self.reap();
+        let Some(free) = self.read() else {
             return;
         };
         observe(free);
@@ -162,7 +229,7 @@ impl Sampler<'_, '_> {
         }
         // A VOLUME BACK ABOVE THE FLOOR forgets the last pass's ending.
         if free >= self.min {
-            self.settled.store(u64::MAX, Ordering::Release);
+            self.settled.set(u64::MAX);
             return;
         }
         // A PASS THAT COULD NOT LIFT THE VOLUME IS NOT REPEATED UNTIL SOMETHING
@@ -171,69 +238,51 @@ impl Sampler<'_, '_> {
         // a thousand tree walks a second on a volume that stays full. The event
         // that makes another pass worth it is a reading below the one the last
         // pass ended on: new bytes, which are what a pass can collect.
-        if free >= self.settled.load(Ordering::Acquire) {
+        if free >= self.settled.get() {
             return;
         }
         // ONE COLLECTION AT A TIME: a sample that finds one running does
         // nothing, and the next sample judges what it left.
-        if self.collecting.swap(true, Ordering::AcqRel) {
+        if self.pending.borrow().is_some() || self.halt.load(Ordering::Acquire) {
             return;
         }
-        if let Some(done) = self.pending.borrow_mut().take() {
-            let _ = done.join();
+        let (repo, config, kept) = (self.repo.clone(), self.config.clone(), self.kept.clone());
+        let (copies, halt) = (self.copies.clone(), Arc::clone(&self.halt));
+        let (answer, answered) = std::sync::mpsc::channel();
+        // AN OWNED THREAD, NEVER A SCOPED ONE (CLOUD-2789): a scope joins every
+        // thread it spawned at its end, so a pass that would not end held the
+        // watched run open after it printed its result. This one is waited on
+        // for [`PASS_GRACE`] at most ([`Sampler::settle`]), and it reads nothing
+        // the watcher's thread owns: the volume is read there, when it answers.
+        let spawned = std::thread::Builder::new()
+            .name("disk-collect".to_owned())
+            .spawn(move || {
+                let mut unread = || {
+                    Err(anyhow::anyhow!(
+                        "the volume is read on the watcher's thread"
+                    ))
+                };
+                // THE WATCHER WAITS ITS TURN ON A HELD TREE. It is the one
+                // collector with no deadline, on a thread of its own; skipping a
+                // held tree did not work. Measured on #1276: 292 passes during
+                // one `land` lap each logged `disk-held ./target` and freed
+                // nothing while 6.9GB of stale scratch sat in that tree, and the
+                // lap died at `No space left on device`. It waits on its stop
+                // flag, never on the lock itself (CLOUD-2789).
+                let done = crate::collect::collect_toward_max_in(
+                    &repo,
+                    &config,
+                    &kept,
+                    free,
+                    &mut unread,
+                    (None, true, Some(&halt)),
+                    &copies,
+                );
+                let _ = answer.send(done);
+            });
+        if spawned.is_ok() {
+            *self.pending.borrow_mut() = Some(answered);
         }
-        let (repo, kept, config) = (self.repo.clone(), self.kept.clone(), self.config);
-        let copies = self.copies.clone();
-        let (reader, lines, collecting, sink, settled) = (
-            Arc::clone(&self.reader),
-            Arc::clone(&self.lines),
-            Arc::clone(&self.collecting),
-            self.sink.clone(),
-            Arc::clone(&self.settled),
-        );
-        *self.pending.borrow_mut() = Some(self.scope.spawn(move || {
-            let mut read = || {
-                reader
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("the free-space reader was poisoned"))
-                    .and_then(|mut read| read())
-            };
-            // THE WATCHER WAITS ITS TURN ON A HELD TREE. It is the one
-            // collector with no deadline, on a thread of its own, so blocking
-            // costs nothing; skipping a held tree did. Measured on #1276: 292
-            // passes during one `land` lap each logged `disk-held ./target` and
-            // freed nothing while 6.9GB of stale scratch sat in that tree, and
-            // the lap died at `No space left on device`.
-            if let Some(done) = crate::collect::collect_toward_max_in(
-                &repo,
-                config,
-                &kept,
-                free,
-                &mut read,
-                (None, true),
-                &copies,
-            ) {
-                let new = done.lines();
-                if let Ok(mut lines) = lines.lock() {
-                    lines.extend_from_slice(&new);
-                }
-                // AS IT HAPPENS (CLOUD-2782): the record gets this collection's
-                // lines when it ends, not when the landing does.
-                if let Some(sink) = sink
-                    && !new.is_empty()
-                {
-                    sink(&new);
-                }
-            }
-            // WHERE THIS PASS LEFT THE VOLUME, read once more: what the next
-            // pass waits to see the volume fall under. A reading at or above
-            // the floor needs no case of its own: the next sample there resets
-            // it, and any sample below the floor is below it too.
-            if let Ok(after) = read() {
-                settled.store(after, Ordering::Release);
-            }
-            collecting.store(false, Ordering::Release);
-        }));
     }
 }
 
@@ -288,35 +337,31 @@ fn watch_on<'scope>(
         // THE LAP OPENS RE-ARMED: every fingerprint's atime is set to its mtime,
         // so the next read by cargo records a fresh one and the LRU order is
         // this run's use rather than the first read of the day.
+        //
+        // A STOP ENDS IT TOO (CLOUD-2789): a run shorter than one walk of a
+        // large tree is not held open for the rest of the walk.
         for tree in crate::collect::trees(&repo, config) {
-            crate::collect::rearm(&tree);
+            crate::collect::rearm_until(&tree, Some(stop));
         }
         let sampler = Sampler {
-            scope,
             repo,
             config,
             kept,
             copies,
             min,
-            reader: Arc::new(Mutex::new(free_mb)),
-            lines: Arc::new(Mutex::new(Vec::new())),
+            reader: std::cell::RefCell::new(free_mb),
+            lines: std::cell::RefCell::new(Vec::new()),
             sink: record.map(Sink::from),
-            collecting: Arc::new(AtomicBool::new(false)),
-            settled: Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
+            settled: std::cell::Cell::new(u64::MAX),
             pending: std::cell::RefCell::new(None),
+            halt: Arc::new(AtomicBool::new(false)),
             trace: crate::collect::tracing(),
             started: std::time::Instant::now(),
             last_wake: std::cell::Cell::new(None),
         };
         run(&sampler, stop, driver);
-        if let Some(done) = sampler.pending.borrow_mut().take() {
-            let _ = done.join();
-        }
-        sampler
-            .lines
-            .lock()
-            .map(|lines| lines.clone())
-            .unwrap_or_default()
+        sampler.settle();
+        sampler.lines.take()
     })
 }
 
@@ -336,7 +381,7 @@ fn blocking_floor(stop: &AtomicBool, mut tick: impl FnMut()) {
 ///
 /// A runtime that cannot be built leaves the timer's floor to the crate's one
 /// synchronous pause, so the watcher is never silently off.
-fn run(sampler: &Sampler<'_, '_>, stop: &AtomicBool, driver: Option<compio::driver::DriverType>) {
+fn run(sampler: &Sampler<'_>, stop: &AtomicBool, driver: Option<compio::driver::DriverType>) {
     let mut builder = compio::runtime::RuntimeBuilder::new();
     if let Some(driver) = driver {
         let mut proactor = compio::driver::ProactorBuilder::new();
@@ -357,7 +402,7 @@ fn run(sampler: &Sampler<'_, '_>, stop: &AtomicBool, driver: Option<compio::driv
         }
     };
     runtime.block_on(async {
-        let events = wake_source(sampler);
+        let events = wake_source(sampler, stop);
         let timer = async {
             // THE CRATE'S ONE CLOCK (`crate::pr_watch::clock`), whose single
             // inventory row names this floor's bound: the band.
@@ -371,6 +416,20 @@ fn run(sampler: &Sampler<'_, '_>, stop: &AtomicBool, driver: Option<compio::driv
         };
         until_first(timer, events).await;
     });
+}
+
+/// Hand the runtime one turn: `Pending` once, waking itself, then done.
+async fn yield_once() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if yielded {
+            return std::task::Poll::Ready(());
+        }
+        yielded = true;
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    })
+    .await;
 }
 
 /// Run `first` to completion while `second` runs beside it; `second` is
@@ -396,8 +455,16 @@ async fn until_first(first: impl Future<Output = ()>, second: impl Future<Output
 /// write to the repository's volume, awaited on the runtime's driver. It
 /// records the armed line either way, naming the errno when the mark was
 /// refused.
+///
+/// THE EVENT LOOP YIELDS AFTER EVERY BATCH AND ENDS ON `stop` (CLOUD-2789): a
+/// volume written faster than one batch is read kept the descriptor ready, so
+/// a loop that never returned `Pending` starved the timer, the one wait that
+/// sees the stop.
 #[cfg(target_os = "linux")]
-fn wake_source<'a>(sampler: &'a Sampler<'_, '_>) -> impl Future<Output = ()> + 'a {
+fn wake_source<'a>(
+    sampler: &'a Sampler<'_>,
+    stop: &'a AtomicBool,
+) -> impl Future<Output = ()> + 'a {
     let armed = fanotify::arm(&sampler.repo).and_then(|group| {
         let group = Arc::new(group);
         compio::runtime::fd::PollFd::new(Arc::clone(&group))
@@ -421,17 +488,24 @@ fn wake_source<'a>(sampler: &'a Sampler<'_, '_>) -> impl Future<Output = ()> + '
             {
                 return;
             }
-            // COALESCED: every queued event is drained, then one sample judges
-            // them all. An overflow is a wake like any other.
+            // COALESCED: one batch of queued events is read, then one sample
+            // judges them all. An overflow is a wake like any other.
             fanotify::drain(&group);
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
             sampler.sample();
+            yield_once().await;
         }
     }
 }
 
 /// No filesystem mark off Linux: the timer is the whole wake.
 #[cfg(not(target_os = "linux"))]
-fn wake_source<'a>(sampler: &'a Sampler<'_, '_>) -> impl Future<Output = ()> + 'a {
+fn wake_source<'a>(
+    sampler: &'a Sampler<'_>,
+    _stop: &'a AtomicBool,
+) -> impl Future<Output = ()> + 'a {
     // The same armed line as Linux's refused branch, from the same `arm`.
     let errno = fanotify::arm(&sampler.repo).err().unwrap_or_default();
     sampler.emit(&[format!(
@@ -479,16 +553,11 @@ mod fanotify {
         Ok(group)
     }
 
-    /// Read every queued event until the group would block; how many were read.
+    /// Read ONE batch of queued events; how many it held. One per wake
+    /// (CLOUD-2789): draining until the group would block never ended on a
+    /// volume written faster than it was read.
     pub(super) fn drain(group: &Fanotify) -> usize {
-        let mut read = 0;
-        while let Ok(events) = group.read_events() {
-            if events.is_empty() {
-                break;
-            }
-            read += events.len();
-        }
-        read
+        group.read_events().map_or(0, |events| events.len())
     }
 }
 
@@ -736,7 +805,7 @@ mod tests {
         let held = crate::durable::open_handle(&tree).expect("open the tree");
         held.lock()
             .expect("hold the tree as another collector would");
-        let held = Arc::new(Mutex::new(Some(held)));
+        let held = Arc::new(std::sync::Mutex::new(Some(held)));
         let config = crate::config_model::Prune {
             root: "target".to_owned(),
             keep: 2,
@@ -859,7 +928,7 @@ mod tests {
         for driver in drivers() {
             let (repo, stale, config) = stale_repo(&format!("disk-watch-burst-{driver:?}"));
             let (recorded, arrived) = std::sync::mpsc::channel::<Vec<String>>();
-            let recorded = Mutex::new(recorded);
+            let recorded = std::sync::Mutex::new(recorded);
             let watch = series(
                 repo,
                 &config,
@@ -970,7 +1039,7 @@ mod tests {
         use std::io::Write as _;
         const SAMPLES: usize = 1000;
         let (repo, _stale, config) = stale_repo("disk-watch-period");
-        let stamps = Arc::new(Mutex::new(Vec::with_capacity(SAMPLES)));
+        let stamps = Arc::new(std::sync::Mutex::new(Vec::with_capacity(SAMPLES)));
         let samples = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (full, filled) = std::sync::mpsc::channel();
         let (taken, counted) = (Arc::clone(&stamps), Arc::clone(&samples));
