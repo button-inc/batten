@@ -113,6 +113,7 @@ fn request<'a>(
         live_since: None,
         copies: None,
         fixtures_since: None,
+        traces: None,
     }
 }
 
