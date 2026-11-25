@@ -1272,26 +1272,31 @@ fn a_wildcard_entry_is_neither_a_total_bypass_nor_a_fence_for_the_bare_host() {
     // list semantics is the whole reason `fetch::is_direct` exists; making either
     // one match the other would put a second authority in front of one of the two
     // subjects.
+    //
+    // WITH NO LIVE CREDENTIAL THE PROXY IS THE ROUTE (#1276, admitted by the
+    // owner): unfenced is a failure only while a credential would go direct.
     let dir = scratch("egress-wildcard-host", true, Some("version = 1\n"));
     let output = egress(&dir, Some("http://proxy:8080"), Some("*.api.github.com"));
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
 }
 
 #[test]
 fn a_proxy_with_no_github_fence_is_unfenced() {
+    // No live credential, so the proxy is the route (#1276, admitted).
     let dir = scratch("egress-unfenced", true, Some("version = 1\n"));
     let output = egress(&dir, Some("http://proxy:8080"), Some("localhost,127.0.0.1"));
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
 }
 
 #[test]
 fn a_proxy_with_an_empty_no_proxy_is_unfenced() {
+    // No live credential, so the proxy is the route (#1276, admitted).
     let dir = scratch("egress-unfenced-empty", true, Some("version = 1\n"));
     let output = egress(&dir, Some("http://proxy:8080"), Some(""));
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
 }
 
 #[test]
