@@ -220,44 +220,78 @@ test_two_real_choices_are_asked if {
 
 # The 2026-11-24 question (CLOUD-2915): the alternative is an action, and the
 # word list let it through.
+#
+# THE CLOUD-2915 CASES WRITE THEIR OWN `with`, never through `judged` or
+# `described`: a helper that writes its own `with` sends the case to the
+# interpreter, and `policy_execution.rs`'s bytecode ceiling only lowers.
 test_the_measured_action_alternative_is_refused if {
-	count(judged(
+	count(violation) == 1 with input as ask(
 		"Keep fix 2 and close CLOUD-2904 with #1276?",
 		["Keep fix 2 (Recommended)", "Split fix 2 out"],
-	)) == 1
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 # The recommendation settles it, whatever the alternative is.
 test_a_recommendation_between_two_actions_is_refused if {
-	count(judged(
+	count(violation) == 1 with input as ask(
 		"Where should the shards run?",
 		["Dispatched sessions (Recommended)", "CI matrix legs"],
-	)) == 1
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_a_lone_recommended_option_is_refused if {
-	count(judged("Push the branch?", ["Push (Recommended)"])) == 1
+	count(violation) == 1 with input as ask("Push the branch?", ["Push (Recommended)"])
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 # The ledger's own question is the exception: a human answers it by design.
 test_a_ledger_question_with_a_recommendation_is_asked if {
-	count(judged(
+	count(violation) == 0 with input as ask(
 		"Admit test-expectation-changed crates/batten/tests/it/cli.rs::every_format?",
 		["Admit the change (Recommended)", "Refuse"],
-	)) == 0
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 # The text carries no "admit", so only the settled arm can fire: each half of
 # the exception is required.
 test_a_recommended_admit_label_without_the_pair_is_refused if {
-	count(judged("Keep fix 2?", ["Admit it (Recommended)", "Split fix 2 out"])) == 1
+	count(violation) == 1 with input as ask("Keep fix 2?", ["Admit it (Recommended)", "Split fix 2 out"])
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_a_recommended_pair_without_an_admit_label_is_refused if {
-	count(judged(
+	count(violation) == 1 with input as ask(
 		"Keep test-expectation-changed crates/batten/tests/it/cli.rs::every_format?",
 		["Keep it (Recommended)", "Split it out"],
-	)) == 1
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_a_question_with_no_recommendation_is_asked if {
@@ -307,54 +341,105 @@ described(question, options) := v if {
 		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
+# The same input as `ask`, with options as `{"label", "description"}` objects.
+asked(question, options) := {"call": {
+	"tool": "AskUserQuestion",
+	"arguments": {"questions": [{"question": question, "options": options}]},
+}}
+
 # --- CLOUD-2915 review, item 2: every spelling of a recommendation ------------
 
 test_a_recommended_prefix_is_refused if {
-	count(judged("Keep fix 2?", ["Recommended: Keep fix 2", "Split fix 2 out"])) == 1
+	count(violation) == 1 with input as ask("Keep fix 2?", ["Recommended: Keep fix 2", "Split fix 2 out"])
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_a_bracketed_recommendation_is_refused if {
-	count(judged("Keep fix 2?", ["Keep fix 2 [Recommended]", "Split fix 2 out"])) == 1
+	count(violation) == 1 with input as ask("Keep fix 2?", ["Keep fix 2 [Recommended]", "Split fix 2 out"])
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_a_lowercase_recommendation_is_refused if {
-	count(judged("Keep fix 2?", ["Keep fix 2 (recommended)", "Split fix 2 out"])) == 1
+	count(violation) == 1 with input as ask("Keep fix 2?", ["Keep fix 2 (recommended)", "Split fix 2 out"])
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_a_recommendation_in_the_description_is_refused if {
-	count(described("Keep fix 2?", [
+	count(violation) == 1 with input as asked("Keep fix 2?", [
 		{"label": "Keep fix 2", "description": "Recommended: the evidence settles it"},
 		{"label": "Split fix 2 out", "description": "a second PR"},
-	])) == 1
+	])
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_the_text_naming_an_option_as_recommended_is_refused if {
-	count(judged(
+	count(violation) == 1 with input as ask(
 		"Keep fix 2 (Recommended) or split it out?",
 		["Keep fix 2", "Split fix 2 out"],
-	)) == 1
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_the_text_recommending_an_option_by_name_is_refused if {
-	count(judged("I recommend keep fix 2. Which?", ["Keep fix 2", "Split fix 2 out"])) == 1
+	count(violation) == 1 with input as ask("I recommend keep fix 2. Which?", ["Keep fix 2", "Split fix 2 out"])
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_a_recommended_tag_in_the_text_is_refused if {
-	count(judged("Keep fix 2? (Recommended)", ["Yes", "Split it out"])) == 1
+	count(violation) == 1 with input as ask("Keep fix 2? (Recommended)", ["Yes", "Split it out"])
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 # Saying an option is NOT recommended settles nothing on its own.
 test_a_not_recommended_description_is_asked if {
-	count(described("Which crate goes first?", [
+	count(violation) == 0 with input as asked("Which crate goes first?", [
 		{"label": "batten-model", "description": "not recommended while #1276 is open"},
 		{"label": "batten-base", "description": "the smaller cut"},
-	])) == 0
+	])
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 # The owner asked for a view: a question about what is recommended marks no
 # option.
 test_asking_which_is_recommended_is_asked if {
-	count(judged("Which runner do you recommend?", ["Dispatched sessions", "CI matrix legs"])) == 0
+	count(violation) == 0 with input as ask("Which runner do you recommend?", ["Dispatched sessions", "CI matrix legs"])
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 # --- CLOUD-2915 review, item 3: the exemption is the admission's -------------
@@ -362,55 +447,115 @@ test_asking_which_is_recommended_is_asked if {
 # The review's own input: a pair mentioned, an `Admit…` alternative, and the
 # recommendation on something else.
 test_a_recommendation_over_a_mentioned_pair_is_refused if {
-	count(judged(
+	count(violation) == 1 with input as ask(
 		"Keep fix 2? It touches test-removed crates/a/b.rs::x",
 		["Keep fix 2 (Recommended)", "Admit nothing, split it"],
-	)) == 1
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_an_admission_recommending_a_non_admit_option_is_refused if {
-	count(judged(
+	count(violation) == 1 with input as ask(
 		"Admit test-removed crates/batten/tests/it/cli.rs::every_format?",
 		["Keep it (Recommended)", "Admit"],
-	)) == 1
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_a_recommended_admit_without_asking_to_admit_is_refused if {
-	count(judged(
+	count(violation) == 1 with input as ask(
 		"Keep fix 2? It touches test-removed crates/batten/tests/it/cli.rs::every_format",
 		["Admit it (Recommended)", "Split it out"],
-	)) == 1
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
-# Every genuine admission shape stays asked, each spelling of the mark included.
-test_a_genuine_admission_is_asked_however_it_recommends if {
-	every options in [
+# Every genuine admission shape stays asked, each spelling of the mark included:
+# one case per shape, because a `with` inside `every` is a nested query.
+test_a_genuine_admission_tagged_recommended_is_asked if {
+	count(violation) == 0 with input as asked(
+		"Admit rule-predicate-changed rule[layer place wrong].use_sources?",
 		[{"label": "Admit the change (Recommended)"}, {"label": "Refuse"}],
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
+}
+
+test_a_genuine_admission_bracketed_recommended_is_asked if {
+	count(violation) == 0 with input as asked(
+		"Admit rule-predicate-changed rule[layer place wrong].use_sources?",
 		[{"label": "Admit the change [Recommended]"}, {"label": "Refuse"}],
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
+}
+
+test_a_genuine_admission_recommended_in_its_description_is_asked if {
+	count(violation) == 0 with input as asked(
+		"Admit rule-predicate-changed rule[layer place wrong].use_sources?",
 		[{"label": "Admit the change", "description": "recommended"}, {"label": "Refuse"}],
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
+}
+
+test_a_genuine_admission_unmarked_is_asked if {
+	count(violation) == 0 with input as asked(
+		"Admit rule-predicate-changed rule[layer place wrong].use_sources?",
 		[{"label": "Admit the change"}, {"label": "Refuse"}],
-	] {
-		count(described(
-			"Admit rule-predicate-changed rule[layer place wrong].use_sources?",
-			options,
-		)) == 0
-	}
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 # A label the ledger cannot bind (it must START `Admit`) is refused whatever
 # marks it.
 test_a_recommended_prefix_before_admit_is_refused if {
-	count(judged(
+	count(violation) > 0 with input as ask(
 		"Admit rule-predicate-changed rule[layer place wrong].use_sources?",
 		["Recommended: Admit the change", "Refuse"],
-	)) > 0
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 test_a_genuine_admission_recommended_in_its_text_is_asked if {
-	count(judged(
+	count(violation) == 0 with input as ask(
 		"Admit test-removed crates/batten/tests/it/cli.rs::every_format? Recommended: admit",
 		["Admit", "Refuse"],
-	)) == 0
+	)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+		with data.batten.patterns["ledger-pair"] as pair_regex
+		with data.batten.patterns["recommendation-marked"] as marked_regex
+		with data.batten.patterns["recommendation-tagged"] as tagged_regex
 }
 
 # The #1276 fourth round: a path and a rule id in prose, no pair side by side.
