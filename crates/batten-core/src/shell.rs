@@ -477,40 +477,12 @@ pub fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
         // them keep the single fused entry `flatten` gave them — which is the
         // pre-CLOUD-1287 reading, conservative and consistent, rather than a
         // half-applied one.
-        let mut lines = line_readings.into_iter();
-        let mut assignment: Vec<Vec<SegmentLine>> = Vec::new();
-        let mut landed = true;
-        for segment in out.iter().filter(|segment| !segment.nested) {
-            let wanted = segment.words.len();
-            let mut taken: Vec<SegmentLine> = Vec::new();
-            let mut counted = 0;
-            // AT LEAST ONE LINE, THEN UNTIL THE COUNT IS MET (CLOUD-2840 review
-            // M3): a segment of no words — `''` — is a line of no words, and a
-            // loop that stops once the count is met took none for it, refused,
-            // and cancelled the per-line reading for every segment.
-            for line in lines.by_ref() {
-                counted += line.words.len();
-                taken.push(line);
-                if counted >= wanted {
-                    break;
-                }
-            }
-            // TWO REFUSALS, KEPT APART: a segment that took no line and one whose
-            // count missed are each a reassignment that did not land, and neither
-            // is implied by the other where a word count can be zero.
-            if taken.is_empty() {
-                landed = false;
-                break;
-            }
-            if counted != wanted {
-                landed = false;
-                break;
-            }
-            assignment.push(taken);
-        }
-        // Applied only where every segment landed AND no line is left over but
-        // a line of no words, which no segment can own.
-        if landed && lines.all(|line| line.words.is_empty()) {
+        let wanted: Vec<usize> = out
+            .iter()
+            .filter(|segment| !segment.nested)
+            .map(|segment| segment.words.len())
+            .collect();
+        if let Some(assignment) = assign_lines(&wanted, line_readings) {
             for (segment, taken) in out
                 .iter_mut()
                 .filter(|segment| !segment.nested)
@@ -521,6 +493,41 @@ pub fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
         }
     }
     crate::facts::Look::Is(out)
+}
+
+/// Each segment's own lines, taken in order from `lines` until its word count,
+/// `wanted`, is met; `None` where any segment's count is missed or a line with
+/// words is left over (the per-line reading of [`segments`], CLOUD-1287).
+fn assign_lines(wanted: &[usize], lines: Vec<SegmentLine>) -> Option<Vec<Vec<SegmentLine>>> {
+    let mut lines = lines.into_iter();
+    let mut assignment: Vec<Vec<SegmentLine>> = Vec::new();
+    for &wanted in wanted {
+        let mut taken: Vec<SegmentLine> = Vec::new();
+        let mut counted = 0;
+        // AT LEAST ONE LINE, THEN UNTIL THE COUNT IS MET (CLOUD-2840 review
+        // M3): a segment of no words — `''` — is a line of no words, and a
+        // loop that stops once the count is met took none for it, refused,
+        // and cancelled the per-line reading for every segment.
+        for line in lines.by_ref() {
+            counted += line.words.len();
+            taken.push(line);
+            if counted >= wanted {
+                break;
+            }
+        }
+        // TWO REFUSALS, KEPT APART: a segment that took no line and one whose
+        // count missed are each a reassignment that did not land, and neither
+        // is implied by the other where a word count can be zero.
+        if taken.is_empty() || counted != wanted {
+            return None;
+        }
+        assignment.push(taken);
+    }
+    // Applied only where no line is left over but a line of no words, which
+    // no segment can own.
+    lines
+        .all(|line| line.words.is_empty())
+        .then_some(assignment)
 }
 
 /// The command re-parsed with its newlines as whitespace, where that is safe.
@@ -1107,10 +1114,14 @@ fn substituted(lines: &[Vec<String>], arguments: &[String]) -> Vec<Vec<String>> 
             }
             continue;
         }
-        if command_word(line).is_some_and(|word| word.contains('$')) {
-            opaque = true;
-        }
+        // A LINE THAT READS NO ARGUMENT can still run one by another name:
+        // `c=$1; $c` runs the first argument from a variable this does not
+        // follow. A line that reads them is judged after substitution instead,
+        // where `"$@"` in command position is the argument itself.
         if !line.iter().any(|word| reads_positional(word)) {
+            if command_word(line).is_some_and(|word| word.contains('$')) {
+                opaque = true;
+            }
             continue;
         }
         reads = true;
@@ -1196,7 +1207,11 @@ fn expand_positional(word: &str, arguments: &[String]) -> Option<Vec<String>> {
     let joined = arguments.join(" ");
     let mut text = String::with_capacity(word.len());
     let mut rest = word;
-    while let Some(at) = rest.find('$') {
+    // BOUNDED BY THE WORD'S LENGTH, as `effective_program` is by its tokens:
+    // every pass consumes at least the `$`, so a change that stops it
+    // advancing answers wrong where a case sees it, rather than spinning.
+    for _ in 0..=word.len() {
+        let Some(at) = rest.find('$') else { break };
         text.push_str(&rest[..at]);
         let after = &rest[at + 1..];
         let (value, used) = if let Some(inner) = after.strip_prefix('{') {
@@ -1687,14 +1702,11 @@ pub fn cat_heredoc_body(word: &rable::Node) -> Option<String> {
 /// `$(...)`, `` `...` `` and `<(...)` each carry a parsed command, and each of
 /// them is a command this call will run. They are appended AFTER the command
 /// that contains them and carry no terminator: nothing takes their status.
-pub fn descend_word(word: &rable::Node, source: &str, out: &mut Vec<Segment>) {
-    descend_word_in(word, source, &[], out);
-}
-
-/// [`descend_word`], with the functions `defined` where the word is expanded
-/// (CLOUD-2840 review, finding 5): a substitution is a subshell, which
-/// inherits them, so a call to one inside `$( … )` runs the function and
-/// nothing on `PATH`. Its own definitions die with it, so it walks a copy.
+///
+/// With the functions `defined` where the word is expanded (CLOUD-2840 review,
+/// finding 5): a substitution is a subshell, which inherits them, so a call to
+/// one inside `$( … )` runs the function and nothing on `PATH`. Its own
+/// definitions die with it, so it walks a copy.
 pub fn descend_word_in(
     word: &rable::Node,
     source: &str,
@@ -1899,11 +1911,6 @@ fn descend_words(
 }
 
 /// The same, for a redirection's target: `diff <(a) <(b)` runs three programs.
-pub fn descend_redirect(redirect: &rable::Node, source: &str, out: &mut Vec<Segment>) {
-    descend_redirect_in(redirect, source, &[], out);
-}
-
-/// [`descend_redirect`], with the functions `defined` where it runs.
 pub fn descend_redirect_in(
     redirect: &rable::Node,
     source: &str,
@@ -2073,6 +2080,227 @@ mod tests {
                 "`{command}`: {parsed:?}"
             );
         }
+    }
+
+    /// Owned words, for the table cases below.
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    /// A line of `count` words, for [`super::assign_lines`].
+    fn line(count: usize) -> super::SegmentLine {
+        super::SegmentLine {
+            words: vec![String::from("w"); count],
+            redirects: Vec::new(),
+            raw: String::new(),
+            function_call: false,
+            forwarded: Vec::new(),
+        }
+    }
+
+    /// Fails by: a segment taking no line, an overshot count, or a line with
+    /// words left over read as a landed reassignment (review M3).
+    #[test]
+    fn lines_are_assigned_only_when_every_count_lands() {
+        let sizes = |assigned: Option<Vec<Vec<super::SegmentLine>>>| {
+            assigned.map(|all| {
+                all.iter()
+                    .map(|taken| taken.iter().map(|line| line.words.len()).collect())
+                    .collect::<Vec<Vec<usize>>>()
+            })
+        };
+        assert_eq!(
+            sizes(super::assign_lines(
+                &[3, 0],
+                vec![line(1), line(2), line(0)]
+            )),
+            Some(vec![vec![1, 2], vec![0]])
+        );
+        assert_eq!(
+            sizes(super::assign_lines(&[1], vec![line(1), line(0)])),
+            Some(vec![vec![1]])
+        );
+        assert_eq!(sizes(super::assign_lines(&[0], Vec::new())), None);
+        assert_eq!(
+            sizes(super::assign_lines(&[1, 0], vec![line(2), line(0)])),
+            None
+        );
+        assert_eq!(
+            sizes(super::assign_lines(&[1], vec![line(1), line(1)])),
+            None
+        );
+        assert_eq!(sizes(super::assign_lines(&[2], vec![line(1)])), None);
+    }
+
+    /// Fails by: a heredoc in any one part of a compound — its condition, a
+    /// body, an arm, its own redirect — not seen (review M5).
+    #[test]
+    fn a_heredoc_anywhere_in_a_compound_is_seen() {
+        let opens = |text: &str| {
+            rable::parse(text, false)
+                .unwrap_or_else(|error| panic!("`{text}` parses: {error:?}"))
+                .iter()
+                .any(super::opens_heredoc)
+        };
+        let doc = "cat <<'EOF'\nx\nEOF\n";
+        for text in [
+            format!("{{ {doc}}}"),
+            "{ cat; } <<'EOF'\nx\nEOF".to_owned(),
+            format!("( {doc})"),
+            format!("while {doc}do :; done"),
+            format!("while :; do {doc}done"),
+            "while :; do :; done <<'EOF'\nx\nEOF".to_owned(),
+            format!("until {doc}do :; done"),
+            format!("for x in a; do {doc}done"),
+            "for x in a; do :; done <<'EOF'\nx\nEOF".to_owned(),
+            format!("if {doc}then :; fi"),
+            format!("if :; then {doc}fi"),
+            format!("if :; then :; else {doc}fi"),
+            "if :; then :; fi <<'EOF'\nx\nEOF".to_owned(),
+            format!("case a in a) {doc};; esac"),
+            "case a in a) :;; esac <<'EOF'\nx\nEOF".to_owned(),
+            format!("f() {{ {doc}}}"),
+            format!("coproc {doc}"),
+            format!("! {doc}"),
+            format!("time {doc}"),
+            "[[ -n x ]] <<'EOF'\nx\nEOF".to_owned(),
+            "(( 1 )) <<'EOF'\nx\nEOF".to_owned(),
+        ] {
+            assert!(opens(&text), "`{text}` opens a heredoc");
+        }
+        for text in [
+            "{ cat; }",
+            "while :; do :; done",
+            "if :; then :; else :; fi",
+            "case a in a) :;; esac",
+            "f() { :; }",
+            "! cat",
+            "[[ -n x ]]",
+        ] {
+            assert!(!opens(text), "`{text}` opens no heredoc");
+        }
+    }
+
+    /// Fails by: a name `unset -v` or `unset -n` names read as a function, the
+    /// `unset` word itself read as a name, or a name after `--` dropped.
+    #[test]
+    fn an_unset_names_the_functions_it_removes() {
+        let unset = |call: &[&str]| super::unset_functions(&words(call));
+        assert_eq!(
+            unset(&["unset", "-f", "git", "gh"]),
+            Some(words(&["git", "gh"]))
+        );
+        assert_eq!(unset(&["builtin", "unset", "git"]), Some(words(&["git"])));
+        assert_eq!(unset(&["unset", "--", "-x"]), Some(words(&["-x"])));
+        assert_eq!(unset(&["unset", "-v", "git"]), None);
+        assert_eq!(unset(&["unset", "-n", "git"]), None);
+        assert_eq!(unset(&["echo", "unset"]), None);
+        assert_eq!(unset(&["builtin"]), None);
+    }
+
+    /// Fails by: an assignment's name misread, so a program is taken for an
+    /// assignment or an assignment for a program.
+    #[test]
+    fn an_assignment_word_is_a_name_then_equals() {
+        for word in ["A=1", "_a1=x", "a+=x", "A="] {
+            assert!(super::is_assignment_word(word), "{word}");
+        }
+        for word in ["1A=x", "a-b=x", "=x", "a", "$c=x", "+=x"] {
+            assert!(!super::is_assignment_word(word), "{word}");
+        }
+        assert_eq!(
+            super::command_word(&words(&["A=1", "B=2", "git", "C=3"])),
+            Some(&String::from("git"))
+        );
+        assert_eq!(super::command_word(&words(&["A=1"])), None);
+    }
+
+    /// Fails by: a positional parameter missed, or another parameter read as
+    /// one, so an argument is put where it is not or not where it is.
+    #[test]
+    fn a_positional_parameter_is_read_and_put_in_place() {
+        for word in ["$@", "$*", "x$1", "${1}", "${@:2}", "${!a}", "$9"] {
+            assert!(super::reads_positional(word), "{word}");
+        }
+        for word in ["$a", "${a}", "$0", "plain", "$#", "${#a}"] {
+            assert!(!super::reads_positional(word), "{word}");
+        }
+        let arguments = words(&["a", "b", "c"]);
+        let expand = |word: &str| super::expand_positional(word, &arguments);
+        assert_eq!(expand("$@"), Some(words(&["a", "b", "c"])));
+        assert_eq!(expand("${*}"), Some(words(&["a", "b", "c"])));
+        assert_eq!(expand("${@:2}"), Some(words(&["b", "c"])));
+        assert_eq!(expand("${@:2:1}"), Some(words(&["b"])));
+        assert_eq!(expand("${*:9}"), Some(Vec::new()));
+        assert_eq!(expand("x$1y"), Some(words(&["xay"])));
+        assert_eq!(expand("${2}z"), Some(words(&["bz"])));
+        assert_eq!(expand("--$*"), Some(words(&["--a b c"])));
+        assert_eq!(expand("-$@-"), Some(words(&["-a b c-"])));
+        assert_eq!(expand("$HOME/$1"), Some(words(&["$HOME/a"])));
+        assert_eq!(expand("${HOME}/$3"), Some(words(&["${HOME}/c"])));
+        assert_eq!(expand("${}$1"), Some(words(&["${}a"])));
+        assert_eq!(expand("$0$9"), Some(words(&["$0"])));
+        assert_eq!(expand("plain"), Some(words(&["plain"])));
+        assert_eq!(expand("${1:-x}"), None);
+        assert_eq!(expand("x${!1}"), None);
+        assert_eq!(expand("${@:x}"), None);
+    }
+
+    /// Fails by: a `shift` ignored or applied once too often, or a body that
+    /// runs an argument from a variable not read as running it.
+    #[test]
+    fn a_body_runs_its_arguments_where_it_reads_them() {
+        let lines = |body: &[&[&str]]| body.iter().map(|line| words(line)).collect::<Vec<_>>();
+        let arguments = words(&["x", "git", "push"]);
+        assert_eq!(
+            super::substituted(&lines(&[&["shift"], &["$@"]]), &arguments),
+            lines(&[&["x", "git", "push"], &["git", "push"]])
+        );
+        assert_eq!(
+            super::substituted(&lines(&[&["shift", "2"], &["$1"]]), &arguments),
+            lines(&[&["x"], &["push"]])
+        );
+        assert_eq!(
+            super::substituted(&lines(&[&["echo", "$@"]]), &arguments),
+            lines(&[&["echo", "x", "git", "push"]])
+        );
+        assert_eq!(
+            super::substituted(&lines(&[&["c=$1"], &["$c"]]), &arguments),
+            lines(&[&["c=x"], &["x", "git", "push"], &["git", "push"], &["push"]])
+        );
+        assert_eq!(
+            super::substituted(&lines(&[&["$c", "$@"]]), &words(&["a"])),
+            lines(&[&["$c", "a"], &["a"]])
+        );
+        assert_eq!(
+            super::substituted(&lines(&[&["shift", "n"], &["$1"]]), &words(&["a", "b"])),
+            lines(&[&["a"], &["a", "b"], &["b"]])
+        );
+        assert_eq!(
+            super::substituted(&lines(&[&["$CMD"]]), &arguments),
+            Vec::<Vec<String>>::new()
+        );
+    }
+
+    /// Fails by: a substitution's text misread: one in single quotes run, an
+    /// escaped one run, a nested group cut short, or `$((` read as a command.
+    #[test]
+    fn a_texts_substitutions_are_found_as_the_shell_finds_them() {
+        let found = |text: &str, arithmetic: bool| super::embedded_commands(text, arithmetic);
+        assert_eq!(found("$(a (b) c) $(d)", false), words(&["a (b) c", "d"]));
+        assert_eq!(found("`a b` x `c", false), words(&["a b", "c"]));
+        assert_eq!(found("<(a) >(b)", false), words(&["a", "b"]));
+        assert_eq!(found("<(a) >(b)", true), Vec::<String>::new());
+        assert_eq!(found("'$(a)' \\$(b) \"$(c)\"", false), words(&["c"]));
+        assert_eq!(found("$(( 1 + $(a) ))", true), words(&["a"]));
+        assert_eq!(found("$(a ')' b) $(c", false), words(&["a ')' b", "c"]));
+        assert_eq!(found("$(a \")\" b)", false), words(&["a \")\" b"]));
+        assert_eq!(found("`a \\` b`", false), words(&["a \\` b"]));
+        assert_eq!(found("\"'\"$(a)", false), words(&["a"]));
+        assert_eq!(super::closing_paren(&['a', ')'], 0), Some(1));
+        assert_eq!(super::closing_paren(&['(', ')', ')'], 0), Some(2));
+        assert_eq!(super::closing_paren(&['\\', ')', ')'], 0), Some(2));
+        assert_eq!(super::closing_paren(&['a'], 0), None);
     }
 
     /// A SUBSTITUTION RUNS WHEREVER IT IS WRITTEN (CLOUD-2840 patch
