@@ -2421,10 +2421,10 @@ fn pump_into<R: std::io::Read + Send + 'static>(
 /// Wait for `child` until `bound`, end its whole process group, then reap it,
 /// answering its status and whether the bound ran out (CLOUD-1860, CLOUD-2059).
 ///
-/// A BLOCKING WAIT WITH A DEADLINE, NOT A POLL. `std::thread::sleep` is a denied
-/// method here (`clippy.toml`), and this wait has a terminal state to block on:
-/// a worker blocks on the child's exit, the receive carries the bound, and a
-/// suite that returns wakes this immediately.
+/// ONE BLOCKING RECEIVE OVER TWO EVENTS, NOT A POLL AND NOT A TIMED RECEIVE
+/// (CLOUD-2789). A worker blocks on the child's exit and a [`Deadline`] on
+/// `bound`, both sending into the channel this waits on, so a suite that
+/// returns wakes it at once and one that hangs wakes it at the bound.
 ///
 /// **KILL THE GROUP, THEN REAP THE LEADER, IN THAT ORDER.** The worker waits with
 /// `WNOWAIT`, which reports the exit without reaping, so the leader stays an
@@ -2446,14 +2446,16 @@ fn wait_bounded(
 ) -> std::io::Result<(std::process::ExitStatus, bool)> {
     let pid = child.id();
     let (send, exits) = std::sync::mpsc::channel();
+    let exited = send.clone();
     let worker = std::thread::spawn(move || {
         // The receiver is gone only when the bound already ran out and the
         // caller stopped listening; the group kill below is what ends this wait.
-        let _ = send.send(await_exit(pid));
+        let _ = exited.send(Some(await_exit(pid)));
     });
-    let timed_out = match exits.recv_timeout(bound) {
-        Ok(Ok(())) => false,
-        Ok(Err(failed)) => {
+    let deadline = Deadline::arm(bound, &send, None);
+    let timed_out = match exits.recv() {
+        Ok(Some(Ok(()))) => false,
+        Ok(Some(Err(failed))) => {
             // The wait itself failed, so whether the suite exited is unknown.
             // It is ended rather than left running, and the failure is the answer.
             kill_group(pid);
@@ -2464,8 +2466,10 @@ fn wait_bounded(
             let _ = child.wait();
             return Err(failed);
         }
-        Err(_) => true,
+        // `send` is held here, so the channel cannot close: `None` is the bound.
+        Ok(None) | Err(_) => true,
     };
+    drop(deadline);
     if timed_out {
         // A RUNNER THAT LEADS ITS OWN GROUPS IS ASKED FIRST. nextest starts each
         // test in a process group of its own, so a `SIGKILL` to the runner's
@@ -2474,7 +2478,8 @@ fn wait_bounded(
         // nextest). `SIGTERM` is what nextest answers by ending every group it
         // started. The grace is bounded, and the `SIGKILL` below still follows.
         terminate_group(pid);
-        let _ = exits.recv_timeout(TERMINATE_GRACE);
+        let _grace = Deadline::arm(TERMINATE_GRACE, &send, None);
+        let _ = exits.recv();
     }
     kill_group(pid);
     sweep_group(pid);
@@ -2526,6 +2531,42 @@ fn sweep_group(leader: u32) {
 #[cfg(unix)]
 const TERMINATE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// A SUPERVISOR BOUND, AS AN EVENT (CLOUD-2789): `fired` is sent on the waiter's
+/// own channel once the bound has passed, unless the deadline is dropped first.
+///
+/// The waiter makes ONE blocking `recv` over every event it waits for — an
+/// exit, a close, the bound — so no receive carries a clock and no wait polls.
+/// The bound itself is served by the crate's one clock,
+/// [`crate::pr_watch::pause_until`], which checks its stop between slices: a
+/// dropped deadline's thread ends within a slice and sends nothing, so an
+/// answered wait leaves no timer behind it.
+pub(crate) struct Deadline(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Deadline {
+    /// Send `fired` on `send` once `bound` has passed, unless dropped first.
+    pub(crate) fn arm<T: Send + 'static>(
+        bound: std::time::Duration,
+        send: &std::sync::mpsc::Sender<T>,
+        fired: T,
+    ) -> Self {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (send, held) = (send.clone(), std::sync::Arc::clone(&stop));
+        std::thread::spawn(move || {
+            crate::pr_watch::pause_until(bound.as_secs_f64(), &held);
+            if !held.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = send.send(fired);
+            }
+        });
+        Self(stop)
+    }
+}
+
+impl Drop for Deadline {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// `SIGTERM` the process group `leader` leads, through [`crate::exec::signal_group`].
 /// Best effort, as [`kill_group`].
 #[cfg(unix)]
@@ -2543,15 +2584,17 @@ fn wait_bounded(
     bound: std::time::Duration,
 ) -> std::io::Result<(std::process::ExitStatus, bool)> {
     let (send, statuses) = std::sync::mpsc::channel();
+    let exited = send.clone();
     let worker = std::thread::spawn(move || {
-        let _ = send.send(child.wait());
+        let _ = exited.send(Some(child.wait()));
     });
-    let (status, timed_out) = match statuses.recv_timeout(bound) {
-        Ok(status) => (status?, false),
-        Err(_) => (
-            statuses
-                .recv()
-                .map_err(|_| std::io::Error::other("mutate: the wait for the suite was lost"))??,
+    let _deadline = Deadline::arm(bound, &send, None);
+    let lost = || std::io::Error::other("mutate: the wait for the suite was lost");
+    let (status, timed_out) = match statuses.recv().map_err(|_| lost())? {
+        Some(status) => (status?, false),
+        // The bound fired first; the next event is the exit, waited out.
+        None => (
+            statuses.recv().map_err(|_| lost())?.ok_or_else(lost)??,
             true,
         ),
     };
@@ -2815,11 +2858,12 @@ fn orphaned(parent: rustix::process::Pid) -> ! {
         let leader = *leader;
         let _ = std::thread::Builder::new().spawn(move || {
             let _ = await_exit(leader);
-            let _ = send.send(());
+            let _ = send.send(Some(()));
         });
     }
+    let _grace = Deadline::arm(ORPHAN_GRACE, &send, None);
     drop(send);
-    let _ = exits_within(&exits, live.len(), ORPHAN_GRACE);
+    let _ = exits_within(&exits, live.len());
     for leader in &live {
         kill_group(*leader);
         sweep_group(*leader);
@@ -2827,41 +2871,16 @@ fn orphaned(parent: rustix::process::Pid) -> ! {
     std::process::exit(crate::ExitCode::Internal.code())
 }
 
-/// How many of `count` exits `exits` delivered before `grace` ran out, counted
-/// from now: the wait [`orphaned`] gives a group it sent TERM before the KILL. A
-/// SEPARATE FUNCTION so a case can see the grace, which `orphaned` itself,
-/// ending the process, never lets one observe (CLOUD-2789). Compiled where
-/// `orphaned` is, and under `test`, whose case runs on every target.
+/// How many of `count` exits `exits` delivered before its grace's [`Deadline`]
+/// fired: the wait [`orphaned`] gives a group it sent TERM before the KILL. Each
+/// exit is `Some`, the grace is `None`, and a closed channel ends the count too.
+/// A SEPARATE FUNCTION so a case can see the grace, which `orphaned` itself,
+/// ending the process, never lets one observe (CLOUD-2789); the grace is an
+/// event, so the case hands it in as one and never waits on a clock. Compiled
+/// where `orphaned` is, and under `test`, whose case runs on every target.
 #[cfg(any(target_os = "linux", test))]
-fn exits_within(
-    exits: &std::sync::mpsc::Receiver<()>,
-    count: usize,
-    grace: std::time::Duration,
-) -> usize {
-    let started = std::time::Instant::now();
-    exits_within_by(exits, count, grace, || started.elapsed())
-}
-
-/// [`exits_within`] over a caller's reading of the time spent so far. THE
-/// CLOCK IS AN INPUT (CLOUD-2789): a case hands it a fixed reading and asserts
-/// the count, since the crate refuses both an assertion on the clock
-/// (`wall_clock`) and the sleep a delayed exit would need (`waiver add
-/// refused`).
-#[cfg(any(target_os = "linux", test))]
-fn exits_within_by(
-    exits: &std::sync::mpsc::Receiver<()>,
-    count: usize,
-    grace: std::time::Duration,
-    elapsed: impl Fn() -> std::time::Duration,
-) -> usize {
-    let mut arrived = 0;
-    for _ in 0..count {
-        if exits.recv_timeout(grace.saturating_sub(elapsed())).is_err() {
-            break;
-        }
-        arrived += 1;
-    }
-    arrived
+fn exits_within(exits: &std::sync::mpsc::Receiver<Option<()>>, count: usize) -> usize {
+    exits.iter().take(count).take_while(Option::is_some).count()
 }
 
 // ---------------------------------------------------------------------------
@@ -6622,46 +6641,66 @@ mod tests {
     }
 
     /// An orphaned sweep's group that exits on TERM inside the grace is waited
-    /// for, and one that never exits is waited for no longer than the grace.
+    /// for, and none is waited for once the grace has fired.
     ///
-    /// Fails by: the time spent read as more than it is, so a group that
-    /// would have exited cleanly inside the grace gets KILL at once; the
-    /// grace ignored, so a group that never exits holds the sweep past it (a
-    /// hang the runner's own timeout reports); or an exit miscounted.
+    /// Fails by: an exit after the grace counted, so a group still alive at
+    /// the bound escapes its KILL; the grace ignored, so a group that never
+    /// exits holds the sweep past it; or an exit miscounted. The grace is an
+    /// event in the channel, so no case here waits on a clock (CLOUD-2789).
     #[test]
     fn an_orphaned_sweep_waits_the_grace_for_its_groups() {
-        use std::time::Duration;
-        let grace = Duration::from_secs(3600);
-        let (send, exits) = std::sync::mpsc::channel();
-        send.send(()).unwrap();
+        let counted = |events: &[Option<()>], count| {
+            let (send, exits) = std::sync::mpsc::channel();
+            for event in events {
+                send.send(*event).unwrap();
+            }
+            drop(send);
+            exits_within(&exits, count)
+        };
         assert_eq!(
-            exits_within(&exits, 1, grace),
+            counted(&[Some(())], 1),
             1,
             "an exit inside the grace is waited for"
         );
         assert_eq!(
-            exits_within(&exits, 2, Duration::from_millis(50)),
+            counted(&[None, Some(())], 2),
             0,
-            "no exit arrives"
+            "nothing is waited for after the grace"
         );
         assert_eq!(
-            exits_within_by(&exits, 1, grace, || grace),
-            0,
-            "a grace already spent waits no longer, though the group is alive"
+            counted(&[Some(()), None, Some(())], 3),
+            1,
+            "an exit after the grace is not counted, though the group was alive at it"
         );
         assert_eq!(
-            exits_within_by(&exits, 3, grace, || grace + grace),
-            0,
-            "nor does one overspent"
-        );
-        send.send(()).unwrap();
-        send.send(()).unwrap();
-        assert_eq!(
-            exits_within_by(&exits, 3, Duration::from_millis(50), || Duration::ZERO),
+            counted(&[Some(()), Some(()), Some(())], 2),
             2,
-            "every exit already in is counted, and only those"
+            "every exit asked for is counted, and only those"
         );
+        assert_eq!(counted(&[], 3), 0, "a closed channel waits no longer");
+    }
+
+    /// Fails by: an armed deadline never firing, so a hung suite is never ended;
+    /// or a dropped one firing anyway, so an answered wait reads as timed out.
+    /// Both are events: the zero bound's send, and the dropped deadline's
+    /// thread ending without one, which closes the channel (CLOUD-2789).
+    #[test]
+    fn a_deadline_fires_at_its_bound_and_never_once_dropped() {
+        let (send, fired) = std::sync::mpsc::channel();
+        let _armed = Deadline::arm(std::time::Duration::ZERO, &send, 7);
+        assert_eq!(fired.recv(), Ok(7), "an armed deadline fires at its bound");
+
+        let (send, fired) = std::sync::mpsc::channel::<u8>();
+        drop(Deadline::arm(
+            std::time::Duration::from_secs(3600),
+            &send,
+            9,
+        ));
         drop(send);
+        assert!(
+            fired.recv().is_err(),
+            "a dropped deadline ends without firing, closing the channel"
+        );
     }
 
     /// Fails by: the first status line reported instead of the last, or a
@@ -8867,16 +8906,15 @@ mod tests {
         )
         .expect("the wait answers");
         assert_eq!(ran.outcome, Outcome::Failed(Some(3)), "{}", ran.output);
-        let Ok(read) = said.recv_timeout(std::time::Duration::from_secs(10)) else {
-            panic!(
-                "the job the suite left running outlived the group kill: {}",
-                survivors(&dir)
-            );
-        };
+        // AN EVENT, NOT A CLOCK (CLOUD-2789): the fifo reads to its end once
+        // its last holder is gone, and a job the group kill missed writes
+        // `orphaned` into it before it goes.
+        let read = said.recv().expect("the fifo's reader answers");
         assert_eq!(
             read.expect("read the fifo to its end"),
             "",
-            "the job the suite left running is ended with it"
+            "the job the suite left running outlived the group kill: {}",
+            survivors(&dir)
         );
     }
 
@@ -8917,25 +8955,26 @@ mod tests {
                 bound,
             ));
         });
-        // The fifo's open blocks until the suite writes, so the read is the wait,
-        // and it is taken on its own thread so a suite that never writes fails
-        // the case within a bound instead of holding it.
+        // The fifo's open blocks until the suite writes, so the read is the wait:
+        // an event, never a clock (CLOUD-2789).
         let (named, said) = std::sync::mpsc::channel();
         let ready = dir.join("ready");
         std::thread::spawn(move || {
             let _ = named.send(crate::fsio::read_to_string(ready));
         });
         let leader: u32 = said
-            .recv_timeout(std::time::Duration::from_secs(20))
+            .recv()
             .expect("the suite names itself")
             .expect("read the fifo")
             .trim()
             .parse()
             .expect("a pid");
         sweep_group(leader);
+        // An unswept suite waits its sleep out and passes, which the assertion
+        // below refuses.
         let ran = swept
-            .recv_timeout(std::time::Duration::from_secs(20))
-            .expect("the swept suite returns before its sleep would")
+            .recv()
+            .expect("the swept suite returns")
             .expect("the wait answers");
         assert_ne!(ran.outcome, Outcome::Passed, "{}", ran.output);
     }

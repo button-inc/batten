@@ -623,14 +623,17 @@ pub(crate) fn await_trace(path: &Path) -> Option<String> {
         return read();
     }
     let (closed, woken) = std::sync::mpsc::channel();
+    // THE GRACE IS AN EVENT ON THE SAME CHANNEL (CLOUD-2789): a close is
+    // `Some`, the bound `None`, and the wait is one blocking receive.
+    let _grace = crate::mutate::Deadline::arm(TRACE_GRACE, &closed, None);
     std::thread::spawn(move || {
         let mut events = [0_u8; 1024];
         forward_closes(
             || rustix::io::read(&watch, &mut events).is_ok(),
-            || closed.send(()).is_ok(),
+            || closed.send(Some(())).is_ok(),
         );
     });
-    wait_whole(read, |left| woken.recv_timeout(left).is_ok(), TRACE_GRACE)
+    wait_whole(read, || woken.recv() == Ok(Some(())))
 }
 
 /// Pass each close event on until either side goes away: the watch's read
@@ -642,23 +645,20 @@ fn forward_closes(mut event: impl FnMut() -> bool, mut send: impl FnMut() -> boo
 }
 
 /// [`await_trace`]'s wait, apart from what wakes it (CLOUD-2789): read; a whole
-/// trace is the answer; otherwise wait for the next close, and once `grace` is
-/// spent or nothing more will close, answer one final read. `woken` waits at
-/// most the time it is given and says whether a close came. Platform-free, so a
-/// case drives it with a fake reader on every target.
+/// trace is the answer; otherwise wait for the next event, and once it is the
+/// grace or nothing more will close, answer one final read. `woken` blocks for
+/// the next event and says whether it was a close. Platform-free, so a case
+/// drives it with a fake reader on every target.
 fn wait_whole(
     mut read: impl FnMut() -> Option<String>,
-    mut woken: impl FnMut(std::time::Duration) -> bool,
-    grace: std::time::Duration,
+    mut woken: impl FnMut() -> bool,
 ) -> Option<String> {
-    let deadline = std::time::Instant::now() + grace;
     loop {
         let text = read();
         if text.as_deref().is_some_and(trace_whole) {
             return text;
         }
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        if left.is_zero() || !woken(left) {
+        if !woken() {
             return read();
         }
     }
@@ -677,11 +677,7 @@ mod off_linux {
     /// No tracer off Linux, so nothing wakes the wait: no grace, and the
     /// trace is whatever a read finds.
     pub(crate) fn await_trace(path: &Path) -> Option<String> {
-        super::wait_whole(
-            || crate::fsio::read_to_string(path).ok(),
-            |_| false,
-            std::time::Duration::ZERO,
-        )
+        super::wait_whole(|| crate::fsio::read_to_string(path).ok(), || false)
     }
 }
 
@@ -1062,32 +1058,25 @@ mod tests {
 
     const PARTIAL: &str = "7     execve(\"/bin/sh\", [\"sh\"], 0x0 /* 0 vars */) = 0\n";
 
-    // Fails by: the grace's deadline set before now (`+` read as `-`), or a
-    // close read as no close (`!` dropped), so the wait answers the second
-    // partial text rather than reading on to the whole one (CLOUD-2789).
+    // Fails by: a close read as no close (`!` dropped), so the wait answers the
+    // first partial text rather than reading on to the whole one (CLOUD-2789).
     #[test]
     fn a_trace_finished_after_a_partial_read_is_waited_for() {
         let text = whole(&[]);
         let read = reads(&[PARTIAL, PARTIAL, &text]);
-        let answer = super::wait_whole(read, |_| true, std::time::Duration::from_secs(3600));
+        let answer = super::wait_whole(read, || true);
         assert_eq!(answer, Some(text));
     }
 
-    // Fails by: a spent grace waited out anyway (`||` read as `&&`, or the
-    // zero test dropped), so the wait reads on past its one final read; or
-    // that final read skipped, answering the first partial text.
+    // Fails by: the grace read as a close, so the wait reads on past its one
+    // final read; or that final read skipped, answering the first partial text.
+    // The grace is the event `woken` answers `false` for (CLOUD-2789).
     #[test]
     fn a_spent_grace_answers_one_final_read() {
         let text = whole(&[]);
         let second = format!("{PARTIAL}{PARTIAL}");
         let read = reads(&[PARTIAL, &second, &text]);
-        assert_eq!(
-            super::wait_whole(read, |_| true, std::time::Duration::ZERO),
-            Some(second.clone())
-        );
-        let read = reads(&[PARTIAL, &second, &text]);
-        let unwoken = super::wait_whole(read, |_| false, std::time::Duration::from_secs(3600));
-        assert_eq!(unwoken, Some(second));
+        assert_eq!(super::wait_whole(read, || false), Some(second));
     }
 
     // Fails by: a whole first read not answered at once, so the wait reads
@@ -1096,7 +1085,7 @@ mod tests {
     fn a_whole_first_read_is_the_answer() {
         let text = whole(&[]);
         let read = reads(&[&text, PARTIAL]);
-        let answer = super::wait_whole(read, |_| true, std::time::Duration::from_secs(3600));
+        let answer = super::wait_whole(read, || true);
         assert_eq!(answer, Some(text));
     }
 
