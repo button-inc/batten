@@ -724,24 +724,36 @@ fn lock_path(dir: &Path) -> PathBuf {
 /// # Errors
 ///
 /// Returns an error when the store cannot be created or the lock cannot be taken.
-fn lock(dir: &Path) -> Result<std::fs::File> {
+fn lock(dir: &Path) -> Result<crate::lock_wait::Held> {
     std::fs::create_dir_all(dir)
         .with_context(|| format!("create the override store at {}", dir.display()))?;
+    let path = lock_path(dir);
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(lock_path(dir))
+        .open(&path)
         .with_context(|| format!("open the override store lock in {}", dir.display()))?;
-    // BLOCKING, not `try_lock`, and that is the difference from
+    // IT WAITS, not `try_lock`, and that is the difference from
     // [`crate::capture`]'s use of the same primitive. A capture that cannot take
     // the lock drops the write and says so, because a missed capture is a missing
     // record; a consume that cannot take the lock must WAIT, because the whole
     // claim is that exactly one concurrent consumer wins — and a `WouldBlock`
     // treated as a refusal would make the loser's verdict depend on scheduling.
-    fs4::FileExt::lock(&file)
-        .with_context(|| format!("lock the override store in {}", dir.display()))?;
-    Ok(file)
+    // The wait is on the holder's release ([`crate::lock_wait`]), never a
+    // blocking `flock` (CLOUD-2789), and a store this process already holds is
+    // an error rather than a wait on itself.
+    match crate::lock_wait::acquire(file, &path, crate::lock_wait::Mode::Exclusive, None)
+        .with_context(|| format!("lock the override store in {}", dir.display()))?
+    {
+        crate::lock_wait::Taken::Held(held) => Ok(held),
+        crate::lock_wait::Taken::Stopped | crate::lock_wait::Taken::Reentrant => {
+            Err(anyhow::anyhow!(
+                "the override store in {} is already locked by this process",
+                dir.display()
+            ))
+        }
+    }
 }
 
 /// Read one record, or `None` when there is none at that address or it will not

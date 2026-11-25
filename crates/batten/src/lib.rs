@@ -127,6 +127,7 @@ pub mod judge;
 /// The landing lap's replay half: advance the base, replay the branch onto it,
 /// and record what happened for a module to decide over (CLOUD-1335).
 pub mod land;
+pub mod lock_wait;
 /// Whether a board column is honest about what git and the forge already did —
 /// behind git in one direction, ahead of a declined key in the other
 /// (CLOUD-186, CLOUD-1127).
@@ -4112,14 +4113,28 @@ fn open_drain_lock(path: &Path) -> std::io::Result<std::fs::File> {
 ///
 /// Propagates a blocking `lock` that fails outright. A contended `try_lock` is
 /// `Ok(false)`, never an error: losing a race is an answer.
-fn take_write_lock(lock: &std::fs::File, surface: facts::Surface) -> Result<bool> {
+///
+/// The verb's wait is [`lock_wait::acquire`]'s, on the holder's release, never
+/// a blocking `flock` (CLOUD-2789); a lock this process already holds is an
+/// error rather than a wait on itself.
+fn take_write_lock(path: &Path, surface: facts::Surface) -> Result<Option<lock_wait::Held>> {
+    let lock = open_drain_lock(path)?;
     let may_block =
         !matches!(surface, facts::Surface::Hook) && std::env::var_os(DRAIN_MARKER).is_none();
     if may_block {
-        fs4::FileExt::lock(lock)?;
-        return Ok(true);
+        return match lock_wait::acquire(lock, path, lock_wait::Mode::Exclusive, None)? {
+            lock_wait::Taken::Held(held) => Ok(Some(held)),
+            lock_wait::Taken::Stopped | lock_wait::Taken::Reentrant => Err(anyhow::anyhow!(
+                "the state write lock {} is already held by this process",
+                path.display()
+            )),
+        };
     }
-    Ok(fs4::FileExt::try_lock(lock).is_ok())
+    // A LOCK CALL THAT ERRS IS A LOST RACE HERE, as it always was: the hook
+    // has a per-call budget and writes nothing it cannot own.
+    Ok(lock_wait::try_acquire(lock, lock_wait::Mode::Exclusive)
+        .ok()
+        .flatten())
 }
 
 /// Say which rules did not look, so a clean-looking record is not a false green.
@@ -4243,7 +4258,6 @@ fn run_state_record(
     } else {
         None
     };
-    let lock = open_drain_lock(&git_dir.join(DRAIN_LOCK))?;
     // **The ref comes from HERE, not from `repo`.** `repo_root` answers with the
     // MAIN worktree's root — which is exactly what makes every linked worktree
     // share one store — so asking it for the branch would report the main
@@ -4329,7 +4343,8 @@ fn run_state_record(
     // per identity by atomic rename and appends no journal entry, and the drain
     // holding the lock is deriving the same value from the same transcript — so
     // the two agree by construction rather than by exclusion.
-    let holds_lock = take_write_lock(&lock, surface)?;
+    let write_lock = take_write_lock(&git_dir.join(DRAIN_LOCK), surface)?;
+    let holds_lock = write_lock.is_some();
 
     let bound = store::commit(store::resolve(&repo)?)?;
     if let Some(note) = &bound.note {
