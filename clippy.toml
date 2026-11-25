@@ -122,4 +122,20 @@ disallowed-methods = [
   { path = "compio::time::sleep_until", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
   { path = "compio::time::interval", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
   { path = "compio::time::interval_at", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
+  # NO BLOCKING LOCK WITHOUT A STOP (CLOUD-2789). A blocking `flock` has no way
+  # back: `step run` waited on a second handle to a tree its own process held,
+  # printed its result and never exited. Every lock goes through
+  # `batten::lock_wait`: `try_lock`, then a wait on the holder's release or a
+  # stop event. The `std` rows, and each lock crate in the graph: `fs4`, and the
+  # raw `flock` of `nix`, `rustix` and `libc`.
+  { path = "std::fs::File::lock", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`" },
+  { path = "std::fs::File::lock_shared", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`" },
+  { path = "fs4::FileExt::lock", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
+  { path = "fs4::FileExt::lock_shared", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
+  { path = "fs4::fs_std::FileExt::lock", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
+  { path = "fs4::fs_std::FileExt::lock_shared", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
+  { path = "nix::fcntl::flock", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
+  { path = "nix::fcntl::Flock::lock", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
+  { path = "rustix::fs::flock", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
+  { path = "libc::flock", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
 ]
