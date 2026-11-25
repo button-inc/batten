@@ -2101,8 +2101,8 @@ mod repair {
             "mise.toml",
             &format!(
                 "[tool_alias]\nrust = \"http:rust\"\n\n[tools]\n\
-                 rust = {{ version = \"1.0.0\", url = \"{toolchain}\" }}\n\
-                 \"http:unreachable\" = {{ version = \"1.0.0\", url = \"{dead}\" }}\n"
+                 rust = {{ version = \"1.0.0\", url = '{toolchain}' }}\n\
+                 \"http:unreachable\" = {{ version = \"1.0.0\", url = '{dead}' }}\n"
             ),
         );
         let mut lock = String::new();
@@ -2123,7 +2123,7 @@ mod repair {
             for platform in ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64"] {
                 write!(
                     lock,
-                    "[tools.{tool}.\"platforms.{platform}\"]\nchecksum = \"sha256:{sum}\"\nurl = \"{url}\"\n\n"
+                    "[tools.{tool}.\"platforms.{platform}\"]\nchecksum = \"sha256:{sum}\"\nurl = '{url}'\n\n"
                 )
                 .unwrap();
             }
