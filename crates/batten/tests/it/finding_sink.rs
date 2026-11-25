@@ -648,7 +648,8 @@ fn a_concurrent_decide_waits_for_the_one_holding_the_record() {
         .write(true)
         .open(turns.repo.join(".git/batten-record-decide.lock"))
         .expect("the decide lock");
-    fs4::FileExt::lock(&lock).expect("hold it, as a concurrent decide would");
+    lock.try_lock()
+        .expect("hold it, as a concurrent decide would; free in a fresh fixture");
     let mut child = common::batten()
         .args(committed_argv())
         .current_dir(&turns.repo)

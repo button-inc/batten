@@ -671,7 +671,8 @@ fn a_tree_a_running_build_holds_is_not_reclaimed() {
     artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
     artifact(&deps, "cli", "cccccccccccc", 60);
     let lock = std::fs::File::create(repo.join("target/debug/.cargo-lock")).unwrap();
-    lock.lock().unwrap();
+    lock.try_lock()
+        .expect("hold the build lock, free in a fresh fixture");
 
     let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
@@ -1054,7 +1055,8 @@ fn a_held_profile_is_reported_by_its_lock() {
     let profile = repo.join("target/debug");
     live(&profile, "stale", "cccccccccccccccc", 7200, 1 << 20);
     let lock = std::fs::File::create(profile.join(".cargo-lock")).unwrap();
-    lock.lock().unwrap();
+    lock.try_lock()
+        .expect("hold the build lock, free in a fresh fixture");
 
     let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);

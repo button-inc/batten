@@ -274,7 +274,7 @@ fn install_modules(dir: &Path) {
 fn stop_payload(message: &str, active: bool) -> String {
     serde_json::json!({
         "hook_event_name": "Stop",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "stop_hook_active": active,
         "last_assistant_message": message,
     })
@@ -288,7 +288,7 @@ fn stop_payload(message: &str, active: bool) -> String {
 fn plan_mode_payload(message: &str) -> String {
     serde_json::json!({
         "hook_event_name": "Stop",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "stop_hook_active": false,
         "last_assistant_message": message,
         "permission_mode": "plan",
@@ -838,7 +838,7 @@ fn a_tool_call_is_not_judged_by_the_end_of_turn_rule() {
     let dir = repo("stop-posture-pre-tool");
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "tool_name": "Bash",
         "tool_input": {"command": "echo one thing I would flag"},
     })
@@ -906,7 +906,7 @@ fn stop_with_transcript(dir: &Path, message: &str) -> String {
     fs::write(&transcript, "{}\n").expect("write transcript");
     serde_json::json!({
         "hook_event_name": "Stop",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "stop_hook_active": false,
         "last_assistant_message": message,
         "transcript_path": transcript.display().to_string(),
@@ -965,7 +965,7 @@ fn a_refusing_stop_row_still_speaks() {
     fs::write(&transcript, "{}\n").expect("write transcript");
     let payload = serde_json::json!({
         "hook_event_name": "Stop",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "stop_hook_active": false,
         "last_assistant_message": "Landed and pushed.",
         "transcript_path": transcript.display().to_string(),
@@ -1155,7 +1155,7 @@ fn unlanded_line(stdout: &str) -> Option<String> {
 fn prompt_payload(prompt: &str) -> String {
     serde_json::json!({
         "hook_event_name": "UserPromptSubmit",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "prompt": prompt,
     })
     .to_string()
@@ -1316,7 +1316,7 @@ fn a_land_just_started_excuses_one_stop() {
     let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     let start = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "tool_name": "Bash",
         "tool_input": {"command": "mise run land", "run_in_background": true},
         "tool_response": {"backgroundTaskId": "b-1"},
@@ -1688,7 +1688,8 @@ fn a_stop_whose_store_lock_is_held_elsewhere_still_speaks() {
         .write(true)
         .open(&lock_path)
         .expect("open the store's write lock");
-    fs4::FileExt::lock(&held).expect("hold the store's write lock");
+    held.try_lock()
+        .expect("hold the store's write lock, free in a fresh fixture");
 
     let output = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     let stdout = stdout_of(&output);
@@ -1914,7 +1915,7 @@ fn a_closed_row_leaves_the_filed_checklist() {
     // The tracker's answer for CLOUD-8, stored by the engine's own post-tool hook.
     let read = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "filed-closed",
+        "session_id": common::session_id("filed-closed"),
         "tool_name": "mcp__tracker__get_issue",
         "tool_input": {},
         "tool_response": [{ "type": "text", "text": serde_json::json!({
