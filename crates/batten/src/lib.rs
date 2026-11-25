@@ -10818,6 +10818,20 @@ fn run_override_spend(
     );
     // THIS RULE'S EPOCH (CLOUD-2779), never the whole surface's.
     let epoch = epoch::for_rule(root, overrides.config_from.as_deref(), rule, token)?;
+    // AN OWNER-ONLY ROUTE IS THE OWNER'S TO OPEN (CLOUD-2926). `request` takes
+    // the agent's answers on stdin, so an address and a situation hash alone let
+    // an agent admit its own write to the rules it is judged by, which two
+    // sessions on #1276 did. The owner's yes, recorded by the host's question
+    // hook after this admission was issued, is what authorizes it.
+    if !owner_answered(root, admission, rule, token, subject) {
+        let path = admission::subject_path(subject);
+        writeln!(
+            err,
+            "::error:: admission {admission} has no owner answer for {rule} {path}; \
+             ask the owner: one yes/no naming `{rule} {path}`"
+        )?;
+        return Ok(ExitCode::Internal);
+    }
     let situation = admission::Situation {
         rule,
         verdict: token,
@@ -10863,6 +10877,21 @@ fn run_override_spend(
             Ok(ExitCode::Violation)
         }
     }
+}
+
+/// Whether an owner-only `rule`'s admission carries the owner's answer: true
+/// for every other rule, whose articulation is its own route (CLOUD-2926).
+fn owner_answered(root: &Path, admission: &str, rule: &str, token: &str, subject: &str) -> bool {
+    if !admission::OWNER_ONLY.contains(&rule) {
+        return true;
+    }
+    let Some(since) = admission::issued_at(root, admission) else {
+        return false;
+    };
+    let path = admission::subject_path(subject);
+    asked::ledger_roots(root)
+        .iter()
+        .any(|ledger| asked::owner_admits(ledger, rule, token, path, since))
 }
 
 /// The [`admission::Anchor`] a `(rule, subject)` pair is answered about

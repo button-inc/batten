@@ -757,6 +757,27 @@ pub fn load(repo_root: &Path, admission: &str) -> Option<Record> {
     (record.predicate_type == PREDICATE_TYPE).then_some(record)
 }
 
+/// When the admission at `admission` was issued, in seconds since the Unix
+/// epoch, or `None` where no record is stored (CLOUD-2926).
+///
+/// The record file's modification time: `request` writes it once, and nothing
+/// rewrites an issued record but its spend, which reads this first. The store
+/// lives in the state directory, outside the repository.
+#[must_use]
+pub fn issued_at(repo_root: &Path, admission: &str) -> Option<u64> {
+    let path = record_path(repo_root, admission).ok()?;
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|since| since.as_secs())
+}
+
+/// The rules whose refusal names an OWNER-ONLY route (CLOUD-2926): the agent's
+/// own articulation records the reasoning and never authorizes the spend.
+/// `protected-mutation` guards the rules an agent is judged by.
+pub const OWNER_ONLY: &[&str] = &["protected-mutation"];
+
 /// Write `record` to the store, atomically.
 ///
 /// One temp file and one rename, so a reader never sees a partial record. The
@@ -1232,6 +1253,19 @@ pub fn unanswered<'a>(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: a gate's appended tool or surface read as part of the path,
+    /// so the owner's answer naming the path never matches (CLOUD-2926); or
+    /// `protected-mutation` dropped from the owner-only set.
+    #[test]
+    fn a_subjects_path_is_its_first_word() {
+        assert_eq!(
+            subject_path(".batten/asked.jsonl shell"),
+            ".batten/asked.jsonl"
+        );
+        assert_eq!(subject_path("policy/x.rego Write"), "policy/x.rego");
+        assert!(OWNER_ONLY.contains(&"protected-mutation"));
+    }
     #[cfg(test)]
     fn binding() -> Binding {
         Binding {

@@ -167,6 +167,8 @@ fn an_admitted_protected_write_passes() {
         .last()
         .unwrap_or_default()
         .to_owned();
+    // THE OWNER'S YES, which an owner-only override spends on (CLOUD-2926).
+    common::owner_admits(&dir, "protected-mutation", "path write refused", subject);
     let spent = run(
         &dir,
         &[

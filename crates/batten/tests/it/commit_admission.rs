@@ -129,6 +129,8 @@ fn articulate(dir: &Path, subject: &str) -> String {
          rejected-route=restoring it would undo the change\n",
     );
     let address = issued.trim().to_owned();
+    // THE OWNER'S YES, which an owner-only override spends on (CLOUD-2926).
+    common::owner_admits(dir, "protected-mutation", "path write refused", subject);
     let spent = run(
         dir,
         &[

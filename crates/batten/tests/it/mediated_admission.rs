@@ -154,6 +154,8 @@ fn spend(dir: &Path, admission: &str, subject: &str) -> bool {
 
 /// [`spend`] for any rule and class.
 fn spend_as(dir: &Path, admission: &str, rule: &str, class: &str, subject: &str) -> bool {
+    // THE OWNER'S YES, which an owner-only override spends on (CLOUD-2926).
+    common::owner_admits(dir, rule, class, subject);
     run(
         dir,
         &[
