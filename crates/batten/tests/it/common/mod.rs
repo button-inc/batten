@@ -1970,6 +1970,40 @@ pub(crate) fn state_dir<'a>(command: &'a mut Command, dir: &Path) -> &'a mut Com
 /// and `design audit` both read a JSONL stream on stdin, and two copies of a
 /// spawn-and-pipe helper are two places the environment scrubbing can drift out
 /// of agreement with [`batten`].
+/// Record the OWNER's yes to overriding `rule`'s `verdict` on `subject`'s
+/// path in `dir`'s asked ledger, the line the host's question hook appends
+/// (CLOUD-2926). An owner-only override spends only with one, recorded no
+/// earlier than the admission was issued, so a case calls this between its
+/// `override request` and its `override spend`.
+pub(crate) fn owner_admits(dir: &Path, rule: &str, verdict: &str, subject: &str) {
+    use std::io::Write as _;
+    let path = subject
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .next()
+        .unwrap_or(subject);
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let entry = serde_json::json!({
+        "question": format!("Override `{rule}` (verdict `{verdict}`) for {path}?"),
+        "options": [
+            {"label": "Admit the edit", "description": "Override and make the edit."},
+            {"label": "Refuse", "description": "Leave it alone."},
+        ],
+        "answer": "Admit the edit",
+        "at": at,
+    });
+    let ledger = dir.join(".batten/asked.jsonl");
+    std::fs::create_dir_all(ledger.parent().expect("the ledger has a parent"))
+        .expect("the ledger directory");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&ledger)
+        .expect("the ledger opens");
+    writeln!(file, "{entry}").expect("the ledger line");
+}
+
 #[must_use]
 pub(crate) fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
     stdin_run(&mut batten(), dir, args, input)

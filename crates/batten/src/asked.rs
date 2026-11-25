@@ -161,6 +161,43 @@ impl Entry {
     }
 }
 
+/// Whether `label` affirms an override: it says [`ADMIT`], or it is a "yes"
+/// that names the override (`Yes, override`), the two spellings the owner's
+/// answers on this ledger use.
+fn affirms_override(label: &str) -> bool {
+    let lower = label.to_ascii_lowercase();
+    label.starts_with(ADMIT) || (lower.starts_with("yes") && lower.contains("override"))
+}
+
+/// Whether the OWNER answered yes to overriding `rule`'s `verdict` on `path`,
+/// on the ledger under `root`, at or after `since` (CLOUD-2926).
+///
+/// THE HOST'S QUESTION TOOL IS THE ONLY WRITER of the ledger (its `PostToolUse`
+/// hook appends, and the ledger is protected), so an entry here is a human's
+/// answer and an agent's own words are not. An entry counts when its question
+/// names the rule, the class and the path, its answer is a presented option
+/// ([`Entry::selected`]: typed text is recorded, never a selection), one
+/// selected label affirms the override, and it was recorded no earlier than
+/// the admission it authorizes was issued: an answer given before the ask
+/// answered some other request.
+#[must_use]
+pub fn owner_admits(root: &Path, rule: &str, verdict: &str, path: &str, since: u64) -> bool {
+    let Ok(text) = crate::fsio::read_to_string(root.join(LEDGER)) else {
+        return false;
+    };
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Entry>(line).ok())
+        .any(|entry| {
+            entry.at >= since
+                && entry.names(rule)
+                && entry.names(verdict)
+                && entry.names(path)
+                && entry
+                    .selected()
+                    .is_some_and(|labels| labels.into_iter().any(affirms_override))
+        })
+}
+
 /// Every question-and-answer pair in one host result.
 ///
 /// Pure over the result so the parse is testable without a host. A question
@@ -338,6 +375,76 @@ pub fn added_since(root: &Path, base: &str) -> Result<Ledger> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: a refusing or typed answer read as the owner's yes, or the
+    /// owner's own spellings (`Admit the edit`, `Yes, override`) read as no.
+    #[test]
+    fn only_an_affirming_label_admits_an_override() {
+        assert!(affirms_override("Admit the edit"));
+        assert!(affirms_override("Yes, override"));
+        assert!(!affirms_override("Refuse"));
+        assert!(!affirms_override("No"));
+        assert!(!affirms_override("Yes"), "a bare yes names no override");
+        assert!(
+            !affirms_override("admit"),
+            "the label says Admit, capitalised"
+        );
+    }
+
+    /// Fails by: an owner answer counted when it names another rule, verdict
+    /// or path, was typed rather than selected, refused, or predates the ask
+    /// (CLOUD-2926); or a matching one ignored.
+    #[test]
+    fn the_owners_answer_must_match_and_follow_the_ask() -> Result<()> {
+        let root = crate::scratch::scratch("asked-owner-admits");
+        let line = |question: &str, answer: &str, at: u64| {
+            serde_json::json!({
+                "question": question,
+                "options": [
+                    {"label": "Admit the edit", "description": ""},
+                    {"label": "Refuse", "description": ""},
+                ],
+                "answer": answer,
+                "at": at,
+            })
+            .to_string()
+        };
+        let asked =
+            "Override `protected-mutation` (verdict `path write refused`) for policy/x.rego?";
+        let check = |lines: &[String]| -> Result<bool> {
+            std::fs::create_dir_all(root.join(".batten"))?;
+            std::fs::write(root.join(LEDGER), lines.join("\n") + "\n")?;
+            Ok(owner_admits(
+                &root,
+                "protected-mutation",
+                "path write refused",
+                "policy/x.rego",
+                100,
+            ))
+        };
+        assert!(check(&[line(asked, "Admit the edit", 100)])?);
+        assert!(
+            !check(&[line(asked, "Admit the edit", 99)])?,
+            "before the ask"
+        );
+        assert!(!check(&[line(asked, "Refuse", 200)])?, "a refusal");
+        assert!(!check(&[line(asked, "admit it", 200)])?, "typed text");
+        let other_path = asked.replace("policy/x.rego", "policy/y.rego");
+        assert!(!check(&[line(&other_path, "Admit the edit", 200)])?);
+        let other_rule = asked.replace("protected-mutation", "another-rule");
+        assert!(!check(&[line(&other_rule, "Admit the edit", 200)])?);
+        let other_verdict = asked.replace("path write refused", "rule read missing");
+        assert!(!check(&[line(&other_verdict, "Admit the edit", 200)])?);
+        std::fs::remove_file(root.join(LEDGER))?;
+        assert!(!owner_admits(
+            &root,
+            "protected-mutation",
+            "path write refused",
+            "policy/x.rego",
+            0
+        ));
+        Ok(())
+    }
     #[cfg(test)]
     const PAIR: &str = "rule-removed rule[task carry other]";
 

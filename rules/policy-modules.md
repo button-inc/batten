@@ -49,9 +49,19 @@ batten override request --rule protected-mutation \
 #   precondition=…   the class's precondition and the fact satisfying it here
 #   lost=…           what is lost if you do not override
 #   rejected-route=… which declared route you rejected, and why it does not apply
+# then ONE yes/no to the owner through the host's question tool, naming
+# `protected-mutation policy/<module>.rego`, with an `Admit…` option
 batten override spend --admission <address> --rule protected-mutation \
   --verdict "path write refused" --subject policy/<module>.rego
 ```
+
+**The owner opens it, never the agent (CLOUD-2926).** `protected-mutation` is an
+owner-only route: `spend` admits only when `.batten/asked.jsonl` holds the
+owner's answer, recorded by the question hook after the admission was issued,
+naming the same rule, verdict and path, and selecting an affirming option. Your
+stdin answers are the recorded reasoning; they never authorize. Without the
+owner's answer `spend` exits 3 and the admission stays issued, so it spends once
+the owner says yes.
 
 `spend` prints an `Admits-*` block that goes in the commit message. It is
 **self-verifying**: the address is computed over the binding _and the answers_,
