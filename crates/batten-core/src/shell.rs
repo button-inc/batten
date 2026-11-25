@@ -950,9 +950,10 @@ fn redirected(
     out.append(&mut nested);
 }
 
-/// A `[[ … ]]` or `(( … ))` carrying a redirection, as the segment of its
-/// redirect tokens alone (CLOUD-2840 review M5): it runs no program, and its
-/// target is written all the same, as `> out` alone writes it.
+/// A `[[ … ]]` or `(( … ))`: the commands its terms run (item 6), and, where
+/// it carries a redirection, the segment of its redirect tokens alone
+/// (CLOUD-2840 review M5) — it runs no program, and its target is written all
+/// the same, as `> out` alone writes it.
 fn flatten_test(
     node: &rable::Node,
     source: &str,
@@ -961,41 +962,35 @@ fn flatten_test(
     defined: &[Definition],
     out: &mut Vec<Segment>,
 ) {
-    let (rable::NodeKind::ConditionalExpr { redirects, .. }
-    | rable::NodeKind::ArithmeticCommand { redirects, .. }) = &node.kind
-    else {
-        return;
-    };
-    if redirects.is_empty() {
-        return;
-    }
-    let tokens: Vec<String> = redirects
-        .iter()
-        .flat_map(|redirect| redirect_words(redirect, source))
-        .collect();
-    let raw = node.source_text(source).to_owned();
-    out.push(Segment {
-        words: tokens.clone(),
-        redirects: tokens.clone(),
-        raw: raw.clone(),
-        terminator: after,
-        input_redirect: redirects.iter().any(binds_stdin),
-        stdin_text: redirects.iter().filter_map(stdin_text).collect(),
-        cat_bodies: Vec::new(),
-        lines: vec![SegmentLine {
-            words: tokens.clone(),
-            redirects: tokens,
-            raw,
-            function_call: false,
-            forwarded: Vec::new(),
-        }],
-        construct,
-        nested: false,
-        grouped: false,
-    });
     let mut nested = Vec::new();
-    for redirect in redirects {
-        descend_redirect_in(redirect, source, defined, &mut nested);
+    let redirects = match &node.kind {
+        rable::NodeKind::ConditionalExpr { body, redirects } => {
+            descend_test(body, defined, &mut nested);
+            redirects
+        }
+        rable::NodeKind::ArithmeticCommand {
+            redirects,
+            raw_content,
+            ..
+        } => {
+            descend_text(raw_content, true, defined, &mut nested);
+            redirects
+        }
+        _ => return,
+    };
+    if !redirects.is_empty() {
+        let tokens: Vec<String> = redirects
+            .iter()
+            .flat_map(|redirect| redirect_words(redirect, source))
+            .collect();
+        let raw = node.source_text(source).to_owned();
+        let mut segment = bare_segment(tokens.clone(), tokens, raw, after, construct);
+        segment.input_redirect = redirects.iter().any(binds_stdin);
+        segment.stdin_text = redirects.iter().filter_map(stdin_text).collect();
+        out.push(segment);
+        for redirect in redirects {
+            descend_redirect_in(redirect, source, defined, &mut nested);
+        }
     }
     for inner in &mut nested {
         inner.nested = true;
@@ -1531,18 +1526,43 @@ fn flatten_control(
             }
             redirects
         }
+        // THE HEADER RUNS FIRST, and its substitutions are commands (item 6):
+        // `for x in $(cmd)`, `for (( i=$(cmd); … ))`, `case $(cmd) in`.
         rable::NodeKind::For {
-            body, redirects, ..
-        }
-        | rable::NodeKind::ForArith {
-            body, redirects, ..
+            words,
+            body,
+            redirects,
+            ..
         } => {
+            descend_words(words.as_deref().unwrap_or_default(), source, &inner, out);
+            flatten_scoped(body, source, after, Some(("for", "body")), &mut inner, out);
+            redirects
+        }
+        rable::NodeKind::ForArith {
+            init,
+            cond,
+            incr,
+            body,
+            redirects,
+        } => {
+            let mut nested = Vec::new();
+            for clause in [init, cond, incr] {
+                descend_text(clause, true, &inner, &mut nested);
+            }
+            for segment in &mut nested {
+                segment.nested = true;
+            }
+            out.append(&mut nested);
             flatten_scoped(body, source, after, Some(("for", "body")), &mut inner, out);
             redirects
         }
         rable::NodeKind::Select {
-            body, redirects, ..
+            words,
+            body,
+            redirects,
+            ..
         } => {
+            descend_words(words.as_deref().unwrap_or_default(), source, &inner, out);
             flatten_scoped(
                 body,
                 source,
@@ -1554,10 +1574,14 @@ fn flatten_control(
             redirects
         }
         rable::NodeKind::Case {
+            word,
             patterns,
             redirects,
-            ..
         } => {
+            descend_words(std::slice::from_ref(word), source, &inner, out);
+            for arm in patterns {
+                descend_words(&arm.patterns, source, &inner, out);
+            }
             for body in patterns.iter().filter_map(|arm| arm.body.as_ref()) {
                 let tag = Some(("case", "body"));
                 let mut arm = inner.clone();
@@ -1671,17 +1695,200 @@ pub fn descend_word_in(
     out: &mut Vec<Segment>,
 ) {
     match &word.kind {
-        rable::NodeKind::Word { parts, .. } => {
-            for part in parts {
-                descend_word_in(part, source, defined, out);
+        // AN ARITHMETIC EXPANSION KEEPS NO TEXT AND NO NODE for a substitution
+        // inside it (`rable` 0.2.2: `expression: None`), so the word's own text
+        // is read instead — for every substitution in it, which is why its
+        // other parts are not also walked.
+        rable::NodeKind::Word { parts, value, .. } => {
+            if parts
+                .iter()
+                .any(|part| matches!(part.kind, rable::NodeKind::ArithmeticExpansion { .. }))
+            {
+                descend_text(value, true, defined, out);
+            } else {
+                for part in parts {
+                    descend_word_in(part, source, defined, out);
+                }
             }
         }
         rable::NodeKind::CommandSubstitution { command, .. }
         | rable::NodeKind::ProcessSubstitution { command, .. } => {
             flatten_scoped(command, source, None, None, &mut defined.to_vec(), out);
         }
+        // A `${…}` OPERAND IS TEXT TO THE PARSE (item 6): `${u:-$(cmd)}` runs
+        // `cmd`, and `rable` keeps the operand as a string.
+        rable::NodeKind::ParamExpansion { arg: Some(arg), .. }
+        | rable::NodeKind::ParamIndirect { arg: Some(arg), .. } => {
+            descend_text(arg, false, defined, out);
+        }
         _ => {}
     }
+}
+
+/// Every command a TEXT the parse left unparsed runs (CLOUD-2840 patch
+/// verification, item 6): a `${…}` operand, a `[[ … ]]` term, an arithmetic
+/// expression. Each `$( … )`, `` ` … ` `` and — outside `arithmetic` —
+/// `<( … )` or `>( … )` in it is parsed as the command it is and walked.
+///
+/// A substitution that will not parse is read by whitespace, so a program in
+/// it is still seen: reading too much is the safe direction here, and a miss
+/// is a program no policy judges.
+fn descend_text(text: &str, arithmetic: bool, defined: &[Definition], out: &mut Vec<Segment>) {
+    for inner in embedded_commands(text, arithmetic) {
+        let parsed = rable::parse(&inner, false)
+            .ok()
+            .filter(|nodes| covered(nodes, &inner));
+        if let Some(nodes) = parsed {
+            for node in &nodes {
+                flatten_scoped(node, &inner, None, None, &mut defined.to_vec(), out);
+            }
+        } else {
+            let words: Vec<String> = inner.split_whitespace().map(unquote).collect();
+            out.push(bare_segment(words, Vec::new(), inner, None, None));
+        }
+    }
+}
+
+/// The command text of every substitution in `text`, outermost first; one
+/// nested inside another is found when the outer one is walked.
+///
+/// Quotes are honoured as the shell's: nothing in single quotes runs, and a
+/// backslash escapes the next character. `$((` opens arithmetic, which is
+/// scanned through rather than read as a command.
+fn embedded_commands(text: &str, arithmetic: bool) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut found = Vec::new();
+    let mut double = false;
+    let mut at = 0;
+    while let Some(&c) = chars.get(at) {
+        let next = chars.get(at + 1).copied();
+        match c {
+            '\\' => at += 1,
+            '\'' if !double => {
+                at += 1;
+                while chars.get(at).is_some_and(|&inner| inner != '\'') {
+                    at += 1;
+                }
+            }
+            '"' => double = !double,
+            '`' => {
+                let start = at + 1;
+                at = start;
+                while chars.get(at).is_some_and(|&inner| inner != '`') {
+                    if chars[at] == '\\' {
+                        at += 1;
+                    }
+                    at += 1;
+                }
+                found.push(chars[start..at.min(chars.len())].iter().collect());
+            }
+            '$' if next == Some('(') && chars.get(at + 2) == Some(&'(') => at += 2,
+            '$' | '<' | '>' if next == Some('(') && (c == '$' || !arithmetic) => {
+                let start = at + 2;
+                let close = closing_paren(&chars, start).unwrap_or(chars.len());
+                found.push(chars[start..close].iter().collect());
+                at = close;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    found
+}
+
+/// The index of the `)` closing a group whose text starts at `start`, quotes
+/// honoured, or `None` where it never closes.
+fn closing_paren(chars: &[char], start: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut double = false;
+    let mut at = start;
+    while let Some(&c) = chars.get(at) {
+        match c {
+            '\\' => at += 1,
+            '\'' if !double => {
+                at += 1;
+                while chars.get(at).is_some_and(|&inner| inner != '\'') {
+                    at += 1;
+                }
+            }
+            '"' => double = !double,
+            '(' if !double => depth += 1,
+            ')' if !double => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    None
+}
+
+/// A segment the walk builds from tokens rather than from a `Command` node:
+/// its words, its redirection tokens (their suffix), and its span as written.
+fn bare_segment(
+    words: Vec<String>,
+    redirects: Vec<String>,
+    raw: String,
+    after: Option<Separator>,
+    construct: Option<(&'static str, &'static str)>,
+) -> Segment {
+    Segment {
+        lines: vec![SegmentLine {
+            words: words.clone(),
+            redirects: redirects.clone(),
+            raw: raw.clone(),
+            function_call: false,
+            forwarded: Vec::new(),
+        }],
+        words,
+        redirects,
+        raw,
+        terminator: after,
+        input_redirect: false,
+        stdin_text: Vec::new(),
+        cat_bodies: Vec::new(),
+        construct,
+        nested: false,
+        grouped: false,
+    }
+}
+
+/// Every command the terms of a `[[ … ]]` run, through its operators.
+fn descend_test(node: &rable::Node, defined: &[Definition], out: &mut Vec<Segment>) {
+    match &node.kind {
+        rable::NodeKind::CondTerm { value, .. } => descend_text(value, false, defined, out),
+        rable::NodeKind::UnaryTest { operand, .. }
+        | rable::NodeKind::CondNot { operand }
+        | rable::NodeKind::CondParen { inner: operand } => descend_test(operand, defined, out),
+        rable::NodeKind::BinaryTest { left, right, .. }
+        | rable::NodeKind::CondAnd { left, right }
+        | rable::NodeKind::CondOr { left, right } => {
+            descend_test(left, defined, out);
+            descend_test(right, defined, out);
+        }
+        _ => {}
+    }
+}
+
+/// `nodes`' substitutions, appended to `out` as nested segments: a `for` or
+/// `select` word list, a `case` word and its patterns.
+fn descend_words(
+    nodes: &[rable::Node],
+    source: &str,
+    defined: &[Definition],
+    out: &mut Vec<Segment>,
+) {
+    let mut nested = Vec::new();
+    for node in nodes {
+        descend_word_in(node, source, defined, &mut nested);
+    }
+    for inner in &mut nested {
+        inner.nested = true;
+    }
+    out.append(&mut nested);
 }
 
 /// The same, for a redirection's target: `diff <(a) <(b)` runs three programs.
@@ -1856,6 +2063,52 @@ mod tests {
             assert!(
                 parsed.iter().any(|segment| segment.nested
                     && segment.words.first().is_some_and(|word| word == "tee")),
+                "`{command}`: {parsed:?}"
+            );
+        }
+    }
+
+    /// A SUBSTITUTION RUNS WHEREVER IT IS WRITTEN (CLOUD-2840 patch
+    /// verification, item 6): in a `${…}` operand, `$(( … ))`, a `for` or
+    /// `select` word list, a `case` word or pattern, `[[ … ]]`, `(( … ))` and
+    /// a `for (( … ))` clause, as in a command's own words.
+    ///
+    /// Fails by: the walk descending none of those, so the push inside reaches
+    /// no segment.
+    #[test]
+    fn a_substitution_anywhere_is_a_nested_segment() {
+        for command in [
+            "echo ${u:-$(git push --force origin main)}",
+            "echo \"${u:+`git push --force origin main`}\"",
+            "echo ${!u:-$(git push --force origin main)}",
+            "echo $(( $(git push --force origin main) + 1 ))",
+            "for x in $(git push --force origin main); do :; done",
+            "select x in $(git push --force origin main); do :; done",
+            "case $(git push --force origin main) in a) :;; esac",
+            "case x in $(git push --force origin main)) :;; esac",
+            "[[ -n $(git push --force origin main) ]]",
+            "[[ x == \"$(git push --force origin main)\" && -n y ]]",
+            "(( $(git push --force origin main) ))",
+            "for (( i=$(git push --force origin main); i<1; i++ )); do :; done",
+            "echo ${u:-$(echo ${v:-$(git push --force origin main)})}",
+        ] {
+            let parsed = parsed(command);
+            assert!(
+                parsed.iter().any(|segment| segment.nested
+                    && segment.words.first().is_some_and(|word| word == "git")),
+                "`{command}`: {parsed:?}"
+            );
+        }
+        // Text that only looks like one is not: quoted, escaped, or a bare
+        // arithmetic expression.
+        for command in [
+            "echo ${u:-'$(git push)'}",
+            "(( a < (b + 1) ))",
+            "echo $(( 1 + 2 ))",
+        ] {
+            let parsed = parsed(command);
+            assert!(
+                !parsed.iter().any(|segment| segment.nested),
                 "`{command}`: {parsed:?}"
             );
         }
