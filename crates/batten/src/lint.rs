@@ -894,16 +894,36 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
     // pinned engine could not evaluate — `data.batten.library.read_only`
     // under v0.0.221 — so every mediated call in that tree was then refused
     // `engine-cannot-adjudicate`. A config that will not PARSE has no bundles
-    // to load; `smells` refuses it below with its own message.
+    // to load; `smells` refuses it below with its own message. A module FILE
+    // that is absent is a different fault, said by the verbs that run the
+    // rule, and a lint over a copied config alone stays the document it was.
     let bundles = match config::parse(&text, &path.display().to_string()) {
         Err(_) => Vec::new(),
-        Ok(config) => crate::policy::load(
-            dir,
-            &config.rules,
-            crate::policy::Vocabulary::from(&config),
-            crate::policy::ModuleChecks::Run,
-            base_ref,
-        )?,
+        Ok(config) => {
+            // PRESENT WHERE THE SOURCES ARE READ: at the base ref when one is
+            // in play, which is where `policy::load` reads them. A module the
+            // working config adds and the base lacks is absent there, not
+            // unloadable — every branch adding a module meets it.
+            let present = config
+                .rules
+                .iter()
+                .filter_map(|rule| rule.module.as_deref())
+                .all(|module| match base_ref {
+                    Some(reference) => crate::git::show(dir, reference, module).is_ok(),
+                    None => dir.join(module).is_file(),
+                });
+            match crate::policy::load(
+                dir,
+                &config.rules,
+                crate::policy::Vocabulary::from(&config),
+                crate::policy::ModuleChecks::Run,
+                base_ref,
+            ) {
+                Ok(bundles) => bundles,
+                Err(err) if present => return Err(err),
+                Err(_) => Vec::new(),
+            }
+        }
     };
     let found = smells(
         &text,
