@@ -139,9 +139,15 @@ impl<W: Write> Write for Shared<W> {
 /// hold a pipe open forever, and a join would wait with it. What the pump wrote
 /// is in its sinks either way, so the caller waits as long as it chooses
 /// ([`Pumping::finished`]) and then reads them.
+///
+/// JOINED ONCE IT HAS FINISHED (CLOUD-2789): the detach is for a pump still
+/// running at its caller's bound, never for one that reported. A pump that
+/// reported its result is joined by the [`Pumping::finished`] that saw it, so
+/// its thread, its sinks and its pipe are gone when the caller reads them.
 #[derive(Debug)]
 pub struct Pumping {
     done: mpsc::Receiver<std::io::Result<()>>,
+    thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 /// Where a [`Pumping`] stands.
@@ -163,7 +169,7 @@ impl Pumping {
     pub fn finished(&self, within: Duration) -> Pumped {
         // A NON-BLOCKING TAKE FIRST: `recv_timeout(ZERO)` may report a timeout
         // without looking at a result that is already waiting (CLOUD-1288).
-        match self.done.try_recv() {
+        let pumped = match self.done.try_recv() {
             Ok(result) => Pumped::Finished(result),
             Err(mpsc::TryRecvError::Disconnected) => Pumped::Lost,
             Err(mpsc::TryRecvError::Empty) => match self.done.recv_timeout(within) {
@@ -171,7 +177,29 @@ impl Pumping {
                 Err(mpsc::RecvTimeoutError::Timeout) => Pumped::Running,
                 Err(mpsc::RecvTimeoutError::Disconnected) => Pumped::Lost,
             },
+        };
+        if !matches!(pumped, Pumped::Running) {
+            self.join();
         }
+        pumped
+    }
+
+    /// Join the pump's thread: it sent its result or ended without one, so
+    /// the join waits only for its exit. A panic's payload is already
+    /// [`Pumped::Lost`].
+    fn join(&self) {
+        let thread = self.thread.lock().ok().and_then(|mut held| held.take());
+        if let Some(thread) = thread {
+            // The payload of a panic is the `Lost` already reported.
+            drop(thread.join());
+        }
+    }
+
+    /// Whether the pump's thread has been joined (none was ever spawned for a
+    /// [`Pumping::held`]).
+    #[must_use]
+    pub fn joined(&self) -> bool {
+        self.thread.lock().is_ok_and(|held| held.is_none())
     }
 }
 
@@ -183,7 +211,13 @@ impl Pumping {
     #[must_use]
     pub fn held() -> (Self, mpsc::Sender<std::io::Result<()>>) {
         let (tx, done) = mpsc::channel();
-        (Self { done }, tx)
+        (
+            Self {
+                done,
+                thread: std::sync::Mutex::new(None),
+            },
+            tx,
+        )
     }
 }
 
@@ -194,14 +228,17 @@ where
     R: Read + Send + 'static,
 {
     let (tx, done) = mpsc::channel();
-    drop(std::thread::spawn(move || {
+    let thread = std::thread::spawn(move || {
         let mut held: Vec<&mut dyn Write> = sinks
             .iter_mut()
             .map(|sink| sink.as_mut() as &mut dyn Write)
             .collect();
         let _ = tx.send(pump(pipe, &mut held));
-    }));
-    Pumping { done }
+    });
+    Pumping {
+        done,
+        thread: std::sync::Mutex::new(Some(thread)),
+    }
 }
 
 /// How long a finished child's pipes have to reach EOF once it is reaped: a
@@ -237,6 +274,26 @@ mod tests {
         let mut shared = Shared::new(Vec::new());
         assert_eq!(shared.write(b"abc").unwrap(), 3);
         assert_eq!(shared.bytes(), b"abc");
+    }
+
+    /// Fails by: a pump that reported its result left detached, its thread
+    /// still holding the sinks and the pipe after the caller has read them.
+    #[test]
+    fn a_finished_pump_is_joined() {
+        let buffer = Shared::new(Vec::new());
+        let pumping = spawn_pump(&b"chunk"[..], vec![Box::new(buffer.clone())]);
+        assert!(!pumping.joined(), "a running pump is not joined");
+        // The bound is never reached: the cursor ends at once, and the result
+        // arriving is the event the call returns on.
+        assert!(matches!(
+            pumping.finished(Duration::from_secs(3600)),
+            Pumped::Finished(Ok(()))
+        ));
+        assert!(pumping.joined(), "the pump that reported is joined");
+        assert!(
+            buffer.into_inner().is_ok(),
+            "its thread is gone, so no clone of the sink is left"
+        );
     }
 
     /// A pipe that yields `chunks` one per read, and on each read records what
