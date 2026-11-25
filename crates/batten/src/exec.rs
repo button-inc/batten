@@ -1450,13 +1450,6 @@ impl Adoption {
 #[derive(Debug)]
 struct AdoptionGuard(std::sync::Arc<Adoption>);
 
-#[cfg_attr(
-    all(not(unix), not(test)),
-    expect(
-        dead_code,
-        reason = "the forwarder it serves is unix-only; compiled everywhere so its cases are"
-    )
-)]
 impl Drop for AdoptionGuard {
     fn drop(&mut self) {
         self.0.settle(Adopted::Abandoned);
