@@ -465,6 +465,15 @@ fn a_session_under_config_in_never_writes_the_pin() {
         "{}",
         text(&output)
     );
+    // The hook adopts nothing at all (CLOUD-2840); the setup task is the
+    // writer, so the override is asserted where the write would happen.
+    let task = following(&dir, &["startup", "--session"], &env, None);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
+        "version = 1\n",
+        "the setup task under --config-in: {}",
+        text(&task)
+    );
 }
 
 #[test]

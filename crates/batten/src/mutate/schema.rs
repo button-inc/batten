@@ -16586,6 +16586,20 @@ mod tests {
             [(0, [String::from("src/x.txt")].into())].into(),
             "an include in a macro's arguments, in a probed file"
         );
+        // Another macro beside it is no include: `format!("y.txt")` names no
+        // file the build reads (CLOUD-2789, the include name is the predicate).
+        let beside = render_in(
+            "pub fn f() -> bool { assert_eq!(include_str!(\"x.txt\"), format!(\"y.txt\")); true }\n",
+            &[],
+            &BTreeSet::new(),
+            Some(0),
+            &FileScope::of("src/lib.rs"),
+        );
+        assert_eq!(
+            beside.compiled.probe_includes,
+            [(0, [String::from("src/x.txt")].into())].into(),
+            "a non-include macro in a macro's arguments"
+        );
     }
 
     /// R4-5 (CLOUD-2904, round 4): a case whose function no source names as
