@@ -455,6 +455,116 @@ fn the_declared_lock_writer_may_switch_it_off() {
     assert_eq!(code, Some(0), "the declared writer is clean\n{said}");
 }
 
+/// The `mise` the suite runs under.
+fn host_mise() -> PathBuf {
+    std::env::var_os("PATH")
+        .iter()
+        .flat_map(std::env::split_paths)
+        .map(|dir| dir.join("mise"))
+        .find(|candidate| candidate.is_file())
+        .expect("the suite runs under mise, so `mise` is on PATH")
+}
+
+/// `mise <args>` in `project`, against the cold `home`, with every ambient
+/// `MISE_*` dropped: exit status and stdout.
+fn cold_mise(project: &Path, home: &Path, args: &[&str]) -> (bool, String) {
+    let mut command = std::process::Command::new(host_mise());
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("MISE_") {
+            command.env_remove(name);
+        }
+    }
+    let output = command
+        .args(args)
+        .current_dir(project)
+        .env("MISE_DATA_DIR", home.join("data"))
+        .env("MISE_CACHE_DIR", home.join("cache"))
+        .env("MISE_STATE_DIR", home.join("state"))
+        .env("MISE_CONFIG_DIR", home.join("config"))
+        .env("MISE_CEILING_PATHS", home)
+        .env("MISE_TRUSTED_CONFIG_PATHS", project)
+        .output()
+        .expect("run mise");
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+    )
+}
+
+/// THE TOOLCHAIN CHECKS DECIDE AS THE JOB RESOLVES (CLOUD-2881). A `github:`
+/// install dir placed by hand, with no `.mise.backend.toml`, is the state a
+/// by-hand repair leaves. Under `lockfile = false` the verdicts split on it,
+/// measured on mise 2026.9.1: `toolchain-check`'s `mise install
+/// --dry-run-code` said 1, `toolchain-is-provisioned`'s `mise ls --current
+/// --missing` said nothing (pass), and `mise run` failed 127 on the API's 403.
+/// Under this repository's committed `[settings]`, read here rather than
+/// restated, the two checks must agree with the job for the bare dir and the
+/// registered one alike. `mise.toml`'s `settings-lockfile-off` and
+/// `settings-unlocked` rows reopen the split, and this case reddens.
+#[cfg(unix)]
+#[test]
+fn the_toolchain_checks_decide_as_the_job_resolves() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let committed: toml::Table = std::fs::read_to_string(common::at_root("mise.toml"))
+        .expect("read mise.toml")
+        .parse()
+        .expect("mise.toml parses");
+    let setting = |key: &str| {
+        committed["settings"]
+            .get(key)
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false)
+    };
+    let (lockfile, locked) = (setting("lockfile"), setting("locked"));
+    let tool = "github:example-org/example-tool";
+    let mut lock = format!("[[tools.\"{tool}\"]]\nversion = \"1.0.0\"\nbackend = \"{tool}\"\n\n");
+    for platform in ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64"] {
+        let block = format!(
+            "[tools.\"{tool}\".\"platforms.{platform}\"]\nchecksum = \"sha256:{}\"\nurl = \"https://example.invalid/{platform}.tar.gz\"\n\n",
+            "0".repeat(64)
+        );
+        lock.push_str(&block);
+    }
+    for registered in [false, true] {
+        let home = scratch(if registered {
+            "lock-checks-agree-registered"
+        } else {
+            "lock-checks-agree-bare"
+        });
+        let project = home.join("project");
+        write(
+            &project,
+            "mise.toml",
+            &format!(
+                "[settings]\nlockfile = {lockfile}\nlocked = {locked}\n\n[tools]\n\"{tool}\" = \"1.0.0\"\n\n[tasks.t]\nrun = \"example-tool\"\n"
+            ),
+        );
+        write(&project, "mise.lock", &lock);
+        let installs = home.join("data/installs/github-example-org-example-tool");
+        write(&installs, "1.0.0/example-tool", "#!/bin/sh\nexit 0\n");
+        let binary = installs.join("1.0.0/example-tool");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+            .expect("make the tool executable");
+        if registered {
+            write(
+                &installs,
+                ".mise.backend.toml",
+                &format!("short = \"{tool}\"\nfull = \"{tool}\"\nexplicit_backend = true\n"),
+            );
+        }
+        let (check, _) = cold_mise(&project, &home, &["install", "--dry-run-code"]);
+        let (listed, missing) = cold_mise(&project, &home, &["ls", "--current", "--missing"]);
+        let startup = listed && missing.trim().is_empty();
+        let (job, _) = cold_mise(&project, &home, &["run", "t"]);
+        assert_eq!(
+            (check, startup),
+            (job, job),
+            "registered={registered}: toolchain-check {check}, startup check {startup}, \
+             the job {job}, under lockfile={lockfile} locked={locked}"
+        );
+    }
+}
+
 /// THE COMMITTED CONFIG INSTALLS LOCKED EVERYWHERE (CLOUD-2881): this
 /// repository's own `mise.toml`, `mise.lock`, agent overlay, `renovate.json5`
 /// and every workflow, judged by this rule. `mise.toml`'s `#MUTANT` rows flip
