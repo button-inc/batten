@@ -23,12 +23,8 @@ use std::path::{Path, PathBuf};
     reason = "stays, and test-only: `exec --jobs` is a bundle of real children, so this suite's subject is a process tree and its fixtures are processes"
 )]
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
 
 use common::{StateHome as _, scratch};
-
-/// How long a case waits for a condition before giving up.
-const PATIENCE: Duration = Duration::from_secs(20);
 
 /// A `#!/bin/sh` fixture, executable, that runs `body`.
 fn script(name: &str, body: &str) -> PathBuf {
@@ -330,29 +326,18 @@ fn has_flock() -> bool {
 
 /// The live spool's three paths for one stream of one command.
 fn spool_paths(home: &Path, stream: &str, pid: u32, index: usize) -> (PathBuf, PathBuf, PathBuf) {
-    let dir = home.join("data").join("batten");
-    // The repo-name segment is derived at runtime, so the directory is found
-    // rather than spelled: one `live` directory exists under the scratch home.
-    let mut live = None;
-    let mut stack = vec![dir];
-    while let Some(next) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&next) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if path.file_name().and_then(|name| name.to_str()) == Some("live") {
-                    live = Some(path.clone());
-                }
-                stack.push(path);
-            }
-        }
-    }
-    let live = live.expect("the live capture directory exists while a command runs");
-    // `<pid>.<dispatch>.<index>`, and the dispatch is always `0` through the
-    // CLI — one `exec` per process. Derived here rather than read out of Batten's
-    // output, because printing it would break §6 byte-stability.
+    // DERIVED, NOT FOUND (CLOUD-2789): the repo-name segment is the one the
+    // engine derives from the directory it runs in, which is this process's,
+    // so the path is known before the engine has created any of it — which is
+    // what lets a case wait on its creation instead of searching for it.
+    let here = std::env::current_dir().expect("the case's own directory");
+    let root = batten::git::repo_root(&here).expect("the case runs inside a repository");
+    let live = home
+        .join("data")
+        .join(env!("CARGO_PKG_NAME"))
+        .join(batten::state::derive_repo_name(&root).expect("derive the repo state segment"))
+        .join("captures")
+        .join("live");
     let handle = format!("{stream}@{pid}.0.{index}");
     (
         live.join(&handle),
@@ -375,70 +360,58 @@ fn spool_paths(home: &Path, stream: &str, pid: u32, index: usize) -> (PathBuf, P
     reason = "stays, and test-only: the point of the case is a REAL second process contending for the same OS advisory lock — an in-process reader would assert nothing about kernel-released locks"
 )]
 fn read_spool(lock: &Path, watermark: &Path, data: &Path, from: u64) -> String {
-    let deadline = Instant::now() + PATIENCE;
+    let out = Command::new("flock")
+        .args([
+            "-s",
+            lock.to_str().expect("utf-8"),
+            "sh",
+            "-c",
+            &format!(
+                "w=$(cat {}); dd if={} bs=1 skip={from} count=$((w - {from})) 2>/dev/null",
+                watermark.display(),
+                data.display()
+            ),
+        ])
+        .streamed_output()
+        .expect("read the spool");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Block until `ready` answers, re-asked at every change the kernel reports
+/// in the deepest existing ancestor of `dir` — so the wait DESCENDS as the
+/// engine creates the directories on the way (CLOUD-2789). The watch is armed
+/// BEFORE each ask, so a change between an ask and the wait is never missed,
+/// and nothing here reads a clock: a condition that never comes hangs the case,
+/// and the mutation judge's per-case cut files that as the timeout it is.
+/// Linux only, as `flock(1)` already makes every caller.
+fn await_in<T>(dir: &Path, mut ready: impl FnMut() -> Option<T>) -> T {
+    use rustix::fs::inotify::{self, CreateFlags, WatchFlags};
     loop {
-        let out = Command::new("flock")
-            .args([
-                "-s",
-                lock.to_str().expect("utf-8"),
-                "sh",
-                "-c",
-                &format!(
-                    "w=$(cat {}); dd if={} bs=1 skip={from} count=$((w - {from})) 2>/dev/null",
-                    watermark.display(),
-                    data.display()
-                ),
-            ])
-            .streamed_output()
-            .expect("read the spool");
-        let seen = String::from_utf8_lossy(&out.stdout).into_owned();
-        if !seen.is_empty() || Instant::now() >= deadline {
-            return seen;
+        let watch = inotify::init(CreateFlags::CLOEXEC).expect("an inotify instance");
+        let watched = dir
+            .ancestors()
+            .find(|ancestor| ancestor.is_dir())
+            .expect("an existing ancestor");
+        inotify::add_watch(
+            &watch,
+            watched,
+            WatchFlags::CREATE
+                | WatchFlags::MOVED_TO
+                | WatchFlags::CLOSE_WRITE
+                | WatchFlags::MODIFY,
+        )
+        .expect("watch the directory");
+        if let Some(found) = ready() {
+            return found;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the `flock`ed reader \
-                      returning bytes, bounded by `PATIENCE` — the `deadline` comparison one line \
-                      up is what ends it either way (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
+        let mut event = [0_u8; 4096];
+        let _ = rustix::io::read(&watch, &mut event);
     }
 }
 
-/// Block until `path` exists, or fail.
-fn await_path(path: &Path) {
-    let deadline = Instant::now() + PATIENCE;
-    while Instant::now() < deadline {
-        if path.exists() {
-            return;
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is `path.exists`, bounded by \
-                      `PATIENCE` — past that this panics rather than waiting longer (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    panic!("{} never appeared", path.display());
-}
-
-/// Poll `probe` until it answers, bounded by [`PATIENCE`], or `None` once the
-/// patience is spent — so the CALLER asserts on the state it found, and no
-/// assertion reads the clock (CLOUD-2059).
-fn poll_until<T>(mut probe: impl FnMut() -> Option<T>) -> Option<T> {
-    let deadline = Instant::now() + PATIENCE;
-    while Instant::now() < deadline {
-        if let Some(found) = probe() {
-            return Some(found);
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the caller's probe answering, \
-                      bounded by `PATIENCE` — past that this answers `None` (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    None
+/// The length the watermark at `path` commits, once it is published.
+fn committed(path: &Path) -> Option<u64> {
+    fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
 /// A child that says `line`, records its own pid, and then holds its capture
@@ -501,13 +474,14 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
     // The live handle is derived from the pid and the command's index, both of
     // which this test knows because it spawned the process — printing it would
     // put a pid in Batten's output and break §6 byte-stability.
-    let (data, watermark, lock) = poll_until(|| {
-        std::panic::catch_unwind(|| spool_paths(&home, "stdout", pid, 0))
-            .ok()
-            .filter(|paths| paths.0.exists())
-    })
-    .expect("the spool never appeared");
-    await_path(&watermark);
+    let (data, watermark, lock) = spool_paths(&home, "stdout", pid, 0);
+    // THE EVENT: the engine publishing a watermark past zero, which it does
+    // once the child's line is in the spool.
+    let live = watermark
+        .parent()
+        .expect("the live directory")
+        .to_path_buf();
+    await_in(&live, || committed(&watermark).filter(|length| *length > 0));
 
     // A REAL SECOND PROCESS, holding the same OS advisory lock Batten takes.
     let read = |from: u64| read_spool(&lock, &watermark, &data, from);
@@ -587,12 +561,14 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
         .expect("spawn batten exec");
     let pid = batten.id();
 
-    let (data, watermark, lock) = poll_until(|| {
-        std::panic::catch_unwind(|| spool_paths(&home, "stdout", pid, 0))
-            .ok()
-            .filter(|paths| fs::read_to_string(&paths.1).is_ok_and(|text| text.trim() != "0"))
-    })
-    .expect("the spool never committed anything");
+    let (data, watermark, lock) = spool_paths(&home, "stdout", pid, 0);
+    // THE EVENT: a watermark past zero, the moment there is something durable
+    // to read after the kill.
+    let live = watermark
+        .parent()
+        .expect("the live directory")
+        .to_path_buf();
+    await_in(&live, || committed(&watermark).filter(|length| *length > 0));
 
     #[expect(
         clippy::disallowed_types,
