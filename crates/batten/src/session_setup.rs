@@ -340,18 +340,7 @@ pub fn run(
         "install",
         crate::clock::now_unix(),
     );
-    let install = if crate::startup::repair(root, &installs)
-        .iter()
-        .all(|outcome| outcome.ok)
-    {
-        task::OK
-    } else {
-        task::FAILED
-    };
-    let _ = crate::durable::replace(
-        dir(git_dir).join(INSTALLED),
-        format!("{session}\t{install}"),
-    );
+    install(root, git_dir, &installs, &session);
 
     task::push(
         git_dir,
@@ -422,6 +411,23 @@ pub fn run(
     );
     task::singleton_release(git_dir, TASK);
     passed
+}
+
+/// Run the install rows and record how the install phase ended for `session`
+/// ([`INSTALLED`]): the one outcome the install gate's hold keys on.
+fn install(root: &Path, git_dir: &Path, installs: &[crate::config_model::Startup], session: &str) {
+    let outcome = if crate::startup::repair(root, installs)
+        .iter()
+        .all(|row| row.ok)
+    {
+        task::OK
+    } else {
+        task::FAILED
+    };
+    let _ = crate::durable::replace(
+        dir(git_dir).join(INSTALLED),
+        format!("{session}\t{outcome}"),
+    );
 }
 
 /// Whether a handler FAILED: reported a violation, refused, or broke the
