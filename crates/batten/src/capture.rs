@@ -767,13 +767,27 @@ impl Index {
             .write(true)
             .open(&lock_at)
             .with_context(|| "the locator index lock could not be opened".to_owned())?;
-        fs4::FileExt::lock(&lock)
-            .with_context(|| "the locator index lock could not be taken".to_owned())?;
+        // WAITED ON THROUGH `lock_wait`, never a blocking `flock` (CLOUD-2789):
+        // the wait wakes on the holder's close, and a lock this process already
+        // holds is refused rather than waited on by itself.
+        let held = match crate::lock_wait::acquire(
+            lock,
+            &lock_at,
+            crate::lock_wait::Mode::Exclusive,
+            None,
+        )
+        .with_context(|| "the locator index lock could not be taken".to_owned())?
+        {
+            crate::lock_wait::Taken::Held(held) => held,
+            crate::lock_wait::Taken::Stopped | crate::lock_wait::Taken::Reentrant => {
+                anyhow::bail!("the locator index lock is already held by this process")
+            }
+        };
 
         let recorded = self.record_locked(locator, address);
-        // Released explicitly so the unlock is ordered before the function
-        // returns, rather than at whatever point the handle happens to drop.
-        let _ = fs4::FileExt::unlock(&lock);
+        // Released explicitly so the release is ordered before the function
+        // returns: the CLOSE is the release, and the event a waiter wakes on.
+        drop(held);
         recorded
     }
 

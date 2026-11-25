@@ -2109,42 +2109,57 @@ const DECIDE_LOCK: &str = "batten-record-decide.lock";
 /// whole decide makes the write, the judgement and the clear one step to every
 /// other decide.
 ///
-/// IT BLOCKS, AND SAYS SO FIRST. Losing the race and abstaining would be the same
-/// fail-open by another route, so a contended caller waits. The line it writes
-/// before waiting is a pointer and the only output contention ever produces, and
-/// it is what lets a case observe the wait without timing it.
+/// IT WAITS, AND SAYS SO FIRST. Losing the race and abstaining would be the
+/// same fail-open by another route, so a contended caller waits — on the
+/// holder's release, through [`crate::lock_wait`], never a blocking `flock`
+/// (CLOUD-2789). The line it writes before waiting is a pointer and the only
+/// output contention ever produces, and it is what lets a case observe the
+/// wait without timing it. A decide this process already holds is refused
+/// rather than waited on: the holder would be the waiter.
 ///
 /// # Errors
 ///
-/// An internal error when the lock file cannot be opened or a blocking lock fails.
-pub(crate) fn hold_decide(family: &str, err: &mut dyn Write) -> Result<Option<std::fs::File>> {
+/// An internal error when the lock file cannot be opened, the lock call
+/// fails, or this process already holds it.
+pub(crate) fn hold_decide(
+    family: &str,
+    err: &mut dyn Write,
+) -> Result<Option<crate::lock_wait::Held>> {
+    use crate::lock_wait::{Mode, Taken};
+
     let Ok(git_dir) = git::git_dir(Path::new(".")) else {
         return Ok(None);
     };
     let path = git_dir.join(DECIDE_LOCK);
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("open the decide lock {}", path.display()))?;
-    // Fully qualified for `capture.rs`'s reason: `std::fs::File::try_lock` shares
-    // the name, and an inherent method would win over the trait silently.
-    match fs4::FileExt::try_lock(&lock) {
-        Ok(()) => return Ok(Some(lock)),
-        Err(fs4::TryLockError::WouldBlock) => {}
-        Err(fs4::TryLockError::Error(error)) => {
-            return Err(anyhow::Error::from(error))
-                .with_context(|| format!("take the decide lock {}", path.display()));
+    let open = || {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("open the decide lock {}", path.display()))
+    };
+    // ONCE, however many times the wait parks: a spurious wake parks again.
+    let mut said = None;
+    let mut announce = || {
+        if said.is_none() {
+            said = Some(writeln!(
+                err,
+                "batten: record decide {family}: waiting on a concurrent decide"
+            ));
         }
+    };
+    let taken =
+        crate::lock_wait::acquire_announced(open()?, &path, Mode::Exclusive, None, &mut announce)
+            .with_context(|| format!("take the decide lock {}", path.display()))?;
+    said.transpose()?;
+    match taken {
+        Taken::Held(held) => Ok(Some(held)),
+        Taken::Stopped | Taken::Reentrant => Err(anyhow::anyhow!(
+            "the decide lock {} is already held by this process",
+            path.display()
+        )),
     }
-    writeln!(
-        err,
-        "batten: record decide {family}: waiting on a concurrent decide"
-    )?;
-    fs4::FileExt::lock(&lock)
-        .with_context(|| format!("take the decide lock {}", path.display()))?;
-    Ok(Some(lock))
 }
 
 /// Remove the record at `path`, where an absent one is already the answer.

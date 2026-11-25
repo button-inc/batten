@@ -678,7 +678,8 @@ fn a_tree_a_build_holds_is_never_collected() {
     let profile = tree.join("debug");
     unit(&profile, "busy", "6666666666666666", 3600, 4096);
     let lock = std::fs::File::create(profile.join(".cargo-lock")).unwrap();
-    lock.lock().unwrap();
+    lock.try_lock()
+        .expect("hold the build lock, free in a fresh fixture");
     let trees = [tree.clone()];
     let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
     assert!(
@@ -1066,7 +1067,7 @@ fn hook(dir: &Path, event: &str, env: &[(&str, &str)]) -> std::process::Output {
     use std::io::Write as _;
     let payload = serde_json::json!({
         "hook_event_name": event,
-        "session_id": "disk",
+        "session_id": common::session_id("disk"),
         "source": "startup",
         "tool_name": "Read",
         "tool_input": { "file_path": "Cargo.toml" },
@@ -1849,7 +1850,8 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
     let marker = dir.join(".git/refs/tags/gate-ran");
     let build_lock = dir.join("target/debug/.cargo-lock");
     let lock = std::fs::File::create(&build_lock).unwrap();
-    lock.lock().unwrap();
+    lock.try_lock()
+        .expect("hold the build lock, free in a fresh fixture");
     let verify = || {
         let mut command = common::batten();
         command
