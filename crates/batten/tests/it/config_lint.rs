@@ -2204,19 +2204,18 @@ fn a_modified_module_the_engine_cannot_evaluate_is_refused() {
 
 /// A module `name` publishing each of `ids`, each raising on its own field.
 fn module_publishing(name: &str, ids: &[&str]) -> String {
-    let declared: String = ids
-        .iter()
-        .map(|id| format!("rules contains \"{id}\"\n\n"))
-        .collect();
-    let raised: String = ids
-        .iter()
-        .map(|id| {
-            format!(
-                "violation contains {{\"rule\": \"{id}\", \"verdict\": \"call name refused\"}} if {{\n\
-                 \tinput.call.{id}\n}}\n\n"
-            )
-        })
-        .collect();
+    use std::fmt::Write as _;
+    let mut declared = String::new();
+    let mut raised = String::new();
+    for id in ids {
+        write!(declared, "rules contains \"{id}\"\n\n").expect("a String takes every write");
+        write!(
+            raised,
+            "violation contains {{\"rule\": \"{id}\", \"verdict\": \"call name refused\"}} if {{\n\
+             \tinput.call.{id}\n}}\n\n"
+        )
+        .expect("a String takes every write");
+    }
     format!("package batten.{name}\nimport rego.v1\n\n{declared}{raised}")
 }
 
