@@ -1640,22 +1640,6 @@ pub(crate) fn pkl_argv(
     argv
 }
 
-/// A path the committed protected set guards TODAY: the policy authority while the
-/// owner's set is declared, and otherwise the asked ledger the narrower set always
-/// guards (CLOUD-1078).
-///
-/// So a case asserting the committed gate always has a subject to assert over,
-/// rather than returning — and passing — while the owner has their set switched
-/// off (CLOUD-2059).
-#[must_use]
-pub(crate) fn committed_protected_path() -> &'static str {
-    if committed_protected_declared() {
-        "batten.toml"
-    } else {
-        ".batten/asked.jsonl"
-    }
-}
-
 /// The `pipeline` row this repository retired (CLOUD-2698), byte for byte as it
 /// was committed.
 ///
