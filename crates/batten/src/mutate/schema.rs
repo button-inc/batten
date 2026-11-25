@@ -395,6 +395,9 @@ pub struct Rendered {
     pub fn_names: Vec<String>,
     /// Each probed function's byte range in the source, in probe-id order.
     pub fn_spans: Vec<Range<usize>>,
+    /// Each probed function's keyed-text digest, in probe-id order: what a
+    /// selection keys a same-named function on ([`keyed_text`]).
+    pub keyed: Vec<String>,
 }
 
 impl Rendered {
@@ -927,6 +930,7 @@ pub fn render_in(
         skeleton: probed.skeleton,
         fn_names: probed.fn_names,
         fn_spans: probed.functions.into_iter().map(|(span, _)| span).collect(),
+        keyed: probed.keyed,
     }
 }
 
@@ -966,11 +970,14 @@ struct Probed {
     skeleton: String,
     /// Each probed function's own name, in probe-id order.
     fn_names: Vec<String>,
+    /// Each probed function's keyed-text digest, in probe-id order
+    /// ([`keyed_text`]).
+    keyed: Vec<String>,
 }
 
 /// One skeleton item as [`probe_sites`] gathers it: the names it answers
 /// to, its tokens' hasher and the names those tokens mention.
-type Grouped = (Vec<String>, blake3::Hasher, BTreeSet<String>);
+type Grouped = (Vec<String>, blake3::Hasher, BTreeSet<String>, String);
 
 /// A probe site in every function body that runs at run time, ids counted
 /// from `probe_from` (none when it is `None`), each with its function's
@@ -1043,6 +1050,11 @@ fn probe_sites(
                 .probes
                 .push(blake3::hash(text.as_bytes()).to_hex().to_string());
             probed.names.push(mentions_in(function.syntax(), place));
+            probed.keyed.push(
+                blake3::hash(keyed_text(function.syntax()).as_bytes())
+                    .to_hex()
+                    .to_string(),
+            );
             probed.fn_names.push(
                 ast::HasName::name(&function)
                     .map_or_else(String::new, |name| name.text().to_string()),
@@ -1084,14 +1096,23 @@ fn probe_sites(
         let at = owner.as_ref().map_or(usize::MAX, |item| {
             usize::from(item.syntax().text_range().start())
         });
-        let (_, hasher, mentions) = items
+        let (_, hasher, mentions, own) = items
             .entry(at)
             .or_insert_with(|| grouped(owner.as_ref(), place, &widened));
         hasher.update(token.text().as_bytes());
         hasher.update(b"\x1f");
+        own.push_str(token.text());
         token_mentions(&token, place, mentions);
     }
-    for (names, hasher, mentions) in items.into_values() {
+    // AN ITEM'S POSITION ONLY WHERE ITS OWN TOKENS OBSERVE IT (CLOUD-2904):
+    // keyed by its whole text, a `mod tests` holding one `line!()` case moved
+    // with every line above it, and with it every case reaching the module.
+    let mut whole: Option<String> = None;
+    for (at, (names, mut hasher, mentions, own)) in items {
+        if at != usize::MAX && position_sensitive(&own) {
+            let text = whole.get_or_insert_with(|| root.text().to_string());
+            hasher.update(format!("\x1c{}", position_in(text, at)).as_bytes());
+        }
         let digest = hasher.finalize().to_hex().to_string();
         probed
             .items
@@ -1105,21 +1126,23 @@ fn probe_sites(
 }
 
 /// A new skeleton item's group ([`probe_sites`]): the keys it is defined
-/// under, `""` for tokens outside any item, and a hasher already holding
-/// its members' names ([`member_names`]) and, for text observing where it
-/// sits, its position ([`position_sensitive`]).
+/// under, `""` for tokens outside any item, a hasher already holding its
+/// members' names ([`member_names`]), and its own tokens' text, which says
+/// whether it observes its position ([`position_sensitive`]).
 fn grouped(owner: Option<&ast::Item>, place: &FileScope, widened: &BTreeSet<String>) -> Grouped {
     let mut hasher = blake3::Hasher::new();
     let Some(item) = owner else {
-        return (vec![String::new()], hasher, BTreeSet::new());
+        return (vec![String::new()], hasher, BTreeSet::new(), String::new());
     };
     for member in member_names(item) {
         hasher.update(format!("\x1d{member}").as_bytes());
     }
-    if position_sensitive(&item.syntax().to_string()) {
-        hasher.update(format!("\x1c{}", position_of(item.syntax())).as_bytes());
-    }
-    (definitions(item, place, widened), hasher, BTreeSet::new())
+    (
+        definitions(item, place, widened),
+        hasher,
+        BTreeSet::new(),
+        String::new(),
+    )
 }
 
 /// Whether a token of `kind` changes no compiled behaviour, so no skeleton
@@ -1427,6 +1450,9 @@ const ASSOCIATED: char = '\u{1}';
 const DEFINED_IN: char = '\u{2}';
 /// Between a mention's name and the scope it is made in ([`mentions_in`]).
 const MENTIONED_IN: char = '\u{3}';
+/// After an impl's definition key: an impl is keyed wherever its names are,
+/// and followed only where it is a name's one definition ([`Graph::new`]).
+const IMPL_DEFINED: char = '\u{5}';
 
 /// Where one source file's items are defined and its names mentioned: its
 /// package and module path, or nowhere in particular.
@@ -1595,11 +1621,17 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
             format!("{name}{DEFINED_IN}{}{DEFINED_IN}{module}", place.package)
         }
     });
+    let impl_mark = if matches!(item, ast::Item::Impl(_)) {
+        IMPL_DEFINED.to_string()
+    } else {
+        String::new()
+    };
     free.chain(
         associated_names(item)
             .into_iter()
             .map(|name| format!("{ASSOCIATED}{name}")),
     )
+    .map(|key| format!("{key}{impl_mark}"))
     .chain(owner_type_names(item))
     .collect()
 }
@@ -1653,9 +1685,15 @@ fn position_sensitive(text: &str) -> bool {
 /// Where `node` starts in its file, as `line:column`.
 fn position_of(node: &SyntaxNode) -> String {
     let root = node.ancestors().last().unwrap_or_else(|| node.clone());
-    let text = root.text().to_string();
-    let at = usize::from(node.text_range().start()).min(text.len());
-    let before = text.get(..at).unwrap_or_default();
+    position_in(
+        &root.text().to_string(),
+        usize::from(node.text_range().start()),
+    )
+}
+
+/// Where byte `at` of `text` sits, as `line:column`.
+fn position_in(text: &str, at: usize) -> String {
+    let before = text.get(..at.min(text.len())).unwrap_or_default();
     let line = before.matches('\n').count();
     let column = before.len() - before.rfind('\n').map_or(0, |newline| newline + 1);
     format!("{line}:{column}")
@@ -1788,7 +1826,9 @@ fn associated_position(token: &ra_ap_syntax::SyntaxToken) -> bool {
 /// The name a definition or mention key is keyed under, its namespace kept:
 /// an associated key keeps its prefix, a scope is cut.
 fn key_base(key: &str) -> &str {
-    key.split([DEFINED_IN, MENTIONED_IN]).next().unwrap_or(key)
+    key.split([DEFINED_IN, MENTIONED_IN, IMPL_DEFINED])
+        .next()
+        .unwrap_or(key)
 }
 
 /// The bare identifier of a definition or mention key: no scope and no
@@ -1907,7 +1947,16 @@ fn moves_modules(source: &str, file: &str) -> bool {
         || root
             .descendants_with_tokens()
             .filter_map(ra_ap_syntax::NodeOrToken::into_token)
-            .filter(|token| token.kind() == SyntaxKind::IDENT && token.text() == "include")
+            .filter(|token| {
+                token.kind() == SyntaxKind::IDENT
+                    && token.text() == "include"
+                    && std::iter::successors(
+                        token.next_token(),
+                        ra_ap_syntax::SyntaxToken::next_token,
+                    )
+                    .find(|next| !next.kind().is_trivia())
+                    .is_some_and(|next| next.kind() == SyntaxKind::BANG)
+            })
             .any(|token| {
                 let resolved = token
                     .parent_ancestors()
@@ -5106,16 +5155,25 @@ impl<'g> Graph<'g> {
                     .collect()
             })
             .collect();
-        // EVERY DEFINITION A MENTION SEES IS FOLLOWED (CLOUD-2904). Cut at a
-        // name with more than one definition, an edit reached only through
-        // such a name's definitions (a type's impls, a `use` and its target)
-        // reused a stale verdict. What keeps the walk narrow is scoping: a
-        // mention sees only the definitions visible where it is made, and an
-        // impl's members only from an associated position.
+        // EVERY DEFINITION A MENTION SEES IS FOLLOWED BUT AN AMBIGUOUS IMPL
+        // (CLOUD-2904). Cut at every name with more than one definition, an
+        // edit reached only through a type's own definition or a `use`'s
+        // target reused a stale verdict; followed through every impl too, the
+        // impls of common names (`new`, `fmt`, `from`) joined one component
+        // and a `///` edit on any type in it re-keyed 97.6% of probed
+        // functions. So an impl is keyed wherever its names are and followed
+        // only where it is a name's one definition: its header names traits
+        // and bounds, and its bodies are probed functions run or not.
         let edges = resolves
             .iter()
             .map(|found| {
+                let count: usize = found
+                    .iter()
+                    .map(|id| depends.items.get(definitions[*id]).map_or(0, BTreeSet::len))
+                    .sum();
                 found
+                    .iter()
+                    .filter(|id| count <= 1 || !definitions[**id].ends_with(IMPL_DEFINED))
                     .iter()
                     .filter_map(|id| depends.mentions.get(definitions[*id]))
                     .flatten()
@@ -7503,6 +7561,7 @@ fn build_flags_in(
 #[derive(Debug, Default)]
 pub struct DependencyIndex {
     probes: Vec<String>,
+    keyed: Vec<String>,
     names: Vec<BTreeSet<String>>,
     own_names: std::collections::BTreeMap<String, BTreeSet<usize>>,
     items: std::collections::BTreeMap<String, BTreeSet<String>>,
@@ -7718,6 +7777,7 @@ pub fn dependency_index(
                 .insert(first + offset);
         }
         index.probes.extend(rendered.probes.iter().cloned());
+        index.keyed.extend(rendered.keyed.iter().cloned());
         index.names.extend(rendered.names.iter().cloned());
         for (name, digest) in rendered.items {
             index.items.entry(name).or_default().insert(digest);
@@ -7965,10 +8025,13 @@ fn selection_digest(
         if index.gated_names.contains(name) || !include(index.name_includes.get(name)) {
             return None;
         }
+        // A SAME-NAMED FUNCTION BY ITS TOKENS, NEVER ITS TEXT (CLOUD-2904): by
+        // its text, a comment in any `fn new` or `fmt` moved 97.5% of the
+        // selection reaches.
         for id in index.own_names.get(name).into_iter().flatten() {
             probes.insert(*id);
             hasher.update(format!("\x18{name}\x1f").as_bytes());
-            hasher.update(index.probes.get(*id).map_or("", String::as_str).as_bytes());
+            hasher.update(index.keyed.get(*id).map_or("", String::as_str).as_bytes());
         }
     }
     for definition in graph.defined(&nodes) {
@@ -12941,6 +13004,127 @@ mod tests {
             "mutate schema: reused 2 of 9 verdict(s), 1 decided by a held kill pair, \
              and 4 case run(s) a recorded outcome decided"
         );
+    }
+
+    /// B16 (CLOUD-2904, round 3): a name with several definitions is followed
+    /// through its non-impl ones and keys its impls without following them,
+    /// so an edit a type's own definition reaches moves the case naming it
+    /// and an edit only one of its impls' headers names does not.
+    ///
+    /// Fails by: every impl followed (the impls of common names join one
+    /// component, and a `///` edit on any type in it re-keyed 97.6% of probed
+    /// functions), or the type's own definition not followed.
+    #[test]
+    fn an_ambiguous_impl_is_keyed_but_not_followed() {
+        let g = case("g");
+        let cases: BTreeSet<Case> = [g.clone()].into();
+        let executed = [(g.clone(), [0].into())].into();
+        let source = |c: &str, d: &str| {
+            format!(
+                "pub fn g(s: S) -> S {{ s }}\npub struct S {{ c: C }}\n\
+                 impl S {{ pub const K: u8 = 0; }}\nimpl Tr for S where D: Bound {{}}\n\
+                 pub struct C({c});\npub struct D({d});\n"
+            )
+        };
+        let held = source_digests(&cases, &executed, &source("u32", "u32"));
+        let field = source_digests(&cases, &executed, &source("u64", "u32"));
+        assert_ne!(field[&g], held[&g], "S's own field type");
+        let bound = source_digests(&cases, &executed, &source("u32", "u64"));
+        assert_eq!(
+            bound[&g], held[&g],
+            "a type only an impl's where clause names"
+        );
+    }
+
+    /// B17 (CLOUD-2904, round 3): an item's position is keyed only when its
+    /// own tokens observe it, so a line added above a module holding a case
+    /// that reads `line!()` moves no case naming the module, while one above
+    /// a `const` reading it moves the case naming the const.
+    ///
+    /// Fails by: an item keyed at its position for what a nested function
+    /// observes (`mod tests` moved with every line above it, and 97.6% of
+    /// probed functions with it), or a `const` reading `line!()` not keyed at
+    /// its position.
+    #[test]
+    fn only_an_items_own_tokens_key_its_position() {
+        let names = case("names");
+        let cases: BTreeSet<Case> = [names.clone()].into();
+        let executed = [(names.clone(), [0].into())].into();
+        let module = |above: &str| {
+            format!(
+                "{above}pub fn names() -> u8 {{ tests::X }}\nmod tests {{\n    \
+                 pub const X: u8 = 1;\n    fn t() {{ assert_eq!(line!(), 4); }}\n}}\n"
+            )
+        };
+        assert_eq!(
+            source_digests(&cases, &executed, &module(""))[&names],
+            source_digests(&cases, &executed, &module("\n"))[&names],
+            "the module observes nothing itself"
+        );
+        let constant = |above: &str| {
+            format!("{above}pub fn names() -> u32 {{ L }}\nconst L: u32 = line!();\n")
+        };
+        assert_ne!(
+            source_digests(&cases, &executed, &constant(""))[&names],
+            source_digests(&cases, &executed, &constant("\n"))[&names],
+            "the const reads its line"
+        );
+    }
+
+    /// B18 (CLOUD-2904, round 3): a selection keys a function sharing a name
+    /// the case calls on its tokens, so a comment in it moves nothing and a
+    /// token edit does.
+    ///
+    /// Fails by: a same-named function keyed on its text (a comment in any
+    /// `fn new` moved 97.5% of selection reaches), or not keyed at all.
+    #[test]
+    fn a_same_named_functions_comment_moves_no_selection() {
+        let none = std::collections::BTreeMap::new();
+        let ran: BTreeSet<String> = {
+            let (root, format) = selection_tree("schema-select-same-base", SELECTED, "");
+            let index = dependency_index(&root, &format).unwrap();
+            ["run", "helper", "checks"]
+                .iter()
+                .flat_map(|name| index.digests_of(name))
+                .collect()
+        };
+        let digest = |name: &str, body: &str| {
+            let lib =
+                format!("{SELECTED}mod other {{\n    pub fn helper() -> u8 {{\n{body}    }}\n}}\n");
+            let (root, format) = selection_tree(name, &lib, "");
+            let index = dependency_index(&root, &format).unwrap();
+            let case = (String::from("tests::checks"), String::from("fix"));
+            let cases = [(case.clone(), (ran.clone(), Some(BTreeSet::new())))].into();
+            test_digests(&root, &index, &format.dirs, &cases, &none)
+                .remove(&case)
+                .unwrap()
+        };
+        let held = digest("schema-select-same-a", "        2\n");
+        assert_eq!(
+            digest("schema-select-same-b", "        // a note\n        2\n"),
+            held,
+            "a comment in a same-named function"
+        );
+        assert_ne!(
+            digest("schema-select-same-c", "        3\n"),
+            held,
+            "a token edit in it"
+        );
+    }
+
+    /// B19 (CLOUD-2904, round 3): only an `include!` macro call moves a
+    /// package's modules; an identifier spelled `include` does not.
+    ///
+    /// Fails by: any `include` identifier read as an include (a field or a
+    /// variable so named left `crates/batten` and `batten-core` with no module
+    /// scoping), or a spaced `include !` call missed.
+    #[test]
+    fn only_an_include_macro_call_moves_modules() {
+        assert!(!moves_modules(
+            "pub struct S { include: bool }\npub fn f(s: S) -> bool { let include = s.include; include }\n",
+            "src/lib.rs"
+        ));
+        assert!(moves_modules("include !(some_path());\n", "src/lib.rs"));
     }
 
     /// An impl answers to its header's unqualified names, and its members'
