@@ -870,9 +870,22 @@ mod tests {
         };
         let root = crate::scratch::scratch("session-setup-run-passes");
         let git_dir = root.join(".git");
-        assert!(run(&root, &git_dir, &[], &[], &[row("passes", "true")]));
+        let mut no_actions = |_: &str| {};
+        assert!(run(
+            &root,
+            &git_dir,
+            &[],
+            &mut no_actions,
+            &[row("passes", "true")]
+        ));
         let root = crate::scratch::scratch("session-setup-run-fails");
         let git_dir = root.join(".git");
-        assert!(!run(&root, &git_dir, &[], &[], &[row("fails", "false")]));
+        assert!(!run(
+            &root,
+            &git_dir,
+            &[],
+            &mut no_actions,
+            &[row("fails", "false")]
+        ));
     }
 }
