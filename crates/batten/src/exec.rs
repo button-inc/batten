@@ -3895,16 +3895,28 @@ mod tests {
                 .expect("write the fifo");
         }
 
+        /// The first write a child makes, waited for with no bound at all: the
+        /// read returns the moment the child writes (CLOUD-2789). For a wait
+        /// whose missing event leaves nothing running — no child was started
+        /// to write — so a case that hangs here holds no process a cut would
+        /// orphan, and the mutation judge files the hang as the timeout it is.
+        fn awaited(&self) -> String {
+            use std::io::Read as _;
+
+            let mut reader = &self.file;
+            let mut said = [0u8; 64];
+            let read = reader.read(&mut said).expect("read the fifo");
+            String::from_utf8_lossy(&said[..read]).trim().to_owned()
+        }
+
         /// The first write a child makes, waited for up to a fixed bound that
         /// is this case's input rather than its assertion. The read blocks on
         /// its own thread; a write that never comes fails the case at the
-        /// bound. The bound sits under the mutation judge's 20 s floor per case
-        /// (CLOUD-2911): at 20 s a `detached` made `()` raced that cut and was
-        /// read as a timeout, which decides nothing (CLOUD-2789).
+        /// bound.
         fn first(&self, what: &str) -> String {
             use std::io::Read as _;
 
-            let bound = Duration::from_secs(10);
+            let bound = Duration::from_secs(20);
 
             let mut reader = self.file.try_clone().expect("share the fifo");
             let (sent, answer) = std::sync::mpsc::channel();
@@ -3955,8 +3967,10 @@ mod tests {
         let pid = Fifo::at(dir.join("pid"));
         let script = format!("{trap} {}; while :; do :; done", pid.write("$$"));
         detached(Path::new("/bin/sh"), &["-c".to_owned(), script], &[]);
+        // THE EVENT, NOT A CLOCK: the child's pid arrives once it runs with its
+        // trap set; `detached` that starts nothing leaves this read waiting.
         Group {
-            pid: pid.first("the detached child writing its pid"),
+            pid: pid.awaited(),
             reaped: false,
         }
     }
