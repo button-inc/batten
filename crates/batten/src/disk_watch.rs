@@ -57,18 +57,6 @@ use crate::low_water::reset as reset_low_water;
 /// Where a watcher hands each collection's lines as it ends (CLOUD-2782).
 pub type RecordSink<'a> = Box<dyn Fn(&[String]) + Send + Sync + 'a>;
 
-/// How long a watcher waits, once the run it watched has returned, for the
-/// collection still running to answer (CLOUD-2789): the stream's drain grace,
-/// the crate's bound on waiting for work the run no longer needs.
-///
-/// A pass that outlives it is ABANDONED, never joined: the watcher records
-/// `disk-abandoned <grace_ms>` and returns, and the pass ends at its next unit
-/// on the stop flag it was handed, releasing its tree locks as it does. A pass
-/// wedged in one system call holds them until the process exits, which is the
-/// one release left; joining it was a step that printed its result and never
-/// exited.
-pub const PASS_GRACE: std::time::Duration = batten_stream::DRAIN_GRACE;
-
 /// What a watcher needs: the repository whose trees it collects, the committed
 /// `[prune]` rules, how free space is read, and what is never collected.
 ///
@@ -189,19 +177,20 @@ impl Sampler<'_> {
         }
     }
 
-    /// Stop every collection, and wait for the running one's answer for at
-    /// most [`PASS_GRACE`]; a pass that outlives it is recorded abandoned.
+    /// Stop every collection, and wait for the running one's answer.
+    ///
+    /// NO GRACE AND NO CLOCK (CLOUD-2789): the pass ends because it observes the
+    /// stop — its tree locks wait through [`crate::lock_wait`] on this same
+    /// stop, and its walks end at their next unit once it is raised — so the
+    /// join needs no bound. A grace that abandoned a pass hid one that did not.
     fn settle(&self) {
         self.halt.raise();
         let Some(answered) = self.pending.borrow_mut().take() else {
             return;
         };
-        match answered.recv_timeout(PASS_GRACE) {
-            Ok(done) => self.finish(done),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                self.emit(&[format!("disk-abandoned {}", PASS_GRACE.as_millis())]);
-            }
+        // A pass that panicked answers nothing; there is nothing to record.
+        if let Ok(done) = answered.recv() {
+            self.finish(done);
         }
     }
 
@@ -248,11 +237,10 @@ impl Sampler<'_> {
         let (repo, config, kept) = (self.repo.clone(), self.config.clone(), self.kept.clone());
         let (copies, halt) = (self.copies.clone(), Arc::clone(&self.halt));
         let (answer, answered) = std::sync::mpsc::channel();
-        // AN OWNED THREAD, NEVER A SCOPED ONE (CLOUD-2789): a scope joins every
-        // thread it spawned at its end, so a pass that would not end held the
-        // watched run open after it printed its result. This one is waited on
-        // for [`PASS_GRACE`] at most ([`Sampler::settle`]), and it reads nothing
-        // the watcher's thread owns: the volume is read there, when it answers.
+        // ITS OWN THREAD, ANSWERING OVER A CHANNEL (CLOUD-2789): the watcher
+        // reads the answer on a wake ([`Sampler::reap`]) or once the run ends
+        // ([`Sampler::settle`]), and the pass reads nothing the watcher's
+        // thread owns: the volume is read there, when it answers.
         let spawned = std::thread::Builder::new()
             .name("disk-collect".to_owned())
             .spawn(move || {
