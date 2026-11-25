@@ -472,17 +472,11 @@ fn guard_condition(arm: &ast::MatchArm) -> Option<ast::Expr> {
     arm.guard()?.syntax().children().find_map(ast::Expr::cast)
 }
 
-/// Whether `arm` may be what makes its match exhaustive: no guard, and a
-/// pattern that is `_` or a bare binding. A binding that names a unit variant
-/// or a const reads as one too; that costs a mutant judged in place, never a
-/// broken build.
+/// Whether `arm` surely catches everything its match is given: an unguarded
+/// `_`. A bare binding is not taken on its word: `N =>` and `None =>` parse
+/// as one and catch only their value, and the syntax cannot tell them apart.
 fn catches_all(arm: &ast::MatchArm) -> bool {
-    arm.guard().is_none()
-        && arm.pat().is_some_and(|pat| match pat {
-            ast::Pat::WildcardPat(_) => true,
-            ast::Pat::IdentPat(binding) => binding.pat().is_none(),
-            _ => false,
-        })
+    arm.guard().is_none() && matches!(arm.pat(), Some(ast::Pat::WildcardPat(_)))
 }
 
 /// A placed mutant: its site, its wrap, and the `const` its function must
@@ -567,19 +561,20 @@ fn switched(
             if bare != (start..end) && whole != (start..end) {
                 return None;
             }
-            // THE LAST UNGUARDED CATCH-ALL CANNOT BE SWITCHED OFF (CLOUD-2904):
+            // NO ARM IS GUARDED OFF UNLESS A `_` STILL CATCHES ALL (CLOUD-2904):
             // a guarded arm counts for nothing in exhaustiveness, so guarding
-            // the only arm that catches everything breaks the whole schema
-            // build on an error that points at the scrutinee, not at the arm.
+            // an arm the match needs, its last catch-all (`other =>` beside
+            // `_ if registered =>` in `Shared::of`) or one of an enumeration
+            // (`true =>` beside `false =>`), breaks the whole schema build on
+            // an error that points at the scrutinee, not at the arm.
             // cargo-mutants lists such a deletion when another arm is a `_`
             // carrying a guard; handed back, it is judged in place.
-            if catches_all(&arm)
-                && !arm
-                    .syntax()
-                    .parent()
-                    .into_iter()
-                    .flat_map(|list| list.children().filter_map(ast::MatchArm::cast))
-                    .any(|other| other != arm && catches_all(&other))
+            if !arm
+                .syntax()
+                .parent()
+                .into_iter()
+                .flat_map(|list| list.children().filter_map(ast::MatchArm::cast))
+                .any(|other| other != arm && catches_all(&other))
             {
                 return None;
             }
@@ -11898,9 +11893,10 @@ mod tests {
     /// The arm that alone makes a match exhaustive is handed back, never
     /// guarded off; one a second unguarded catch-all covers still switches.
     ///
-    /// Fails by: `other =>` beside a guarded `_ if g =>` switched off, which
-    /// leaves the match non-exhaustive and breaks the whole schema build on an
-    /// error no mutant owns; or every catch-all deletion handed back.
+    /// Fails by: `other =>` beside a guarded `_ if g =>` or a const `N =>`
+    /// switched off, or `true =>` of a `bool` match enumerated beside a guarded
+    /// `_`, each leaving the match non-exhaustive and breaking the whole schema
+    /// build on an error no mutant owns; or every arm deletion handed back.
     #[test]
     fn the_last_unguarded_catch_all_arm_is_handed_back() {
         let source = "fn f(x: u8, g: bool) -> u8 {\n    match x {\n        _ if g => 1,\n        3 => 4,\n        other => other,\n    }\n}\n";
@@ -11909,6 +11905,12 @@ mod tests {
         let wild = "fn f(x: u8) -> u8 {\n    match x {\n        _ => 1,\n    }\n}\n";
         let lone = render_all(wild, &[listed("MatchArm", "", (3, 9), (3, 15))]);
         assert_eq!(lone.classic, vec![0], "{}", lone.text);
+        let listed_out = "fn f(b: bool, g: bool) -> u8 {\n    match b {\n        _ if g => 0,\n        true => 1,\n        false => 2,\n    }\n}\n";
+        let enumerated = render_all(listed_out, &[listed("MatchArm", "", (4, 9), (4, 18))]);
+        assert_eq!(enumerated.classic, vec![0], "exhaustive by enumeration");
+        let named = "const N: u8 = 5;\nfn f(x: u8) -> u8 {\n    match x {\n        N => 4,\n        other => other,\n    }\n}\n";
+        let beside = render_all(named, &[listed("MatchArm", "", (5, 9), (5, 23))]);
+        assert_eq!(beside.classic, vec![0], "a const is no catch-all");
         let covered = "fn f(x: u8) -> u8 {\n    match x {\n        3 => 4,\n        other => other,\n        _ => 0,\n    }\n}\n";
         let spare = render_all(covered, &[listed("MatchArm", "", (4, 9), (4, 23))]);
         assert!(spare.classic.is_empty(), "{:?}", spare.classic);
