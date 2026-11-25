@@ -2388,6 +2388,42 @@ mod tests {
         (dir, text)
     }
 
+    /// CLOUD-2789: a POLICY rule whose module is absent from the tree leaves a
+    /// gap in the set, so no bundle is returned for the set-level smells to
+    /// answer over; with every module present, the set loads whole.
+    ///
+    /// Fails by: the gap read off the NON-policy rules, so a set missing one
+    /// policy module is answered for as if it were whole.
+    #[test]
+    fn a_policy_module_absent_from_the_tree_returns_no_bundle() {
+        let dir = crate::scratch::scratch("lint-loaded-from-tree-gap");
+        std::fs::create_dir_all(dir.join("policy")).unwrap();
+        for name in ["a", "b"] {
+            std::fs::write(
+                dir.join(format!("policy/{name}.rego")),
+                format!("package batten.{name}\nimport rego.v1\n\nrules contains \"{name}-id\"\n"),
+            )
+            .unwrap();
+        }
+        let row = |name: &str| {
+            format!(
+                "[[rule]]\nid = \"{name} row\"\nkind = \"policy\"\nscope = \"tree\"\n\
+                 line_sources = [\"batten.toml\"]\nmodule = \"policy/{name}.rego\"\n\
+                 severity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n\n"
+            )
+        };
+        let loaded = |names: &[&str]| {
+            let text = names
+                .iter()
+                .fold(String::from("version = 1\n\n"), |text, name| {
+                    text + &row(name)
+                });
+            loaded_from_tree(&dir, &config::parse(&text, "test").unwrap()).unwrap()
+        };
+        assert_eq!(loaded(&["a", "b"]).len(), 2, "every module present");
+        assert!(loaded(&["a", "absent"]).is_empty(), "one module absent");
+    }
+
     /// Fails by: a predicate id the bundle publishes refused as a typo; the
     /// abstention over an unloaded bundle dropped; or the set analysis located
     /// at a row that is not the bundle's own.
