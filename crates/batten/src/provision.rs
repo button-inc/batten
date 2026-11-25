@@ -1570,7 +1570,7 @@ fn credential_usable(value: &Secret, probe: &str) -> bool {
 /// situation: one is the operator's credential to replace and the others are the
 /// consumer's config to write. Reporting the distinction is the only thing
 /// separating this from a mechanism that loads clean and decides nothing.
-fn credential_health() -> Credential {
+pub(crate) fn credential_health() -> Credential {
     let declaration = match credential_declaration() {
         Ok(declaration) => declaration,
         // No declared table is could-not-look, not health. Reading it as healthy
