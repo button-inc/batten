@@ -97,6 +97,25 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+/// Write one sweep progress line to `$out` and say the step advanced
+/// (CLOUD-2789): the line a person reads and the stamp the land's self-stall
+/// arm reads are one write, so no stage can report to the log and stay still to
+/// the lap. MEASURED ON #1276 at add313832: the declared sweep printed all 204
+/// of its rows over 9,754 s and the lap was cancelled as stalled, because only
+/// the judging loop told the task it moved.
+///
+/// Every `mutate sweep: row …` and `mutate schema: …` line goes through this,
+/// and `every_sweep_line_says_the_step_advanced` refuses one written any other
+/// way.
+macro_rules! progress {
+    ($out:expr, $($arg:tt)*) => {{
+        let line = ::std::format!($($arg)*);
+        $crate::step::advanced(&line);
+        ::std::writeln!($out, "{line}")
+    }};
+}
+pub(crate) use progress;
+
 pub mod cover;
 pub mod resume;
 pub mod schema;
@@ -3528,7 +3547,7 @@ fn run_suite(
     if ran.outcome == Outcome::TimedOut {
         if let Some(stopped) = stopped_at(&ran.output) {
             use std::io::Write as _;
-            let _ = writeln!(
+            let _ = crate::mutate::progress!(
                 std::io::stderr(),
                 "mutate sweep: {want} timed out at `{stopped}`"
             );
@@ -5481,7 +5500,7 @@ fn build_if_owed(
     if !owed {
         return None;
     }
-    let _ = writeln!(
+    let _ = crate::mutate::progress!(
         progress,
         "mutate sweep: building the cargo suites the rows run under"
     );
@@ -5739,7 +5758,7 @@ pub fn sweep_shard(
     let gates = findings.len() + holding.len();
     findings.extend(nextest_absent);
     let total = mine.len();
-    let _ = writeln!(
+    let _ = crate::mutate::progress!(
         progress,
         "mutate sweep: {total} row(s) across {gates} gate(s)"
     );
@@ -5767,7 +5786,7 @@ pub fn sweep_shard(
         let key = row_key(root, gate, row);
         if let Some(verdict) = recorded.get(&key) {
             replayed += 1;
-            let _ = writeln!(
+            let _ = crate::mutate::progress!(
                 progress,
                 "mutate sweep: row {declared}/{total} {name} {} {verdict} (recorded) 0s",
                 row.slug
@@ -5780,7 +5799,7 @@ pub fn sweep_shard(
         if !bypassed {
             record_row(&record, &key, &verdict);
         }
-        let _ = writeln!(
+        let _ = crate::mutate::progress!(
             progress,
             "mutate sweep: row {declared}/{total} {name} {} {verdict} {}s",
             row.slug,
@@ -6679,6 +6698,45 @@ pub fn disk_short(at: &Path, disk_mb: u64, floor_mb: u64) -> Result<Option<u64>>
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// EVERY SWEEP LINE SAYS THE STEP ADVANCED (CLOUD-2789): a census of the
+    /// sweep's own sources, so a stage that reports to the log through any
+    /// writer but [`progress!`] is refused here rather than found as a lap
+    /// cancelled while it was still working (add313832: 204 declared rows over
+    /// 9,754 s, none of them seen by the self-stall arm).
+    ///
+    /// Two shapes are refused, in the production half of each file: a write
+    /// whose format opens `mutate sweep` or `mutate schema`, and a `"{}"`
+    /// write of one of the functions that build such a line.
+    ///
+    /// Fails by: any of those lines written with `write!`/`writeln!`, which
+    /// leaves the stamp the stall arm reads where it was.
+    #[test]
+    fn every_sweep_line_says_the_step_advanced() {
+        let literal =
+            regex::Regex::new(r#"write(?:ln)?!\(\s*[^,]+,\s*"mutate (?:schema|sweep)"#).unwrap();
+        let built = regex::Regex::new(
+            r#"write(?:ln)?!\(\s*[^,]+,\s*"\{\}",\s*(?:untraced_line|reach_starts_line|control_red_lines|stable_line|[\w.]*hang_line|tally\.line)\("#,
+        )
+        .unwrap();
+        for (name, source) in [
+            ("mutate.rs", include_str!("mutate.rs")),
+            ("mutate/schema.rs", include_str!("mutate/schema.rs")),
+        ] {
+            let production = source
+                .find("\nmod tests {")
+                .map_or(source, |cut| &source[..cut]);
+            let unsaid: Vec<usize> = literal
+                .find_iter(production)
+                .chain(built.find_iter(production))
+                .map(|found| production[..found.start()].lines().count() + 1)
+                .collect();
+            assert!(
+                unsaid.is_empty(),
+                "{name}: a sweep line written without progress! at line(s) {unsaid:?}"
+            );
+        }
+    }
 
     /// WHERE NO RUNTIME CAN BE BUILT, A DROPPED DEADLINE HAS NOT LAPSED and an
     /// undropped one whose bound has passed has. Both bounds end at once: a
