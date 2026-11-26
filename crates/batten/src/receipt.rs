@@ -506,11 +506,15 @@ fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
 /// bound step receipts keep (CLOUD-2784). Past it, the oldest go first.
 const KEPT_SLOTS: usize = 32;
 
-/// The directory a check's (head, base) slots live in, beside its canonical
-/// receipt (CLOUD-2253 A3).
+/// The directory a check's (head, base) slots live in (CLOUD-2253 A3).
+///
+/// A SIBLING STORE, never inside `receipts/`: that store is one file per check,
+/// updated in place, and its readers list it as exactly that.
 fn slot_dir(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
-    let canonical = receipt_path(repo_root, check)?;
-    Ok(canonical.with_extension("slots"))
+    let fingerprint = identity::scope_fingerprint(check, RECEIPT_SCOPE_KEY);
+    Ok(state::repo_state_dir(Path::new(repo_root))?
+        .join("receipt-slots")
+        .join(fingerprint.to_hex()))
 }
 
 /// The slot one (head, base) pair is filed under.
