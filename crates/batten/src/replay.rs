@@ -1549,6 +1549,24 @@ fn run_union(
     published: &[(String, Option<String>)],
     wrapped: Option<&(PathBuf, String)>,
 ) -> Option<(i32, String)> {
+    // ONE CHECK PAST EVERY FAILING TARGET FIRST (CLOUD-2789). `nextest` builds
+    // through cargo, which stops at the first test target that fails to
+    // compile, so each charging round saw one crate's errors and the next
+    // round the next crate's: measured on #1276, 17 rounds and 1,648 s. A
+    // spliced body sits in a test target, which nothing depends on, so a
+    // `--keep-going` check reports every one of them in one pass, and the
+    // charge drops them all before `nextest` builds at all.
+    if let Some((code, output)) = crate::exec::piped_argv(
+        tree,
+        &check_argv(),
+        "",
+        crate::exec::Diagnostics::Keep,
+        published,
+    ) && code != 0
+        && output.contains(COMPILE_FAILED)
+    {
+        return Some((BUILD_FAILED, output));
+    }
     let tests: Vec<&str> = splices
         .values()
         .flat_map(|(_, modified)| modified.iter().map(|test| test.inner.as_str()))
@@ -1581,6 +1599,23 @@ fn run_union(
     // names only where a capture is stored, and the child inherits this
     // process's directory — the checkout, whose HEAD test passes.
     crate::exec::piped_argv(tree, &argv, "", crate::exec::Diagnostics::Keep, published)
+}
+
+/// The check [`run_union`] runs before it builds: every test target in the
+/// workspace, past every one that fails, in the human format whose `-->`
+/// locations [`compile_errors`] reads.
+fn check_argv() -> Vec<String> {
+    [
+        "cargo",
+        "check",
+        "--workspace",
+        "--tests",
+        "--keep-going",
+        "--color",
+        "never",
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 /// The spliced bodies that hold a compile error's location, as `(path, inner)`.
@@ -3098,6 +3133,63 @@ mod tests {
         )
         .unwrap();
         assert_eq!(keys(&findings).len(), 2, "every test still standing fails");
+    }
+
+    /// Fails by: the pre-build check stopping at the first test target that
+    /// fails, or skipping the test targets, so each charging round sees one
+    /// crate's errors (CLOUD-2789: 17 rounds, 1,648 s on #1276).
+    #[test]
+    fn the_union_is_checked_once_past_every_failing_target() {
+        let argv = check_argv();
+        for flag in ["check", "--workspace", "--tests", "--keep-going"] {
+            assert!(argv.iter().any(|word| word == flag), "{flag}: {argv:?}");
+        }
+    }
+
+    /// Fails by: a build whose output names every uncompilable body charging
+    /// only some of them, so the next round rebuilds for the rest. TWO BUILDS
+    /// for any set of broken bodies: the one that names them all, and the one
+    /// over what is left.
+    #[test]
+    fn every_body_one_build_names_is_charged_in_that_round() {
+        let (splices, _) = two_modified(KEPT_BASE);
+        let errors: String = splices
+            .iter()
+            .flat_map(|(path, (head_text, modified))| {
+                spliced_lines(head_text, modified)
+                    .into_iter()
+                    .map(move |(_, first, _)| {
+                        format!("error[E0425]: gone\n   --> {path}:{first}:9\n")
+                    })
+            })
+            .collect();
+        let builds = std::cell::Cell::new(0_u32);
+        let run = |_: &Splices| {
+            builds.set(builds.get() + 1);
+            if builds.get() == 1 {
+                Some((
+                    BUILD_FAILED,
+                    format!("{errors}error: could not compile `x`\n"),
+                ))
+            } else {
+                Some((0, String::new()))
+            }
+        };
+        let tree = judged_tree("replay-one-round");
+        let findings = judge(
+            &tree,
+            &splices,
+            &journal("replay-one-round-journal"),
+            &run,
+            &|_: &Splices| None,
+        )
+        .unwrap();
+        assert_eq!(keys(&findings).len(), 2, "both broken bodies are charged");
+        assert!(
+            builds.get() <= 2,
+            "{} builds for one set of broken bodies",
+            builds.get()
+        );
     }
 }
 
