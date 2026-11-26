@@ -5,6 +5,10 @@
 #MUTANT host-dispatch-unread|s@^\tsetup.background == false$@\tfalse@|a_host_without_a_background_facility_dispatches_inline
 #MUTANT neutral-read-unread|s@^\tinput.call.operation == "execute"$@\tfalse@|a_host_neutral_read_is_admitted_before_the_dispatch
 #MUTANT pending-read-open|s@^\t\tnot pending_name(program.program)$@\t\ttrue@|a_reader_the_install_may_own_is_held_before_the_dispatch
+#MUTANT notification-read-held|s@^reads if input.call.tool == "ReadNotifications"$@reads if false@|a_held_session_reads_its_instructions_in_every_state
+#MUTANT mcp-read-held|s@^\tinput.call.operation == "mcp"$@\tfalse@|a_held_session_reads_its_instructions_in_every_state
+#MUTANT remedy-cycle|s@^\tnot dispatch_call$@\ttrue@|every_remedy_the_gate_prints_is_admitted_in_its_state
+#MUTANT mcp-read-unjudged|s@^\tdata.batten.library.read_only(input.call)$@\ttrue@|a_held_session_reads_its_instructions_in_every_state
 #
 # CLOUD-2840, the owner's design (2026-11-25): "implement install as a 10/100ms
 # hook just like every other hook with instructions to agent on how to install as
@@ -30,14 +34,24 @@
 #     may own. Host-neutral, so Cursor's `Shell` and every other host can look.
 #     NOT `git`, whatever its subcommand (r5): `-c`, `--config-env` and a
 #     `GIT_*` assignment each make git run a program, and telling those apart
-#     is the engine-default library's git reading. That library, and its
-#     read-only allowlist, join this reading only once the PINNED release
-#     carries it (CLOUD-2840 step 14): this module is evaluated by that
-#     release, and a call to a function it lacks makes the module unevaluable,
-#     so every mediated call is refused. A reader the install may own (a shim
+#     is the engine-default library's git reading. A reader the install may own (a shim
 #     under the manager's root, or a name nothing resolves) is held, because
 #     running it may run the manager's auto-install before setup. The remedy
 #     subject is the dispatch command.
+#
+#     THE CALLS THAT DELIVER INSTRUCTIONS ARE READS TOO (CLOUD-2840 r6). A
+#     held child whose parent had answered could not read the answer, because
+#     the host's notification read was itself held, so it asked the same
+#     question for nearly four hours and was archived: a gate that holds the
+#     channel its remedy may arrive on deadlocks a fleet. So the host's
+#     notification read (keyed on its tool name, `ReadNotifications`, never on
+#     what it carries) and an MCP method the engine-default library reads as
+#     read-only are admitted. The library is called only where the
+#     `install-pending` fact exists, which only an engine that carries the
+#     library produces; the pinned engine evaluates `violation`, not the
+#     `test_` rules, so it never reaches the call (measured on v0.0.221: the
+#     hook answers, and `could not find function` faults only an evaluation
+#     that reaches it). Every other non-shell call stays held.
 #
 # (b) a record exists and is not `ok`: a program that does not resolve,
 #     resolves under the environment manager's install root, or is the manager
@@ -117,6 +131,16 @@ pending_name(name) if {
 # --- (a) what a session may do before it dispatches --------------------------
 
 reads if input.call.operation == "read"
+
+# The host's notification read: the channel a parent's answer arrives on.
+reads if input.call.tool == "ReadNotifications"
+
+# An MCP method the library reads as read-only: the tracker, the forge, the
+# session's own transcript, where a brief or its answer is read.
+reads if {
+	input.call.operation == "mcp"
+	data.batten.library.read_only(input.call)
+}
 
 reads if {
 	input.call.operation == "execute"
@@ -248,10 +272,20 @@ test_before_the_dispatch_a_read_is_admitted if {
 	count(violation) == 0 with input as {"facts": {"install-pending": waiting}, "call": {"operation": "execute", "programs": [{"program": "cat", "name": "cat", "reads-only": true}], "segments": [{"output-redirect": false}]}}
 }
 
+# THE CALLS THAT DELIVER INSTRUCTIONS ARE ADMITTED (r6): the notification read
+# by its tool name, an MCP read by the library's reading; an MCP write and any
+# other host tool are held as before.
+test_before_the_dispatch_the_instruction_channel_is_admitted if {
+	count(violation) == 0 with input as {"facts": {"install-pending": waiting}, "call": {"operation": "other", "tool": "ReadNotifications", "programs": []}}
+	count(violation) == 0 with input as {"facts": {"install-pending": waiting}, "call": {"operation": "mcp", "tool": "mcp__claude-code-remote__list_events", "programs": []}}
+	count(violation) == 1 with input as {"facts": {"install-pending": waiting}, "call": {"operation": "mcp", "tool": "mcp__claude-code-remote__send_message", "programs": []}}
+	count(violation) == 1 with input as {"facts": {"install-pending": waiting}, "call": {"operation": "other", "tool": "Grep", "programs": []}}
+}
+
 # GIT IS NO READ BEFORE THE DISPATCH, whatever its subcommand (r5): `-c`,
 # `--config-env` and a `GIT_*` assignment make `git status` run a program, and
-# the git reading that tells them apart is the library's, which the pinned
-# release may not carry.
+# the git reading that tells them apart is the library's, whose git arm this
+# phase has not been reviewed against.
 test_before_the_dispatch_git_is_held if {
 	count(violation) == 1 with input as {"facts": {"install-pending": waiting}, "call": {"operation": "execute", "programs": [{"program": "git", "name": "git", "subcommand": "status"}], "segments": [{"output-redirect": false}]}}
 	count(violation) == 1 with input as {"facts": {"install-pending": waiting}, "call": {"operation": "execute", "programs": [{"program": "git", "name": "git", "subcommand": "status", "arguments": ["-c", "core.fsmonitor=./x", "status"]}], "segments": [{"output-redirect": false}]}}
