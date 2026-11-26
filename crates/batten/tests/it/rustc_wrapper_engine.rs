@@ -52,8 +52,9 @@ fn resolved(engine: &std::path::Path) -> String {
 }
 
 /// Fails by: `RUSTC_WRAPPER` resolving to `target/release/batten` or the `PATH`
-/// engine while `BATTEN_BIN` names one that answers the probe.
-#[cfg(unix)]
+/// engine while `BATTEN_BIN` names one that answers the probe. ONE CASE ON EVERY
+/// TARGET: `mise.toml` sets no wrapper on Windows, whose probe shell is not `sh`,
+/// so there the same resolution answers empty.
 #[test]
 fn the_wrapper_is_the_engine_the_gate_set_built() {
     let dir = common::scratch("rustc-wrapper-engine");
@@ -63,13 +64,19 @@ fn the_wrapper_is_the_engine_the_gate_set_built() {
         "engine",
         "#!/bin/sh\n[ \"$1 $2\" = \"rustc --batten-wrapper-probe\" ] && echo \"$0\"\n",
     );
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    let expected = if cfg!(windows) {
+        String::new()
+    } else {
+        engine.display().to_string()
+    };
     assert_eq!(
         resolved(&engine),
-        engine.display().to_string(),
+        expected,
         "cargo wraps each compile in the engine the gate set built"
     );
 }
