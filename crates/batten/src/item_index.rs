@@ -1954,6 +1954,14 @@ mod tests {
         Ok(())
     }
 
+    /// Each file's text by its path, as [`forwarded_items`] reads them.
+    fn texts_of(files: &[(&str, &str)]) -> BTreeMap<String, String> {
+        files
+            .iter()
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .collect()
+    }
+
     /// Fails by: an item that stayed put but became one call to an item in
     /// another file pairs with nothing, so a base body that moved out of the
     /// forwarder's crate is spliced naming a crate it cannot reach, and fails to
@@ -1982,10 +1990,7 @@ mod tests {
              Some(crate::durable::make_executable(p))\n}\n",
         );
         let head = index(&[ROOT, lib, forwarder, durable]);
-        let texts: BTreeMap<String, String> = [lib, forwarder, durable]
-            .into_iter()
-            .map(|(path, text)| (path.to_owned(), text.to_owned()))
-            .collect();
+        let texts = texts_of(&[lib, forwarder, durable]);
         assert_eq!(
             forwarded_items(&base, &head, &texts)
                 .get(&("src/engine.rs".to_owned(), "make_executable".to_owned())),
@@ -2000,10 +2005,7 @@ mod tests {
              Some(app::durable::make_executable(p))\n}\n",
         );
         let head = index(&[ROOT, lib, named, durable]);
-        let texts: BTreeMap<String, String> = [lib, named, durable]
-            .into_iter()
-            .map(|(path, text)| (path.to_owned(), text.to_owned()))
-            .collect();
+        let texts = texts_of(&[lib, named, durable]);
         assert_eq!(
             forwarded_items(&base, &head, &texts)
                 .get(&("src/engine.rs".to_owned(), "make_executable".to_owned())),
@@ -2042,10 +2044,7 @@ mod tests {
             "pub fn make_executable(p: u8) -> u8 { p + 1 }\n",
         );
         let head = index(&[&workspace[..], &[across, target]].concat());
-        let texts: BTreeMap<String, String> = [across, target]
-            .into_iter()
-            .map(|(path, text)| (path.to_owned(), text.to_owned()))
-            .collect();
+        let texts = texts_of(&[across, target]);
         assert_eq!(
             forwarded_items(&base, &head, &texts)
                 .get(&("one/src/engine.rs".to_owned(), "make_executable".to_owned())),
@@ -2069,10 +2068,7 @@ mod tests {
              log(p);\n    crate::durable::make_executable(p)\n}\nfn log(_: u8) {}\n",
         );
         let head = index(&[ROOT, lib, working, durable]);
-        let texts: BTreeMap<String, String> = [lib, working, durable]
-            .into_iter()
-            .map(|(path, text)| (path.to_owned(), text.to_owned()))
-            .collect();
+        let texts = texts_of(&[lib, working, durable]);
         assert!(forwarded_items(&base, &head, &texts).is_empty());
     }
 

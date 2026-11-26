@@ -941,6 +941,10 @@ mod tests {
         }
         let (path, _file) = lock_file("released");
         let stop = Stop::new().unwrap();
+        #[expect(
+            clippy::disallowed_types,
+            reason = "test-only: the helper is a program that exits 0 at once, spawned so the stop adopts and then releases a real child's stdin"
+        )]
         let spawn = |_: &Path, _: Mode| {
             std::process::Command::new("true")
                 .stdin(std::process::Stdio::piped())

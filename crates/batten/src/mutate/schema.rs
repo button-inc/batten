@@ -23921,7 +23921,7 @@ pub fn repo() -> u8 {{ scratch() }}
     #[test]
     fn a_journaled_control_answers_only_its_own_case_and_digest() {
         let base = crate::scratch::scratch("schema-control-key");
-        let (own, other, bare) = (case("own"), case("other"), case("bare"));
+        let (own, other, digestless) = (case("own"), case("other"), case("bare"));
         let (reach, seconds, red) = (
             std::collections::BTreeMap::new(),
             std::collections::BTreeMap::new(),
@@ -23962,12 +23962,12 @@ pub fn repo() -> u8 {{ scratch() }}
             Some(&key),
             control_key(&judging!(&empty, &held), &other).as_ref()
         );
-        assert_eq!(control_key(&judging!(&empty, &held), &bare), None);
+        assert_eq!(control_key(&judging!(&empty, &held), &digestless), None);
         let cache = [(key, format!("{CONTROLLED}1.5"))].into();
         let journaled = judging!(&cache, &held);
         assert_eq!(journaled_control(&journaled, &own), Some(1.5));
         assert_eq!(journaled_control(&journaled, &other), None);
-        assert_eq!(journaled_control(&journaled, &bare), None);
+        assert_eq!(journaled_control(&journaled, &digestless), None);
         let moved = digests("d3");
         assert_eq!(journaled_control(&judging!(&cache, &moved), &own), None);
     }

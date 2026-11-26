@@ -4659,6 +4659,10 @@ mod tests {
         }
         let (reader, writer) = std::io::pipe().expect("a pipe");
         let pipes = [pipe_identity(&reader)];
+        #[expect(
+            clippy::disallowed_types,
+            reason = "test-only: two real `cat`s, one in a group of its own holding the pipe, are what `/proc` is read against"
+        )]
         let spawn = |stdout: std::process::Stdio| {
             let mut cat = std::process::Command::new("cat");
             in_own_group(&mut cat);
@@ -4687,6 +4691,10 @@ mod tests {
 
     /// Start `command` as the leader of a process group of its own.
     #[cfg(unix)]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "test-only: sets the group of the case's own spawn above, which owns the inventory verdict"
+    )]
     fn in_own_group(command: &mut std::process::Command) {
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
@@ -4694,5 +4702,9 @@ mod tests {
 
     /// No process groups to lead off unix; the one caller returns first there.
     #[cfg(not(unix))]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "test-only: the off-unix arm of the case's own spawn above"
+    )]
     fn in_own_group(_: &mut std::process::Command) {}
 }
