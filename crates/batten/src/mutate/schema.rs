@@ -5735,6 +5735,26 @@ struct SealContext {
 }
 
 impl SealContext {
+    /// What a case's key reads, as this context was sealed with: `read` per
+    /// case, and the store per-file artifacts are kept in.
+    fn depends<'c>(
+        &'c self,
+        read: &'c std::collections::BTreeMap<Case, BTreeSet<String>>,
+        derived: Option<&'c Derived>,
+    ) -> Depends<'c> {
+        Depends {
+            probes: &self.probes,
+            names: &self.names,
+            items: &self.items,
+            mentions: &self.mentions,
+            read,
+            resources: &self.resources,
+            untraced: &self.untraced,
+            compiled: &self.compiled,
+            derived,
+        }
+    }
+
     fn identity(&self) -> Identity<'_> {
         Identity {
             probes: &self.probes,
@@ -5809,21 +5829,16 @@ fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
             executed.entry(case).or_default();
         }
     }
+    let store = base
+        .parent()
+        .zip(context.build.as_deref())
+        .map(|(state, build)| Derived::at(state, build));
     let digests = case_digests(
         &context.root,
         executed.keys(),
         &context.dirs,
         &executed,
-        &Depends {
-            probes: &context.probes,
-            names: &context.names,
-            items: &context.items,
-            mentions: &context.mentions,
-            read: &reach.read,
-            resources: &context.resources,
-            untraced: &context.untraced,
-            compiled: &context.compiled,
-        },
+        &context.depends(&reach.read, store.as_ref()),
     );
     let digests = match &context.build {
         Some(build) => under_build(digests, (build, &context.unprobed)),
@@ -6284,6 +6299,9 @@ pub struct Depends<'a> {
     /// What each probed function and skeleton item reads at compile time
     /// ([`Compiled`]).
     pub compiled: &'a Compiled,
+    /// What the sweep derived from each source file before, kept by content
+    /// ([`Derived`]); `None` derives every file afresh.
+    pub derived: Option<&'a Derived>,
 }
 
 /// Every name reachable from `start` through what each named item mentions:
@@ -6609,7 +6627,12 @@ pub fn case_digests<'c>(
         }
         // The test's own text and its module's helpers, from the first source
         // that holds it: what a shared module is reached FROM.
-        let (own, unfound) = own_texts(&mut hasher, (root, package_dirs), case, &mut parsed);
+        let (own, unfound) = own_texts(
+            &mut hasher,
+            (root, package_dirs),
+            (case, depends.derived),
+            &mut parsed,
+        );
         let reached = crate_part(
             &mut hasher,
             (root, package_dirs),
@@ -6628,19 +6651,17 @@ pub fn case_digests<'c>(
         let mut outside: BTreeSet<String> = own
             .iter()
             .flatten()
-            .flat_map(|text| {
-                mentions_in(
-                    &batten_facts::source::rust_parse(text, ra_ap_syntax::Edition::Edition2024)
-                        .syntax_node(),
-                    &FileScope::unscoped(),
-                )
-            })
+            .flat_map(|own| own.mentions.iter().cloned())
             .collect();
         // A CASE NO SOURCE NAMES STARTS THE WALK FROM ALL ITS FILES SAY
         // (CLOUD-2904): an `rstest` case, a macro's test or a `mod.rs` module
         // has no own text, and a `const` its file names was in no key.
         if own.is_none() {
-            outside.extend(unfound_mentions(root, &unfound, &mut file_mentions));
+            outside.extend(unfound_mentions(
+                root,
+                &unfound,
+                (&mut file_mentions, depends.derived),
+            ));
         }
         if let Some(reached) = &reached {
             outside.extend(reached.outside.iter().cloned());
@@ -6696,7 +6717,116 @@ fn fan_out(
 
 /// A source file read for a case's own text ([`own_texts`]): its bytes and
 /// its tests' texts ([`test_texts`]); `None` where it cannot be read.
-type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<String>>)>;
+type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<OwnText>>)>;
+
+/// One of a test's own texts ([`test_texts`]), with what it names and what
+/// it mentions: each read off one parse of the text, when its file is derived.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct OwnText {
+    text: String,
+    names: BTreeSet<String>,
+    mentions: BTreeSet<String>,
+}
+
+/// Each test of `source` by name, its own texts parsed for what they name and
+/// mention: the per-file artifact [`own_texts`] keeps in a [`Derived`] store.
+fn own_file(source: &str) -> std::collections::BTreeMap<String, Vec<OwnText>> {
+    test_texts(source)
+        .into_iter()
+        .map(|(name, texts)| {
+            let owned = texts
+                .into_iter()
+                .map(|text| {
+                    let node =
+                        batten_facts::source::rust_parse(&text, ra_ap_syntax::Edition::Edition2024)
+                            .syntax_node();
+                    OwnText {
+                        names: names_in(&node),
+                        mentions: mentions_in(&node, &FileScope::unscoped()),
+                        text,
+                    }
+                })
+                .collect();
+            (name, owned)
+        })
+        .collect()
+}
+
+/// The schema store's directory of per-file artifacts ([`Derived`]).
+const DERIVED: &str = "derived";
+
+/// What a sweep derived from each source file, kept in the schema store by the
+/// file's content, so a file a later sweep finds byte-identical is never
+/// parsed again ([`case_digests`]).
+///
+/// NOTHING WHOSE INPUTS ARE UNCHANGED IS REDONE, ACROSS RUNS (CLOUD-2904): a
+/// sweep parsed every test file and re-parsed each case's own texts twice per
+/// case, ~70 ms a case on #1276 and 1,550 s of a carry over 11,659 cases with
+/// nothing changed. An artifact is keyed by its file's bytes, and its
+/// directory by the code that derives it and the build it is derived under,
+/// so a change to either derives every file afresh rather than reading one
+/// another derivation wrote.
+#[derive(Debug)]
+pub struct Derived {
+    dir: std::path::PathBuf,
+}
+
+impl Derived {
+    /// The store under `state` for artifacts derived by this module's code
+    /// under `build` ([`sweep_build`]).
+    #[must_use]
+    pub fn at(state: &std::path::Path, build: &str) -> Self {
+        let mut code = blake3::Hasher::new();
+        code.update(include_str!("schema.rs").as_bytes());
+        code.update(b"\x1f");
+        code.update(build.as_bytes());
+        Self {
+            dir: state
+                .join(DERIVED)
+                .join(&code.finalize().to_hex().as_str()[..16]),
+        }
+    }
+
+    /// `make`'s artifact of `kind` for a file holding `bytes`: read back where
+    /// this store holds one, else made and kept. A store that cannot be read
+    /// or written derives afresh, never fails the sweep.
+    fn derive<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        kind: &str,
+        bytes: &[u8],
+        make: impl FnOnce() -> T,
+    ) -> T {
+        let path = self
+            .dir
+            .join(format!("{kind}-{}", blake3::hash(bytes).to_hex()));
+        if let Some(held) = crate::fsio::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+        {
+            return held;
+        }
+        let artifact = make();
+        if let Ok(text) = serde_json::to_string(&artifact)
+            && std::fs::create_dir_all(&self.dir).is_ok()
+        {
+            let _ = crate::durable::replace(&path, text);
+        }
+        artifact
+    }
+}
+
+/// [`Derived::derive`] through `store`, or `make` where there is none.
+fn derived<T: serde::Serialize + serde::de::DeserializeOwned>(
+    store: Option<&Derived>,
+    kind: &str,
+    bytes: &[u8],
+    make: impl FnOnce() -> T,
+) -> T {
+    match store {
+        Some(store) => store.derive(kind, bytes, make),
+        None => make(),
+    }
+}
 
 /// A case's own text ([`case_digests`]): in each of its own module files,
 /// the test function it names and the helpers beside it, or the whole file
@@ -6708,12 +6838,12 @@ fn own_texts(
         &std::path::Path,
         &std::collections::BTreeMap<String, String>,
     ),
-    case: &Case,
+    (case, store): (&Case, Option<&Derived>),
     parsed: &mut std::collections::BTreeMap<String, Parsed>,
-) -> (Option<Vec<String>>, Vec<String>) {
+) -> (Option<Vec<OwnText>>, Vec<String>) {
     let (name, binary) = case;
     let test = name.rsplit("::").next().unwrap_or(name);
-    let mut own: Option<Vec<String>> = None;
+    let mut own: Option<Vec<OwnText>> = None;
     let mut unfound: Vec<String> = Vec::new();
     for file in case_sources(package_dirs, name, binary) {
         if file.ends_with("common/mod.rs") {
@@ -6721,7 +6851,9 @@ fn own_texts(
         }
         let held = parsed.entry(file.clone()).or_insert_with(|| {
             let bytes = crate::fsio::read(root.join(&file)).ok()?;
-            let tests = test_texts(&String::from_utf8_lossy(&bytes));
+            let tests = derived(store, "own", &bytes, || {
+                own_file(&String::from_utf8_lossy(&bytes))
+            });
             Some((bytes, tests))
         });
         hasher.update(format!("\x1d{file}\x1f").as_bytes());
@@ -6729,8 +6861,8 @@ fn own_texts(
             continue;
         };
         if let Some(bodies) = tests.get(test) {
-            for text in bodies {
-                hasher.update(text.as_bytes());
+            for own in bodies {
+                hasher.update(own.text.as_bytes());
                 hasher.update(b"\x1e");
             }
             own.get_or_insert_with(Vec::new)
@@ -6748,17 +6880,22 @@ fn own_texts(
 fn unfound_mentions(
     root: &std::path::Path,
     unfound: &[String],
-    cache: &mut std::collections::HashMap<String, BTreeSet<String>>,
+    (cache, store): (
+        &mut std::collections::HashMap<String, BTreeSet<String>>,
+        Option<&Derived>,
+    ),
 ) -> BTreeSet<String> {
     let mut mentions = BTreeSet::new();
     for file in unfound {
         let found = cache.entry(file.clone()).or_insert_with(|| {
             let source = crate::fsio::read_to_string(root.join(file)).unwrap_or_default();
-            mentions_in(
-                &batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024)
-                    .syntax_node(),
-                &FileScope::unscoped(),
-            )
+            derived(store, "mentions", source.as_bytes(), || {
+                mentions_in(
+                    &batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024)
+                        .syntax_node(),
+                    &FileScope::unscoped(),
+                )
+            })
         });
         mentions.extend(found.iter().cloned());
     }
@@ -6800,8 +6937,7 @@ struct TestCrate {
 }
 
 impl TestCrate {
-    fn read(root: &std::path::Path, files: &[String]) -> Self {
-        use ra_ap_syntax::ast::HasModuleItem as _;
+    fn read(root: &std::path::Path, files: &[String], store: Option<&Derived>) -> Self {
         let mut whole = Vec::new();
         let mut items = Vec::new();
         let mut raw = blake3::Hasher::new();
@@ -6812,19 +6948,13 @@ impl TestCrate {
             whole.extend(format!("\x1d{file}\x1f").as_bytes());
             raw.update(format!("\x1d{file}\x1f").as_bytes());
             raw.update(source.as_bytes());
-            let parse =
-                batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024);
-            if !parse.errors().is_empty() {
-                whole.extend(source.as_bytes());
-                let mut unread = Shared::whole(file, &source);
-                unread.outside = mentions_in(&parse.syntax_node(), &FileScope::unscoped());
-                items.push(unread);
-                continue;
-            }
-            whole.extend(keyed_text(&parse.syntax_node()).as_bytes());
-            for item in parse.tree().items() {
-                shared_items(&item, file, &mut items);
-            }
+            // THE PATH IS IN WHAT IS DERIVED, so it is in the key with the bytes.
+            let mut keyed = format!("{file}\x1f").into_bytes();
+            keyed.extend(source.as_bytes());
+            let (text, shared): (String, Vec<Shared>) =
+                derived(store, "crate", &keyed, || crate_file(file, &source));
+            whole.extend(text.as_bytes());
+            items.extend(shared);
         }
         Self {
             whole,
@@ -6832,6 +6962,23 @@ impl TestCrate {
             raw: raw.finalize(),
         }
     }
+}
+
+/// One source of a test crate as [`TestCrate::read`] keys it: its keyed text
+/// (its whole source where it does not parse) and its items.
+fn crate_file(file: &str, source: &str) -> (String, Vec<Shared>) {
+    use ra_ap_syntax::ast::HasModuleItem as _;
+    let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
+    if !parse.errors().is_empty() {
+        let mut unread = Shared::whole(file, source);
+        unread.outside = mentions_in(&parse.syntax_node(), &FileScope::unscoped());
+        return (source.to_owned(), vec![unread]);
+    }
+    let mut items = Vec::new();
+    for item in parse.tree().items() {
+        shared_items(&item, file, &mut items);
+    }
+    (keyed_text(&parse.syntax_node()), items)
 }
 
 /// `item` of `file` as shared items, and each item of an inline module inside
@@ -6986,7 +7133,7 @@ fn crate_part(
         &std::collections::BTreeMap<String, String>,
     ),
     (_, binary): &Case,
-    own: Option<&Vec<String>>,
+    own: Option<&Vec<OwnText>>,
     (shared, depends, everything): (
         &mut std::collections::HashMap<String, TestCrate>,
         &Depends<'_>,
@@ -6994,8 +7141,11 @@ fn crate_part(
     ),
 ) -> Option<CrateReach> {
     if !shared.contains_key(binary) {
-        let files = crate_sources(root, package_dirs, binary)?;
-        shared.insert(binary.clone(), TestCrate::read(root, &files));
+        let files = crate_sources(root, package_dirs, binary, depends.derived)?;
+        shared.insert(
+            binary.clone(),
+            TestCrate::read(root, &files, depends.derived),
+        );
     }
     let test_crate = shared.get(binary)?;
     hasher.update(b"\x17");
@@ -7005,12 +7155,7 @@ fn crate_part(
     let taken: Vec<&Shared> = if let Some(texts) = own {
         let wanted: BTreeSet<String> = texts
             .iter()
-            .flat_map(|text| {
-                names_in(
-                    &batten_facts::source::rust_parse(text, ra_ap_syntax::Edition::Edition2024)
-                        .syntax_node(),
-                )
-            })
+            .flat_map(|own| own.names.iter().cloned())
             .collect();
         let taken = reached_items(&test_crate.items, wanted);
         hasher.update(texts_digest(&taken).as_bytes());
@@ -7215,6 +7360,7 @@ fn crate_sources(
     root: &std::path::Path,
     package_dirs: &std::collections::BTreeMap<String, String>,
     binary: &str,
+    store: Option<&Derived>,
 ) -> Option<Vec<String>> {
     let (package, target) = binary.split_once("::")?;
     if target.is_empty() || target.contains('/') {
@@ -7233,11 +7379,13 @@ fn crate_sources(
     ];
     roots.extend(declared_test_root(root, &prefix, target));
     for crate_root in roots {
-        files.extend(module_files(root, &crate_root));
+        files.extend(module_files(root, &crate_root, store));
     }
     // A MODULE A MACRO DECLARES IS IN NO `mod` LINE (round 4b #3): a crate
     // calling a macro at item level is read as every file under `tests/`.
-    let whole = files.iter().any(|file| calls_item_macro(root, file));
+    let whole = files
+        .iter()
+        .any(|file| module_facts(root, file, store).is_some_and(|facts| facts.0));
     let walks = if whole {
         vec![format!("{prefix}tests")]
     } else {
@@ -7263,15 +7411,66 @@ fn crate_sources(
     Some(files.into_iter().collect())
 }
 
-/// Whether the file at `file` calls a macro at item level, other than an
-/// include, which may declare a module.
-fn calls_item_macro(root: &std::path::Path, file: &str) -> bool {
-    let Ok(source) = crate::fsio::read_to_string(root.join(file)) else {
-        return false;
-    };
-    batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024)
-        .syntax_node()
-        .descendants()
+/// A `mod name;` a file declares ([`module_files`]): its name, the step each
+/// inline module around it adds to its directory (`None` where one has
+/// none), and its own `#[path]`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ModDecl {
+    name: String,
+    inline: Option<Vec<String>>,
+    path: Option<String>,
+}
+
+/// What [`crate_sources`] reads off the file at `file`: whether it calls a
+/// macro at item level ([`calls_item_macro`]) and each module it declares,
+/// derived once per content ([`Derived`]); `None` where it cannot be read.
+fn module_facts(
+    root: &std::path::Path,
+    file: &str,
+    store: Option<&Derived>,
+) -> Option<(bool, Vec<ModDecl>)> {
+    let source = crate::fsio::read_to_string(root.join(file)).ok()?;
+    Some(derived(store, "mods", source.as_bytes(), || {
+        let node = batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024)
+            .syntax_node();
+        (calls_item_macro(&node), mod_decls(&node))
+    }))
+}
+
+/// Every `mod name;` under `node`, with what [`module_files`] resolves it by.
+fn mod_decls(node: &SyntaxNode) -> Vec<ModDecl> {
+    use ast::{HasAttrs as _, HasName as _};
+    node.descendants()
+        .filter_map(ast::Module::cast)
+        .filter(|module| module.item_list().is_none())
+        .filter_map(|module| {
+            let name = module.name()?.text().to_string();
+            let enclosing: Vec<ast::Module> = module
+                .syntax()
+                .ancestors()
+                .skip(1)
+                .filter_map(ast::Module::cast)
+                .collect();
+            let inline = enclosing
+                .iter()
+                .rev()
+                .map(|inline| {
+                    inline
+                        .attrs()
+                        .find_map(|attr| path_attr(&attr))
+                        .or_else(|| inline.name().map(|name| name.text().to_string()))
+                })
+                .collect();
+            let path = module.attrs().find_map(|attr| path_attr(&attr));
+            Some(ModDecl { name, inline, path })
+        })
+        .collect()
+}
+
+/// Whether `node` calls a macro at item level, other than an include, which
+/// may declare a module.
+fn calls_item_macro(node: &SyntaxNode) -> bool {
+    node.descendants()
         .filter_map(ast::MacroCall::cast)
         .filter(|call| {
             call.syntax().parent().is_some_and(|parent| {
@@ -7305,8 +7504,11 @@ fn declared_test_root(root: &std::path::Path, prefix: &str, target: &str) -> Opt
 /// The files of the crate rooted at `crate_root` by its module tree: each
 /// `mod name;` as `name.rs` or `name/mod.rs` under its parent's directory,
 /// through inline modules, and a `#[path]` one where it says.
-fn module_files(root: &std::path::Path, crate_root: &str) -> BTreeSet<String> {
-    use ast::{HasAttrs as _, HasName as _};
+fn module_files(
+    root: &std::path::Path,
+    crate_root: &str,
+    store: Option<&Derived>,
+) -> BTreeSet<String> {
     let dir_of = |file: &str| {
         file.rsplit_once('/')
             .map_or_else(String::new, |(dir, _)| dir.to_owned())
@@ -7314,58 +7516,38 @@ fn module_files(root: &std::path::Path, crate_root: &str) -> BTreeSet<String> {
     let mut files = BTreeSet::new();
     let mut queue = vec![(crate_root.to_owned(), dir_of(crate_root))];
     while let Some((file, dir)) = queue.pop() {
-        let Ok(source) = crate::fsio::read_to_string(root.join(&file)) else {
-            continue;
-        };
-        if !files.insert(file.clone()) {
+        if files.contains(&file) {
             continue;
         }
-        let parse = batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024);
-        for module in parse
-            .syntax_node()
-            .descendants()
-            .filter_map(ast::Module::cast)
-        {
-            if module.item_list().is_some() {
-                continue;
-            }
-            let Some(name) = module.name().map(|name| name.text().to_string()) else {
-                continue;
-            };
-            let enclosing: Vec<ast::Module> = module
-                .syntax()
-                .ancestors()
-                .skip(1)
-                .filter_map(ast::Module::cast)
-                .collect();
-            let mut base = Some(dir.clone());
-            for inline in enclosing.iter().rev() {
-                let step = inline
-                    .attrs()
-                    .find_map(|attr| path_attr(&attr))
-                    .or_else(|| inline.name().map(|name| name.text().to_string()));
-                base = base
-                    .zip(step)
-                    .and_then(|(base, step)| tree_join(&base, &step));
-            }
+        let Some((_, decls)) = module_facts(root, &file, store) else {
+            continue;
+        };
+        files.insert(file.clone());
+        for decl in decls {
+            let base = decl.inline.as_ref().and_then(|steps| {
+                steps
+                    .iter()
+                    .try_fold(dir.clone(), |base, step| tree_join(&base, step))
+            });
             let Some(base) = base else {
                 continue;
             };
-            if let Some(path) = module.attrs().find_map(|attr| path_attr(&attr)) {
-                let from = if enclosing.is_empty() {
+            if let Some(path) = &decl.path {
+                let from = if decl.inline.as_ref().is_some_and(Vec::is_empty) {
                     dir_of(&file)
                 } else {
                     base
                 };
-                if let Some(found) = tree_join(&from, &path) {
+                if let Some(found) = tree_join(&from, path) {
                     let child = dir_of(&found);
                     queue.push((found, child));
                 }
                 continue;
             }
+            let name = &decl.name;
             for leaf in [format!("{name}.rs"), format!("{name}/mod.rs")] {
                 if let (Some(found), Some(child)) =
-                    (tree_join(&base, &leaf), tree_join(&base, &name))
+                    (tree_join(&base, &leaf), tree_join(&base, name))
                     && root.join(&found).is_file()
                 {
                     queue.push((found, child));
@@ -7477,6 +7659,7 @@ fn reached_items(items: &[Shared], mut wanted: BTreeSet<String>) -> Vec<&Shared>
 }
 
 /// One item of a shared test module as [`common_reached`] takes it.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Shared {
     /// The names it answers to; none when it is always taken.
     names: Option<BTreeSet<String>>,
@@ -9460,6 +9643,12 @@ fn build_journaled(
     build(root, work, target, mutants, known, &mut keep, out)
 }
 
+/// What each case ran, by probe id, and the tree paths it read.
+type Recorded<'r> = (
+    &'r std::collections::BTreeMap<Case, BTreeSet<usize>>,
+    &'r std::collections::BTreeMap<Case, BTreeSet<String>>,
+);
+
 /// Each of `executed`'s cases keyed on what it depends on ([`case_digests`]):
 /// the schema's probes, names and items, `read`, and the checkout's content
 /// ids with the untraced fallback.
@@ -9468,8 +9657,8 @@ fn digests_with(
     dirs: &std::collections::BTreeMap<String, String>,
     schema: &Schema,
     (resources, untraced): (&std::collections::BTreeMap<String, String>, &str),
-    executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
-    read: &std::collections::BTreeMap<Case, BTreeSet<String>>,
+    (executed, read): Recorded<'_>,
+    derived: Option<&Derived>,
 ) -> std::collections::BTreeMap<Case, String> {
     let depends = Depends {
         probes: &schema.probes,
@@ -9480,6 +9669,7 @@ fn digests_with(
         resources,
         untraced,
         compiled: &schema.compiled,
+        derived,
     };
     case_digests(root, executed.keys(), dirs, executed, &depends)
 }
@@ -9655,13 +9845,14 @@ fn reached(
     };
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
     let (build, unprobed) = build_keys(root, ids.0, format)?;
+    let derived = Derived::at(state, &build);
     let memo = DigestMemo::default();
     let recompute =
         |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
          read: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
             memo.take(executed, read, |due| {
                 under_build(
-                    digests_with(root, &dirs, schema, ids, due, read),
+                    digests_with(root, &dirs, schema, ids, (due, read), Some(&derived)),
                     (&build, &unprobed),
                 )
             })
@@ -10355,6 +10546,7 @@ pub fn test_digests(
         resources,
         untraced: &untraced,
         compiled: &index.compiled,
+        derived: None,
     };
     let base = case_digests(root, executed.keys(), dirs, &executed, &depends);
     // ONE INDEXED GRAPH FOR EVERY CASE'S SELECTION WALK, as `case_digests`
@@ -10770,6 +10962,7 @@ mod tests {
             resources: &std::collections::BTreeMap::new(),
             untraced: "",
             compiled: &NO_COMPILED,
+            derived: None,
         };
         let graph = Graph::new(&depends);
         let mut walk = Walk::default();
@@ -11753,16 +11946,7 @@ mod tests {
             reach.executed.keys(),
             &context.dirs,
             &reach.executed,
-            &Depends {
-                probes: &context.probes,
-                names: &context.names,
-                items: &context.items,
-                mentions: &context.mentions,
-                read: &reach.read,
-                resources: &context.resources,
-                untraced: &context.untraced,
-                compiled: &context.compiled,
-            },
+            &context.depends(&reach.read, None),
         );
         seal_reach(
             &by_sweep,
@@ -14502,6 +14686,7 @@ mod tests {
             resources: &IDS,
             untraced: "",
             compiled: &NO_COMPILED,
+            derived: None,
         }
     }
 
@@ -14616,6 +14801,7 @@ mod tests {
             items: &items,
             mentions: &mentions,
             compiled: &rendered.compiled,
+            derived: None,
             ..depends(&rendered.probes)
         };
         case_digests(
@@ -15175,6 +15361,7 @@ mod tests {
             items: &items,
             mentions: &mentions,
             compiled: &rendered.compiled,
+            derived: None,
             ..depends(&rendered.probes)
         };
         case_digests(
@@ -15985,9 +16172,76 @@ mod tests {
             resources,
             untraced: "",
             compiled: &rendered.compiled,
+            derived: None,
         };
         let dirs = [(String::from("fix"), String::new())].into();
         case_digests(&root, cases, &dirs, executed, &depends)
+    }
+
+    /// A sweep over a tree it has derived before parses no file, and one
+    /// over a one-file edit parses that file alone; what it keys is the same
+    /// with the store as without it. Parses are counted, never timed.
+    ///
+    /// Fails by: a test crate, a case's own texts or a file's mentions parsed
+    /// again over unchanged bytes (~70 ms a case and 1,550 s of a carry on
+    /// #1276), or a stored artifact keying a case differently from a fresh one.
+    #[test]
+    fn a_sweep_over_a_tree_it_derived_parses_no_file() {
+        let root = crate::scratch::scratch("schema-derived-parses");
+        let state = crate::scratch::scratch("schema-derived-state");
+        let write = |path: &str, text: &str| {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        };
+        write("src/lib.rs", "pub const LIMIT: u8 = 1;\npub fn f() {}\n");
+        write("tests/it/main.rs", "mod a;\nmod b;\n");
+        write(
+            "tests/it/a.rs",
+            "fn helper() -> u8 { fix::LIMIT }\n#[test]\nfn t() { assert_eq!(helper(), 1); }\n\
+             #[test]\nfn v() { fix::f(); }\n",
+        );
+        write("tests/it/b.rs", "#[test]\nfn u() { fix::f(); }\n");
+        let (t, u) = (
+            (String::from("a::t"), String::from("fix::it")),
+            (String::from("b::u"), String::from("fix::it")),
+        );
+        let cases: BTreeSet<Case> = [t.clone(), u.clone()].into();
+        let executed = [(t.clone(), BTreeSet::new()), (u.clone(), BTreeSet::new())].into();
+        let dirs = [(String::from("fix"), String::new())].into();
+        let sweep = |store: Option<&Derived>| {
+            let before = batten_facts::source::parses();
+            let digests = case_digests(
+                &root,
+                &cases,
+                &dirs,
+                &executed,
+                &Depends {
+                    derived: store,
+                    ..depends(&[])
+                },
+            );
+            (digests, batten_facts::source::parses() - before)
+        };
+        let (first, parsed) = sweep(Some(&Derived::at(&state, "build")));
+        assert!(parsed > 0, "a first sweep parses what it derives");
+        let (again, reparsed) = sweep(Some(&Derived::at(&state, "build")));
+        assert_eq!(reparsed, 0, "an unchanged tree parses no file");
+        assert_eq!(again, first, "a stored artifact keys as a fresh one");
+        assert_eq!(sweep(None).0, first, "and as no store at all");
+        write("tests/it/b.rs", "#[test]\nfn u() { fix::f(); fix::f(); }\n");
+        let (edited, parsed_edit) = sweep(Some(&Derived::at(&state, "build")));
+        assert!(
+            parsed_edit > 0 && parsed_edit < parsed,
+            "the edited file alone: {parsed_edit} of {parsed}"
+        );
+        assert_eq!(edited[&t], first[&t]);
+        assert_ne!(edited[&u], first[&u]);
+        let (_, other_build) = sweep(Some(&Derived::at(&state, "another build")));
+        assert_eq!(
+            other_build, parsed,
+            "another build derives every file afresh"
+        );
     }
 
     /// S1 (CLOUD-2904, round 3): a file an `include_str!` reads at compile
@@ -16421,10 +16675,10 @@ mod tests {
             std::fs::write(root.join(path), text).unwrap();
         }
         let dirs = [(String::from("fix"), String::new())].into();
-        let pm = crate_sources(&root, &dirs, "fix::pm").unwrap();
+        let pm = crate_sources(&root, &dirs, "fix::pm", None).unwrap();
         assert!(pm.contains(&String::from("tests/shared/a.rs")), "{pm:?}");
         assert!(pm.contains(&String::from("tests/shared/b.rs")), "{pm:?}");
-        let mm = crate_sources(&root, &dirs, "fix::mm").unwrap();
+        let mm = crate_sources(&root, &dirs, "fix::mm", None).unwrap();
         assert!(
             mm.contains(&String::from("tests/elsewhere/hidden.rs")),
             "{mm:?}"
@@ -16504,7 +16758,7 @@ mod tests {
             std::fs::write(root.join(path), text).unwrap();
         }
         let dirs = [(String::from("fix"), String::new())].into();
-        let custom = crate_sources(&root, &dirs, "fix::custom").unwrap();
+        let custom = crate_sources(&root, &dirs, "fix::custom", None).unwrap();
         assert!(
             custom.contains(&String::from("checks/support.rs")),
             "{custom:?}"
@@ -16838,7 +17092,7 @@ mod tests {
             std::fs::write(root.join(path), text).unwrap();
         }
         let dirs = [(String::from("fix"), String::new())].into();
-        let plain = crate_sources(&root, &dirs, "fix::plain").unwrap();
+        let plain = crate_sources(&root, &dirs, "fix::plain", None).unwrap();
         assert_eq!(plain, [String::from("tests/plain.rs")], "{plain:?}");
     }
 
@@ -20642,8 +20896,8 @@ pub fn repo() -> u8 {{ scratch() }}
     fn a_binary_without_a_plain_target_has_no_crate_sources() {
         let root = crate::scratch::scratch("schema-crate-sources-none");
         let dirs = [(String::from("p"), String::new())].into();
-        assert_eq!(crate_sources(&root, &dirs, "p::"), None);
-        assert_eq!(crate_sources(&root, &dirs, "p::a/b"), None);
+        assert_eq!(crate_sources(&root, &dirs, "p::", None), None);
+        assert_eq!(crate_sources(&root, &dirs, "p::a/b", None), None);
     }
 
     /// An edit to a sibling module's function no case reaches moves no case:
