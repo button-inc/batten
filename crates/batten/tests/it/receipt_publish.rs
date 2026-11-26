@@ -838,88 +838,39 @@ fn a_deleted_claim_stays_deleted() {
 }
 
 // ---------------------------------------------------------------------------
-// The session-start row on an engine that lacks the verb (review finding 4).
+// The session-start row, withheld until a release ships the verb (CLOUD-2840).
 // ---------------------------------------------------------------------------
 
-/// A planted `batten` that logs its argv and, unless `with_verb`, answers the
-/// receipt verbs the way a release predating them does: clap's `unrecognized
-/// subcommand`, exit 2.
-fn planted_engine(case: &str, with_verb: bool) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let dir = scratch(case).join("task");
-    std::fs::create_dir_all(dir.join("bin")).unwrap();
-    crate::common::init_repo(&dir);
-    let lacking = if with_verb {
-        String::new()
-    } else {
-        "case \"$1 $2\" in 'receipt pull'|'receipt publish') \
-         echo \"error: unrecognized subcommand '$2'\" >&2; exit 2;; esac\n"
-            .to_owned()
-    };
-    let stub = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/../calls\"\n{lacking}exit 0\n"
-    );
-    let path = dir.join("bin").join("batten");
-    std::fs::write(&path, stub).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    dir
-}
-
-/// The argv lines the planted engine logged.
-fn calls(dir: &Path) -> Vec<String> {
-    std::fs::read_to_string(dir.join("calls"))
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_owned)
-        .collect()
-}
-
-/// Fails by: the session-start row running `receipt pull` on an engine that
-/// lacks it, so every session start exits non-zero until a release ships the
-/// verb (the config-ahead-of-engine class). The row is a task, and the task is
-/// inert there: exit `0`, and the pull is never run.
-#[cfg(unix)]
+/// Fails by: a session-start row or task reaching `receipt pull` while the
+/// pinned engine has no such verb, so every session start runs a call the
+/// installed engine cannot parse. The row and its task are withheld until the
+/// pin names a release that carries it (step 14, CLOUD-2821), and `batten.toml`
+/// keeps both verbatim for that commit to restore. Restoring them early turns
+/// this red; restoring them with the pin bump is the moment to delete this case.
 #[test]
-fn the_session_row_is_inert_on_an_engine_that_lacks_the_verb() {
-    let handler = crate::common::at_root("batten.toml");
-    let config: toml::Value = toml::from_str(&std::fs::read_to_string(handler).unwrap()).unwrap();
-    let row = config["hook"]["handler"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["id"].as_str() == Some("session-receipts"))
-        .expect("the session-receipts row");
-    assert_eq!(
-        row["run"].as_array().unwrap(),
-        &["mise", "run", "session:receipts"]
-            .map(|arg| toml::Value::String(arg.to_owned()))
-            .to_vec(),
-        "the row runs the guarded task, never the bare verb"
-    );
-    let body = crate::common::task_body("session:receipts");
-
-    let old = planted_engine("receipt-session-old-engine", false);
-    let output = crate::common::task_bash(&old, &body)
-        .streamed_output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
+fn the_session_row_is_withheld_until_a_release_ships_the_verb() {
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(crate::common::at_root("batten.toml")).unwrap())
+            .unwrap();
+    let handlers = config["hook"]["handler"].as_array().unwrap();
     assert!(
-        !calls(&old).iter().any(|call| call == "receipt pull"),
-        "{:?}",
-        calls(&old)
+        !handlers
+            .iter()
+            .any(|row| row["id"].as_str() == Some("session-receipts")),
+        "the session-receipts row is withheld"
     );
-
-    // The control: on an engine that has the verb, the pull runs.
-    let new = planted_engine("receipt-session-new-engine", true);
-    let output = crate::common::task_bash(&new, &body)
-        .streamed_output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let manifest: toml::Value =
+        toml::from_str(&std::fs::read_to_string(crate::common::at_root("mise.toml")).unwrap())
+            .unwrap();
     assert!(
-        calls(&new).iter().any(|call| call == "receipt pull"),
-        "{:?}",
-        calls(&new)
+        manifest["tasks"].get("session:receipts").is_none(),
+        "the session:receipts task is withheld with its row"
+    );
+    let authority = std::fs::read_to_string(crate::common::at_root("batten.toml")).unwrap();
+    assert!(
+        authority.contains("# id = \"session-receipts\"")
+            && authority.contains("# [tasks.\"session:receipts\"]"),
+        "batten.toml keeps the row and the task verbatim for the restore"
     );
 }
 

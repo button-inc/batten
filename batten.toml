@@ -13082,28 +13082,61 @@ run = ["mise", "run", "-q", "mcp:posture"]
 timeout_ms = 5000
 owner = "CLOUD-312"
 expires = "2027-02-28"
-# CLOUD-1544: bring this branch's published receipts back into a fresh container,
-# so a session does not re-run every gate a sibling already proved. AFTER
-# `session-batten`, because this is the engine answering. Inert where
-# `BATTEN_STATE_REPO` is unset: it prints `off` and touches nothing. It prints one
-# pointer line otherwise — the ref, the commit and a count, never a receipt body —
-# and a remote it cannot reach exits 3, which a session-start row reports and
-# never turns into a deny. The receipts go to the PRIVATE state repository and
-# never to origin (owner ruling, 2026-11-24).
-[[hook.handler]]
-id = "session-receipts"
-on = "session-start"
-# Through a task that asks the engine whether it has the verb first: the
-# installed engine predates `receipt pull` until a release ships it, and a bare
-# call there exits non-zero at every session start (`session:receipts`).
-run = ["mise", "run", "session:receipts"]
-# Two refs: the receipt set (one advertisement, a small tree) and the mutate
-# carry, whose first fetch in a fresh container brings the sealed reach record
-# — #1276's was 815 MB on disk. After that first fetch each ref is a delta, or
-# no fetch at all when it has not moved (`land::receipts::cache_ref`).
-timeout_ms = 600000
-owner = "CLOUD-1544"
-expires = "2027-05-31"
+# WITHHELD UNTIL STEP 14 (CLOUD-2821), WITH ITS TASK (CLOUD-2840, authorized by
+# the bundle's parent session). The pinned v0.0.221 has no `receipt pull`, so
+# the guarded task answered `0` and pulled nothing at every session start: no
+# function is lost while it is out. Its shell guard was the one triple-quoted
+# `run` body `task write other` counts in `mise.toml`, against `origin/main`'s 0.
+# The land lap pulls through `BATTEN_BIN`, the tree's build, so the carry is
+# unaffected. The commit that bumps the pin to a release carrying the verb
+# restores both verbatim — the row here, the task in `mise.toml` beside
+# `session:wiring-register`:
+#
+# # CLOUD-1544: bring this branch's published receipts back into a fresh container,
+# # so a session does not re-run every gate a sibling already proved. AFTER
+# # `session-batten`, because this is the engine answering. Inert where
+# # `BATTEN_STATE_REPO` is unset: it prints `off` and touches nothing. It prints one
+# # pointer line otherwise — the ref, the commit and a count, never a receipt body —
+# # and a remote it cannot reach exits 3, which a session-start row reports and
+# # never turns into a deny. The receipts go to the PRIVATE state repository and
+# # never to origin (owner ruling, 2026-11-24).
+# [[hook.handler]]
+# id = "session-receipts"
+# on = "session-start"
+# # Through a task that asks the engine whether it has the verb first: the
+# # installed engine predates `receipt pull` until a release ships it, and a bare
+# # call there exits non-zero at every session start (`session:receipts`).
+# run = ["mise", "run", "session:receipts"]
+# # Two refs: the receipt set (one advertisement, a small tree) and the mutate
+# # carry, whose first fetch in a fresh container brings the sealed reach record
+# # — #1276's was 815 MB on disk. After that first fetch each ref is a delta, or
+# # no fetch at all when it has not moved (`land::receipts::cache_ref`).
+# timeout_ms = 600000
+# owner = "CLOUD-1544"
+# expires = "2027-05-31"
+#
+# --- the `mise.toml` task ---
+#
+# [tasks."session:receipts"]
+# description = "Session start: pull this branch's published receipts from the private state repository — inert on an engine that predates the verb (CLOUD-1544)"
+# # GUARDED ON THE VERB, NOT THE VERSION, because the row ran ahead of its engine.
+# # The session-start row runs the INSTALLED engine (never a compile, CLOUD-1620),
+# # and until a release carries `receipt pull` that engine answers clap's
+# # `unrecognized subcommand`, exit 2 — every session start failing for a verb that
+# # merely has not shipped. Asking the engine whether it parses the verb is the
+# # one predicate that is true exactly when the call can run; a version compare
+# # would encode a release number this file cannot know in advance. On an engine
+# # that has the verb, the verb's own exit stands: `off` with the variable unset,
+# # `1` for a misconfigured state repository, `3` for one that cannot be reached.
+# # QUIET BY DECLARATION (CLOUD-1991): the pointer line is not session advice.
+# quiet = true
+# silent = "stdout"
+# run = """
+# if batten receipt pull --help >/dev/null 2>&1; then
+#   exec batten receipt pull
+# fi
+# """
+
 [[hook.handler]]
 id = "session-census"
 on = "session-start"
