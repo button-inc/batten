@@ -15935,15 +15935,34 @@ fn report_guard(
         return Ok(ExitCode::Success);
     }
 
-    // WAIT TO BE KILLED, UNTIL THE CANCELLATION IS OBSERVED, never for a count
-    // of ticks (CLOUD-2253 A2). Exiting `0` early would let the job march into
-    // the matrix the cancellation paid to prevent, and exiting non-zero would
-    // red the run. The run's own reading concluding is the event; a forge that
-    // answers none of `UNANSWERED_BEFORE_REFUSING` reads is the fault, named.
+    await_cancel(
+        run,
+        &mut || pr_watch::pause(CANCEL_TICK_SECONDS),
+        &mut || cancel_observed(repo, run),
+        err,
+    )
+}
+
+/// Wait out a requested cancellation of `run`: `tick` between reads, `observe`
+/// for each read (CLOUD-2253 A2).
+///
+/// WAIT TO BE KILLED, UNTIL THE CANCELLATION IS OBSERVED, never for a count
+/// of ticks. Exiting `0` early would let the job march into the matrix the
+/// cancellation paid to prevent, and exiting non-zero would red the run. The
+/// run's own reading concluding is the event; a forge that answers none of
+/// `UNANSWERED_BEFORE_REFUSING` reads IN A ROW is the fault, named. Its own
+/// function so the count is driven by a case with no clock and no forge
+/// (CLOUD-2789).
+fn await_cancel(
+    run: &str,
+    tick: &mut dyn FnMut(),
+    observe: &mut dyn FnMut() -> Option<bool>,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     let mut unanswered: u64 = 0;
     loop {
-        pr_watch::pause(CANCEL_TICK_SECONDS);
-        match cancel_observed(repo, run) {
+        tick();
+        match observe() {
             Some(true) => {
                 writeln!(
                     err,
@@ -19289,7 +19308,7 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
         for line in done.lines() {
             writeln!(err, "{step}: {line}")?;
         }
-        let gained = done.freed_bytes > 0 || done.free_after_mb > after;
+        let gained = waited_and_gained(done.freed_bytes, done.free_after_mb, after);
         after = done.free_after_mb;
         held = done.held.locks;
         if !gained {
@@ -19305,6 +19324,14 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
         root.join(&prune.root).display()
     )?;
     Ok(false)
+}
+
+/// Whether a collection after a wait bought anything: bytes it freed itself,
+/// or more free space than `before_mb` (another holder's release counts). A
+/// wait that bought nothing ends [`disk_admits`]'s loop, since the next would
+/// wait on the same holders (CLOUD-2789).
+const fn waited_and_gained(freed_bytes: u64, free_after_mb: u64, before_mb: u64) -> bool {
+    freed_bytes > 0 || free_after_mb > before_mb
 }
 
 /// A batten singleton held by a live process other than this one, by task
@@ -33933,6 +33960,96 @@ mod mutation_markers;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// Fails by: a wait whose collection freed bytes itself, or found more
+    /// space free than before it, read as buying nothing (so the step refuses
+    /// beside space still coming free), or one that bought neither read as a
+    /// gain (so the step waits on the same holders again) (CLOUD-2789).
+    #[test]
+    fn a_wait_gains_by_its_own_bytes_or_by_more_space_free() {
+        assert!(super::waited_and_gained(1, 100, 100));
+        assert!(super::waited_and_gained(0, 101, 100));
+        assert!(super::waited_and_gained(1, 90, 100));
+        assert!(!super::waited_and_gained(0, 100, 100));
+        assert!(!super::waited_and_gained(0, 90, 100));
+    }
+
+    /// Fails by: a cancelled run's reading read as concluded whatever the
+    /// forge answered — a refused read or a run still in progress taken as the
+    /// cancellation observed, so the guard runs into the matrix it paid to
+    /// stop (CLOUD-2789).
+    #[test]
+    fn a_cancelled_run_is_observed_only_once_its_reading_concludes() {
+        let dir = crate::rest::routed(
+            "cancel-observed",
+            &[
+                (
+                    "actions/runs/1",
+                    200,
+                    r#"{"status":"completed","conclusion":"cancelled"}"#,
+                ),
+                (
+                    "actions/runs/2",
+                    200,
+                    r#"{"status":"in_progress","conclusion":null}"#,
+                ),
+                (
+                    "actions/runs/3",
+                    403,
+                    r#"{"status":"completed","conclusion":"cancelled"}"#,
+                ),
+            ],
+        );
+        crate::rest::with_fixture(&dir, || {
+            assert_eq!(super::cancel_observed("o/r", "1"), Some(true));
+            assert_eq!(super::cancel_observed("o/r", " 2 "), Some(false));
+            assert_eq!(super::cancel_observed("o/r", "3"), None);
+        });
+    }
+
+    /// Fails by: the could-not-look count not counting each unanswered read,
+    /// not reset by an answered one, or refusing before the bound — so a
+    /// forge's single hiccup ends the wait, or one that never answers holds the
+    /// job forever. Driven with no clock: `tick` is a counter (CLOUD-2789).
+    #[test]
+    fn the_cancel_wait_refuses_only_after_a_run_of_unanswered_reads() {
+        let bound = crate::pr_watch::UNANSWERED_BEFORE_REFUSING;
+        let bound_reads = usize::try_from(bound).unwrap();
+        // One short of the bound, one answered read that resets it, then the
+        // bound in a row.
+        let mut reads: std::collections::VecDeque<Option<bool>> =
+            std::iter::repeat_n(None, bound_reads - 1)
+                .chain([Some(false)])
+                .chain(std::iter::repeat_n(None, bound_reads))
+                .collect();
+        let total = reads.len();
+        let mut ticks = 0;
+        let mut err = Vec::new();
+        let code = super::await_cancel(
+            "77",
+            &mut || ticks += 1,
+            &mut || reads.pop_front().expect("no read past the bound"),
+            &mut err,
+        )
+        .unwrap();
+        assert_eq!(code, super::ExitCode::Success);
+        assert_eq!(ticks, total, "one tick before each read");
+        let said = String::from_utf8(err).unwrap();
+        assert!(
+            said.contains(&format!("could not be read {bound} time(s) running")),
+            "{said}"
+        );
+        // The run seen concluded ends the wait at once.
+        let mut err = Vec::new();
+        let mut reads = vec![Some(true), None].into_iter();
+        super::await_cancel("77", &mut || {}, &mut || reads.next().unwrap(), &mut err).unwrap();
+        assert!(
+            String::from_utf8(err)
+                .unwrap()
+                .contains("run 77 is seen cancelled"),
+        );
+        assert_eq!(reads.next(), Some(None), "no read after the conclusion");
+    }
 
     /// Fails by: a declared pin read as no pin, so `engine install` installs
     /// the running binary over a release or source the config names, or a

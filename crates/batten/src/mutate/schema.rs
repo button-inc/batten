@@ -5079,6 +5079,27 @@ fn run_bound(
     }
 }
 
+/// The nextest argv one judging run of `cases` starts with: `--no-fail-fast`
+/// unless `fail_fast`, so a run asked for every case's outcome is never cut
+/// at its first failure, and each worker's share of threads.
+fn judge_argv(
+    judging: &Judging<'_>,
+    mutant: &Listed,
+    cases: &BTreeSet<Case>,
+    fail_fast: bool,
+) -> Vec<String> {
+    let mut args = judge_args(mutant, cases, judging.target, judging.reuse);
+    if !fail_fast {
+        args.push(String::from("--no-fail-fast"));
+    }
+    // EACH WORKER ITS SHARE OF THE CASES MEMORY HOLDS (CLOUD-2253): nextest's
+    // own default is a case a core, in every worker at once.
+    if let Some(threads) = judging.threads {
+        args.extend([String::from("--test-threads"), threads.to_string()]);
+    }
+    args
+}
+
 /// One judging run of `cases` with `BATTEN_MUTANT=active`, under its own
 /// fixture scratch inside the mirror and its own temp beside it
 /// ([`judge_temp`]), and its `JUnit` report, if it wrote one. The
@@ -5090,15 +5111,7 @@ fn judge_run(
     cases: &BTreeSet<Case>,
     fail_fast: bool,
 ) -> (anyhow::Result<super::Ran>, Option<String>) {
-    let mut args = judge_args(mutant, cases, judging.target, judging.reuse);
-    if !fail_fast {
-        args.push(String::from("--no-fail-fast"));
-    }
-    // EACH WORKER ITS SHARE OF THE CASES MEMORY HOLDS (CLOUD-2253): nextest's
-    // own default is a case a core, in every worker at once.
-    if let Some(threads) = judging.threads {
-        args.extend([String::from("--test-threads"), threads.to_string()]);
-    }
+    let mut args = judge_argv(judging, mutant, cases, fail_fast);
     // INSIDE THE MIRROR (W2), as the reach run's fixtures are: a case whose
     // fixture needs a checkout around it passed under reach and failed here,
     // which read as a kill.
@@ -18751,6 +18764,57 @@ mod tests {
         );
     }
 
+    /// A leading `::` before a WORKSPACE crate's name resolves in that crate,
+    /// and a `self::` path from the module it is written in (CLOUD-2789).
+    ///
+    /// Fails by: `::core_x::a::Schema` read as unknown (so an edit to
+    /// `core_x::b::Schema`, or to the app's own `a::Schema`, moves `f`), or
+    /// `self::a::Schema` not resolved from `c` (so an edit to `c::a::Schema`
+    /// leaves `g` on a stale verdict, or one to the app's top `a::Schema`
+    /// moves it).
+    #[test]
+    fn a_leading_root_crate_and_a_self_path_resolve_to_their_one_definition() {
+        let (rooted, selfed) = (case("f"), case("g"));
+        let cases: BTreeSet<Case> = [rooted.clone(), selfed.clone()].into();
+        let executed = [(rooted.clone(), [0].into()), (selfed.clone(), [1].into())].into();
+        let core = "pub mod a { pub struct Schema { pub x: u8 } }\n\
+                    pub mod b { pub struct Schema { pub y: u8 } }\n";
+        let app = "pub mod a { pub struct Schema { pub q: u8 } }\n\
+                   pub fn f(s: ::core_x::a::Schema) -> u8 { s.x }\n\
+                   pub mod c { pub mod a { pub struct Schema { pub z: u8 } } \
+                   pub fn g(s: self::a::Schema) -> u8 { s.z } }\n";
+        let digests = |core: &str, app: &str| {
+            files_digests(
+                &cases,
+                &executed,
+                &[
+                    ("crates/core/src/lib.rs", core),
+                    ("crates/app/src/lib.rs", app),
+                ],
+                &[("core_x", "crates/core"), ("app", "crates/app")],
+            )
+        };
+        let held = digests(core, app);
+        let other = digests(&core.replace("pub y: u8", "pub y: u16"), app);
+        assert_eq!(
+            other[&rooted], held[&rooted],
+            "::core_x::a is not core_x::b"
+        );
+        let top = digests(core, &app.replace("pub q: u8", "pub q: u16"));
+        assert_eq!(
+            top[&rooted], held[&rooted],
+            "::core_x::a is not the app's a"
+        );
+        assert_eq!(
+            top[&selfed], held[&selfed],
+            "self::a in c is not the app's a"
+        );
+        let own = digests(&core.replace("pub x: u8", "pub x: u16"), app);
+        assert_ne!(own[&rooted], held[&rooted], "f names core_x::a::Schema");
+        let inner = digests(core, &app.replace("pub z: u8", "pub z: u16"));
+        assert_ne!(inner[&selfed], held[&selfed], "g names c::a::Schema");
+    }
+
     /// CLOUD-2927 (h): an item in a block is named from inside the block
     /// alone: a `const` block's own `LIMIT` answers the mention in it, and a
     /// mention outside the block resolves past it to the `LIMIT` its module
@@ -20372,6 +20436,51 @@ mod tests {
         let (added, derived_added) = sweep(&held, Some(&Derived::at(&state, "build")));
         assert_eq!(derived_added, 0, "a test added beside them moves no case");
         assert_eq!((&added[&t], &added[&u]), (&body[&t], &body[&u]));
+    }
+
+    /// A case with no own text reads its test crate whole, and a warm sweep
+    /// takes its digest from the store like any other.
+    ///
+    /// Fails by: a kept whole read re-derived item by item, which never equals
+    /// what it kept, so every such case is derived afresh on every sweep
+    /// (CLOUD-2789).
+    #[test]
+    fn a_warm_sweep_takes_a_whole_crate_read_from_the_store() {
+        let root = crate::scratch::scratch("schema-case-memo-whole");
+        let state = crate::scratch::scratch("schema-case-memo-whole-state");
+        let write = |path: &str, text: &str| {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        };
+        write("src/lib.rs", "pub fn f() {}\n");
+        write("tests/it/main.rs", "mod a;\n");
+        write("tests/it/a.rs", "#[test]\nfn t() { fix::f(); }\n");
+        // `gone` names no test in the crate's text: it has no own text.
+        let gone = (String::from("a::gone"), String::from("fix::it"));
+        let cases: BTreeSet<Case> = [gone.clone()].into();
+        let executed = [(gone.clone(), [0].into())].into();
+        let dirs = [(String::from("fix"), String::new())].into();
+        let probes = [String::from("f")];
+        let sweep = || {
+            let before = case_derivations();
+            let digests = case_digests(
+                &root,
+                &cases,
+                &dirs,
+                &executed,
+                &Depends {
+                    derived: Some(&Derived::at(&state, "build")),
+                    ..depends(&probes)
+                },
+            );
+            (digests, case_derivations() - before)
+        };
+        let (cold, derived_cold) = sweep();
+        assert_eq!(derived_cold, 1, "a cold sweep derives it");
+        let (warm, derived_warm) = sweep();
+        assert_eq!(derived_warm, 0, "a warm sweep takes it from the store");
+        assert_eq!(warm, cold);
     }
 
     /// A kept case entry holds only while what it read of its test crate
@@ -23749,6 +23858,116 @@ pub fn repo() -> u8 {{ scratch() }}
         assert!(
             said.contains("1 journal line(s) could not be written"),
             "{said}"
+        );
+    }
+
+    /// A passing control is journaled under its own case and digest: one
+    /// case's journaled control is never another's, nor a case's whose
+    /// digest moved, and a case with no digest has none.
+    ///
+    /// Fails by: every case's control keyed alike, so a case whose control
+    /// never ran here reads another's seconds, skips its control and is
+    /// judged against a baseline it never had (CLOUD-2789).
+    #[test]
+    fn a_journaled_control_answers_only_its_own_case_and_digest() {
+        let base = crate::scratch::scratch("schema-control-key");
+        let (own, other, bare) = (case("own"), case("other"), case("bare"));
+        let (reach, seconds, red) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            Red::new(),
+        );
+        let control = Control::new();
+        let digests = |own_digest: &str| -> std::collections::BTreeMap<Case, String> {
+            [
+                (own.clone(), own_digest.to_owned()),
+                (other.clone(), String::from("d2")),
+            ]
+            .into()
+        };
+        macro_rules! judging {
+            ($cache:expr, $digests:expr) => {
+                Judging {
+                    work: &base,
+                    target: &base,
+                    scratch: &base,
+                    root: &base,
+                    mutants: &[],
+                    reach: &reach,
+                    seconds: &seconds,
+                    cache: $cache,
+                    digests: $digests,
+                    store: &base,
+                    red: &red,
+                    control: &control,
+                    reuse: None,
+                    threads: None,
+                }
+            };
+        }
+        let held = digests("d1");
+        let empty = std::collections::BTreeMap::new();
+        let key = control_key(&judging!(&empty, &held), &own).unwrap();
+        assert_ne!(
+            Some(&key),
+            control_key(&judging!(&empty, &held), &other).as_ref()
+        );
+        assert_eq!(control_key(&judging!(&empty, &held), &bare), None);
+        let cache = [(key, format!("{CONTROLLED}1.5"))].into();
+        let journaled = judging!(&cache, &held);
+        assert_eq!(journaled_control(&journaled, &own), Some(1.5));
+        assert_eq!(journaled_control(&journaled, &other), None);
+        assert_eq!(journaled_control(&journaled, &bare), None);
+        let moved = digests("d3");
+        assert_eq!(journaled_control(&judging!(&cache, &moved), &own), None);
+    }
+
+    /// A run asked for every case's outcome is never cut at its first
+    /// failure, and a fail-fast one is.
+    ///
+    /// Fails by: `--no-fail-fast` passed to a fail-fast run (it runs on past
+    /// the kill it was asked to stop at) or withheld from a run that must see
+    /// every case (the cases after the first failure read as undecided)
+    /// (CLOUD-2789).
+    #[test]
+    fn only_a_run_asking_for_every_outcome_is_not_cut_at_its_first_failure() {
+        let base = crate::scratch::scratch("schema-judge-argv");
+        let mutants = [listed("BinaryOperator", "!=", (2, 7), (2, 9))];
+        let (reach, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let (red, control) = (Red::new(), Control::new());
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &base,
+            red: &red,
+            control: &control,
+            reuse: None,
+            threads: Some(3),
+        };
+        let cases: BTreeSet<Case> = [case("a")].into();
+        let cut = |fail_fast| {
+            judge_argv(&judging, &mutants[0], &cases, fail_fast)
+                .iter()
+                .any(|arg| arg == "--no-fail-fast")
+        };
+        assert!(!cut(true), "a fail-fast run stops at its first failure");
+        assert!(cut(false), "a run for every outcome is never cut short");
+        let argv = judge_argv(&judging, &mutants[0], &cases, true);
+        assert!(
+            argv.windows(2).any(|pair| pair == ["--test-threads", "3"]),
+            "{argv:?}"
         );
     }
 

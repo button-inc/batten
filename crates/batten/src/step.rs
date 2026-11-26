@@ -2422,6 +2422,21 @@ mod tests {
         lint_accessed(&declaration, accessed, file, &mut |_| false)
     }
 
+    // Fails by: a `step record` line without its leading `--` keying its
+    // words as families, or a `--` line naming a family that is not one path
+    // component keying it anyway — either conjunction widened to a disjunction
+    // (CLOUD-2789).
+    #[test]
+    fn a_record_ask_keys_only_dash_dash_and_single_components() {
+        let words = |list: &[&str]| list.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+        let asked = words(&["--", "claims", "verdicts"]);
+        assert_eq!(record_ask(&asked), Some(&asked[1..]));
+        assert_eq!(record_ask(&words(&["-x", "claims"])), None);
+        assert_eq!(record_ask(&words(&["--", "claims/inner"])), None);
+        assert_eq!(record_ask(&words(&["--", "claims", ".hidden"])), None);
+        assert_eq!(record_ask(&words(&["--"])), None);
+    }
+
     // Fails by: a run that only READ its declared input read as one that
     // wrote it (the write filter inverted), or an empty write list read as a
     // write hazard. A synthetic trace, so it judges on every host, under a

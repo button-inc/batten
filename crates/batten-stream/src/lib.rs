@@ -290,6 +290,21 @@ mod tests {
         assert_eq!(shared.bytes(), b"abc");
     }
 
+    /// Fails by: a flush through the share answering `Ok` without flushing
+    /// the sink, so bytes a buffered sink holds never reach its writer
+    /// (CLOUD-2789).
+    #[test]
+    fn a_flush_through_the_share_flushes_the_sink() {
+        let mut shared = Shared::new(std::io::BufWriter::new(Vec::new()));
+        shared.write_all(b"abc").unwrap();
+        assert!(
+            shared.with(|sink| sink.get_ref().is_empty()).unwrap(),
+            "buffered until flushed"
+        );
+        shared.flush().unwrap();
+        assert_eq!(shared.with(|sink| sink.get_ref().clone()).unwrap(), b"abc");
+    }
+
     /// Fails by: a pump that reported its result left detached, its thread
     /// still holding the sinks and the pipe after the caller has read them.
     #[test]

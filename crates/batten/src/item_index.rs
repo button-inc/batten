@@ -2009,6 +2009,60 @@ mod tests {
                 .get(&("src/engine.rs".to_owned(), "make_executable".to_owned())),
             Some(&("src/durable.rs".to_owned(), "make_executable".to_owned()))
         );
+        // A callee through ANOTHER crate's name keeps that crate: rooting every
+        // callee at the forwarder's own crate would look for `one::durable`,
+        // which `one` does not declare, and pair the forwarder with nothing.
+        let workspace = [
+            ("Cargo.toml", "[workspace]\n"),
+            ("one/Cargo.toml", "[package]\nname = \"one\"\n"),
+            ("two/Cargo.toml", "[package]\nname = \"two\"\n"),
+            ("one/src/lib.rs", "pub mod engine;\n"),
+            ("two/src/lib.rs", "pub mod durable;\n"),
+        ];
+        let base = index(
+            &[
+                &workspace[..],
+                &[
+                    (
+                        "one/src/engine.rs",
+                        "pub fn make_executable(p: u8) -> u8 { p + 1 }\n",
+                    ),
+                    ("two/src/durable.rs", ""),
+                ],
+            ]
+            .concat(),
+        );
+        let across = (
+            "one/src/engine.rs",
+            "pub fn make_executable(p: u8) -> Option<u8> {\n    \
+             Some(two::durable::make_executable(p))\n}\n",
+        );
+        let target = (
+            "two/src/durable.rs",
+            "pub fn make_executable(p: u8) -> u8 { p + 1 }\n",
+        );
+        let head = index(&[&workspace[..], &[across, target]].concat());
+        let texts: BTreeMap<String, String> = [across, target]
+            .into_iter()
+            .map(|(path, text)| (path.to_owned(), text.to_owned()))
+            .collect();
+        assert_eq!(
+            forwarded_items(&base, &head, &texts)
+                .get(&("one/src/engine.rs".to_owned(), "make_executable".to_owned())),
+            Some(&(
+                "two/src/durable.rs".to_owned(),
+                "make_executable".to_owned()
+            ))
+        );
+        let base = index(&[
+            ROOT,
+            lib,
+            (
+                "src/engine.rs",
+                "pub fn make_executable(p: u8) -> u8 { p + 1 }\n",
+            ),
+            ("src/durable.rs", ""),
+        ]);
         let working = (
             "src/engine.rs",
             "pub fn make_executable(p: u8) -> u8 {\n    \
