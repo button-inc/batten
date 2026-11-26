@@ -286,11 +286,23 @@ fn a_record_of_another_predicate_is_could_not_look() {
 /// contract, and a record that reads back.
 #[test]
 fn this_session_can_observe_the_pinned_runner() {
+    const SESSION: &str = "hk-observation-suite";
     let root = common::at_root(".");
-    let output = common::run(
-        &root,
-        &["hk", "observe", "--session", "hk-observation-suite"],
+    // THIS SESSION'S RECORD IS CLEARED FIRST (CLOUD-2936). It lives in the real
+    // git directory, so one recording probed and wrote it and the next read it
+    // back without probing. Every run now probes, which is this case's subject.
+    let git_dir = batten::git::git_dir(&root).expect("this checkout has a git directory");
+    let digest = fs::read(root.join(hk::ARTIFACT)).map_or_else(
+        |_| "no-contract".to_owned(),
+        |bytes| batten::tools::digest(&bytes),
     );
+    match fs::remove_file(hk::observation_path(&git_dir, SESSION, &digest)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            panic!("clear this session's record: {error}")
+        }
+        _ => {}
+    }
+    let output = common::run(&root, &["hk", "observe", "--session", SESSION]);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -309,7 +321,7 @@ fn this_session_can_observe_the_pinned_runner() {
         "the verb emits one of the three state tokens, got {state:?}"
     );
     assert!(
-        !emitted.contains("hk-observation-suite"),
+        !emitted.contains(SESSION),
         "the raw session token reaches no channel"
     );
 }
