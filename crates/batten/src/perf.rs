@@ -2320,6 +2320,11 @@ fn state_env(state: &str) -> Vec<(String, String)> {
 ///
 /// `-C<dir>` is dropped only where it names the directory the arm already runs
 /// in; any other prefix is left as it is, measured as before.
+///
+/// ONLY A PROGRAM NAMED BY ITS PATH LOSES THE PREFIX. `env` resolves a bare name
+/// through `PATH`, and the measuring tool runs a command without one: the
+/// commit-time `taplo` arm, lifted, failed every run with "no such file". A
+/// hook arm names the binary by its path, so it still measures what a call pays.
 fn unprefixed(dir: &Path, argv: Vec<String>) -> (Vec<(String, String)>, Vec<String>) {
     if argv.first().map(String::as_str) != Some("env") {
         return (Vec::new(), argv);
@@ -2343,7 +2348,7 @@ fn unprefixed(dir: &Path, argv: Vec<String>) -> (Vec<(String, String)>, Vec<Stri
         rest.next();
     }
     let rest: Vec<String> = rest.cloned().collect();
-    if rest.is_empty() {
+    if !rest.first().is_some_and(|program| program.contains('/')) {
         return (Vec::new(), argv);
     }
     (env, rest)
@@ -5221,6 +5226,10 @@ mod tests {
 
         let bare = words("env A=1");
         assert_eq!(unprefixed(here, bare.clone()), (Vec::new(), bare));
+
+        // A program named bare keeps `env`, which is what finds it on `PATH`.
+        let by_name = words("env RUST_LOG=warn taplo lint mise.toml");
+        assert_eq!(unprefixed(here, by_name.clone()), (Vec::new(), by_name));
     }
 
     /// Fails by: the seconds-to-milliseconds factor or the fallback mean's
