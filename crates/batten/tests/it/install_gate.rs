@@ -519,6 +519,130 @@ fn a_host_neutral_read_is_admitted_before_the_dispatch() {
     assert!(held(&said), "a write is held on any host: {said}");
 }
 
+/// Each state the gate judges, recorded as [`setup`] records it: `None` is the
+/// session `SessionStart` prepared and nothing dispatched.
+fn states() -> Vec<(&'static str, Option<(String, &'static str)>)> {
+    let alive = std::process::id().to_string();
+    vec![
+        ("undispatched", None),
+        ("running", Some((alive, "handlers"))),
+        ("failed", Some((NO_SUCH_PID.to_owned(), "failed"))),
+        ("crashed", Some((NO_SUCH_PID.to_owned(), "repair"))),
+        ("ok", Some((NO_SUCH_PID.to_owned(), "ok"))),
+    ]
+}
+
+/// A tool call with no arguments: the shape of a notification read or of an
+/// MCP method called bare.
+fn bare(dir: &Path, tool: &str) -> String {
+    tool_call(dir, tool, &serde_json::json!({}), &[])
+}
+
+/// THE CALLS THAT DELIVER INSTRUCTIONS ARE NEVER HELD (CLOUD-2840 r6). A held
+/// child whose parent had answered could not read the answer: the host's
+/// notification read was itself held, so the child asked the same question
+/// from 17:48Z to 21:33Z and was archived. A gate that holds the channel its
+/// remedy may arrive on deadlocks every session waiting on another.
+///
+/// Fails by: the notification read held before the dispatch — mutant
+/// `notification-read-held`; an MCP read held — mutant `mcp-read-held`; or
+/// every MCP method admitted, writes included — mutant `mcp-read-unjudged`.
+#[test]
+fn a_held_session_reads_its_instructions_in_every_state() {
+    let dir = bench("install-gate-instructions");
+    let _ = session_start(&dir);
+    let reads = [
+        "ReadNotifications",
+        "mcp__claude-code-remote__list_events",
+        "mcp__4db58e41-cd4e-4818-8922-46cf616593f4__list_comments",
+    ];
+    for (state, record) in states() {
+        if let Some((pid, phase)) = &record {
+            setup(&dir, pid, phase);
+        }
+        for tool in reads {
+            let said = bare(&dir, tool);
+            assert!(!held(&said), "{state}: `{tool}` is admitted: {said}");
+        }
+    }
+    // WHAT IT HELD BEFORE, IT STILL HOLDS: a fresh bench, undispatched.
+    let dir = bench("install-gate-instructions-held");
+    let _ = session_start(&dir);
+    for tool in ["mcp__claude-code-remote__send_message", "Grep"] {
+        let said = bare(&dir, tool);
+        assert!(
+            held(&said) && said.contains("session-setup undispatched"),
+            "`{tool}` is still held before the dispatch: {said}"
+        );
+    }
+}
+
+/// Every runnable remedy a refusal prints: each `run <argv>` clause, up to the
+/// clause's end, unescaped from the host's JSON envelope.
+fn remedies(said: &str) -> Vec<String> {
+    let said = said.replace("\\n", "\n").replace("\\\"", "\"");
+    said.split("; run ")
+        .skip(1)
+        .map(|rest| {
+            rest.split(['\n', ';'])
+                .next()
+                .unwrap_or_default()
+                .split(" — ")
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        })
+        .collect()
+}
+
+/// NO REMEDY THE GATE PRINTS IS ONE IT REFUSES (CLOUD-2840 r6). A refusal whose
+/// remedy the gate itself refuses is a remedy cycle: the session does what it
+/// is told and is held again, and only a human can break it. In every state,
+/// each call the gate refuses there names at least one remedy, and each
+/// remedy, run the way the session's instruction asks (in the background, on a
+/// host that has one), is admitted in that same state.
+///
+/// Fails by: the dispatch held in a state whose refusal names it, or a refusal
+/// printing any other remedy this gate holds.
+#[test]
+fn every_remedy_the_gate_prints_is_admitted_in_its_state() {
+    let dir = bench("install-gate-remedies");
+    let _ = session_start(&dir);
+    let inline = serde_json::json!({"command": "batten startup --session"});
+    let mut judged = 0;
+    for (state, record) in states() {
+        if let Some((pid, phase)) = &record {
+            setup(&dir, pid, phase);
+        }
+        let mut refusals = vec![tool_call(&dir, "Bash", &inline, &[])];
+        if state != "ok" {
+            refusals.push(call(&dir, &format!("{ABSENT} --version")));
+        }
+        if state == "undispatched" {
+            refusals.push(bare(&dir, "Grep"));
+            refusals.push(bare(&dir, "mcp__claude-code-remote__send_message"));
+        }
+        for said in refusals {
+            assert!(held(&said), "{state}: the probe is refused: {said}");
+            let printed = remedies(&said);
+            assert!(
+                !printed.is_empty(),
+                "{state}: a refusal names its remedy: {said}"
+            );
+            for remedy in printed {
+                let answer = call(&dir, &remedy);
+                assert!(
+                    !held(&answer),
+                    "{state}: the remedy `{remedy}` the gate printed is admitted: {answer}"
+                );
+                judged += 1;
+            }
+        }
+    }
+    assert!(judged >= 10, "every state was judged: {judged}");
+}
+
 /// Fails by: the committed `batten.toml` not loading with this verdict's
 /// route, or its `command` route carrying anything but the dispatch's argv. A
 /// command route's target is the refusal's runnable fix, split on whitespace,
