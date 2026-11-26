@@ -1685,6 +1685,14 @@ expression: stdout_of(&output)
               "help": "Exit 1 when the pin would change, and write nothing"
             },
             {
+              "name": "require_source",
+              "short": null,
+              "long": "require-source",
+              "takes_value": false,
+              "positional": false,
+              "help": "Exit 2 under a release pin, naming `batten engine install`, and write nothing; exit 0 under a source pin or none"
+            },
+            {
               "name": "value",
               "short": null,
               "long": null,
@@ -3567,6 +3575,24 @@ expression: stdout_of(&output)
           "id": "receipt.clean",
           "about": "Refuse when the working tree differs from HEAD, so a receipt keyed to HEAD would attest bytes no commit contains",
           "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "receipt publish",
+          "id": "receipt.publish",
+          "about": "Publish this checkout's receipts to the state repository named by BATTEN_STATE_REPO, as one parentless commit",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "receipt pull",
+          "id": "receipt.pull",
+          "about": "Pull this branch's published receipts from the state repository into this checkout",
+          "effect": "write",
           "data_channel": false,
           "flags": [],
           "subcommands": []

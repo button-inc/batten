@@ -4,13 +4,16 @@
 .SH NAME
 batten\-engine\-pin \- Set the config\*(Aqs engine pin, or refresh a declared source pin to this tree\*(Aqs digest
 .SH SYNOPSIS
-\fBbatten engine pin\fR [\fB\-\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIvalue\fR] 
+\fBbatten engine pin\fR [\fB\-\-check\fR] [\fB\-\-require\-source\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIvalue\fR] 
 .SH DESCRIPTION
 Set the config\*(Aqs engine pin, or refresh a declared source pin to this tree\*(Aqs digest
 .SH OPTIONS
 .TP
 \fB\-\-check\fR
 Exit 1 when the pin would change, and write nothing
+.TP
+\fB\-\-require\-source\fR
+Exit 2 under a release pin, naming `batten engine install`, and write nothing; exit 0 under a source pin or none
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

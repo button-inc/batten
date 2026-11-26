@@ -5828,6 +5828,7 @@ verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from pin" -l check -d 'Exit 1 when the pin would change, and write nothing'
+complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from pin" -l require-source -d 'Exit 2 under a release pin, naming `batten engine install`, and write nothing; exit 0 under a source pin or none'
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from pin" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from pin" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from pin" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
