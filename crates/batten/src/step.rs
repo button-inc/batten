@@ -1034,7 +1034,7 @@ pub fn run_step(
     step: &str,
     args: &[String],
     command: &[String],
-    watched: bool,
+    watched: Option<&Path>,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     // ONE RUNNER PER STEP AT A TIME (CLOUD-2783). hk's hooks start the same
@@ -1109,8 +1109,13 @@ pub fn run_step(
     // A WATCHED STEP TELLS ITS COMMAND SO (CLOUD-2925): the watcher collects
     // from this process, outside the trace, and a collection run inside the
     // command — the rustc wrapper's — had its reads charged to the step.
+    // THE WORKTREE IT WATCHES, never a bare flag (CLOUD-2789): a command that
+    // reaches ANOTHER repository — a suite's fixture checkout above all — is
+    // not covered by this watcher, and told only "watched" it skipped its own
+    // collection and its own watcher, and every disk case under `test:cargo`
+    // went red or hung.
     let published: Vec<(String, String)> = watched
-        .then(|| (DISK_WATCHED.to_owned(), "1".to_owned()))
+        .map(|root| (DISK_WATCHED.to_owned(), root.to_string_lossy().into_owned()))
         .into_iter()
         .collect();
     let ran = crate::git::repo_root(Path::new(".")).and_then(|root| {
@@ -1654,10 +1659,25 @@ fn step_lock_at(git_dir: &Path, step: &str) -> Option<batten_facts::lock_wait::H
     }
 }
 
-/// Published to a watched step's command (CLOUD-2925): a disk watcher outside
-/// the command collects for it, so nothing inside the command collects. A
-/// collection in a traced command is read the command did not declare.
+/// Published to a watched step's command (CLOUD-2925): the worktree a disk
+/// watcher outside the command collects for, so nothing inside the command
+/// collects for THAT worktree. A collection in a traced command is reads the
+/// command did not declare.
 pub const DISK_WATCHED: &str = "BATTEN_DISK_WATCHED";
+
+/// Whether an enclosing step's watcher covers the worktree at `root`
+/// ([`DISK_WATCHED`] names it). Another worktree — a suite's fixture, a
+/// sibling checkout — is never covered: its trees are not the ones that
+/// watcher collects.
+#[must_use]
+pub fn watched_by_an_outer_step(root: &Path) -> bool {
+    std::env::var_os(DISK_WATCHED).is_some_and(|watched| {
+        match (std::fs::canonicalize(&watched), std::fs::canonicalize(root)) {
+            (Ok(watched), Ok(root)) => watched == root,
+            _ => false,
+        }
+    })
+}
 
 /// The prefix of each step's run lock under the git dir.
 const LOCKS: &str = "batten-step-lock";
