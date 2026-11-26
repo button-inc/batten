@@ -196,6 +196,28 @@ fn every_spawn_scrubs_the_host_session_the_engine_reads() {
     );
 }
 
+/// THE MUTANT SWITCH REACHES EVERY ENGINE SPAWN (#1276): a schema judge
+/// exports [`batten::mutate::schema::ACTIVE`] to the cases it runs, and a site
+/// that only a spawned `batten` reaches is judged through that child. Scrubbed
+/// there, every such mutant would run unswitched and read as a survivor the
+/// suite could never kill. `task_bash` removes it on purpose (CLOUD-2789), for
+/// a sweep a case starts runs its own baseline; the engine spawn never does.
+///
+/// Fails by: the switch added to `common::batten`'s scrub, or replaced there.
+#[test]
+fn the_mutant_switch_reaches_every_engine_spawn() {
+    let switch = std::ffi::OsStr::new(batten::mutate::schema::ACTIVE);
+    for command in [
+        common::batten(),
+        common::batten_as(std::path::Path::new(env!("CARGO_BIN_EXE_batten"))),
+    ] {
+        assert!(
+            !command.get_envs().any(|(name, _)| name == switch),
+            "an engine spawn touches {switch:?}, so a judged mutant never reaches the child"
+        );
+    }
+}
+
 /// Every `"CLAUDE_<NAME>"` string literal in `source`.
 fn host_session_names(source: &str) -> Vec<String> {
     let prefix = concat!("\"CLAUDE", "_");

@@ -16362,6 +16362,24 @@ mod tests {
                 "{name} is the schema build's still"
             );
         }
+        // SEEDED ONCE, and never from a build that is not one yet (the guard's
+        // `|| -> &&`, which the land sweep at c72bd2ba6 found survived): a
+        // second seed leaves the hand-back's own build, and a source with no
+        // tag seeds nothing.
+        seed_handback_target(&schema, &own);
+        assert_eq!(
+            std::fs::read_to_string(own.join("debug/build/dep-3/output")).unwrap(),
+            "built from classic",
+            "a seeded target is seeded once"
+        );
+        let (bare, fresh) = (state.join("bare"), state.join("fresh"));
+        file(&bare, "debug/deps/libdep-1.rlib", "no build yet");
+        file(&bare, "debug/.fingerprint/dep-1/lib-dep", "no build yet");
+        seed_handback_target(&bare, &fresh);
+        assert!(
+            !fresh.exists(),
+            "a source that is not a target seeds nothing"
+        );
     }
 
     /// A hand-back's room step removes the mirror's own former target, which
@@ -21129,6 +21147,108 @@ mod tests {
         assert!(same_bytes(&empty, &empty));
     }
 
+    /// Two files are the same bytes exactly when both hold every byte alike,
+    /// read across the 64 KiB chunk boundary; a length unequal, one byte apart
+    /// past the first chunk, or one file missing is not; two missing are.
+    ///
+    /// Fails by: the length guard negated or its `!` deleted, the function
+    /// answering `false`, the end arm's guard made `true` or its arm deleted
+    /// (an endless zero-length step), each of which the land sweep at
+    /// c72bd2ba6 found survived.
+    #[test]
+    fn same_bytes_is_every_byte_alike_across_chunks() {
+        let base = crate::scratch::scratch("schema-same-bytes-chunks");
+        let held: Vec<u8> = (0..(3 << 16) + 17)
+            .map(|at: u32| (at % 251) as u8)
+            .collect();
+        let mut late = held.clone();
+        let last = late.len() - 1;
+        late[last] ^= 1;
+        let (one, two, apart, short) = (
+            base.join("one"),
+            base.join("two"),
+            base.join("apart"),
+            base.join("short"),
+        );
+        std::fs::write(&one, &held).unwrap();
+        std::fs::write(&two, &held).unwrap();
+        std::fs::write(&apart, &late).unwrap();
+        std::fs::write(&short, &held[..held.len() - 1]).unwrap();
+        assert!(same_bytes(&one, &two));
+        assert!(!same_bytes(&one, &apart));
+        assert!(!same_bytes(&one, &short));
+        assert!(!same_bytes(&short, &one));
+        let missing = base.join("missing");
+        assert!(!same_bytes(&one, &missing));
+        assert!(!same_bytes(&missing, &one));
+        assert!(same_bytes(&missing, &base.join("absent")));
+    }
+
+    /// A whole reach run says what it recorded and untraced, then bounds the
+    /// derived store to what the run read and says that too.
+    ///
+    /// Fails by: `reached_said` answering `Ok(())` unwritten, which the land
+    /// sweep at c72bd2ba6 found survived: the reach's counts and the store's
+    /// bound, said nowhere, and an artifact the run never read kept.
+    #[test]
+    fn a_reach_says_what_it_recorded_and_what_the_store_kept() {
+        let state = crate::scratch::scratch("schema-reached-said");
+        let derived = Derived::at(&state, "build");
+        std::fs::create_dir_all(&derived.dir).unwrap();
+        let stale = derived.dir.join("unread");
+        std::fs::write(&stale, "a former file's").unwrap();
+        let mut said = Vec::new();
+        reached_said(
+            &Reach::default(),
+            (3, std::time::Instant::now()),
+            &derived,
+            &mut said,
+        )
+        .unwrap();
+        let said = String::from_utf8(said).unwrap();
+        let lines: Vec<&str> = said.lines().collect();
+        assert_eq!(lines.len(), 3, "{said}");
+        assert!(
+            lines[0].starts_with(
+                "mutate schema: reach recorded for 0 site(s), 3 function(s) probed, in "
+            ),
+            "{said}"
+        );
+        assert_eq!(lines[1], untraced_line(&Reach::default().untraced));
+        assert_eq!(
+            lines[2],
+            "mutate schema: derived store kept 0 artifact(s), removed 1"
+        );
+        assert!(!stale.exists(), "what the run never read is removed");
+    }
+
+    /// A hand-back's run names every other mutant it judged, once each, and
+    /// never its target or a blank line of an outcome list.
+    ///
+    /// Fails by: the filter's `&&` made `||` (the target and the blank line
+    /// said) or its `!=` made `==` (only the target said), both of which the
+    /// land sweep at c72bd2ba6 found survived.
+    #[test]
+    fn the_siblings_said_are_every_other_judged_mutant() {
+        let output = crate::scratch::scratch("schema-say-siblings");
+        let lists = output.join("mutants.out");
+        std::fs::create_dir_all(&lists).unwrap();
+        std::fs::write(lists.join("caught.txt"), "target\n\nbeside\n").unwrap();
+        std::fs::write(lists.join("missed.txt"), "  apart  \nbeside\n").unwrap();
+        let mut said = Vec::new();
+        say_siblings(&output, "target", &mut said).unwrap();
+        let note = |sibling: &str| {
+            format!(
+                "mutate schema: target's run also judged {sibling} under its own cases; \
+                 that outcome is not a verdict, which is its own hand-back's\n"
+            )
+        };
+        assert_eq!(
+            String::from_utf8(said).unwrap(),
+            format!("{}{}", note("apart"), note("beside"))
+        );
+    }
+
     /// The finished cases are exactly the records a recorder would skip: each
     /// one done passing, by the case it names; a record unfinished, failed or
     /// naming no case is none.
@@ -21514,8 +21634,18 @@ mod tests {
         write("tests/it/b.rs", "#[test]\nfn u() { fix::f(); fix::f(); }\n");
         let edited = Derived::at(&state, "build");
         let (keyed, _) = sweep(&edited);
-        assert!(artifacts(&edited) > whole, "the edit derived b.rs afresh");
-        edited.retain_touched();
+        let derived = artifacts(&edited);
+        assert!(derived > whole, "the edit derived b.rs afresh");
+        // THE COUNTS ARE SAID (`retain_touched`'s `+= -> *=`, which the land
+        // sweep at c72bd2ba6 found survived): every artifact the run read is
+        // kept, b.rs's former ones removed, and so is the former build's
+        // version, recreated here so the count names it.
+        sweep(&Derived::at(&state, "a former build"));
+        assert_eq!(
+            edited.retain_touched(),
+            (whole, derived - whole + 1),
+            "kept and removed, counted"
+        );
         assert!(!old.dir.exists(), "another version's directory is removed");
         assert_eq!(
             artifacts(&edited),
