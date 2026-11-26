@@ -704,6 +704,7 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
         "MUTANT_PRESETS",
         "MUTANT_OVERLAY_ENV",
         "MUTANT_OVERLAY_FEATURES",
+        "MUTANT_OVERLAY_ROOTS",
         // THE HOST SIGNALS (CLOUD-2709): a suite run inside a cloud session
         // inherited them and decided `host` one way, and CI the other. A case
         // that means a host sets it.

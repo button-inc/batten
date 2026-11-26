@@ -1978,8 +1978,11 @@ description = "Gate: every declared Rego, Pkl or manifest gate this branch touch
 # it, so an in-place mutation recompiled the crate twice per row (~41 s a row on
 # #1276). The suite is built once with `preset-overlay` and reads the mutated
 # copy from `BATTEN_PRESET_OVERLAY` (`mutate::Overlay`, `PresetModule::text`);
-# the overlay's root is `[env]`'s `MUTANT_PRESETS`.
-env = { MUTANT_OVERLAY_ENV = "BATTEN_PRESET_OVERLAY", MUTANT_OVERLAY_FEATURES = "preset-overlay" }
+# the overlay's root is `[env]`'s `MUTANT_PRESETS`. THE ENGINE-DEFAULT LIBRARY
+# IS EMBEDDED TOO, and read through the same overlay at its repository path
+# (`policy::library_text`, CLOUD-2253): before it was a further root, its 54
+# rows cost 108 rebuilds a sweep.
+env = { MUTANT_OVERLAY_ENV = "BATTEN_PRESET_OVERLAY", MUTANT_OVERLAY_FEATURES = "preset-overlay", MUTANT_OVERLAY_ROOTS = "crates/batten/src/policy/library" }
 # THE SUITE'S `pkl eval hk.pkl` CASES NEED THE PACKAGE CACHE WARM, as `hooks` and
 # `record-verdicts` do (CLOUD-2311). Run alone on a cold, TLS-intercepted host,
 # `hk_contract`'s four pkl cases went baseline-red and every mutant they reach
