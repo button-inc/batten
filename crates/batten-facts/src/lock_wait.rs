@@ -477,6 +477,17 @@ impl Mode {
     }
 }
 
+/// The helper's argv before its path: the marker [`helped`] is re-entered on,
+/// then `mode` as [`helped`] reads it. The spawner passes exactly this, so a
+/// case asks this function what the helper is told rather than reading a
+/// helper's `/proc/<pid>/cmdline`, which is empty while its exec is still
+/// replacing the image (`the_helper_waits_in_the_waiters_own_mode`, red 18
+/// times in 300 under load).
+#[must_use]
+pub const fn helper_args(mode: Mode) -> [&'static str; 2] {
+    [HELPER_ARG, mode.name()]
+}
+
 /// What starts a helper: given the lock's path and the waiter's mode, a
 /// running `batten __lock-wait <mode> <path>` with its stdin piped.
 ///
@@ -837,6 +848,13 @@ mod tests {
             "first",
             "the first spawner stands"
         );
+    }
+
+    /// Fails by: a helper told a mode other than its waiter's, or no marker.
+    #[test]
+    fn a_helper_is_told_its_waiters_mode_after_the_marker() {
+        assert_eq!(helper_args(Mode::Shared), [HELPER_ARG, "shared"]);
+        assert_eq!(helper_args(Mode::Exclusive), [HELPER_ARG, "exclusive"]);
     }
 
     /// Fails by: a process that is not a helper taken for one.

@@ -251,19 +251,29 @@ fn the_helper_waits_in_the_waiters_own_mode() {
         .unwrap()
         .try_lock()
         .expect("free in a fresh fixture");
-    let mut argv = String::new();
-    let taken = wait_with_helper(&file, &path, Mode::Shared, None, &helper, &mut |pid| {
-        argv = std::fs::read_to_string(format!("/proc/{pid}/cmdline")).expect("read its argv");
+    // What the wait asked its spawner for, recorded at the ask: never read
+    // back off the helper's `/proc/<pid>/cmdline`, which is EMPTY while the
+    // helper's exec is still replacing its image — the read raced the exec and
+    // went red 18 times in 300 under load, with no mode ever wrong.
+    let asked = std::cell::Cell::new(None);
+    let spawn = |path: &Path, mode: Mode| {
+        asked.set(Some(mode));
+        helper(path, mode)
+    };
+    let taken = wait_with_helper(&file, &path, Mode::Shared, None, &spawn, &mut |_| {
         drop(holder.take());
     })
     .expect("the wait ends");
     assert!(taken);
-    let words: Vec<&str> = argv.split('\0').collect();
-    assert!(
-        words
-            .windows(2)
-            .any(|pair| pair == ["__lock-wait", "shared"]),
-        "the helper was asked for the waiter's mode: {words:?}"
+    assert_eq!(
+        asked.get(),
+        Some(Mode::Shared),
+        "the helper is asked for the waiter's mode"
+    );
+    assert_eq!(
+        batten_facts::lock_wait::helper_args(Mode::Shared),
+        ["__lock-wait", "shared"],
+        "and told it, as `helped` reads it"
     );
 }
 

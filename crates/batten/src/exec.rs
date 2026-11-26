@@ -1047,8 +1047,7 @@ pub fn spawn_lock_helper_as(
     mode: batten_facts::lock_wait::Mode,
 ) -> std::io::Result<std::process::Child> {
     Command::new(program)
-        .arg(batten_facts::lock_wait::HELPER_ARG)
-        .arg(mode.name())
+        .args(batten_facts::lock_wait::helper_args(mode))
         .arg(path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
