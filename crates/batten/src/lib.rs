@@ -15361,11 +15361,16 @@ fn run_step_watched(
         .as_deref()
         .and_then(|root| resolve::resolve(root, &Overrides::default()).ok())
         .and_then(|resolved| resolved.prune);
+    // A STEP INSIDE A WATCHED ONE ARMS NO WATCHER OF ITS OWN (CLOUD-2925): it
+    // runs in the outer step's traced command, so its collections would be
+    // reads charged to that step, and the outer watcher already watches.
     let watch = root
         .as_deref()
+        .filter(|_| std::env::var_os(crate::step::DISK_WATCHED).is_none())
         .and_then(|root| disk_watcher(root, prune_rules.as_ref()));
+    let watched = watch.is_some() || std::env::var_os(crate::step::DISK_WATCHED).is_some();
     let (ran, lines) = disk_watch::around(watch, || {
-        crate::step::run_step(step, args, command, &mut *err)
+        crate::step::run_step(step, args, command, watched, &mut *err)
     });
     for line in &lines {
         let _ = writeln!(err, "step run {step}: {line}");
@@ -15455,6 +15460,12 @@ pub fn rustc_wrapped(
 /// A declared `min_free_mb` above the default floor is honoured by the hook
 /// and the watchers, not here: reading it would cost every compile the config.
 fn guard_compile(rustc_args: &[std::ffi::OsString]) {
+    // A COMPILE A STEP'S WATCHER COVERS COLLECTS NOTHING HERE (CLOUD-2925): it
+    // runs inside the step's traced command, where the pass's reads — the
+    // config, the repository, its `.gitignore` — were charged to the step.
+    if std::env::var_os(crate::step::DISK_WATCHED).is_some() {
+        return;
+    }
     let Some(out_dir) = rustc_args
         .iter()
         .position(|arg| arg == "--out-dir")
