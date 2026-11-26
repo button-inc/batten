@@ -4649,16 +4649,20 @@ mod tests {
     /// Fails by: the group test inverted (a mutant missed at 34c6e4d1f), so
     /// this process reads as the holder and every clean managed run ends the
     /// group its child meant to leave running.
-    #[cfg(target_os = "linux")]
+    ///
+    /// `/proc` is how a group is read, so off Linux the case returns at once;
+    /// `cfg!` rather than `#[cfg]` keeps it compiled, and counted, everywhere.
     #[test]
     fn only_a_member_of_the_group_holds_its_pipe() {
-        use std::os::unix::process::CommandExt as _;
+        if !cfg!(target_os = "linux") {
+            return;
+        }
         let (reader, writer) = std::io::pipe().expect("a pipe");
         let pipes = [pipe_identity(&reader)];
         let spawn = |stdout: std::process::Stdio| {
-            std::process::Command::new("cat")
-                .process_group(0)
-                .stdin(std::process::Stdio::piped())
+            let mut cat = std::process::Command::new("cat");
+            in_own_group(&mut cat);
+            cat.stdin(std::process::Stdio::piped())
                 .stdout(stdout)
                 .stderr(std::process::Stdio::null())
                 .spawn()
@@ -4680,4 +4684,15 @@ mod tests {
         );
         assert!(holder_holds, "the member writing to it holds it");
     }
+
+    /// Start `command` as the leader of a process group of its own.
+    #[cfg(unix)]
+    fn in_own_group(command: &mut std::process::Command) {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+
+    /// No process groups to lead off unix; the one caller returns first there.
+    #[cfg(not(unix))]
+    fn in_own_group(_: &mut std::process::Command) {}
 }

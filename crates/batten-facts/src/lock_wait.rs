@@ -930,9 +930,13 @@ mod tests {
     ///
     /// Fails by: [`Stop::release`] doing nothing (a mutant missed at
     /// 34c6e4d1f), so each helper a long-lived stop outlives leaks a pipe.
-    #[cfg(unix)]
+    /// `true` is the helper, so off unix the case returns at once; `cfg!`
+    /// rather than `#[cfg]` keeps it compiled, and counted, on every target.
     #[test]
     fn a_finished_helper_is_released_from_its_stop() {
+        if !cfg!(unix) {
+            return;
+        }
         let (path, _file) = lock_file("released");
         let stop = Stop::new().unwrap();
         let spawn = |_: &Path, _: Mode| {
