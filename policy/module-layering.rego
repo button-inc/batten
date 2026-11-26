@@ -767,6 +767,10 @@ declared_modules := {
 	# functions over `std::fs` and a path. Every module that mutates a file calls
 	# it, so it must sit below all of them, which a leaf does by construction.
 	"durable",
+	# `lock_wait` arrived with CLOUD-2789 and is `durable`'s class: a LEAF that
+	# reaches nothing in this crate. Every module that takes a file lock calls
+	# it, so it sits below all of them.
+	"lock_wait",
 	# `forge_query` arrived with CLOUD-843's forge-read foundation. It is a
 	# PRODUCER in `record`'s class, and it sits directly above the three modules
 	# it composes: it walks `forge`'s window over `rest`'s transport and writes
