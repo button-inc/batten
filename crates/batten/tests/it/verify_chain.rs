@@ -371,10 +371,12 @@ fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
         "seconds, then minutes, then the suite: {gated:?}"
     );
     // `test:traced` (63f961882) is CI's traced test branches, run where the
-    // suite runs, so it is the suite's tier too.
+    // suite runs, so it is the suite's tier too: FIRST in it (CLOUD-2789), so
+    // its traced cases redden the tier in a minute rather than after the suite
+    // and the mutants.
     assert_eq!(
         members(&gated[suite]),
-        ["verify:ci-suite", "verify:ci-slow-needed", "test:traced"],
+        ["test:traced", "verify:ci-suite", "verify:ci-slow-needed"],
         "the suite is its own tier: {gated:?}"
     );
     assert!(
@@ -553,9 +555,11 @@ fn the_receipt_is_the_last_step() {
     let gated = steps("verify:gated");
     let receipt = step_at(&gated, "receipt record verify");
     assert_eq!(receipt, gated.len() - 1, "{gated:?}");
-    // THE FIRST STEP IS `tree-clean`: nothing after it is decided over a dirty
-    // tree.
-    assert_eq!(gated[0], "mise run tree-clean", "{gated:?}");
+    // THE FIRST STEP IS `tree-clean`'s check: nothing after it is decided over a
+    // dirty tree. Spelled as the engine call itself since CLOUD-2789: `mise run
+    // tree-clean` started a second `mise` that re-entered `build:debug` through
+    // `depends`, which `verify:gated`'s own `depends` had just run.
+    assert_eq!(gated[0], steps("tree-clean")[0], "{gated:?}");
     assert!(
         depends_of("verify:gated")
             .iter()
@@ -753,16 +757,18 @@ fn every_hk_step_runs_the_named_engine() {
 }
 
 /// THE GATE SET RUNS THE ENGINE IT BUILT FIRST (CLOUD-2924): `tree-clean`,
-/// which opens `verify:gated`'s `depends` and its body, itself depends on
-/// `build:debug`, so the binary exists before any `{{vars.batten}}` runs;
-/// `BATTEN_BIN` names that binary; and the build is pinned to that directory.
-/// So every `step run` a tier reaches renders `{{vars.batten}}` to this tree's
-/// engine rather than a `cargo run` per step, whatever `BATTEN_BIN` the caller
-/// of `verify` set or left unset, and `tree-clean` still runs the engine `land`
-/// hands its gate.
+/// which opens `verify:gated`'s `depends`, itself depends on `build:debug`, so
+/// the binary exists before any `{{vars.batten}}` runs; the body opens with
+/// `tree-clean`'s own check through that var (CLOUD-2789), so the lap builds
+/// once; `BATTEN_BIN` names that binary; and the build is pinned to that
+/// directory. So every `step run` a tier reaches renders `{{vars.batten}}` to
+/// this tree's engine rather than a `cargo run` per step, whatever
+/// `BATTEN_BIN` the caller of `verify` set or left unset, and `tree-clean`
+/// still runs the engine `land` hands its gate.
 #[test]
 fn the_gate_set_runs_the_engine_it_built_first() {
-    assert_eq!(steps("verify:gated")[0], "mise run tree-clean");
+    assert_eq!(depends_of("verify:gated"), ["tree-clean"]);
+    assert_eq!(steps("verify:gated")[0], steps("tree-clean")[0]);
     assert_eq!(
         depends_of("tree-clean"),
         ["build:debug"],
