@@ -1332,13 +1332,21 @@ fn trees_from_a_linked_worktree_name_each_directory_once() {
 ///
 /// Fails by: a pass that holds one lock while it blocks on another, or a
 /// watcher whose join waits on a pass without bound.
+///
+/// RELEASED ONCE THE PASS HAS WALKED, AT `disk-pass` (CLOUD-2936): released at
+/// `disk-sample`, when the pass is only spawned, the step's stop raced the
+/// pass, and how far it walked before it read the stop was the scheduler's
+/// draw: one reach recording ran the prune functions and the next did not, with
+/// no code changed. A pass blocked on its second lock never says `disk-pass`,
+/// so the hang this case exists for still hangs it. A stop observed mid-pass
+/// is [`a_held_tree_does_not_hold_a_watched_step_open`]'s.
 #[test]
 fn a_step_run_in_a_linked_worktree_exits_under_pressure() {
     if !cfg!(target_os = "linux") {
         return;
     }
     let linked = linked("step-run-linked");
-    let (code, said) = step_released_at("step-run-linked", &linked, "disk-sample ");
+    let (code, said) = step_released_at("step-run-linked", &linked, "disk-pass ");
     assert_eq!(code, Some(0), "{said}");
     assert!(said.contains("step run probe: disk-watch-armed "), "{said}");
 }
