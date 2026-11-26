@@ -1259,7 +1259,7 @@ fn pull_ended(answer: Option<&crate::rest::Answer>, sha: &str) -> Option<Waited>
 struct Report<'a> {
     /// The race's one channel; the first message is the verdict.
     send: std::sync::mpsc::Sender<Waited>,
-    /// Raised by whichever arm answers, read by both before every ask.
+    /// Raised by whichever arm answers, read by both after every reading.
     stop: &'a std::sync::atomic::AtomicBool,
     /// The reading a red verdict was taken over (CLOUD-2270).
     red: &'a std::sync::Mutex<RedReading>,
@@ -1317,7 +1317,12 @@ fn checks_arm(
     // (CLOUD-2253 A7): the same head, read moments ago, and its validator makes
     // the second ask a conditional one.
     let mut primed = waiting.primed.clone();
-    while !report.answered() {
+    // EVERY ARM READS ONCE BEFORE IT ASKS WHETHER THE OTHER ANSWERED
+    // (CLOUD-2936): the race decides which verdict is sent, never whether an
+    // arm looked. A check before the first read made that a draw between two
+    // thread starts, and the losing arm's read ran on one recording of
+    // unchanged code and not the next. A late answer is dropped ([`Report::answer`]).
+    loop {
         // The conditional read is `pr_watch`'s, so the argv, the client
         // and the empty-string-on-failure posture stay its business and
         // this arm only decides when to ask.
@@ -1427,6 +1432,9 @@ fn checks_arm(
         // INTERRUPTIBLE, because the OTHER arm may answer during this
         // wait and `thread::scope` joins this one before the verdict can
         // be acted on (review of #848).
+        if report.answered() {
+            return;
+        }
         (waiting.pause)(interval, report.stop);
     }
 }
@@ -1440,7 +1448,9 @@ fn trunk_arm(
     report: &Report<'_>,
 ) {
     let mut poll = crate::main_watch::Poll::default();
-    while !report.answered() {
+    // Read once before asking whether the other arm answered, for
+    // [`checks_arm`]'s reason (CLOUD-2936).
+    loop {
         let raw = (waiting.trunk)(poll.etag());
         let interval = poll.absorb(raw.as_ref(), trunk.interval);
         if let Some(moved) = poll.moved(&trunk.base) {
@@ -1463,6 +1473,9 @@ fn trunk_arm(
         // sleep in this crate and it carries the one `disallowed_methods`
         // exemption, so a second arm cannot grow a timer of its own.
         // Interruptible, for the sibling arm's reason.
+        if report.answered() {
+            return;
+        }
         (waiting.pause)(interval, report.stop);
     }
 }
