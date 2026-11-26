@@ -294,7 +294,13 @@ fn a_bash_call_is_never_refused_by_this_module() {
 #[test]
 fn a_write_outside_the_repository_is_not_refused() {
     let dir = repo("shell-authored-outside", &[]);
-    let outside = common::scratch("shell-authored-outside-target").join("x.sh");
+    // OUTSIDE EVERY REPOSITORY, NOT ONLY THE FIXTURE'S (CLOUD-2936). Under the
+    // build's scratch root the target sat in the checkout holding the build, so
+    // the hook judged the call by that checkout: its spawn failed there, and the
+    // repair removed the checkout's pin record. The suite's other cases then
+    // read that record on one recording and its absence on the next. The
+    // system temp directory is enclosed by no repository at all.
+    let outside = batten::scratch::scratch("shell-authored-outside-target").join("x.sh");
     let call = write(outside.to_str().expect("a UTF-8 path"), "echo hi\n");
     assert_eq!(fact(&dir, &call), Look::IsNot);
     assert!(!refused(&dir, &call));
