@@ -37,7 +37,11 @@
 //! exec, so the holder's own close may release nothing at all. So [`Held`]'s
 //! drop unlocks explicitly and then opens and closes the file once more: an
 //! `IN_CLOSE_NOWRITE` that follows the release. A holder outside this module
-//! that only closes keeps the kernel's order, and its waiter the race.
+//! (cargo, whose lock files the collector waits on) only closes and keeps the
+//! kernel's order, so the batten binary, which installs a spawner ([`install`]),
+//! never waits on close events: on Linux too it waits through a helper blocked
+//! in the kernel's own `flock`, which no release escapes. Close events are the
+//! wait only where no spawner is installed, a library or a test harness.
 //!
 //! # Off Linux: a helper process does the blocking
 //!
@@ -385,6 +389,16 @@ fn wait(
     use rustix::event::{PollFd, PollFlags};
     use rustix::fs::inotify;
 
+    // THE BINARY WAITS IN THE KERNEL. A close event is not a release (module
+    // docs, "release"), and a holder that is not a `Held` — cargo, to the
+    // collector's waits on its lock files — never announces one, so its waiter
+    // can miss the release and park for good. A helper blocked in `flock` sees
+    // every release. Only a process with no spawner (a library, a test harness,
+    // whose holders are its own `Held`s) waits on close events below.
+    if let Ok(spawn) = installed() {
+        return wait_with_helper(file, path, mode, stop, &spawn, &mut |_| parked());
+    }
+
     let watch = inotify::init(inotify::CreateFlags::CLOEXEC)?;
     inotify::add_watch(
         &watch,
@@ -486,13 +500,6 @@ fn install_into(slot: &std::sync::OnceLock<Spawner>, spawner: Spawner) -> std::i
 /// The installed spawner, or a NAMED refusal where none was: a library or a
 /// test harness, which is not batten and has no helper entry, so it must never
 /// spawn itself in batten's place.
-#[cfg_attr(
-    all(target_os = "linux", not(test)),
-    expect(
-        dead_code,
-        reason = "Linux waits on inotify; compiled everywhere so its case is"
-    )
-)]
 fn installed() -> std::io::Result<Spawner> {
     installed_from(&SPAWNER)
 }
