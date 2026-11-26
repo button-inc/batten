@@ -1676,57 +1676,24 @@ pub const LIBRARY: &[(&str, &str)] = &[(
     include_str!("policy/library/read-only.rego"),
 )];
 
-/// [`LIBRARY`] as this build compiles it: the embedded text, or under the
-/// `preset-overlay` feature a mutated copy a sweep wrote to
-/// `$BATTEN_PRESET_OVERLAY/<path>` ([`library_text`]). Read once per process.
+/// [`LIBRARY`] as this build compiles it: the embedded text, or in a mutation
+/// sweep's suite build a mutated copy ([`crate::preset::library_text`]). Read
+/// once per process.
 fn library() -> &'static [(&'static str, std::borrow::Cow<'static, str>)] {
     static LOADED: std::sync::OnceLock<Vec<(&'static str, std::borrow::Cow<'static, str>)>> =
         std::sync::OnceLock::new();
     LOADED.get_or_init(|| {
-        #[cfg(feature = "preset-overlay")]
-        let overlay = std::env::var_os("BATTEN_PRESET_OVERLAY").map(std::path::PathBuf::from);
-        #[cfg(not(feature = "preset-overlay"))]
-        let overlay: Option<std::path::PathBuf> = None;
+        let overlay = crate::preset::library_overlay();
         LIBRARY
             .iter()
-            .map(|(path, embedded)| (*path, library_text(overlay.as_deref(), path, embedded)))
+            .map(|(path, embedded)| {
+                (
+                    *path,
+                    crate::preset::library_text(overlay.as_deref(), path, embedded),
+                )
+            })
             .collect()
     })
-}
-
-/// The text of the library module at `path` (CLOUD-2253): `embedded`, or under
-/// the `preset-overlay` feature the mutated copy at `<overlay>/<path>` where one
-/// is there ([`crate::preset::read_overlay`]), so a sweep judges a library row
-/// on binaries built once rather than recompiling the crate twice per row.
-///
-/// A BUILD FEATURE, NEVER A RUNTIME SWITCH ALONE, for `PresetModule::text`'s
-/// reason: a shipped build ignores `overlay` whatever it names, so no caller
-/// under judgement can swap the library it is judged by for a file. The copy
-/// the overlay names as its target and that will not read exits 3 rather than
-/// judging the embedded text (CLOUD-2839).
-#[must_use]
-pub fn library_text(
-    overlay: Option<&Path>,
-    path: &str,
-    embedded: &'static str,
-) -> std::borrow::Cow<'static, str> {
-    #[cfg(feature = "preset-overlay")]
-    match crate::preset::read_overlay(overlay, path) {
-        crate::preset::Overlaid::Mutated(text) => return std::borrow::Cow::Owned(text),
-        crate::preset::Overlaid::Unreadable(copy) => {
-            use std::io::Write as _;
-            let _ = writeln!(
-                std::io::stderr(),
-                "batten: library overlay: {} will not read; could-not-look",
-                copy.display()
-            );
-            std::process::exit(3);
-        }
-        crate::preset::Overlaid::Embedded => {}
-    }
-    #[cfg(not(feature = "preset-overlay"))]
-    let _ = (overlay, path);
-    std::borrow::Cow::Borrowed(embedded)
 }
 
 /// Whether a bundle of `sources` composes the library: any module naming it,
@@ -7567,41 +7534,6 @@ mod tests {
     const MODULE: &str = "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
 violation contains {\"rule\": \"a\", \"verdict\": \"a\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
 test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n";
-
-    /// A SHIPPED BUILD NEVER READS THE LIBRARY OVERLAY (CLOUD-2253): only the
-    /// sweep's `preset-overlay` build reads a mutated copy, and every other
-    /// build answers the embedded text whatever the overlay holds, so no
-    /// variable redirects the rules a shipped engine enforces.
-    ///
-    /// Fails by: the overlay honoured without the feature (a bypass of the
-    /// shipped library), or ignored with it (every library row judged on the
-    /// unmutated module).
-    #[test]
-    fn only_the_sweep_build_reads_the_library_overlay() {
-        let (path, embedded) = LIBRARY[0];
-        let dir =
-            std::env::temp_dir().join(format!("batten-library-overlay-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let copy = dir.join(path);
-        std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
-        std::fs::write(&copy, "package batten.library\n").unwrap();
-        let read = library_text(Some(&dir), path, embedded);
-        let receipted = dir
-            .join(format!("{path}{}", crate::preset::OVERLAY_READ))
-            .is_file();
-        let _ = std::fs::remove_dir_all(&dir);
-        if cfg!(feature = "preset-overlay") {
-            assert_eq!(
-                read, "package batten.library\n",
-                "the sweep build reads the copy"
-            );
-            assert!(receipted, "and leaves its receipt");
-        } else {
-            assert_eq!(read, embedded, "a shipped build reads the embedded text");
-            assert!(!receipted, "and never touches the overlay");
-        }
-        assert_eq!(library_text(None, path, embedded), embedded);
-    }
 
     /// A bundle composing the library keys on the library's text (CLOUD-2253):
     /// under the sweep's overlay one binary compiles many library texts, so an

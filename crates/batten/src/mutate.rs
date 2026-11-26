@@ -3147,7 +3147,7 @@ impl Overlay {
     /// outside [`Overlay::root`] and every further root, which is mutated in
     /// place. A preset's copy is at its path under the presets root, as
     /// `PresetModule::text` spells it; a further root's at its whole repository
-    /// path, as `policy::library_text` does.
+    /// path, as `preset::library_text` does.
     #[must_use]
     pub fn path_of(&self, source: &str) -> Option<PathBuf> {
         let under = |root: &str| {
@@ -6568,7 +6568,7 @@ mod tests {
         assert_eq!(overlay.path_of("crates/x/presets"), None);
         assert_eq!(overlay.path_of("policy/a.rego"), None);
         // A FURTHER ROOT'S COPY IS AT ITS WHOLE REPOSITORY PATH (CLOUD-2253),
-        // the spelling `policy::library_text` reads.
+        // the spelling `preset::library_text` reads.
         let overlay = Overlay {
             roots: vec![String::from("crates/x/library")],
             ..overlay
