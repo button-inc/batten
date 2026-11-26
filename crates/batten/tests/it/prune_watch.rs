@@ -1535,8 +1535,10 @@ fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
     }
 }
 
-/// A three-crate cargo workspace over `dir`: `app` uses `dep` and `other`,
-/// path dependencies only, so a build needs no registry.
+/// A four-crate cargo workspace over `dir`: the binary `app` uses `dep` and
+/// `other`, and the library `top`, which nothing uses, uses `other`. Path
+/// dependencies only, so a build needs no registry. `top` is a root that is no
+/// executable, which a live run's own rule would otherwise spare.
 fn cargo_workspace(dir: &Path) {
     let write = |path: &str, text: &str| {
         let path = dir.join(path);
@@ -1545,7 +1547,7 @@ fn cargo_workspace(dir: &Path) {
     };
     write(
         "Cargo.toml",
-        "[workspace]\nmembers = [\"app\", \"dep\", \"other\"]\nresolver = \"2\"\n",
+        "[workspace]\nmembers = [\"app\", \"dep\", \"other\", \"top\"]\nresolver = \"2\"\n",
     );
     for leaf in ["dep", "other"] {
         write(
@@ -1561,6 +1563,15 @@ fn cargo_workspace(dir: &Path) {
         "app/Cargo.toml",
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
          [dependencies]\ndep = { path = \"../dep\" }\nother = { path = \"../other\" }\n",
+    );
+    write(
+        "top/Cargo.toml",
+        "[package]\nname = \"top\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [dependencies]\nother = { path = \"../other\" }\n",
+    );
+    write(
+        "top/src/lib.rs",
+        "pub fn value() -> u8 { other::value() }\n",
     );
     write(
         "app/src/main.rs",
@@ -1643,7 +1654,7 @@ fn a_warm_target_collected_under_pressure_rebuilds_nothing() {
     cargo_workspace(&dir);
     assert_eq!(
         cargo_build(&dir),
-        ["app", "dep", "other"],
+        ["app", "dep", "other", "top"],
         "THE PREMISE: a cold build compiles every package"
     );
     let said = collected_below_the_floor(&dir);
@@ -1675,13 +1686,51 @@ fn a_collection_after_an_edit_costs_only_the_edited_crate_and_its_dependents() {
     }
     let dir = hooked("collect-edit-graph", true);
     cargo_workspace(&dir);
-    assert_eq!(cargo_build(&dir), ["app", "dep", "other"], "THE PREMISE");
+    assert_eq!(
+        cargo_build(&dir),
+        ["app", "dep", "other", "top"],
+        "THE PREMISE"
+    );
     std::fs::write(dir.join("dep/src/lib.rs"), "pub fn value() -> u8 { 2 }\n").unwrap();
     let said = collected_below_the_floor(&dir);
     assert_eq!(
         cargo_build(&dir),
         ["app", "dep"],
         "the edited crate and its dependent, and nothing else: {said}"
+    );
+}
+
+/// A COLLECTION AFTER A REBUILD KEEPS THE REBUILT GRAPH, NOT THE ONE IT
+/// REPLACED (CLOUD-2789). A version bump gives a package a new unit, so after
+/// its build two roots of one kind stand: the library as it was and as it is.
+/// The newer is current and the older is not. (An edit to a path crate's
+/// source rebuilds into the SAME unit, so it leaves one root, not two.)
+///
+/// Fails by: the older root read as current, so the build that just ran is
+/// collected and the next one repeats it.
+#[test]
+fn a_collection_after_a_rebuild_keeps_the_rebuilt_graph() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("collect-rebuilt-graph", true);
+    cargo_workspace(&dir);
+    assert_eq!(
+        cargo_build(&dir),
+        ["app", "dep", "other", "top"],
+        "THE PREMISE"
+    );
+    let manifest = dir.join("top/Cargo.toml");
+    let bumped = std::fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("version = \"0.1.0\"", "version = \"0.2.0\"");
+    std::fs::write(&manifest, bumped).unwrap();
+    assert_eq!(cargo_build(&dir), ["top"], "THE PREMISE: the bump's build");
+    let said = collected_below_the_floor(&dir);
+    assert_eq!(
+        cargo_build(&dir),
+        Vec::<String>::new(),
+        "a no-op build after the collection: {said}"
     );
 }
 
