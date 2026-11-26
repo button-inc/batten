@@ -9414,7 +9414,7 @@ fn claim_payloads(repo: &Path, issue: Option<&str>) -> Result<Vec<claim::Issue>>
 }
 
 /// The out-of-tree receipt directory both halves of the claim protocol share.
-const RECEIPT_DIR: &str = "batten-receipts";
+pub(crate) const RECEIPT_DIR: &str = "batten-receipts";
 
 use clock::now_unix;
 use config::anchor_at;

@@ -3413,7 +3413,7 @@ fn sync_dir(
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let name = entry.file_name();
-        if top && name == "target" {
+        if top && name == "target" || engine_runtime(at, &name) {
             continue;
         }
         present.insert(name.clone());
@@ -3450,6 +3450,37 @@ fn sync_dir(
         }
     }
     Ok(())
+}
+
+/// Whether `name`, directly in the directory `at` of the tree, is the engine's
+/// own runtime state under the checkout's git directory: a step's trace or run
+/// lock, or the receipt, record and journal stores, each by the constant its
+/// writer names it with.
+///
+/// NEVER MIRRORED (CLOUD-2253): a mutant sweep inside a traced step walked the
+/// step's own trace, 5.65 GB and still growing, and copied it into the mirror
+/// on every lap, torn mid-write, beside the locks and receipts no case reads.
+/// A stale copy goes too, as any entry the checkout lacks.
+fn engine_runtime(at: &std::path::Path, name: &std::ffi::OsStr) -> bool {
+    if at != std::path::Path::new(".git") {
+        return false;
+    }
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let prefixed = |prefix: &str| {
+        name.strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('-'))
+    };
+    prefixed(crate::step::TRACES)
+        || prefixed(crate::step::LOCKS)
+        || [
+            crate::RECEIPT_DIR,
+            crate::record::KEYED_STORE,
+            crate::record::JOURNAL_STORE,
+            crate::record::RECEIPTS,
+        ]
+        .contains(&name)
 }
 
 /// Whether the files at `a` and `b` hold the same bytes, or are both
@@ -13752,6 +13783,59 @@ mod tests {
             .expect("one item");
         assert!(matches!(item, ast::Item::MacroCall(_)), "{item:?}");
         assert!(ast::AnyHasName::cast(item.syntax().clone()).is_none());
+    }
+
+    /// The mirror never holds the engine's own runtime state under the git
+    /// directory (CLOUD-2253): a step's trace still being written, its run
+    /// lock, and the receipt and record stores are left out, and a copy an
+    /// earlier sync made is removed; the repository's own files are kept.
+    ///
+    /// Fails by: the walk copying them, which mirrored a traced step's 5.65 GB
+    /// trace on every lap, torn mid-write; or a name matched by a hand-spelled
+    /// string rather than its writer's constant.
+    #[test]
+    fn the_mirror_leaves_out_the_engines_runtime_under_the_git_dir() {
+        let dir = crate::scratch::scratch("schema-sync-runtime");
+        let (live, work) = (dir.join("live"), dir.join("work"));
+        let git = live.join(".git");
+        let runtime = [
+            format!("{}-abc.trace", crate::step::TRACES),
+            format!("{}-abc", crate::step::LOCKS),
+            format!("{}/fam/k", crate::record::KEYED_STORE),
+            format!("{}/fam/s", crate::record::JOURNAL_STORE),
+            format!("{}/r", crate::RECEIPT_DIR),
+            format!("{}/q", crate::record::RECEIPTS),
+        ];
+        for path in runtime
+            .iter()
+            .map(String::as_str)
+            .chain(["HEAD", "objects/ab/cd"])
+        {
+            let file = git.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, "x").unwrap();
+        }
+        // A STALE COPY a sync before this one made goes too.
+        let stale = work.join(".git").join(&runtime[0]);
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, "old").unwrap();
+        // GROWING WHILE IT IS WALKED: the trace is appended to between syncs.
+        sync(&live, &work, &BTreeSet::new()).unwrap();
+        std::fs::write(git.join(&runtime[0]), "xx").unwrap();
+        sync(&live, &work, &BTreeSet::new()).unwrap();
+        for path in &runtime {
+            let top = path.split('/').next().unwrap();
+            assert!(!work.join(".git").join(top).exists(), "{top} mirrored");
+        }
+        assert!(
+            work.join(".git/HEAD").is_file(),
+            "the repository's own files stay"
+        );
+        assert!(work.join(".git/objects/ab/cd").is_file());
+        // ONLY UNDER THE GIT DIRECTORY: a tree file of the same name is the tree's.
+        std::fs::write(live.join(&runtime[1]), "tree").unwrap();
+        sync(&live, &work, &BTreeSet::new()).unwrap();
+        assert!(work.join(&runtime[1]).is_file());
     }
 
     /// Where a bounded child of [`the_tree_walks_hold_no_file_whole`] finds

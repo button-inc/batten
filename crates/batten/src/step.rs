@@ -1680,7 +1680,7 @@ pub fn watched_by_an_outer_step(root: &Path) -> bool {
 }
 
 /// The prefix of each step's run lock under the git dir.
-const LOCKS: &str = "batten-step-lock";
+pub(crate) const LOCKS: &str = "batten-step-lock";
 
 /// Remove every step trace under `git_dir` whose step no runner holds, and
 /// answer how many and how many bytes (CLOUD-2783).
@@ -1722,7 +1722,7 @@ pub fn sweep_orphaned_traces(git_dir: &Path) -> (usize, u64) {
 
 /// The prefix of each step's last trace, and its undeclared listing, under the
 /// git dir.
-const TRACES: &str = "batten-step-trace";
+pub(crate) const TRACES: &str = "batten-step-trace";
 
 /// What a traced run's reads say about its row's declaration.
 #[derive(Debug, PartialEq, Eq)]
