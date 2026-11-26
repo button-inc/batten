@@ -692,6 +692,44 @@ fn a_tree_a_build_holds_is_never_collected() {
     );
 }
 
+/// A BUILD DIRECTORY ANOTHER TARGET'S BUILD HOLDS IS NEVER COLLECTED
+/// (CLOUD-2789). A mutation sweep builds with `CARGO_BUILD_BUILD_DIR` at the
+/// checkout's `target` and its own `CARGO_TARGET_DIR`, so cargo holds only
+/// `.cargo-build-lock` in `target/debug`, never `.cargo-lock`; reading the
+/// latter alone, a pass removed the rlibs the sweep was about to link. Each of
+/// cargo's three profile locks, held alone, keeps the profile.
+///
+/// Fails by: a profile read as free while any one of cargo's locks is held.
+#[test]
+fn a_profile_any_cargo_lock_holds_is_never_collected() {
+    for (at, name) in [".cargo-build-lock", ".cargo-artifact-lock", ".cargo-lock"]
+        .into_iter()
+        .enumerate()
+    {
+        let root = common::scratch(&format!("collect-held-by-{}", name.trim_start_matches('.')));
+        let tree = root.join("target");
+        let profile = tree.join("debug");
+        let hash = format!("{at}abcabcabcabcabc");
+        unit(&profile, "linked", &hash, 3600, 4096);
+        let lock = std::fs::File::create(profile.join(name)).unwrap();
+        lock.try_lock()
+            .expect("hold the lock, free in a fresh fixture");
+        let trees = [tree.clone()];
+        let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
+        assert!(
+            present(&profile, "linked", &hash),
+            "{name} held: a building profile loses nothing"
+        );
+        drop(lock);
+        released(&profile.join(name));
+        let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
+        assert!(
+            !present(&profile, "linked", &hash),
+            "{name} released: it is collectable"
+        );
+    }
+}
+
 #[test]
 fn a_shared_inode_is_not_counted_until_its_last_name_goes() {
     let root = common::scratch("collect-inode");

@@ -747,6 +747,20 @@ pub fn declared_alone(dir: &Path) -> Option<Prune> {
 /// The lock cargo holds on a profile directory for the whole of a build.
 const BUILD_LOCK: &str = ".cargo-lock";
 
+/// EVERY LOCK CARGO TAKES ON A PROFILE DIRECTORY (CLOUD-2789), any one of which
+/// held means a build is reading or writing it.
+///
+/// Since cargo split the build directory from the artifact directory it takes
+/// `.cargo-build-lock` (exclusive) in the BUILD directory, and `.cargo-lock`
+/// (shared) and `.cargo-artifact-lock` (exclusive) in the ARTIFACT directory —
+/// traced on 1.98. A mutation sweep sets `CARGO_TARGET_DIR` to its own tree and
+/// `CARGO_BUILD_BUILD_DIR` to the checkout's `target`, so while it compiled and
+/// linked from `target/debug/deps` the only lock held there was
+/// `.cargo-build-lock`. Reading `.cargo-lock` alone, the collector found the
+/// profile free and removed the `libbstr`/`libregex` rlibs the sweep was about
+/// to link: `rust-lld: cannot open …/target/debug/deps/libbstr-….rlib`.
+pub(crate) const BUILD_LOCKS: [&str; 3] = [BUILD_LOCK, ".cargo-build-lock", ".cargo-artifact-lock"];
+
 /// Take the build lock of every profile `path` sits in or holds, or `None` if a
 /// build holds any of them.
 ///
@@ -767,13 +781,17 @@ pub(crate) fn claim(root: &Path, path: &Path) -> Result<Vec<std::fs::File>, Path
     let enclosing = path.ancestors().take_while(|dir| dir.starts_with(root));
     let nested = PROFILE_DIRS.iter().map(|profile| path.join(profile));
     let mut held = Vec::new();
-    for profile in enclosing.map(Path::to_path_buf).chain(nested) {
-        let Ok(lock) = std::fs::File::open(profile.join(BUILD_LOCK)) else {
+    let locks = enclosing
+        .map(Path::to_path_buf)
+        .chain(nested)
+        .flat_map(|profile| BUILD_LOCKS.map(|name| profile.join(name)));
+    for path in locks {
+        let Ok(lock) = std::fs::File::open(&path) else {
             continue;
         };
         match lock.try_lock() {
             Ok(()) => held.push(lock),
-            Err(std::fs::TryLockError::WouldBlock) => return Err(profile.join(BUILD_LOCK)),
+            Err(std::fs::TryLockError::WouldBlock) => return Err(path),
             // An error that is not contention says nothing about a build, and
             // refusing on it would let one unreadable lock wedge every reclaim.
             Err(std::fs::TryLockError::Error(_)) => {}
