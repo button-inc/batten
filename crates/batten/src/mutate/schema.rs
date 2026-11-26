@@ -1515,14 +1515,15 @@ fn glob_targets(item: &ast::Item, place: &FileScope) -> BTreeSet<String> {
                 segments = own;
             }
         }
-        // A GLOB FROM A PATH NO MODULE SAYS (CLOUD-2927): an external crate,
-        // an enum's variants or a module named relatively; what it brings in
-        // is unknown, so no mention in the module is narrowed through it.
-        if !segments
-            .first()
-            .is_some_and(|first| ["crate", "self", "super"].contains(&first.as_str()))
-        {
-            targets.insert(format!("{USE_SCOPE}*?"));
+        // THE GLOB'S OWN PATH (CLOUD-2927), resolved where it is written
+        // ([`Resolver::lookup`]): a module of the workspace, or an external
+        // crate or a type, which bring in no definition of it.
+        if segments.iter().all(|segment| {
+            !segment.is_empty() && segment.chars().all(|c| c.is_alphanumeric() || c == '_')
+        }) {
+            targets.insert(format!("{USE_SCOPE}*@{}", rooted(&segments, &place.root)));
+        } else {
+            targets.insert(format!("{USE_SCOPE}*@?"));
         }
         let target = glob_module(&module, &segments);
         targets.insert(use_scope(place, &target));
@@ -1759,6 +1760,13 @@ fn impl_members(it: &ast::Impl) -> Vec<String> {
 /// (`self` binding the module it stands for), and for a glob the module it
 /// globs, which is the one name a glob's edit is reached through.
 fn use_names(it: &ast::Use) -> Vec<String> {
+    use_leaf_names(it, true)
+}
+
+/// [`use_names`], each glob's module among them only where `globs` says: a
+/// glob binds no name of its own, so without them these are the names the
+/// `use` binds.
+fn use_leaf_names(it: &ast::Use, globs: bool) -> Vec<String> {
     use ast::HasName as _;
     let last = |path: Option<ast::Path>| {
         path.and_then(|path| path.segment())
@@ -1767,7 +1775,7 @@ fn use_names(it: &ast::Use) -> Vec<String> {
     };
     let mut names = BTreeSet::new();
     for tree in it.syntax().descendants().filter_map(ast::UseTree::cast) {
-        if tree.use_tree_list().is_some() {
+        if tree.use_tree_list().is_some() || (!globs && tree.star_token().is_some()) {
             continue;
         }
         if let Some(name) = tree.rename().and_then(|rename| rename.name()) {
@@ -1923,6 +1931,19 @@ const HOMED: char = '\u{4}';
 /// a bare name, the module a `crate::`, `self::` or `super::` path names, or
 /// `?` where no path says which.
 const WRITTEN: char = '\u{8}';
+/// Before a workspace crate's name, as the schema records each rendered
+/// package's ([`crate_names`]): what a path's first segment names when no item
+/// in scope does.
+const CRATE_NAMED: char = '\u{9}';
+/// After a `use` binding's home: a path through it goes on through the path
+/// it imports ([`Resolver::module_of`]).
+const USE_BOUND: char = '\u{b}';
+/// After a `mod` item's home: a path through it goes on in that module.
+const MODULE_ITEM: char = '\u{c}';
+/// After the home of the name a glob `use` answers to, the module it globs
+/// ([`use_names`]): keyed where it is mentioned, but bound by no `use`, so
+/// no path resolves to it ([`Resolver::lookup`]).
+const GLOB_NAMED: char = '\u{e}';
 /// The macros that pass a name through as written, where it is called: what
 /// they are handed resolves as it would outside them.
 const PASSED_AS_WRITTEN: [&str; 21] = [
@@ -1980,6 +2001,9 @@ pub struct FileScope {
     flat: bool,
     /// The file's tree path, which an include in it resolves against.
     file: String,
+    /// The root module of the crate the file is in, joined by `::`: what a
+    /// `crate::` path starts from ([`written_as`]).
+    root: String,
 }
 
 impl FileScope {
@@ -2001,6 +2025,22 @@ impl FileScope {
             [first, second] => first == "src" && second == "bin",
             _ => false,
         };
+        // THE CRATE'S ROOT BY ITS PATH (CLOUD-2927): `src`, a `src/bin` file's
+        // `src::bin` or its directory's, a test, example or bench file's own
+        // directory, or its directory under `tests/` and the like.
+        let root: Vec<String> = match parts.as_slice() {
+            [first, second, third, ..] if first == "src" && second == "bin" => {
+                vec![first.clone(), second.clone(), third.clone()]
+            }
+            [first, second, ..] if first == "src" && second == "bin" => {
+                vec![first.clone(), second.clone()]
+            }
+            [first, second, ..] if ["tests", "examples", "benches"].contains(&first.as_str()) => {
+                vec![first.clone(), second.clone()]
+            }
+            [first, ..] => vec![first.clone()],
+            [] => Vec::new(),
+        };
         if !(crate_dir || ["lib", "main", "mod"].contains(&stem.as_str())) {
             parts.push(stem);
         }
@@ -2010,6 +2050,7 @@ impl FileScope {
             unscoped: false,
             flat: false,
             file: file.to_owned(),
+            root: root.join("::"),
         }
     }
 
@@ -2121,37 +2162,7 @@ fn linked(item: &ast::Item) -> bool {
 /// private item of a module in `widened` is visible to its whole package.
 fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) -> Vec<String> {
     let module = place.module_at(item.syntax().parent().as_ref());
-    let visible = match visibility(item) {
-        Visible::Module if place.flat || widened.contains(&module) => Visible::Package,
-        other => other,
-    };
-    // HOMED WHERE A PATH NAMES IT FROM (CLOUD-2927): its package and module,
-    // unless it is in a block or its module's tree is not the one its path
-    // says ([`FileScope::flat`]).
-    let home = if place.unscoped
-        || place.flat
-        || widened.contains(&module)
-        || item
-            .syntax()
-            .ancestors()
-            .any(|node| node.kind() == SyntaxKind::STMT_LIST)
-    {
-        String::new()
-    } else {
-        format!("{HOMED}{}{HOMED}{module}", place.package)
-    };
-    let free = item_names(item).into_iter().map(|name| {
-        if place.unscoped || visible == Visible::Workspace {
-            format!("{name}{home}")
-        } else if visible == Visible::Package {
-            format!("{name}{DEFINED_IN}{}{home}", place.package)
-        } else {
-            format!(
-                "{name}{DEFINED_IN}{}{DEFINED_IN}{module}{home}",
-                place.package
-            )
-        }
-    });
+    let free = free_keys(item, place, &module, widened);
     let mut linked_names: Vec<String> = Vec::new();
     for attr in ast::AnyHasAttrs::cast(item.syntax().clone())
         .iter()
@@ -2191,6 +2202,13 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
             linked_names.push(String::new());
         }
     }
+    // A CRATE RENAMED IN SCOPE (CLOUD-2927): its alias names a crate no
+    // path resolution knows, so a path through it is unknown.
+    if let ast::Item::ExternCrate(it) = item
+        && let Some(alias) = it.rename().and_then(|rename| ast::HasName::name(&rename))
+    {
+        linked_names.push(format!("{CRATE_NAMED}{}", alias.text()));
+    }
     if let ast::Item::Use(it) = item
         && !place.unscoped
         && !is_member(item)
@@ -2210,15 +2228,75 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
     } else {
         String::new()
     };
-    free.chain(
-        associated_names(item)
-            .into_iter()
-            .map(|name| format!("{ASSOCIATED}{name}")),
-    )
-    .map(|key| format!("{key}{impl_mark}"))
-    .chain(owner_type_names(item))
-    .chain(linked_names)
-    .collect()
+    free.into_iter()
+        .chain(
+            associated_names(item)
+                .into_iter()
+                .map(|name| format!("{ASSOCIATED}{name}")),
+        )
+        .map(|key| format!("{key}{impl_mark}"))
+        .chain(owner_type_names(item))
+        .chain(linked_names)
+        .collect()
+}
+
+/// The keys an item's own names are defined under ([`definitions`]): each
+/// scoped where it is visible from `module`, homed where a path names it
+/// from, and marked with what a path through it goes on through.
+fn free_keys(
+    item: &ast::Item,
+    place: &FileScope,
+    module: &str,
+    widened: &BTreeSet<String>,
+) -> Vec<String> {
+    let visible = match visibility(item) {
+        Visible::Module if place.flat || widened.contains(module) => Visible::Package,
+        other => other,
+    };
+    // HOMED WHERE A PATH NAMES IT FROM (CLOUD-2927): its package and module,
+    // unless it is in a block or its module's tree is not the one its path
+    // says ([`FileScope::flat`]).
+    let home = if place.unscoped
+        || place.flat
+        || widened.contains(module)
+        || item
+            .syntax()
+            .ancestors()
+            .any(|node| node.kind() == SyntaxKind::STMT_LIST)
+    {
+        String::new()
+    } else {
+        format!("{HOMED}{}{HOMED}{module}", place.package)
+    };
+    let bound: BTreeSet<String> = match item {
+        ast::Item::Use(it) => use_leaf_names(it, false).into_iter().collect(),
+        _ => BTreeSet::new(),
+    };
+    let kind = |name: &str| -> Option<char> {
+        match item {
+            _ if home.is_empty() => None,
+            ast::Item::Use(_) if bound.contains(name) => Some(USE_BOUND),
+            ast::Item::Use(_) => Some(GLOB_NAMED),
+            ast::Item::Module(_) => Some(MODULE_ITEM),
+            _ => None,
+        }
+    };
+    item_names(item)
+        .into_iter()
+        .map(|name| {
+            let kind = kind(&name).map(String::from).unwrap_or_default();
+            if place.unscoped || visible == Visible::Workspace {
+                format!("{name}{home}{kind}")
+            } else if visible == Visible::Package {
+                format!("{name}{DEFINED_IN}{}{home}{kind}", place.package)
+            } else {
+                format!(
+                    "{name}{DEFINED_IN}{}{DEFINED_IN}{module}{home}{kind}",
+                    place.package
+                )
+            }
+        })
+        .collect()
 }
 
 /// An associated const or type's impl's free names, workspace-wide: a
@@ -2478,7 +2556,7 @@ fn token_mentions(
         format!(
             "{MENTIONED_IN}{}{MENTIONED_IN}{module}{}",
             place.package,
-            written_as(token, &module)
+            written_as(token, &place.root)
         )
     });
     for name in names {
@@ -2492,13 +2570,14 @@ fn token_mentions(
     }
 }
 
-/// How `token`'s name is written, from `module` ([`WRITTEN`]): nothing for a
-/// bare name a path resolves in its own module, or a name a std macro passes
-/// through as written ([`PASSED_AS_WRITTEN`]); the module a `crate::`,
-/// `self::` or `super::` qualifier names; and `?` for a macro's own name, a
-/// name in an attribute, a string or another macro's tokens, or any other
-/// qualifier, which no module of a path says.
-fn written_as(token: &ra_ap_syntax::SyntaxToken, module: &str) -> String {
+/// How `token`'s name is written ([`WRITTEN`]): nothing for a bare name,
+/// resolved in its own module, or a name a std macro passes through as
+/// written ([`PASSED_AS_WRITTEN`]); its qualifier's segments, the enclosing
+/// `use` trees' included, resolved where it is made ([`Resolver::path`]);
+/// and `?` for a macro's own name, a name in an attribute, a string or
+/// another macro's tokens, or a qualifier with generics, a type or a
+/// leading `::`.
+fn written_as(token: &ra_ap_syntax::SyntaxToken, root: &str) -> String {
     let unknown = format!("{WRITTEN}?");
     if token.kind() == SyntaxKind::STRING
         || macro_called(token)
@@ -2551,19 +2630,30 @@ fn written_as(token: &ra_ap_syntax::SyntaxToken, module: &str) -> String {
         return unknown;
     };
     segments.extend(own);
-    if segments
-        .first()
-        .is_some_and(|first| ["crate", "self", "super"].contains(&first.as_str()))
-    {
-        format!("{WRITTEN}{}", glob_module(module, &segments))
-    } else {
-        unknown
+    format!("{WRITTEN}{}", rooted(&segments, root))
+}
+
+/// `segments` joined by `::`, a leading `crate` written as the crate's root
+/// `root` after `@`, its `::`s as `/`: the one segment [`Resolver::path`]
+/// reads as an absolute module.
+fn rooted(segments: &[String], root: &str) -> String {
+    match segments.split_first() {
+        Some((first, rest)) if first == "crate" => {
+            std::iter::once(format!("@{}", root.replace("::", "/")))
+                .chain(rest.iter().cloned())
+                .collect::<Vec<_>>()
+                .join("::")
+        }
+        _ => segments.join("::"),
     }
 }
 
 /// A path's segments, each a plain name or `crate`, `self` or `super`; none
 /// where one carries generics or a type.
 fn path_segments(path: &ast::Path) -> Option<Vec<String>> {
+    if path.syntax().to_string().trim_start().starts_with("::") {
+        return None;
+    }
     path.segments()
         .map(|segment| {
             let text = segment.syntax().to_string();
@@ -2664,9 +2754,18 @@ fn associated_position(token: &ra_ap_syntax::SyntaxToken) -> bool {
 /// The name a definition or mention key is keyed under, its namespace kept:
 /// an associated key keeps its prefix, a scope is cut.
 fn key_base(key: &str) -> &str {
-    key.split([DEFINED_IN, MENTIONED_IN, HOMED, IMPL_DEFINED, WRITTEN])
-        .next()
-        .unwrap_or(key)
+    key.split([
+        DEFINED_IN,
+        MENTIONED_IN,
+        HOMED,
+        IMPL_DEFINED,
+        WRITTEN,
+        USE_BOUND,
+        MODULE_ITEM,
+        GLOB_NAMED,
+    ])
+    .next()
+    .unwrap_or(key)
 }
 
 /// The bare identifier of a definition or mention key: no scope and no
@@ -2888,6 +2987,56 @@ fn custom_target(root: &std::path::Path, package: &str) -> bool {
                 .is_some_and(|path| path != "src/main.rs" && path != format!("src/bin/{name}.rs"))
         });
     lib || bins
+}
+
+/// Each crate in `crates` recorded in `items` by its name ([`CRATE_NAMED`]).
+fn record_crates(
+    items: &mut std::collections::BTreeMap<String, BTreeSet<String>>,
+    crates: std::collections::BTreeMap<String, String>,
+) {
+    for (name, dir) in crates {
+        items
+            .entry(format!("{CRATE_NAMED}{name}"))
+            .or_default()
+            .insert(format!("dir:{dir}"));
+    }
+}
+
+/// The name each package of the sources `files` under `root` is used by:
+/// its `[lib] name`, else its package name with `-` read as `_`.
+fn crate_names<'f>(
+    root: &std::path::Path,
+    files: impl IntoIterator<Item = &'f String>,
+) -> std::collections::BTreeMap<String, String> {
+    let dirs: BTreeSet<&str> = files
+        .into_iter()
+        .filter_map(|file| package_dir_of(file))
+        .collect();
+    let mut names = std::collections::BTreeMap::new();
+    for dir in dirs {
+        let Ok(text) = crate::fsio::read_to_string(root.join(dir).join("Cargo.toml")) else {
+            continue;
+        };
+        let Ok(table) = text.parse::<toml::Table>() else {
+            continue;
+        };
+        let name = table
+            .get("lib")
+            .and_then(|lib| lib.get("name"))
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                table
+                    .get("package")
+                    .and_then(|package| package.get("name"))
+                    .and_then(toml::Value::as_str)
+                    .map(|name| name.replace('-', "_"))
+            });
+        if let Some(name) = name {
+            names.insert(name, dir.to_owned());
+        }
+    }
+    names
 }
 
 /// The files the package sources `files` under `root` compile into another
@@ -3287,6 +3436,10 @@ pub fn write_schema(
         schema.files.insert(file, rendered);
     }
     schema.skeleton = skeleton.finalize().to_hex().to_string();
+    // EVERY RENDERED CRATE BY ITS NAME (CLOUD-2927): what another crate's path
+    // names ([`Resolver::path`]).
+    let crates = crate_names(root, schema.files.keys());
+    record_crates(&mut schema.items, crates);
     // A BUILD SCRIPT AND WHAT IT `#[path]`-INCLUDES SHAPE EVERY BUILD
     // (CLOUD-2904): their text is keyed with the tokens every case carries.
     for dir in package_dirs(mutants).values() {
@@ -6835,18 +6988,22 @@ struct Graph<'g> {
     definitions: Vec<&'g str>,
     /// Each definition's token, by definition id.
     tokens: Vec<Option<blake3::Hash>>,
-    /// Each module's glob targets ([`globs_of`]).
+    /// Each module's glob paths ([`globs_of`]).
     globs: Globs<'g>,
+    /// Each workspace crate's package by its name ([`crates_of`]).
+    crates: std::collections::HashMap<&'g str, Option<&'g str>>,
+    /// Every skeleton item's mentioned names, by name.
+    mentions: &'g std::collections::BTreeMap<String, BTreeSet<String>>,
 }
 
-/// Each module's glob targets, by package and module: the modules its `*`
-/// `use`s import from, or `None` where one names a module no path says.
-type Globs<'g> = std::collections::HashMap<(&'g str, &'g str), Option<Vec<&'g str>>>;
+/// Each module's glob paths, by package and module ([`glob_targets`]): `?`
+/// for one no path says.
+type Globs<'g> = std::collections::HashMap<(&'g str, &'g str), Vec<&'g str>>;
 
-/// [`Globs`] from the mentions of every module's glob key ([`use_globs`]),
-/// which name each target's ([`glob_targets`]).
+/// [`Globs`] from the mentions of every module's glob key ([`use_globs`]).
 fn globs_of(mentions: &std::collections::BTreeMap<String, BTreeSet<String>>) -> Globs<'_> {
     let glob = format!("{USE_SCOPE}*");
+    let raw = format!("{USE_SCOPE}*@");
     let mut globs = Globs::new();
     for (key, mentioned) in mentions {
         let Some((package, module)) = key
@@ -6855,24 +7012,34 @@ fn globs_of(mentions: &std::collections::BTreeMap<String, BTreeSet<String>>) -> 
         else {
             continue;
         };
-        let mut targets = Some(Vec::new());
-        for target in mentioned {
-            let Some(rest) = target.strip_prefix(glob.as_str()) else {
-                continue;
-            };
-            match rest.split_once('\u{7}') {
-                None => targets = None,
-                Some((_, at)) if at != module => {
-                    if let Some(list) = targets.as_mut() {
-                        list.push(at);
-                    }
-                }
-                Some(_) => {}
-            }
-        }
-        globs.insert((package, module), targets);
+        globs.insert(
+            (package, module),
+            mentioned
+                .iter()
+                .filter_map(|target| target.strip_prefix(raw.as_str()))
+                .collect(),
+        );
     }
     globs
+}
+
+/// Each workspace crate's package by its name, `None` for a name an
+/// `extern crate .. as` binds ([`CRATE_NAMED`]).
+fn crates_of(
+    items: &std::collections::BTreeMap<String, BTreeSet<String>>,
+) -> std::collections::HashMap<&str, Option<&str>> {
+    items
+        .iter()
+        .filter_map(|(key, values)| {
+            let name = key.strip_prefix(CRATE_NAMED)?;
+            let mut dirs = values.iter().map(|value| value.strip_prefix("dir:"));
+            let package = match (dirs.next(), dirs.next()) {
+                (Some(Some(dir)), None) => Some(dir),
+                _ => None,
+            };
+            Some((name, package))
+        })
+        .collect()
 }
 
 /// A definition's home, its package and module ([`HOMED`]).
@@ -6880,103 +7047,337 @@ fn home_of(definition: &str) -> Option<(&str, &str)> {
     definition
         .split_once(HOMED)?
         .1
-        .split(IMPL_DEFINED)
+        .split([IMPL_DEFINED, USE_BOUND, MODULE_ITEM, GLOB_NAMED])
         .next()?
         .split_once(HOMED)
 }
 
-/// Where a mention is resolved: its package and the module whose names it
-/// is looked up among, or `None` where no path says ([`WRITTEN`]).
-fn written(mention: &str) -> Option<(&str, &str)> {
+/// Where a mention is made, its package and module, and its qualifier's
+/// segments if it has one; `None` where no path says ([`WRITTEN`]).
+fn written(mention: &str) -> Option<(&str, &str, Option<&str>)> {
     let (_, made) = mention.split_once(MENTIONED_IN)?;
     let (package, rest) = made.split_once(MENTIONED_IN)?;
     match rest.split_once(WRITTEN) {
-        None => Some((package, rest)),
+        None => Some((package, rest, None)),
         Some((_, "?")) => None,
-        Some((_, named)) => Some((package, named)),
+        Some((module, path)) => Some((package, module, Some(path))),
+    }
+}
+
+/// What a name resolves to in a module ([`Resolver::lookup`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Found {
+    /// The one definition it names, holding one item.
+    One(usize),
+    /// No definition of the workspace: a local, a field, a std or external
+    /// item, an associated one.
+    Nothing,
+    /// Several, or none any path says for certain.
+    Unknown,
+}
+
+/// What a path's qualifier resolves to ([`Resolver::path`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Place<'p> {
+    /// A module of the workspace, by package and module.
+    Module(&'p str, String),
+    /// Something no workspace definition is inside: an external crate, a
+    /// type, a trait.
+    Nothing,
+    /// No path says.
+    Unknown,
+}
+
+/// How far a path is followed through `use`s before it is called unknown.
+const RESOLVE_DEPTH: usize = 16;
+
+/// What a mention resolves against ([`resolve`]).
+struct Resolver<'r> {
+    by_base: &'r std::collections::HashMap<&'r str, Vec<usize>>,
+    definitions: &'r [&'r str],
+    items: &'r std::collections::BTreeMap<String, BTreeSet<String>>,
+    mentions: &'r std::collections::BTreeMap<String, BTreeSet<String>>,
+    globs: &'r Globs<'r>,
+    crates: &'r std::collections::HashMap<&'r str, Option<&'r str>>,
+    /// The lookups under way, by name, package and module: one met again is
+    /// a glob whose own path needs itself, which brings in nothing.
+    active: std::cell::RefCell<BTreeSet<(String, String, String)>>,
+}
+
+impl<'r> Resolver<'r> {
+    fn new(
+        by_base: &'r std::collections::HashMap<&'r str, Vec<usize>>,
+        definitions: &'r [&'r str],
+        items: &'r std::collections::BTreeMap<String, BTreeSet<String>>,
+        mentions: &'r std::collections::BTreeMap<String, BTreeSet<String>>,
+        (globs, crates): (
+            &'r Globs<'r>,
+            &'r std::collections::HashMap<&'r str, Option<&'r str>>,
+        ),
+    ) -> Self {
+        Self {
+            by_base,
+            definitions,
+            items,
+            mentions,
+            globs,
+            crates,
+            active: std::cell::RefCell::default(),
+        }
+    }
+
+    /// The definition `base` names in `module` of `package`, visible from
+    /// where `scope` is made: one its module defines or `use`s, else one its
+    /// globs bring in, through theirs in turn.
+    ///
+    /// THE ONE DEFINITION A PATH NAMES (CLOUD-2927): matched by spelling, a
+    /// mention of `Schema` keyed every `Schema` in the workspace. A module's
+    /// own items and `use`s shadow its globs, and a `use` is a definition
+    /// whose own path is a mention, so the walk goes on from it to what it
+    /// imports. Unknown where a definition it sees has no home ([`HOMED`]).
+    fn lookup(
+        &self,
+        scope: &str,
+        base: &str,
+        package: &'r str,
+        start: String,
+        depth: usize,
+    ) -> Found {
+        let key = (base.to_owned(), package.to_owned(), start.clone());
+        if !self.active.borrow_mut().insert(key.clone()) {
+            return Found::Nothing;
+        }
+        let found = self.lookup_once(scope, base, package, start, depth);
+        self.active.borrow_mut().remove(&key);
+        found
+    }
+
+    /// [`Resolver::lookup`], met once.
+    fn lookup_once(
+        &self,
+        scope: &str,
+        base: &str,
+        package: &'r str,
+        start: String,
+        depth: usize,
+    ) -> Found {
+        if depth > RESOLVE_DEPTH {
+            return Found::Unknown;
+        }
+        let Some(candidates) = self
+            .by_base
+            .get(base)
+            .into_iter()
+            .flatten()
+            .filter(|id| {
+                let definition = self.definitions[**id];
+                !definition.ends_with(IMPL_DEFINED)
+                    && !definition.contains(GLOB_NAMED)
+                    && visible_from(scope, definition)
+            })
+            .map(|id| home_of(self.definitions[*id]).map(|home| (*id, home)))
+            .collect::<Option<Vec<(usize, (&str, &str))>>>()
+        else {
+            return Found::Unknown;
+        };
+        let mut found: BTreeSet<usize> = BTreeSet::new();
+        let mut seen: BTreeSet<(&str, String)> = BTreeSet::new();
+        let mut frontier: Vec<(&'r str, String)> = vec![(package, start)];
+        while let Some((at_package, at)) = frontier.pop() {
+            if !seen.insert((at_package, at.clone())) {
+                continue;
+            }
+            let here: Vec<usize> = candidates
+                .iter()
+                .filter(|(_, home)| *home == (at_package, at.as_str()))
+                .map(|(id, _)| *id)
+                .collect();
+            if !here.is_empty() {
+                found.extend(here);
+                continue;
+            }
+            let Some(globbed) = self.globs.get(&(at_package, at.as_str())) else {
+                continue;
+            };
+            for raw in globbed {
+                if *raw == "?" {
+                    return Found::Unknown;
+                }
+                let segments: Vec<&str> = raw.split("::").collect();
+                match self.path(at_package, &at, &segments, depth + 1) {
+                    Place::Module(next_package, next) => frontier.push((next_package, next)),
+                    Place::Nothing => {}
+                    Place::Unknown => return Found::Unknown,
+                }
+            }
+        }
+        let mut found = found.into_iter();
+        match (found.next(), found.next()) {
+            (None, _) => Found::Nothing,
+            (Some(one), None)
+                if self
+                    .items
+                    .get(self.definitions[one])
+                    .map_or(0, BTreeSet::len)
+                    == 1 =>
+            {
+                Found::One(one)
+            }
+            _ => Found::Unknown,
+        }
+    }
+
+    /// The module `segments` name from `module` of `package`: `crate` its
+    /// crate's root, `super` its parent, `self` itself, and each other
+    /// segment what it resolves to there ([`Resolver::lookup`]), the first
+    /// a workspace crate's root where nothing in scope is named so.
+    fn path(&self, package: &'r str, module: &str, segments: &[&str], depth: usize) -> Place<'r> {
+        if depth > RESOLVE_DEPTH {
+            return Place::Unknown;
+        }
+        let mut at_package = package;
+        let mut at = module.to_owned();
+        let mut rest = segments;
+        let mut relative = true;
+        while let Some((first, tail)) = rest.split_first() {
+            match *first {
+                rooted if relative && rooted.starts_with('@') => {
+                    at = rooted[1..].replace('/', "::");
+                }
+                "self" => {}
+                "super" => match at.rsplit_once("::") {
+                    Some((parent, _)) => at = parent.to_owned(),
+                    None if at.is_empty() => return Place::Unknown,
+                    None => at = String::new(),
+                },
+                _ => break,
+            }
+            relative = false;
+            rest = tail;
+        }
+        for (index, segment) in rest.iter().enumerate() {
+            let scope = format!("{segment}{MENTIONED_IN}{at_package}{MENTIONED_IN}{at}");
+            match self.lookup(&scope, segment, at_package, at.clone(), depth + 1) {
+                Found::One(id) => match self.module_of(id, segment, depth + 1) {
+                    Place::Module(next_package, next) => {
+                        at_package = next_package;
+                        at = next;
+                    }
+                    other => return other,
+                },
+                Found::Nothing if index == 0 && relative => match self.crates.get(segment) {
+                    Some(Some(dir)) => {
+                        at_package = dir;
+                        at = String::from("src");
+                    }
+                    Some(None) => return Place::Unknown,
+                    None => return Place::Nothing,
+                },
+                Found::Nothing => return Place::Nothing,
+                Found::Unknown => return Place::Unknown,
+            }
+        }
+        Place::Module(at_package, at)
+    }
+
+    /// The module definition `id`, named `segment`, stands for: a `mod`
+    /// item's own, a `use` binding's through the path it imports, and none
+    /// for any other item, a type or a trait, whose path names associated
+    /// items alone.
+    fn module_of(&self, id: usize, segment: &str, depth: usize) -> Place<'r> {
+        let definition = self.definitions[id];
+        let Some((package, home)) = home_of(definition) else {
+            return Place::Unknown;
+        };
+        let after = definition.split_once(HOMED).map_or("", |(_, rest)| rest);
+        if after.contains(MODULE_ITEM) {
+            return Place::Module(
+                package,
+                if home.is_empty() {
+                    segment.to_owned()
+                } else {
+                    format!("{home}::{segment}")
+                },
+            );
+        }
+        if !after.contains(USE_BOUND) {
+            return Place::Nothing;
+        }
+        // A RENAMED `use` NAMES NO SEGMENT OF ITS OWN: its target is unknown.
+        let Some(target) = self.mentions.get(definition).and_then(|mentioned| {
+            mentioned.iter().find(|mention| {
+                key_base(mention) == segment
+                    && written(mention).is_some_and(|(made, at, path)| {
+                        made == package && at == home && path.is_some()
+                    })
+            })
+        }) else {
+            return Place::Unknown;
+        };
+        let Some((_, _, Some(raw))) = written(target) else {
+            return Place::Unknown;
+        };
+        let segments: Vec<&str> = raw.split("::").collect();
+        match self.path(package, home, &segments, depth + 1) {
+            Place::Module(next_package, next) => {
+                let scope = format!("{segment}{MENTIONED_IN}{next_package}{MENTIONED_IN}{next}");
+                match self.lookup(&scope, segment, next_package, next, depth + 1) {
+                    Found::One(next_id) if next_id != id => {
+                        self.module_of(next_id, segment, depth + 1)
+                    }
+                    Found::Nothing => Place::Nothing,
+                    _ => Place::Unknown,
+                }
+            }
+            other => other,
+        }
     }
 }
 
 /// The definitions `mention` is keyed on and the ones a walk follows from
-/// it: the ONE its path names, where [`narrowed`] finds it, keyed with every
-/// impl it sees and followed alone; else every definition it sees, followed
-/// as [`followed`] says.
-fn resolve(
-    mention: &str,
-    by_base: &std::collections::HashMap<&str, Vec<usize>>,
-    definitions: &[&str],
-    items: &std::collections::BTreeMap<String, BTreeSet<String>>,
-    globs: &Globs<'_>,
-) -> (Vec<usize>, Vec<usize>) {
-    let visible: Vec<usize> = by_base
-        .get(key_base(mention))
+/// it: the ONE its path names ([`Resolver::lookup`]), keyed with every impl
+/// it sees and followed alone; none but those impls where it names nothing
+/// of the workspace; else every definition it sees, followed as
+/// [`followed`] says (owner ruling 2026-11-24).
+fn resolve(mention: &str, resolver: &Resolver<'_>) -> (Vec<usize>, Vec<usize>) {
+    let base = key_base(mention);
+    let visible: Vec<usize> = resolver
+        .by_base
+        .get(base)
         .into_iter()
         .flatten()
         .copied()
-        .filter(|id| visible_from(mention, definitions[*id]))
+        .filter(|id| visible_from(mention, resolver.definitions[*id]))
         .collect();
-    if let Some(one) = narrowed(mention, &visible, definitions, items, globs) {
-        let keyed = visible
+    let found = match written(mention) {
+        None => Found::Unknown,
+        Some((package, module, None)) => {
+            resolver.lookup(mention, base, package, module.to_owned(), 0)
+        }
+        Some((package, module, Some(raw))) => {
+            let segments: Vec<&str> = raw.split("::").collect();
+            match resolver.path(package, module, &segments, 0) {
+                Place::Module(at_package, at) => resolver.lookup(mention, base, at_package, at, 0),
+                Place::Nothing => Found::Nothing,
+                Place::Unknown => Found::Unknown,
+            }
+        }
+    };
+    let impls = |keep: Option<usize>| -> Vec<usize> {
+        visible
             .iter()
             .copied()
-            .filter(|id| *id == one || definitions[*id].ends_with(IMPL_DEFINED))
-            .collect();
-        return (keyed, vec![one]);
-    }
-    let follow = followed(&visible, definitions, items).collect();
-    (visible, follow)
-}
-
-/// The one definition among `visible` that `mention` names, where the
-/// module it is resolved in says which: one defined or `use`d there, else
-/// one its globs bring in, through theirs in turn; `None` where it holds
-/// none or several, a glob names a module no path says, or a definition it
-/// sees has no home ([`HOMED`]).
-///
-/// THE ONE DEFINITION A PATH NAMES (CLOUD-2927): matched by spelling, a
-/// mention of `Schema` keyed every `Schema` in the workspace, and an edit to
-/// one re-keyed every case naming another. A module's own items and `use`s
-/// shadow its globs, and a `use` is a definition whose own path is a mention
-/// written with its module, so the walk goes on from it to what it imports.
-fn narrowed(
-    mention: &str,
-    visible: &[usize],
-    definitions: &[&str],
-    items: &std::collections::BTreeMap<String, BTreeSet<String>>,
-    globs: &Globs<'_>,
-) -> Option<usize> {
-    let (package, start) = written(mention)?;
-    let candidates: Vec<(usize, (&str, &str))> = visible
-        .iter()
-        .filter(|id| !definitions[**id].ends_with(IMPL_DEFINED))
-        .map(|id| home_of(definitions[*id]).map(|home| (*id, home)))
-        .collect::<Option<_>>()?;
-    let mut found: BTreeSet<usize> = BTreeSet::new();
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
-    let mut frontier = vec![start];
-    while let Some(at) = frontier.pop() {
-        if !seen.insert(at) {
-            continue;
-        }
-        let here: Vec<usize> = candidates
-            .iter()
-            .filter(|(_, home)| *home == (package, at))
-            .map(|(id, _)| *id)
-            .collect();
-        if !here.is_empty() {
-            found.extend(here);
-            continue;
-        }
-        match globs.get(&(package, at)) {
-            None => {}
-            Some(None) => return None,
-            Some(Some(targets)) => frontier.extend(targets.iter().copied()),
+            .filter(|id| Some(*id) == keep || resolver.definitions[*id].ends_with(IMPL_DEFINED))
+            .collect()
+    };
+    match found {
+        Found::One(one) => (impls(Some(one)), vec![one]),
+        Found::Nothing => (impls(None), Vec::new()),
+        Found::Unknown => {
+            let follow = followed(&visible, resolver.definitions, resolver.items).collect();
+            (visible, follow)
         }
     }
-    let mut found = found.into_iter();
-    let one = found.next()?;
-    (found.next().is_none() && items.get(definitions[one]).map_or(0, BTreeSet::len) == 1)
-        .then_some(one)
 }
 
 /// One walk's reusable state: the visited map and the ids it set.
@@ -7016,12 +7417,18 @@ impl<'g> Graph<'g> {
             .map(|(id, name)| (*name, id))
             .collect();
         let globs = globs_of(depends.mentions);
+        let crates = crates_of(depends.items);
         // A MENTION RESOLVES TO THE ONE DEFINITION ITS PATH NAMES (CLOUD-2927),
         // else to every definition it sees ([`resolve`]).
-        let (resolves, follows): (Vec<Vec<usize>>, Vec<Vec<usize>>) = names
-            .iter()
-            .map(|name| resolve(name, &by_base, &definitions, depends.items, &globs))
-            .unzip();
+        let index = Resolver::new(
+            &by_base,
+            &definitions,
+            depends.items,
+            depends.mentions,
+            (&globs, &crates),
+        );
+        let (resolves, follows): (Vec<Vec<usize>>, Vec<Vec<usize>>) =
+            names.iter().map(|name| resolve(name, &index)).unzip();
         let def_mentions: Vec<Vec<usize>> = definitions
             .iter()
             .map(|key| {
@@ -7068,6 +7475,8 @@ impl<'g> Graph<'g> {
             definitions,
             tokens,
             globs,
+            crates,
+            mentions: depends.mentions,
         }
     }
 
@@ -7082,10 +7491,13 @@ impl<'g> Graph<'g> {
     ) -> (Vec<usize>, Vec<usize>) {
         let (found, follow) = resolve(
             mention,
-            &self.by_base,
-            &self.definitions,
-            items,
-            &self.globs,
+            &Resolver::new(
+                &self.by_base,
+                &self.definitions,
+                items,
+                self.mentions,
+                (&self.globs, &self.crates),
+            ),
         );
         let nodes = follow
             .iter()
@@ -16209,15 +16621,154 @@ mod tests {
         );
     }
 
+    /// [`source_digests`] over several files, each rendered at its own scope
+    /// ([`FileScope::of`]) with its probes numbered after the last file's, and
+    /// `crates` recorded by name as [`write_schema`] records them.
+    fn files_digests(
+        cases: &BTreeSet<Case>,
+        executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+        files: &[(&str, &str)],
+        crates: &[(&str, &str)],
+    ) -> std::collections::BTreeMap<Case, String> {
+        let root = crate::scratch::scratch("schema-files-digests");
+        let mut probes: Vec<String> = Vec::new();
+        let mut names: Vec<BTreeSet<String>> = Vec::new();
+        let mut compiled = Compiled::default();
+        let mut items: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        let mut mentions: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (file, source) in files {
+            let first = probes.len();
+            let rendered = render_in(
+                source,
+                &[],
+                &BTreeSet::new(),
+                Some(first),
+                &FileScope::of(file),
+            );
+            compiled.fold(&rendered.compiled, first);
+            probes.extend(rendered.probes.iter().cloned());
+            names.extend(rendered.names.iter().cloned());
+            for (name, digest) in &rendered.items {
+                items
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(digest.clone());
+            }
+            for (name, mentioned) in &rendered.mentions {
+                mentions
+                    .entry(name.clone())
+                    .or_default()
+                    .extend(mentioned.iter().cloned());
+            }
+        }
+        for (name, dir) in crates {
+            items
+                .entry(format!("{CRATE_NAMED}{name}"))
+                .or_default()
+                .insert(format!("dir:{dir}"));
+        }
+        let depends = Depends {
+            names: &names,
+            items: &items,
+            mentions: &mentions,
+            compiled: &compiled,
+            derived: None,
+            ..depends(&probes)
+        };
+        case_digests(
+            &root,
+            cases,
+            &std::collections::BTreeMap::new(),
+            executed,
+            &depends,
+        )
+    }
+
+    /// CLOUD-2927 (c): a path resolves segment by segment to the one
+    /// definition it names: through another workspace crate by name, a `use`
+    /// of a module, and a glob beside an external crate's; and a path through
+    /// a type names no free item.
+    ///
+    /// Fails by: any of these keyed on every `Schema` (or every `schema`) by
+    /// spelling, so an edit to the other moves the case, or a path through
+    /// the type `Holder` read as unknown, so the free `SCHEMA`'s edit does.
+    #[test]
+    fn a_path_resolves_through_crates_uses_and_globs_to_its_one_definition() {
+        let cases_of =
+            |names: &[&str]| -> BTreeSet<Case> { names.iter().map(|n| case(n)).collect() };
+        let (by_path, by_other, by_use, by_type, by_glob) =
+            (case("f"), case("g"), case("h"), case("k"), case("w"));
+        let cases = cases_of(&["f", "g", "h", "k", "w"]);
+        let executed = [
+            (by_path.clone(), [0].into()),
+            (by_other.clone(), [1].into()),
+            (by_use.clone(), [2].into()),
+            (by_type.clone(), [3].into()),
+            (by_glob.clone(), [4].into()),
+        ]
+        .into();
+        let core = "pub mod a { pub struct Schema { pub x: u8 } }\n\
+                    pub mod b { pub struct Schema { pub y: u8 } }\n";
+        let app = "use core_x::a;\n\
+                   pub fn f(s: core_x::a::Schema) -> u8 { s.x }\n\
+                   pub fn g(s: core_x::b::Schema) -> u8 { s.y }\n\
+                   pub fn h(s: a::Schema) -> u8 { s.x }\n\
+                   pub struct Holder;\npub const SCHEMA: u8 = 1;\n\
+                   pub fn k() -> u8 { Holder::SCHEMA }\n\
+                   pub mod sch { pub struct Schema { pub z: u8 } }\n\
+                   mod e { use ext::*; use super::sch::*; pub fn w(s: Schema) -> u8 { s.z } }\n";
+        let digests = |core: &str, app: &str| {
+            files_digests(
+                &cases,
+                &executed,
+                &[
+                    ("crates/core/src/lib.rs", core),
+                    ("crates/app/src/lib.rs", app),
+                ],
+                &[("core_x", "crates/core"), ("app", "crates/app")],
+            )
+        };
+        let held = digests(core, app);
+        let other = digests(&core.replace("pub y: u8", "pub y: u16"), app);
+        assert_ne!(
+            other[&by_other], held[&by_other],
+            "g names core_x::b::Schema"
+        );
+        for (named, by) in [
+            (&by_path, "core_x::a::"),
+            (&by_use, "a use of core_x::a"),
+            (&by_glob, "the sch glob"),
+        ] {
+            assert_eq!(
+                other[named], held[named],
+                "{by} names a Schema other than b's"
+            );
+        }
+        let own = digests(&core.replace("pub x: u8", "pub x: u16"), app);
+        assert_ne!(own[&by_path], held[&by_path], "f names core_x::a::Schema");
+        assert_ne!(
+            own[&by_use], held[&by_use],
+            "h names it through a use of its module"
+        );
+        let free = digests(core, &app.replace("SCHEMA: u8 = 1", "SCHEMA: u8 = 2"));
+        assert_eq!(
+            free[&by_type], held[&by_type],
+            "Holder::SCHEMA names no free SCHEMA"
+        );
+    }
+
     /// CLOUD-2927 (b): a mention no path narrows to one definition is keyed on
     /// every definition it sees and followed through none (owner ruling
-    /// 2026-11-24): in a module whose glob names a module no path says, and in
-    /// one whose two `use`s each import a `Schema`.
+    /// 2026-11-24): handed to a macro the workspace does not define, whose
+    /// expansion no source read says, and in a module whose two `use`s each
+    /// import a `Schema`.
     ///
-    /// Fails by: a glob of an unknown module read as bringing in nothing, or
-    /// two `use`s of one name narrowed to either, so an edit to the other
-    /// `Schema` reuses a stale verdict; or an ambiguous mention followed, so
-    /// `C`'s edit moves a case no path says names it.
+    /// Fails by: a name in an unknown macro's tokens resolved, or two `use`s of one name
+    /// narrowed to either, so an edit to the other `Schema` reuses a stale
+    /// verdict; or an ambiguous mention followed, so `C`'s edit moves a case
+    /// no path says names it.
     #[test]
     fn an_unresolved_mention_is_keyed_on_every_definition_and_followed_through_none() {
         let (h, k) = (case("h"), case("k"));
@@ -16225,7 +16776,7 @@ mod tests {
         let executed = [(h.clone(), [0].into()), (k.clone(), [1].into())].into();
         let base = "mod a { pub struct C(pub u8); pub struct Schema { pub x: C } }\n\
                     mod b { pub struct Schema { pub y: u8 } }\n\
-                    mod e { use ext::*; use super::a::*; pub fn h(s: Schema) -> u8 { 0 } }\n\
+                    mod e { pub fn h() -> u8 { ext_mac!(Schema) } }\n\
                     mod m { #[cfg(test)] use super::a::Schema; \
                     #[cfg(not(test))] use super::b::Schema; pub fn k(s: Schema) -> u8 { 0 } }\n";
         let held = source_digests(&cases, &executed, base);
@@ -16234,7 +16785,10 @@ mod tests {
             ("pub y: u8", "pub y: u16"),
         ] {
             let moved = source_digests(&cases, &executed, &base.replace(edit, from));
-            assert_ne!(moved[&h], held[&h], "h's glob may bring in either: {from}");
+            assert_ne!(
+                moved[&h], held[&h],
+                "no source says where ext_mac! puts it: {from}"
+            );
             assert_ne!(moved[&k], held[&k], "k's two uses import both: {from}");
         }
         let hop = source_digests(&cases, &executed, &base.replace("C(pub u8)", "C(pub u16)"));
