@@ -1555,6 +1555,13 @@ run = "{{vars.batten}} step run test:cargo -- cargo nextest run --workspace"
 # Two argvs, the `it` modules and the lib's tracer cases, since a positional
 # filter would match the lib's whole `mutate::` tree too. NOT receipt-routed:
 # a `step run` miss would trace the suite and fail it.
+#
+# ITS `CI = "true"` FORKS THE BUILD (CLOUD-2789, measured): `ra_ap_stdx` reads
+# `option_env!("CI")`, and cargo tracks a variable a crate reads that way as a
+# build input, so this lane and `test:cargo` (no `CI`) rebuild `ra_ap_stdx`,
+# `ra_ap_syntax` and the five workspace crates over each other in the shared
+# `target/debug`, once each way per lap. Target selection does not: `-p batten
+# --test it`, `-p batten --lib` and `--workspace` reuse one another's units.
 [tasks."test:traced"]
 description = "Gate: every case that takes a traced branch on CI's `ci` job, run here as that job runs it (CLOUD-2789)"
 run = [
@@ -5104,7 +5111,11 @@ env = { BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ 
 # * `tree-clean` FIRST (CLOUD-277): the gates above read the working tree and the
 #   receipt is keyed to HEAD, so a dirty tree must fail before anything is decided
 #   about the commit. It is also in `depends`, which fails in seconds; this one
-#   catches a tree dirtied while `depends` ran.
+#   catches a tree dirtied while `depends` ran. Spelled as `tree-clean`'s own
+#   check, `{{vars.batten}} receipt clean` (CLOUD-2789): `mise run tree-clean`
+#   started a second `mise` that re-entered `build:debug` through `depends`.
+#   Tier 3 runs `test:traced` FIRST, so its traced cases redden the tier in a
+#   minute rather than after the suite and the mutants.
 # * `commit-lint` over the lap's own range (CLOUD-1702) — `verify:commit-lint`
 #   carries the base, below.
 # * `record-verdicts` before the rows that read them (CLOUD-1265).
@@ -5174,7 +5185,7 @@ env = { BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ 
 # verify-4` and the `gate:*` rows together. Until then tier 2 keeps the graph's
 # fan width with `--jobs 2` and tier 3 its one-at-a-time with `--jobs 1`.
 run = [
-  "mise run tree-clean",
+  "{{vars.batten}} receipt clean",
   "mise run record-verdicts",
   "mise run evaluator-io-record",
   "mise run signing-posture-record",
@@ -5195,7 +5206,7 @@ run = [
   "mise run dist:lap",
   "mise run sbom-binary target/{{vars.dist_host}}/dist/batten {{vars.dist_host}}",
   "mise run sbom-binary-check",
-  "mise run --continue-on-error --jobs 1 verify:ci-suite ::: verify:ci-slow-needed ::: test:traced",
+  "mise run --continue-on-error --jobs 1 test:traced ::: verify:ci-suite ::: verify:ci-slow-needed",
   "mise run perf-gate",
   "{{vars.batten}} step cover",
   "{{vars.batten}} receipt record verify",
