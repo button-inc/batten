@@ -11603,6 +11603,47 @@ fn keep_handback_error(
     errors
 }
 
+/// Say on `out` every mutant a hand-back's run over `target` judged beside it,
+/// by its outcome files under `output`.
+///
+/// A SIBLING'S OUTCOME HERE IS NOT ITS VERDICT (CLOUD-2253): cargo-mutants
+/// applies no `--re` to a field deletion, so a run over one also judges every
+/// field deletion its line diff touches, each under the TARGET's narrowed
+/// cases. Its raw `MISSED` read as a survivor this sweep dropped: bootstrap
+/// shard 3/8 read `schema.rs:8992` so, which its own hand-back judges, in the
+/// shard its key slices to.
+///
+/// # Errors
+///
+/// `out` cannot be written.
+fn say_siblings(
+    output: &std::path::Path,
+    target: &str,
+    out: &mut dyn std::io::Write,
+) -> std::io::Result<()> {
+    let siblings: BTreeSet<String> = ["caught", "missed", "timeout", "unviable"]
+        .iter()
+        .filter_map(|outcome| {
+            crate::fsio::read_to_string(output.join("mutants.out").join(format!("{outcome}.txt")))
+                .ok()
+        })
+        .flat_map(|text| {
+            text.lines()
+                .map(|line| line.trim().to_owned())
+                .collect::<Vec<_>>()
+        })
+        .filter(|name| !name.is_empty() && name != target)
+        .collect();
+    for sibling in &siblings {
+        writeln!(
+            out,
+            "mutate schema: {target}'s run also judged {sibling} under its own cases; \
+             that outcome is not a verdict, which is its own hand-back's"
+        )?;
+    }
+    Ok(())
+}
+
 /// Every log cargo-mutants wrote under `output`, each headed by its path;
 /// empty where there is none.
 fn handback_logs(output: &std::path::Path) -> String {
@@ -11890,6 +11931,7 @@ fn judge_handbacks(
                 }
             };
             let unobserved = observing.as_ref().is_some_and(BTreeSet::is_empty);
+            say_siblings(output, &mutant.name, out)?;
             let name = unpoisoned(
                 handback_verdict(outcome, output, &mutant.name, unobserved),
                 poisoner.is_some(),

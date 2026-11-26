@@ -890,6 +890,26 @@ fn cargo_sweep(repo: &std::path::Path, base: &str) -> (Option<i32>, String) {
     (output.status.code(), said)
 }
 
+/// [`cargo_sweep`] as shard `shard` (`k/n`) of the judging.
+fn cargo_sweep_on(repo: &std::path::Path, base: &str, shard: &str) -> (Option<i32>, String) {
+    let output = common::batten()
+        .args(["mutate", "cargo"])
+        .current_dir(repo)
+        .env("MUTANT_RUNNERS", "cargo-mutants=**/*.rs")
+        .env("MUTANT_CHANGED_SINCE", base)
+        .env("MUTANT_SHARD", shard)
+        .env("MUTANT_JOB_DISK_MB", "6200")
+        .env("MUTANT_JOB_MEMORY_MB", "4000")
+        .env("MUTANT_JUDGE_MEMORY_MB", "1")
+        .env_remove("CI")
+        .env_remove(batten::mutate::WHOLE_TREE)
+        .streamed_output()
+        .expect("run batten mutate cargo");
+    let mut said = common::stdout(&output);
+    said.push_str(&common::stderr(&output));
+    (output.status.code(), said)
+}
+
 /// A `mutate cargo` RUN OVER A TREE SEEN PASSING WHOLE IS ANSWERED (CLOUD-2253,
 /// C7): a land lap's rerun over the same tree lists nothing, builds nothing
 /// and reaches nothing. A file outside the patch that a case reads is a tree
@@ -998,4 +1018,95 @@ fn a_hand_back_is_decided_by_its_journaled_pairs() {
     assert_eq!(code, Some(0), "{said}");
     let reused = format!("{count} handed-back mutant(s) judged in place, {count} reused");
     assert!(said.contains(&reused), "{reused:?} in\n{said}");
+}
+
+/// A library whose `make` builds `P` through a struct expression with a base,
+/// so cargo-mutants deletes each field of it: two hand-backs on adjacent
+/// lines, and the one case runs `make` and pins nothing, so each survives.
+const SIBLING_FIELDS_LIB: &str = "#[derive(Default)]\npub struct P {\n    pub a: u8,\n    pub b: u8,\n}\n\
+pub fn make() -> P {\n    P {\n        a: 1,\n        b: 2,\n        ..Default::default()\n    }\n}\n\
+#[cfg(test)]\nmod tests {\n    #[test]\n    fn makes() {\n        let _ = super::make();\n    }\n}\n";
+
+/// EVERY HAND-BACK VERDICT REACHES THE TALLY, ONCE (CLOUD-2253): two field
+/// deletions on adjacent lines of one struct expression are each handed
+/// back, and a hand-back's run judges its sibling beside it, since
+/// cargo-mutants applies no `--re` to a field deletion. Unsharded, the final
+/// list names every survivor and the count holds every one; across shards,
+/// each survivor is listed by exactly one shard and the shards' counts sum,
+/// whichever shard's run happened to print its sibling's MISSED.
+///
+/// Fails by: a handed-back survivor dropped from the final list or count, as
+/// bootstrap shard 3/8 read `schema.rs:8992`, so a lap's exit could read green
+/// over it; or one counted by two shards.
+#[test]
+fn every_handed_back_survivor_is_listed_and_counted_once() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let _ = common::scratch_state_root();
+    let repo = seeded_with("mutate-handback-tally", "pub fn one() -> u8 {\n    1\n}\n");
+    common::write(
+        &repo,
+        "batten.toml",
+        &format!("version = 1\n{}", crate::step_journal::MUTANTS_PROVISION),
+    );
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-qm", "provision"]);
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let base = base.trim();
+    common::write(&repo, "src/lib.rs", SIBLING_FIELDS_LIB);
+    common::git_in(&repo, &["commit", "-qam", "make"]);
+    let survivors = |said: &str| -> Vec<String> {
+        said.lines()
+            .filter(|line| line.starts_with("missed\tsrc/lib.rs:"))
+            .map(str::to_owned)
+            .collect()
+    };
+    let missed = |said: &str| -> usize {
+        let tally = said
+            .lines()
+            .find(|line| line.starts_with("mutate schema: {"))
+            .unwrap_or_default();
+        tally
+            .split("\"missed\": ")
+            .nth(1)
+            .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|count| count.parse().ok())
+            .unwrap_or(0)
+    };
+    let (code, said) = cargo_sweep(&repo, base);
+    assert_eq!(code, Some(2), "every mutant of `make` survives\n{said}");
+    let whole = survivors(&said);
+    for field in ["a", "b"] {
+        let deletion = format!("delete field {field} from struct P");
+        assert!(
+            whole.iter().any(|line| line.contains(&deletion)),
+            "the survivor deleting `{field}` is listed\n{said}"
+        );
+    }
+    assert_eq!(
+        missed(&said),
+        whole.len(),
+        "the count holds every listed survivor\n{said}"
+    );
+    // THE SIBLING A RUN JUDGED IS SAID AS NO VERDICT, never left as a bare
+    // MISSED for a reader to count.
+    assert!(
+        said.contains("'s run also judged src/lib.rs:8:9: delete field a"),
+        "the sibling is named as no verdict\n{said}"
+    );
+    let mut listed = Vec::new();
+    let mut counted = 0;
+    for shard in 0..4 {
+        let (_, said) = cargo_sweep_on(&repo, base, &format!("{shard}/4"));
+        counted += missed(&said);
+        listed.extend(survivors(&said));
+    }
+    listed.sort();
+    let mut once = whole.clone();
+    once.sort();
+    assert_eq!(listed, once, "each survivor is listed by exactly one shard");
+    assert_eq!(
+        counted,
+        whole.len(),
+        "and the shards' counts sum to the whole's"
+    );
 }
