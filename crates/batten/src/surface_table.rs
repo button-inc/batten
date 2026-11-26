@@ -6378,6 +6378,9 @@ pub const SURFACE: &[CommandDecl] = &[
     // CLOUD-1544. A WRITE TO A REMOTE, the private state repository named by
     // `BATTEN_STATE_REPO` and never origin. Exit `3` when the remote cannot be
     // reached and never `2`: a publish that fails is not a gate's verdict.
+    // unreached: "receipt publish" CLOUD-2821 `land lap` publishes in process; the
+    // session-start row that reached the receipt verbs is withheld until a
+    // release ships them (CLOUD-2840), and step 14 restores it.
     CommandDecl {
         path: "receipt publish",
         id: "receipt.publish",
@@ -6389,6 +6392,9 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     // CLOUD-1544. Writes under `$GIT_DIR` and the state directory: a pulled
     // receipt lands beside the local stores, never over a local mint.
+    // unreached: "receipt pull" CLOUD-2821 `land lap` pulls in process; the
+    // `session-receipts` row is withheld until a release ships the verb
+    // (CLOUD-2840), and step 14 restores it verbatim from `batten.toml`.
     CommandDecl {
         path: "receipt pull",
         id: "receipt.pull",
