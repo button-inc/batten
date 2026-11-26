@@ -4641,4 +4641,43 @@ mod tests {
         // exit below is derived from it.
         assert_eq!(outcomes[0].exit, 128 + TERM);
     }
+
+    /// CLOUD-2789: a capture pipe is held by the group only where a member
+    /// of it holds the pipe. This process holds the read end of every capture
+    /// pipe and is never in its child's group.
+    ///
+    /// Fails by: the group test inverted (a mutant missed at 34c6e4d1f), so
+    /// this process reads as the holder and every clean managed run ends the
+    /// group its child meant to leave running.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_member_of_the_group_holds_its_pipe() {
+        use std::os::unix::process::CommandExt as _;
+        let (reader, writer) = std::io::pipe().expect("a pipe");
+        let pipes = [pipe_identity(&reader)];
+        let spawn = |stdout: std::process::Stdio| {
+            std::process::Command::new("cat")
+                .process_group(0)
+                .stdin(std::process::Stdio::piped())
+                .stdout(stdout)
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("cat starts")
+        };
+        let mut apart = spawn(std::process::Stdio::null());
+        let mut holder = spawn(writer.into());
+        let (apart_holds, holder_holds) = (
+            group_holds(apart.id(), &pipes),
+            group_holds(holder.id(), &pipes),
+        );
+        for child in [&mut apart, &mut holder] {
+            drop(child.stdin.take());
+            child.wait().expect("cat ends on its stdin closing");
+        }
+        assert!(
+            !apart_holds,
+            "only this process holds it, outside the group"
+        );
+        assert!(holder_holds, "the member writing to it holds it");
+    }
 }
