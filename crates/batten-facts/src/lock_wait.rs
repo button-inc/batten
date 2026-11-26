@@ -26,9 +26,18 @@
 //!   refused as [`Taken::Reentrant`] instead of waited on, because the holder is
 //!   the waiter and the release can never come — the `step run` deadlock.
 //!
-//! A holder that unlocks WITHOUT closing produces no event; every holder in
-//! this crate holds its lock for exactly the life of its descriptor ([`Held`]),
-//! so release and close are one moment.
+//! # Release: a close is not one, so [`Held`] releases and then announces
+//!
+//! A close does not order the event after the release. The kernel's last put
+//! of a description notifies the close (`fsnotify_close`) BEFORE it drops the
+//! flock (`locks_remove_file`), so a waiter woken in between finds the lock
+//! still held, drains the event, and parks with no event left to come — a hang
+//! that load makes likely (`two_concurrent_consumes_resolve_to_exactly_one_winner`
+//! at 1200 s). And a concurrent fork's child shares the description until its
+//! exec, so the holder's own close may release nothing at all. So [`Held`]'s
+//! drop unlocks explicitly and then opens and closes the file once more: an
+//! `IN_CLOSE_NOWRITE` that follows the release. A holder outside this module
+//! that only closes keeps the kernel's order, and its waiter the race.
 //!
 //! # Off Linux: a helper process does the blocking
 //!
@@ -94,11 +103,31 @@ impl Held {
 
 impl Drop for Held {
     fn drop(&mut self) {
+        // Released HERE, before any close, and then announced: the close alone
+        // is not a release a waiter can rely on (module docs, "release").
+        if self.file.unlock().is_ok() {
+            announce_release(&self.file);
+        }
         if let Some(hold) = self.hold {
             release(hold);
         }
     }
 }
+
+/// Raise an `IN_CLOSE_NOWRITE` on `file`'s inode AFTER its lock was released,
+/// by opening and closing it once more: the event every waiter watches for,
+/// now ordered after the release instead of before it.
+#[cfg(target_os = "linux")]
+fn announce_release(file: &File) {
+    use std::os::fd::AsRawFd as _;
+    // A failure leaves a waiter to the holder's own close, as before.
+    drop(File::open(format!("/proc/self/fd/{}", file.as_raw_fd())));
+}
+
+/// Off Linux a waiter's helper blocks in the kernel, so nothing watches for a
+/// close and the release needs no announcement.
+#[cfg(not(target_os = "linux"))]
+const fn announce_release(_: &File) {}
 
 /// A stop any thread can raise to end a wait in [`acquire`].
 #[derive(Debug)]
@@ -829,6 +858,52 @@ mod tests {
         parked.recv().unwrap();
         drop(first);
         assert!(matches!(waiter.join().unwrap().unwrap(), Taken::Held(_)));
+    }
+
+    /// Fails by: a lock released only at the LAST close of its description.
+    /// The twin is a second reference to it, as a concurrent fork's child holds
+    /// one until its exec: the guard's drop must release the lock regardless.
+    #[test]
+    fn a_dropped_guard_releases_even_while_its_description_lives_on() {
+        let (path, file) = lock_file("twin-release");
+        let Taken::Held(first) = acquire(file, &path, Mode::Exclusive, None).unwrap() else {
+            panic!("the first lock is taken");
+        };
+        let twin = first.file().try_clone().unwrap();
+        drop(first);
+        assert!(
+            attempt(&reopen(&path), Mode::Exclusive).unwrap(),
+            "the drop released the lock, not the twin's eventual close"
+        );
+        drop(twin);
+    }
+
+    /// Fails by HANGING: a waiter that saw a close while the lock was still held
+    /// (the kernel notifies a close before it releases the lock, and a forked
+    /// child's reference outlives the holder's close) parks with no further
+    /// event to come. The holder's guard drops on the waiter's park event while
+    /// a twin keeps the description open past the join.
+    #[test]
+    fn a_waiter_wakes_on_a_release_no_close_follows() {
+        let (path, file) = lock_file("twin-wake");
+        let Taken::Held(first) = acquire(file, &path, Mode::Exclusive, None).unwrap() else {
+            panic!("the first lock is taken");
+        };
+        let twin = first.file().try_clone().unwrap();
+        let (ready, parked) = std::sync::mpsc::channel();
+        let waiter = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                let mut park = move || {
+                    let _ = ready.send(());
+                };
+                acquire_announced(reopen(&path), &path, Mode::Exclusive, None, &mut park)
+            })
+        };
+        parked.recv().unwrap();
+        drop(first);
+        assert!(matches!(waiter.join().unwrap().unwrap(), Taken::Held(_)));
+        drop(twin);
     }
 
     /// Fails by: two shared holds in one process refused as re-entry.
