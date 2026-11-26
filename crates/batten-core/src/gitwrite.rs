@@ -213,6 +213,107 @@ pub fn delete_ref(dir: &Path, reference: &str) -> Result<()> {
     Ok(())
 }
 
+/// Put a detached `HEAD` back on the one branch it fast-forwards, or `None`.
+///
+/// **A CLOUD CHECKOUT DETACHES BY DESIGN (CLOUD-2840).** The harness checks the
+/// session's branch out at whatever commit it cloned, then detaches `HEAD` at the
+/// revision the session asked for, so the branch is behind and `HEAD` has no
+/// name: `land` refused there with "a detached HEAD has no branch to key", and a
+/// cold container could not reach `verify` without a hand-run `git switch`.
+///
+/// **ONLY A FAST-FORWARD, ONLY ONE BRANCH.** A local branch qualifies when its
+/// tip is an ancestor of `HEAD` and its upstream carries `HEAD`, so moving it to
+/// `HEAD` loses no commit of its own and claims nothing its remote does not
+/// already hold. Exactly one must qualify: two is a choice this must not make,
+/// and none is a detached `HEAD` somebody chose (a bisect, a rebase, a review),
+/// which is left exactly as it was. The branch moves only if it still holds the
+/// tip that was judged, and the index and worktree are untouched because `HEAD`
+/// keeps its commit.
+///
+/// `Ok(None)` for an attached `HEAD` too: there is nothing to put back.
+///
+/// # Errors
+///
+/// A repository that will not open, or a backend that refuses the edit.
+pub fn attach_detached(dir: &Path) -> Result<Option<String>> {
+    let repo = crate::git::open_for_write(dir)?;
+    let Ok(head) = repo.head() else {
+        return Ok(None);
+    };
+    if head.referent_name().is_some() {
+        return Ok(None);
+    }
+    let Some(at) = head.id().map(gix::Id::detach) else {
+        return Ok(None);
+    };
+    let carries = |base: gix::ObjectId, tip: gix::ObjectId| {
+        base == tip
+            || repo
+                .merge_base(base, tip)
+                .is_ok_and(|found| found.is_some_and(|found| found.detach() == base))
+    };
+    let mut fits: Vec<(gix::refs::FullName, gix::ObjectId)> = Vec::new();
+    let references = repo
+        .references()
+        .map_err(|err| anyhow::anyhow!("gitwrite: the refs will not list: {err}"))?;
+    let branches = references
+        .local_branches()
+        .map_err(|err| anyhow::anyhow!("gitwrite: the branches will not list: {err}"))?;
+    for branch in branches.flatten() {
+        let name = branch.name().to_owned();
+        let Some(tip) = branch.target().try_id().map(ToOwned::to_owned) else {
+            continue;
+        };
+        let Some(upstream) = repo
+            .branch_remote_tracking_ref_name(name.as_ref(), gix::remote::Direction::Fetch)
+            .and_then(std::result::Result::ok)
+            .and_then(|tracking| repo.find_reference(tracking.as_ref()).ok())
+            .and_then(|mut tracking| tracking.peel_to_id().ok().map(gix::Id::detach))
+        else {
+            continue;
+        };
+        if carries(tip, at) && carries(at, upstream) {
+            fits.push((name, tip));
+        }
+    }
+    let [(name, tip)] = fits.as_slice() else {
+        return Ok(None);
+    };
+    let log = |message: &str| gix::refs::transaction::LogChange {
+        mode: gix::refs::transaction::RefLog::AndReference,
+        force_create_reflog: false,
+        message: message.into(),
+    };
+    repo.edit_references([
+        gix::refs::transaction::RefEdit {
+            change: gix::refs::transaction::Change::Update {
+                log: log("batten: fast-forward to the detached HEAD"),
+                expected: gix::refs::transaction::PreviousValue::MustExistAndMatch(
+                    gix::refs::Target::Object(*tip),
+                ),
+                new: gix::refs::Target::Object(at),
+            },
+            name: name.clone(),
+            deref: false,
+        },
+        gix::refs::transaction::RefEdit {
+            change: gix::refs::transaction::Change::Update {
+                log: log("batten: attach HEAD"),
+                expected: gix::refs::transaction::PreviousValue::MustExistAndMatch(
+                    gix::refs::Target::Object(at),
+                ),
+                new: gix::refs::Target::Symbolic(name.clone()),
+            },
+            name: "HEAD"
+                .try_into()
+                .map_err(|err| anyhow::anyhow!("gitwrite: HEAD is not a ref name: {err}"))?,
+            deref: false,
+        },
+    ])
+    .map_err(|err| anyhow::anyhow!("gitwrite: HEAD will not attach: {err}"))?;
+    Ok(Some(name.shorten().to_string()))
+}
+
 /// Does `tip` already carry `candidate`?
 ///
 /// # Why it lives here rather than in `git.rs`
@@ -2397,6 +2498,113 @@ mod tests {
         );
         let misnamed = [hello("1111111111111111111111111111111111111112")];
         assert!(write_objects(&dir, &misnamed).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The cloud checkout's shape (CLOUD-2840): `main` behind at `b`, its
+    /// upstream at `c`, and `HEAD` detached at `c`. Answers `(b, c)`.
+    fn cloud_checkout(case: &str) -> (std::path::PathBuf, String, String) {
+        let dir = replayable(case);
+        commit_tool(&dir, "a\n", "a");
+        let b = commit_tool(&dir, "b\n", "b");
+        let c = commit_tool(&dir, "c\n", "c");
+        set_ref(&dir, "refs/remotes/origin/main", &c).unwrap_or_else(|err| panic!("{err}"));
+        for (key, value) in [
+            ("remote.origin.url", "https://example.invalid/repo.git"),
+            ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
+            ("branch.main.remote", "origin"),
+            ("branch.main.merge", "refs/heads/main"),
+        ] {
+            crate::git::set_config_local(&dir, key, value).unwrap_or_else(|err| panic!("{err}"));
+        }
+        std::fs::write(dir.join(".git/HEAD"), format!("{c}\n"))
+            .unwrap_or_else(|err| panic!("{err}"));
+        set_ref(&dir, "refs/heads/main", &b).unwrap_or_else(|err| panic!("{err}"));
+        (dir, b, c)
+    }
+
+    /// Fails by: `land` keeping its refusal on the cloud checkout, so a cold
+    /// container cannot reach `verify` without a hand-run `git switch`.
+    #[test]
+    fn a_detached_head_its_branch_fast_forwards_to_is_attached() {
+        let (dir, _b, c) = cloud_checkout("gitwrite-attach-cloud");
+        assert_eq!(
+            attach_detached(&dir).unwrap_or_else(|err| panic!("{err}")),
+            Some(String::from("main"))
+        );
+        assert_eq!(
+            crate::git::current_branch(&dir).unwrap_or_else(|err| panic!("{err}")),
+            Some(String::from("main"))
+        );
+        assert_eq!(
+            crate::git::resolve_ref(&dir, "refs/heads/main").unwrap_or_else(|err| panic!("{err}")),
+            Some(c)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a branch holding a commit `HEAD` lacks being moved anyway —
+    /// the commit lost from the branch, the shape `checkout -B` would take.
+    #[test]
+    fn a_branch_with_its_own_commit_is_never_moved() {
+        let (dir, b, c) = cloud_checkout("gitwrite-attach-diverged");
+        std::fs::write(dir.join(".git/HEAD"), "ref: refs/heads/main\n")
+            .unwrap_or_else(|err| panic!("{err}"));
+        let own = commit_tool(&dir, "own\n", "own");
+        assert_ne!(own, b);
+        std::fs::write(dir.join(".git/HEAD"), format!("{c}\n"))
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(
+            attach_detached(&dir).unwrap_or_else(|err| panic!("{err}")),
+            None
+        );
+        assert_eq!(
+            crate::git::resolve_ref(&dir, "refs/heads/main").unwrap_or_else(|err| panic!("{err}")),
+            Some(own)
+        );
+        assert_eq!(
+            crate::git::current_branch(&dir).unwrap_or_else(|err| panic!("{err}")),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a detached `HEAD` past what the remote holds being claimed for
+    /// the branch — a bisect or a review checkout taken over.
+    #[test]
+    fn a_head_the_upstream_does_not_carry_stays_detached() {
+        let (dir, b, _c) = cloud_checkout("gitwrite-attach-unpushed");
+        set_ref(&dir, "refs/remotes/origin/main", &b).unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(
+            attach_detached(&dir).unwrap_or_else(|err| panic!("{err}")),
+            None
+        );
+        assert_eq!(
+            crate::git::resolve_ref(&dir, "refs/heads/main").unwrap_or_else(|err| panic!("{err}")),
+            Some(b)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: one of two equally qualified branches chosen for the caller.
+    #[test]
+    fn two_branches_that_qualify_attach_neither() {
+        let (dir, b, _c) = cloud_checkout("gitwrite-attach-two");
+        set_ref(&dir, "refs/heads/other", &b).unwrap_or_else(|err| panic!("{err}"));
+        for (key, value) in [
+            ("branch.other.remote", "origin"),
+            ("branch.other.merge", "refs/heads/main"),
+        ] {
+            crate::git::set_config_local(&dir, key, value).unwrap_or_else(|err| panic!("{err}"));
+        }
+        assert_eq!(
+            attach_detached(&dir).unwrap_or_else(|err| panic!("{err}")),
+            None
+        );
+        assert_eq!(
+            crate::git::current_branch(&dir).unwrap_or_else(|err| panic!("{err}")),
+            None
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
