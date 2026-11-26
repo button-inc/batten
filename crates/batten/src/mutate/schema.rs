@@ -1163,7 +1163,7 @@ fn probe_sites(
         .descendants_with_tokens()
         .filter_map(ra_ap_syntax::NodeOrToken::into_token)
     {
-        if unkeyed(token.kind()) {
+        if unkeyed_token(&token) {
             gap = true;
             continue;
         }
@@ -1552,6 +1552,59 @@ fn unkeyed(kind: SyntaxKind) -> bool {
     kind == SyntaxKind::WHITESPACE
         || kind == SyntaxKind::COMMENT
         || kind == SyntaxKind::INNER_DOC_COMMENT
+}
+
+/// Whether `token` is keyed by no digest: whitespace or a comment
+/// ([`unkeyed`]), or an outer doc comment no macro can read.
+///
+/// AN OUTER DOC COMMENT IS ITS OWN KIND (CLOUD-2904): `///` lexes as
+/// `OUTER_DOC_COMMENT`, never `COMMENT`, so every doc line was keyed, and a
+/// doc edit on an impl re-keyed every case reaching it. One a derive or an
+/// attribute macro on an enclosing item can read (clap's help text) stays
+/// keyed: it is input to code the build generates.
+fn unkeyed_token(token: &ra_ap_syntax::SyntaxToken) -> bool {
+    unkeyed(token.kind())
+        || (token.kind() == SyntaxKind::OUTER_DOC_COMMENT && !docs_read_by_macro(token))
+}
+
+/// Whether an item enclosing `token` carries a derive or an attribute that is
+/// not one of the compiler's own, either of which may read its doc comments.
+fn docs_read_by_macro(token: &ra_ap_syntax::SyntaxToken) -> bool {
+    use ast::HasAttrs as _;
+    const INERT: [&str; 21] = [
+        "doc",
+        "cfg",
+        "cfg_attr",
+        "allow",
+        "warn",
+        "deny",
+        "forbid",
+        "expect",
+        "must_use",
+        "inline",
+        "cold",
+        "test",
+        "ignore",
+        "should_panic",
+        "non_exhaustive",
+        "repr",
+        "deprecated",
+        "track_caller",
+        "rustfmt",
+        "clippy",
+        "path",
+    ];
+    token
+        .parent_ancestors()
+        .filter_map(ast::Item::cast)
+        .filter_map(|item| ast::AnyHasAttrs::cast(item.syntax().clone()))
+        .flat_map(|item| item.attrs().collect::<Vec<_>>())
+        .any(|attr| {
+            attr.path()
+                .and_then(|path| path.first_segment())
+                .and_then(|segment| segment.name_ref())
+                .is_none_or(|name| INERT.iter().all(|inert| name.text() != *inert))
+        })
 }
 
 /// The skeleton item `token` belongs to: its innermost item, past a macro
@@ -2470,7 +2523,7 @@ fn keyed_text(node: &SyntaxNode) -> String {
         .descendants_with_tokens()
         .filter_map(ra_ap_syntax::NodeOrToken::into_token)
     {
-        if unkeyed(token.kind()) {
+        if unkeyed_token(&token) {
             gap = true;
             continue;
         }
@@ -6744,9 +6797,15 @@ impl<'g> Graph<'g> {
     }
 }
 
-/// The definitions among `found` a walk follows: every one when they hold
-/// one item between them, else every one but an impl ([`Graph::new`]); and
-/// an impl only where the name is also a workspace definition's of its own.
+/// The definitions among `found` a walk follows: none when they hold more
+/// than one item between them ([`Graph::new`]); else each, an impl only where
+/// the name is also a workspace definition's of its own.
+///
+/// KEYED ON EVERY DEFINITION, FOLLOWED THROUGH NONE (owner ruling 2026-11-24,
+/// CLOUD-2904): a name that answers to several items keys all of them, but the
+/// walk does not go on through what they mention. Followed, a type's impls
+/// joined the common names (`new`, `fmt`, `from`) into one component, and an
+/// edit to anything any of them named re-keyed nearly every case.
 ///
 /// NOT AN IMPL REACHED BY A FOREIGN TRAIT OR A METHOD NAME (CLOUD-2904): a
 /// `#[derive(Clone)]` reached the workspace's one `impl Clone` and its self
@@ -6770,7 +6829,7 @@ fn followed<'f>(
     found
         .iter()
         .copied()
-        .filter(move |id| !definitions[*id].ends_with(IMPL_DEFINED) || (owned && count <= 1))
+        .filter(move |id| count <= 1 && (!definitions[*id].ends_with(IMPL_DEFINED) || owned))
 }
 
 /// One reached name's contribution to a case's digest.
@@ -15728,7 +15787,7 @@ mod tests {
     /// edit reuses a stale verdict), or a definition dropped (a field added to
     /// `S` moves nothing).
     #[test]
-    fn a_name_is_followed_through_every_definition() {
+    fn a_name_is_followed_through_one_definition_and_keyed_on_several() {
         let (f, g) = (case("f"), case("g"));
         let cases: BTreeSet<Case> = [f.clone(), g.clone()].into();
         let executed = [(f.clone(), [0].into()), (g.clone(), [1].into())].into();
@@ -15739,9 +15798,10 @@ mod tests {
         let hop = source_digests(&cases, &executed, &base.replace("B: u32 = 1", "B: u32 = 9"));
         assert_ne!(hop[&f], held[&f], "A's one definition names B");
         let beyond = source_digests(&cases, &executed, &base.replace("C(u32)", "C(u64)"));
-        assert_ne!(
+        // KEYED ON ALL, FOLLOWED THROUGH NONE (owner ruling 2026-11-24).
+        assert_eq!(
             beyond[&g], held[&g],
-            "S has two definitions: expanded through both to C"
+            "S has two definitions: keyed on both, followed through neither to C"
         );
         let own = source_digests(
             &cases,
@@ -15752,7 +15812,7 @@ mod tests {
     }
 
     /// T3 (CLOUD-2904): a `//!` edit at a file's head moves no case key, and
-    /// neither does a whitespace edit; a `///` edit on a struct a probed
+    /// neither does a whitespace edit; a `///` edit on a derived struct a probed
     /// function names moves that function's case, since derives compile outer
     /// doc text into run-time text (schemars descriptions, clap help).
     ///
@@ -15765,7 +15825,7 @@ mod tests {
         let (names_s, plain) = (case("names_s"), case("plain"));
         let cases: BTreeSet<Case> = [names_s.clone(), plain.clone()].into();
         let executed = [(names_s.clone(), [0].into()), (plain.clone(), [1].into())].into();
-        let base = "//! The module.\n/// The struct.\npub struct S;\n\
+        let base = "//! The module.\n#[derive(Parser)]\n/// The struct.\npub struct S;\n\
                     pub fn names_s() -> S { S }\npub fn plain() -> u8 { 3 }\n";
         let held = source_digests(&cases, &executed, base);
         let module = source_digests(&cases, &executed, &base.replace("The module", "A module"));
@@ -16887,7 +16947,12 @@ mod tests {
         };
         let held = source_digests(&cases, &executed, &source("u32", "u32"));
         let field = source_digests(&cases, &executed, &source("u64", "u32"));
-        assert_ne!(field[&g], held[&g], "S's own field type");
+        // S ANSWERS TO THREE ITEMS, SO IT IS FOLLOWED THROUGH NONE (owner
+        // ruling 2026-11-24): its field's type is reached only through it.
+        assert_eq!(
+            field[&g], held[&g],
+            "S's field type, through S's three items"
+        );
         let bound = source_digests(&cases, &executed, &source("u32", "u64"));
         assert_eq!(
             bound[&g], held[&g],
@@ -18086,6 +18151,84 @@ mod tests {
             "{files:?}"
         );
         assert!(!files.contains(&String::from("target/b.rs")), "{files:?}");
+    }
+
+    /// A name with several definitions keys every one of them, but a case
+    /// that names it is not walked on through what they mention (owner
+    /// ruling 2026-11-24): an edit reached only through such a name moves no
+    /// case naming it, and a doc edit on one of its impls none either.
+    ///
+    /// Fails by: a type and its impl followed (D244, D264), so an edit to a
+    /// field's type re-keyed every case that names the type; or the type's
+    /// own definitions left unkeyed.
+    #[test]
+    fn a_name_with_several_definitions_is_keyed_but_not_followed() {
+        let tree = |label: &str, lib: &str| {
+            crate_case(
+                label,
+                ("g::t", "fix::it"),
+                &[
+                    ("src/lib.rs", lib),
+                    ("tests/it/main.rs", "mod g;\n"),
+                    (
+                        "tests/it/g.rs",
+                        "#[test]\nfn t() { let _held: Option<fix::T> = None; }\n",
+                    ),
+                ],
+                &[],
+            )
+        };
+        let lib = |field: &str, doc: &str, body: &str| {
+            format!(
+                "pub struct T {{ pub u: U, pub n: {body} }}\n{doc}impl T {{ pub fn m(&self) {{}} }}\n\
+                 pub struct U({field});\n"
+            )
+        };
+        let held = tree("schema-multi-held", &lib("u8", "", "u8"));
+        assert_eq!(
+            tree("schema-multi-field", &lib("u16", "", "u8")),
+            held,
+            "U is reached only through T, which answers to two items"
+        );
+        assert_eq!(
+            tree("schema-multi-doc", &lib("u8", "/// The methods.\n", "u8")),
+            held,
+            "a doc edit on one of T's impls"
+        );
+        assert_ne!(
+            tree("schema-multi-own", &lib("u8", "", "u16")),
+            held,
+            "T's own definition is keyed"
+        );
+    }
+
+    /// A doc comment moves no item's digest, unless a derive or an attribute
+    /// macro on an enclosing item can read it, as clap reads help text.
+    ///
+    /// Fails by: `///` keyed as code (it lexes as `OUTER_DOC_COMMENT`, not
+    /// `COMMENT`), so a doc edit on an impl re-keyed every case reaching it;
+    /// or a derive's doc input left unkeyed.
+    #[test]
+    fn a_doc_comment_is_keyed_only_where_a_macro_reads_it() {
+        let digests = |source: &str| {
+            render_in(
+                source,
+                &[],
+                &BTreeSet::new(),
+                Some(0),
+                &FileScope::of("src/lib.rs"),
+            )
+            .items
+        };
+        let plain = |doc: &str| format!("{doc}pub struct Plain(u8);\n{doc}impl Plain {{}}\n");
+        assert_eq!(digests(&plain("")), digests(&plain("/// Said.\n")));
+        let derived =
+            |doc: &str| format!("#[derive(Parser)]\n{doc}pub struct Args {{ pub n: u8 }}\n");
+        assert_ne!(
+            digests(&derived("/// One help text.\n")),
+            digests(&derived("/// Another help text.\n")),
+            "a derive reads it"
+        );
     }
 
     /// Fails by: a type's one impl left unfollowed, or a method name's impl
