@@ -6195,6 +6195,17 @@ impl JobCost {
     pub fn declared_disk_mb() -> Result<u64> {
         declared_mb("MUTANT_JOB_DISK_MB")
     }
+
+    /// The declared peak of one judged case's process tree,
+    /// `MUTANT_JUDGE_MEMORY_MB`, which [`judging_jobs`] divides available
+    /// memory by.
+    ///
+    /// # Errors
+    ///
+    /// `MUTANT_JUDGE_MEMORY_MB` absent or not a whole number: a usage error.
+    pub fn declared_judge_mb() -> Result<u64> {
+        declared_mb("MUTANT_JUDGE_MEMORY_MB")
+    }
 }
 
 /// A declared megabyte count from the environment variable `name`, refused as
@@ -6234,7 +6245,8 @@ impl Machine {
         let free_mb = crate::prune::sampler(std::env::temp_dir())?()?;
         let meminfo = crate::fsio::read_to_string("/proc/meminfo").unwrap_or_default();
         let available = mem_available_mb(&meminfo);
-        let cgroup = cgroup_remaining_mb(Path::new("/sys/fs/cgroup"));
+        let own = crate::fsio::read_to_string("/proc/self/cgroup").unwrap_or_default();
+        let cgroup = cgroup_remaining_mb(Path::new("/sys/fs/cgroup"), &own);
         let memory_mb = match (available, cgroup) {
             (Some(a), Some(c)) => a.min(c),
             (Some(a), None) => a,
@@ -6260,22 +6272,76 @@ fn mem_available_mb(meminfo: &str) -> Option<u64> {
     })
 }
 
-/// The cgroup's limit minus its usage, in megabytes, v2 then v1; `None` where
-/// neither is readable or the limit is unbounded.
-fn cgroup_remaining_mb(root: &Path) -> Option<u64> {
+/// What remains of the tightest memory limit on this process's own cgroup
+/// path, in megabytes, v2 then v1; `None` where no level along it holds a
+/// readable, bounded limit. `root` is the cgroup mount and `own` the body of
+/// `/proc/self/cgroup`.
+///
+/// THE PROCESS'S OWN CGROUP AND EVERY ANCESTOR, NEVER THE MOUNT'S ROOT ALONE
+/// (CLOUD-2253): a container's limit sits on a nested group
+/// (`memory:/process_api/…`, 14,338 MB on a 16 GB host), and the root reads
+/// unbounded, so a sweep sized itself to the host and was killed (137).
+///
+/// RECLAIMABLE CACHE IS NOT USED: a level's usage counts the page cache its
+/// builds left, 10 GB of 10.9 GB measured, which the kernel drops before it
+/// kills, so its inactive file pages count as remaining.
+fn cgroup_remaining_mb(root: &Path, own: &str) -> Option<u64> {
+    let mut leaves: Vec<(PathBuf, PathBuf, bool)> = Vec::new();
+    for line in own.lines() {
+        let mut parts = line.splitn(3, ':');
+        let (Some(_), Some(controllers), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let path = path.trim().trim_start_matches('/');
+        if controllers.is_empty() {
+            leaves.push((root.to_path_buf(), root.join(path), true));
+        } else if controllers.split(',').any(|name| name == "memory") {
+            let base = root.join("memory");
+            leaves.push((base.clone(), base.join(path), false));
+        }
+    }
+    leaves
+        .iter()
+        .flat_map(|(base, leaf, v2)| {
+            leaf.ancestors()
+                .take_while(move |dir| dir.starts_with(base))
+                .filter_map(move |dir| cgroup_level_mb(dir, *v2))
+        })
+        .min()
+}
+
+/// What remains of one cgroup level's memory limit, in megabytes: its limit
+/// less its usage, its inactive file pages counted as free; `None` where it
+/// has no readable, bounded limit.
+fn cgroup_level_mb(dir: &Path, v2: bool) -> Option<u64> {
     let read = |name: &str| -> Option<String> {
-        crate::fsio::read_to_string(root.join(name))
+        crate::fsio::read_to_string(dir.join(name))
             .ok()
             .map(|text| text.trim().to_owned())
     };
-    let (limit, usage) = read("memory.max").zip(read("memory.current")).or_else(|| {
-        read("memory/memory.limit_in_bytes").zip(read("memory/memory.usage_in_bytes"))
-    })?;
-    let limit: u64 = limit.parse().ok()?;
-    let usage: u64 = usage.parse().ok()?;
+    let (limit, usage, inactive) = if v2 {
+        ("memory.max", "memory.current", "inactive_file")
+    } else {
+        (
+            "memory.limit_in_bytes",
+            "memory.usage_in_bytes",
+            "total_inactive_file",
+        )
+    };
+    let limit: u64 = read(limit)?.parse().ok()?;
+    let usage: u64 = read(usage)?.parse().ok()?;
+    let cache: u64 = read("memory.stat")
+        .and_then(|stat| {
+            stat.lines().find_map(|line| {
+                let (name, value) = line.split_once(' ')?;
+                (name == inactive).then(|| value.trim().parse().ok())?
+            })
+        })
+        .unwrap_or(0);
     // v1 spells "unbounded" as a page-rounded i64::MAX; anything past a
     // petabyte is that, not a limit.
-    (limit < 1 << 50).then(|| limit.saturating_sub(usage) / (1024 * 1024))
+    (limit < 1 << 50).then(|| limit.saturating_sub(usage.saturating_sub(cache)) / (1024 * 1024))
 }
 
 /// Write the change since `base` that cargo-mutants owns to `diff`, as the
@@ -6502,18 +6568,42 @@ pub const fn cargo_exit(outcome: Outcome) -> crate::exit::ExitCode {
     }
 }
 
-/// How many workers a schema sweep judges on: a core each but one. A worker
-/// builds nothing (the schema is one build) and runs its cases under nextest,
-/// which spends cores of its own, so the copy-sized [`job_count`] does not
-/// apply. Measured on #1276: three workers on four cores judged 2,402 mutants
-/// at about three minutes a hundred. Never below one.
+/// How a schema sweep's judging is spread: its workers, and how many cases
+/// each one's nextest runs at once (`--test-threads`); `None` leaves that to
+/// nextest, which runs one a core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Judges {
+    /// The judging workers, each a nextest run at a time.
+    pub workers: usize,
+    /// Each worker's concurrent cases.
+    pub threads: Option<usize>,
+}
+
+/// How a schema sweep judges on `machine` when one running case's process
+/// tree peaks at `case_mb`: as many cases at once as cores and available
+/// memory both hold, on a worker a core but one, each worker's nextest
+/// holding its share. `None` WHEN NOT EVEN ONE CASE FITS, as [`job_count`]
+/// refuses: a run that can only be killed is could-not-look.
+///
+/// MEMORY BOUNDS IT, NEVER THE CORES ALONE (CLOUD-2253). It was a worker a core
+/// but one, and each worker's nextest ran a case a core: twelve cases at once
+/// on four cores, and on a 16 GB host with no swap the land's `mutate cargo`
+/// was killed (137) with no other suite running. A worker builds nothing (the
+/// schema is one build), so its cost is the cases it runs.
 #[must_use]
-pub const fn judging_jobs(machine: Machine) -> usize {
-    if machine.cores > 1 {
-        machine.cores - 1
-    } else {
-        1
+pub fn judging_jobs(machine: Machine, case_mb: u64) -> Option<Judges> {
+    let cores = machine.cores.max(1);
+    let fit = usize::try_from(machine.memory_mb.checked_div(case_mb).unwrap_or(u64::MAX))
+        .unwrap_or(usize::MAX);
+    let slots = cores.min(fit);
+    if slots == 0 {
+        return None;
     }
+    let workers = cores.saturating_sub(1).clamp(1, slots);
+    Some(Judges {
+        workers,
+        threads: Some((slots / workers).max(1)),
+    })
 }
 
 /// How many cargo-mutants jobs this machine holds (`--jobs`).
@@ -6811,17 +6901,50 @@ mod tests {
         );
     }
 
+    /// A sweep judges on a core each but one, and never more cases at once
+    /// than available memory holds at one case's declared peak (CLOUD-2253).
+    ///
+    /// Fails by: the count read off the cores alone, which ran three workers
+    /// of four cases each into a 16 GB host's OOM kill (137); a worker's
+    /// nextest left a case a core; or a host where no case fits judged
+    /// anyway, where its run could only be killed.
     #[test]
-    fn a_sweep_judges_on_every_core_but_one() {
-        let on = |cores| Machine {
+    fn a_sweep_judges_as_many_cases_as_cores_and_memory_both_hold() {
+        let on = |cores, memory_mb| Machine {
             cores,
             disk_headroom_mb: 0,
-            memory_mb: 0,
+            memory_mb,
         };
-        assert_eq!(judging_jobs(on(4)), 3);
-        assert_eq!(judging_jobs(on(2)), 1);
-        assert_eq!(judging_jobs(on(1)), 1);
-        assert_eq!(judging_jobs(on(0)), 1);
+        let judges = |workers, threads| {
+            Some(Judges {
+                workers,
+                threads: Some(threads),
+            })
+        };
+        let ample = 64_000;
+        assert_eq!(judging_jobs(on(4, ample), 1_000), judges(3, 1));
+        assert_eq!(judging_jobs(on(2, ample), 1_000), judges(1, 2));
+        assert_eq!(judging_jobs(on(1, ample), 1_000), judges(1, 1));
+        assert_eq!(judging_jobs(on(0, ample), 1_000), judges(1, 1));
+        assert_eq!(judging_jobs(on(16, ample), 1_000), judges(15, 1));
+        // MEMORY, NOT CORES: 9 GB at 4 GB a case holds two of four cores' cases.
+        assert_eq!(judging_jobs(on(4, 9_000), 4_000), judges(2, 1));
+        assert_eq!(judging_jobs(on(16, 9_000), 4_000), judges(2, 1));
+        assert_eq!(judging_jobs(on(4, 4_000), 4_000), judges(1, 1));
+        assert_eq!(judging_jobs(on(4, 3_999), 4_000), None);
+        // EVERY CASE AT ONCE STAYS INSIDE MEMORY, threads included.
+        for (cores, memory_mb, case_mb) in
+            [(4, 16_000, 1_500), (32, 20_000, 900), (3, 10_000, 3_000)]
+        {
+            let Judges { workers, threads } =
+                judging_jobs(on(cores, memory_mb), case_mb).expect("one fits");
+            let at_once = workers * threads.expect("bounded");
+            assert!(
+                at_once as u64 * case_mb <= memory_mb,
+                "{cores} {memory_mb} {case_mb}"
+            );
+            assert!(at_once <= cores.max(1), "{cores} {memory_mb} {case_mb}");
+        }
     }
 
     /// A handed-back mutant is selected by its whole name and nothing else.
@@ -6942,40 +7065,67 @@ mod tests {
         assert_eq!(mem_available_mb("MemTotal: 1 kB\n"), None);
     }
 
-    /// Fails by: usage ignored, v1 not read, or v1's unbounded limit taken as one.
+    /// Fails by: usage ignored, v1 not read, or v1's unbounded limit taken as
+    /// one; the mount's root read in place of the process's own nested group,
+    /// whose 14,338 MB limit a 16 GB host's sweep then ran past (137); an
+    /// ancestor's tighter limit ignored; or reclaimable cache counted as used.
     #[test]
     fn the_cgroup_limit_is_what_remains_of_it() {
         let v2 = crate::scratch::scratch("mutate-cgroup-v2");
         std::fs::write(v2.join("memory.max"), format!("{}\n", 10u64 << 30)).unwrap();
         std::fs::write(v2.join("memory.current"), format!("{}\n", 4u64 << 30)).unwrap();
-        assert_eq!(cgroup_remaining_mb(&v2), Some(6 * 1024));
-
-        let v1 = crate::scratch::scratch("mutate-cgroup-v1");
-        std::fs::create_dir(v1.join("memory")).unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2, "0::/\n"), Some(6 * 1024));
+        // INACTIVE CACHE IS FREE: 3 GB of the 4 used is reclaimable.
         std::fs::write(
-            v1.join("memory/memory.limit_in_bytes"),
-            (2u64 << 30).to_string(),
+            v2.join("memory.stat"),
+            format!("anon 1\ninactive_file {}\n", 3u64 << 30),
         )
         .unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2, "0::/\n"), Some(9 * 1024));
+        // THE OWN GROUP, NESTED, AND THE TIGHTEST LEVEL ALONG IT.
+        let nested = v2.join("outer/inner");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("memory.max"), format!("{}", 2u64 << 30)).unwrap();
+        std::fs::write(nested.join("memory.current"), format!("{}", 1u64 << 30)).unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2, "0::/outer/inner\n"), Some(1024));
+        std::fs::write(v2.join("outer/memory.max"), "max").unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2, "0::/outer/inner\n"), Some(1024));
+
+        let v1 = crate::scratch::scratch("mutate-cgroup-v1");
+        let own = v1.join("memory/process_api/bash");
+        std::fs::create_dir_all(&own).unwrap();
+        let unbounded = "9223372036854771712";
+        std::fs::write(v1.join("memory/memory.limit_in_bytes"), unbounded).unwrap();
         std::fs::write(
             v1.join("memory/memory.usage_in_bytes"),
             (1u64 << 30).to_string(),
         )
         .unwrap();
-        assert_eq!(cgroup_remaining_mb(&v1), Some(1024));
-
+        let path = "9:pids:/x\n4:memory:/process_api/bash\n0::/\n";
+        assert_eq!(
+            cgroup_remaining_mb(&v1, path),
+            None,
+            "only the root, unbounded"
+        );
+        std::fs::write(own.join("memory.limit_in_bytes"), (14u64 << 30).to_string()).unwrap();
+        std::fs::write(own.join("memory.usage_in_bytes"), (11u64 << 30).to_string()).unwrap();
         std::fs::write(
-            v1.join("memory/memory.limit_in_bytes"),
-            "9223372036854771712",
+            own.join("memory.stat"),
+            format!("cache 1\ntotal_inactive_file {}\n", 4u64 << 30),
         )
         .unwrap();
-        assert_eq!(cgroup_remaining_mb(&v1), None);
-
-        std::fs::write(v2.join("memory.max"), "max\n").unwrap();
-        assert_eq!(cgroup_remaining_mb(&v2), None);
-        // A petabyte exactly is already "unbounded".
+        assert_eq!(
+            cgroup_remaining_mb(&v1, path),
+            Some(7 * 1024),
+            "the nested limit"
+        );
+        assert_eq!(
+            cgroup_remaining_mb(&v1, "4:memory:/\n"),
+            None,
+            "the root alone"
+        );
         std::fs::write(v2.join("memory.max"), (1_u64 << 50).to_string()).unwrap();
-        assert_eq!(cgroup_remaining_mb(&v2), None);
+        assert_eq!(cgroup_remaining_mb(&v2, "0::/\n"), None);
     }
 
     /// An orphaned sweep's group that exits on TERM inside the grace is waited

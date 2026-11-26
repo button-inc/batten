@@ -2026,8 +2026,12 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 # CLOUD-1414; the tree grew), and a 3.5 GB peak rustc. Sized under, two jobs
 # filled the disk mid-build and a mutant whose build hit ENOSPC was recorded
 # unviable. The schema itself judges on every core but one, since its workers
-# share its one build.
-env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "6200", MUTANT_JOB_MEMORY_MB = "4000", MUTANT_CHANGED_SINCE = "{% if get_env(name='MUTANT_WHOLE_TREE', default='') == '' %}{{ get_env(name='MUTANT_CHANGED_SINCE', default='origin/main') }}{% else %}{{ get_env(name='MUTANT_CHANGED_SINCE', default='') }}{% endif %}" }
+# share its one build. ITS CASES AT ONCE ARE MEMORY'S (CLOUD-2253): one judged
+# case's process tree is declared at 3,500 MB, a batten case that builds a
+# fixture crate under cargo; available memory over it bounds the cases running
+# at once across every worker. Sized off the cores alone, three workers ran
+# twelve cases and were killed (137) on a 16 GB host, lap 11 among them.
+env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "6200", MUTANT_JOB_MEMORY_MB = "4000", MUTANT_JUDGE_MEMORY_MB = "3500", MUTANT_CHANGED_SINCE = "{% if get_env(name='MUTANT_WHOLE_TREE', default='') == '' %}{{ get_env(name='MUTANT_CHANGED_SINCE', default='origin/main') }}{% else %}{{ get_env(name='MUTANT_CHANGED_SINCE', default='') }}{% endif %}" }
 # The package cache, for `mutant:declared`'s reason above.
 depends = ["pkl-package"]
 # The verb applies the pin and runs the cached binary, so nothing is linked onto

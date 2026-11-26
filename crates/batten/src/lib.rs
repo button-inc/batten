@@ -18887,7 +18887,11 @@ fn run_reach_seed(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         shard: None,
         phase: mutate::schema::Phase::Reach,
     };
-    let swept = mutate::schema::sweep(root, &listed, &listed_over, (1, scope), None, out)?;
+    let one = mutate::Judges {
+        workers: 1,
+        threads: None,
+    };
+    let swept = mutate::schema::sweep(root, &listed, &listed_over, (one, scope), None, out)?;
     if swept.code == 0 {
         let keyed = mutate::resume::seed_passes(root)?;
         writeln!(
@@ -18932,6 +18936,38 @@ fn mutate_cargo_runner(
         return Ok(None);
     };
     Ok(nextest_absent.is_none().then_some(runner))
+}
+
+/// How `mutate cargo` judges its `listed` mutants of `sources` on `machine`
+/// ([`mutate::judging_jobs`]), said on `out`; `None`, said on `err`, where
+/// available memory holds not one judged case.
+///
+/// # Errors
+///
+/// `MUTANT_JUDGE_MEMORY_MB` is not declared, or a stream cannot be written.
+fn judges_on(
+    machine: mutate::Machine,
+    listed: usize,
+    sources: &str,
+    (out, err): (&mut dyn Write, &mut dyn Write),
+) -> Result<Option<mutate::Judges>> {
+    let case_mb = mutate::JobCost::declared_judge_mb()?;
+    let Some(judges) = mutate::judging_jobs(machine, case_mb) else {
+        writeln!(
+            err,
+            "::error:: mutate cargo: {} MB of memory is available and one judged case needs {case_mb} MB, so none is judged",
+            machine.memory_mb
+        )?;
+        return Ok(None);
+    };
+    writeln!(
+        out,
+        "mutate cargo: {listed} mutant(s) of {sources}, switched in one schema build, judged on {} worker(s) of {} case(s) each, {} MB available",
+        judges.workers,
+        judges.threads.unwrap_or(1),
+        machine.memory_mb
+    )?;
+    Ok(Some(judges))
 }
 
 /// A `mutate cargo` run's exit, its `pass` recorded where it passed whole.
@@ -19051,12 +19087,9 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // and paid its own build and reach run, which one job now pays for all.
     let listed = mutate::list_mutants(root, &runner, listing)?;
     let scope = mutate::schema::Scope { shard, phase };
-    let workers = mutate::judging_jobs(machine);
-    writeln!(
-        out,
-        "mutate cargo: {} mutant(s) of {sources}, switched in one schema build, judged on {workers} worker(s)",
-        listed.len()
-    )?;
+    let Some(judges) = judges_on(machine, listed.len(), &sources, (out, err))? else {
+        return Ok(ExitCode::Internal);
+    };
     // THE HANDED-BACK MUTANTS ARE JUDGED INSIDE THE SWEEP, in place, on the
     // cases that can observe each, under the same journal: the classic stage
     // this replaces paid a copy, a full build, a baseline run and the whole
@@ -19073,7 +19106,7 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         root,
         &listed,
         &listed_over,
-        (workers, scope),
+        (judges, scope),
         Some(&handback),
         out,
     )?;
