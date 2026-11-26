@@ -100,6 +100,7 @@ use anyhow::{Context as _, Result, bail};
 pub mod cover;
 pub mod resume;
 pub mod schema;
+pub mod shown;
 pub mod stable;
 pub mod trace;
 
