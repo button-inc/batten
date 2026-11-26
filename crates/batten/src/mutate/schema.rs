@@ -4741,6 +4741,83 @@ fn suite_binaries(
     Ok((binaries, metadata))
 }
 
+/// Every case the reach suite's binaries hold, by name and binary: nextest's
+/// full list over the binaries [`suite_binaries`] listed, which runs each
+/// binary's own list and builds nothing. `None` where it cannot be taken.
+fn listed_cases(
+    work: &std::path::Path,
+    state: &std::path::Path,
+    (binaries, metadata): (&std::path::Path, &std::path::Path),
+) -> Option<BTreeSet<Case>> {
+    let mut list: Vec<String> = [
+        "nextest",
+        "list",
+        "--list-type",
+        "full",
+        "--message-format",
+        "json",
+    ]
+    .map(String::from)
+    .to_vec();
+    for (flag, path) in [
+        ("--binaries-metadata", binaries),
+        ("--cargo-metadata", metadata),
+    ] {
+        list.extend([flag.to_owned(), path.to_string_lossy().into_owned()]);
+    }
+    let out = state.join("reach-cases.json");
+    cargo_document(work, &list, &out)?;
+    let document: serde_json::Value =
+        serde_json::from_str(&crate::fsio::read_to_string(&out).ok()?).ok()?;
+    let mut cases = BTreeSet::new();
+    for (binary, suite) in document.get("rust-suites")?.as_object()? {
+        for name in suite.get("testcases")?.as_object()?.keys() {
+            cases.insert((name.clone(), binary.clone()));
+        }
+    }
+    Some(cases)
+}
+
+/// Every case a record under `base` holds finished passing
+/// ([`finished_passing`]): what the recorder would skip.
+fn finished_cases(base: &std::path::Path) -> BTreeSet<Case> {
+    std::fs::read_dir(base)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|dir| finished_passing(dir))
+        .filter_map(|dir| kept_case(&dir))
+        .collect()
+}
+
+/// The nextest filter that runs the cases of `listed` not `finished`: none
+/// where every one is, and `None`, no filter, where at least half must run
+/// or a name holds what a filter cannot spell, so the recorder's own skip
+/// decides.
+fn run_filter(listed: &BTreeSet<Case>, finished: &BTreeSet<Case>) -> Option<String> {
+    let due: Vec<&Case> = listed.difference(finished).collect();
+    if due.is_empty() {
+        return Some(String::from("none()"));
+    }
+    if due.len() * 2 >= listed.len() {
+        return None;
+    }
+    let plain = |text: &str| {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '-'))
+    };
+    due.iter()
+        .map(|(name, binary)| {
+            (plain(name) && plain(binary))
+                .then(|| format!("(binary_id(={binary}) & test(={name}))"))
+        })
+        .collect::<Option<Vec<String>>>()
+        .map(|terms| terms.join(" | "))
+}
+
 /// The argv the reach suite runs: under the recorder's `config`, on the
 /// binaries `listed` names ([`suite_binaries`]), never built here.
 ///
@@ -4759,6 +4836,9 @@ fn reach_args(
         "--profile",
         "batten-cover",
         "--no-fail-fast",
+        // A LAP WITH NOTHING TO RECORD RUNS NO CASE ([`run_filter`]), which
+        // is no failure.
+        "--no-tests=pass",
     ]
     .map(String::from)
     .to_vec();
@@ -6809,11 +6889,28 @@ pub fn record_reach(
     // build relinks the checkout's binary, and its path then names nothing.
     std::fs::copy(super::running_image()?, &staged)?;
     std::fs::rename(&staged, &recorder)?;
-    crate::durable::replace(
-        &config,
-        super::cover::wrapped_config(work, &recorder, RECORD_ARG, &state.join("nextest"))?,
-    )?;
     let (binaries, metadata) = suite_binaries((work, target, state), packages)?;
+    let mut text =
+        super::cover::wrapped_config(work, &recorder, RECORD_ARG, &state.join("nextest"))?;
+    // A LAP RUNS ONLY THE CASES IT RECORDS (CLOUD-2904): with 11,740 of 11,797
+    // records carried, the suite still started every case for the recorder to
+    // skip, 1,891 s to re-record 57. The cases no record holds finished are
+    // the run's filter. A double recording clears every record, so it runs
+    // them all.
+    if !super::stable::twice()
+        && let Some(filter) = listed_cases(work, state, (&binaries, &metadata))
+            .and_then(|listed| run_filter(&listed, &finished_cases(&base)))
+    {
+        text = text.replacen(
+            "[profile.batten-cover]\n",
+            &format!(
+                "[profile.batten-cover]\ndefault-filter = {}\n",
+                toml_edit::Value::from(filter)
+            ),
+            1,
+        );
+    }
+    crate::durable::replace(&config, text)?;
     let args = reach_args(&config, (&binaries, &metadata));
     let mut env: Vec<(String, String)> = Vec::new();
     env.extend([
@@ -17062,6 +17159,44 @@ mod tests {
         assert_eq!(site_key(&root, &moved), Some(key));
         let digests = case_digests(&root, &cases, &dirs, &none, &depends(&[]));
         assert_ne!(verdict_key(&root, &moved, &cases, &digests), Some(verdict));
+    }
+
+    /// A lap's reach run starts only the cases no record holds finished: the
+    /// rest are filtered out before nextest starts them, none at all where
+    /// every case is finished, and no filter where at least half must run or a
+    /// name is one a filter cannot spell.
+    ///
+    /// Fails by: every listed case started for the recorder to skip (the T+1
+    /// measurement over 82e566618 ran the whole suite, 1,891 s, to re-record
+    /// 57 of 11,797 cases).
+    #[test]
+    fn a_lap_runs_only_the_cases_no_record_holds_finished() {
+        let case = |name: &str| (name.to_owned(), String::from("batten::it"));
+        let listed: BTreeSet<Case> = ["a::one", "a::two", "b::three", "b::four", "c::five"]
+            .into_iter()
+            .map(case)
+            .collect();
+        let finished: BTreeSet<Case> = ["a::one", "a::two", "b::three", "b::four"]
+            .into_iter()
+            .map(case)
+            .collect();
+        assert_eq!(
+            run_filter(&listed, &finished).as_deref(),
+            Some("(binary_id(=batten::it) & test(=c::five))"),
+            "the one case no record holds finished"
+        );
+        assert_eq!(
+            run_filter(&listed, &listed).as_deref(),
+            Some("none()"),
+            "no case where every one is finished"
+        );
+        let few: BTreeSet<Case> = ["a::one"].into_iter().map(case).collect();
+        assert_eq!(run_filter(&listed, &few), None, "most must run: no filter");
+        let mut odd = listed.clone();
+        odd.insert(case("c::six(\"x\")"));
+        let mut most = finished.clone();
+        most.insert(case("b::seven"));
+        assert_eq!(run_filter(&odd, &most), None, "a name no filter spells");
     }
 
     /// A site's key reads its function as a key reads code (CLOUD-2904): a `//`
