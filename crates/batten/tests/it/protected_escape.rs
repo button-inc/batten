@@ -786,6 +786,70 @@ fn a_rollback_beside_a_fast_forward_that_left_the_path_alone_is_still_refused() 
     assert!(said.contains("path write refused at guarded.txt"), "{said}");
 }
 
+/// A REBASE ONTO A FETCHED TIP IS HISTORY ARRIVING TOO (CLOUD-2923, on #1276).
+/// This clone holds a local commit that never touched the protected file;
+/// another session pushed a change to it. The call fetches and rebases: `HEAD`
+/// is now the local commit replayed on the tip, which does not descend from
+/// the pre-call `HEAD`, but every byte of the protected change is the tip's.
+///
+/// Fails by: excusing only a forward move of `HEAD`, so a rebase, the other
+/// ordinary way a session syncs, is refused as an authored protected write.
+#[test]
+fn a_rebase_onto_a_fetched_tip_is_no_protected_write() {
+    let dir = fixture("protected-escape-rebase");
+    std::fs::write(dir.join(GUARDED), "pushed elsewhere\n").expect("the guarded write lands");
+    common::git_in(&dir, &["commit", "-q", "-am", "pushed by another session"]);
+    common::git_in(&dir, &["branch", "-q", "pushed"]);
+    common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
+    std::fs::write(dir.join(ORDINARY), "local work\n").expect("the local write lands");
+    common::git_in(&dir, &["commit", "-q", "-am", "local work"]);
+    let command = "git fetch origin main && git rebase -q origin/main";
+    let (code, said) = around_with(&dir, "call-rebase", command, |dir| {
+        common::git_in(
+            dir,
+            &["fetch", "-q", ".", "pushed:refs/remotes/origin/main"],
+        );
+        common::git_in(dir, &["rebase", "-q", "origin/main"]);
+    });
+    assert_eq!(
+        code,
+        Some(0),
+        "the tip carried the protected change: {said}"
+    );
+    assert!(!said.contains("path write refused"), "{said}");
+}
+
+/// A REBASE THAT REPLAYS A LOCAL CHANGE TO THE PROTECTED FILE IS NOT HISTORY'S.
+/// The tip and the local commit each edit a different line of the protected
+/// file, so the rebase merges them: the result is bytes neither the remote
+/// nor any earlier call wrote, and the call that produced them owns them.
+///
+/// Fails by: excusing every path a rebase onto a pushed tip moved, rather than
+/// only a path whose bytes are the tip's and which the local side never touched.
+#[test]
+fn a_rebase_replaying_a_local_protected_change_is_still_refused() {
+    let dir = fixture("protected-escape-rebase-local");
+    let lines = |first: &str, last: &str| format!("{first}\nb\nc\nd\n{last}\n");
+    std::fs::write(dir.join(GUARDED), lines("a", "e")).expect("the base write lands");
+    common::git_in(&dir, &["commit", "-q", "-am", "a policy of five lines"]);
+    std::fs::write(dir.join(GUARDED), lines("pushed", "e")).expect("the pushed write lands");
+    common::git_in(&dir, &["commit", "-q", "-am", "pushed by another session"]);
+    common::git_in(&dir, &["branch", "-q", "pushed"]);
+    common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
+    std::fs::write(dir.join(GUARDED), lines("a", "local")).expect("the local write lands");
+    common::git_in(&dir, &["commit", "-q", "-am", "local policy change"]);
+    let command = "git fetch origin main && git rebase -q origin/main";
+    let (code, said) = around_with(&dir, "call-rebase-local", command, |dir| {
+        common::git_in(
+            dir,
+            &["fetch", "-q", ".", "pushed:refs/remotes/origin/main"],
+        );
+        common::git_in(dir, &["rebase", "-q", "origin/main"]);
+    });
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("path write refused at guarded.txt"), "{said}");
+}
+
 /// One hook call made from `cwd`, the directory the host reports the call in.
 fn payload_in(event: &str, call: &str, command: &str, cwd: &Path) -> String {
     let mut value: serde_json::Value =

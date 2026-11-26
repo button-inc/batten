@@ -5187,6 +5187,74 @@ pub fn head_blob_ids(dir: &Path, paths: &[&str]) -> Option<BTreeMap<String, Stri
     Some(ids)
 }
 
+/// The `paths` a REBASE onto pushed history brought in, and nothing the local
+/// side wrote (CLOUD-2923, on #1276). One of the remote tips `tips` must be an
+/// ancestor of the current `HEAD`. A path counts when `HEAD`'s blob differs
+/// from the pre-call `HEAD`'s and equals that tip's, while the pre-call
+/// `HEAD`'s blob still equals its blob at the merge-base with that tip.
+///
+/// That third condition, the local side never touching the path, is what keeps
+/// this narrow. A rebase replaying a local change to a protected file leaves
+/// bytes no remote wrote, so it is not excused.
+///
+/// The fast-forward arm, `head_moved_onto`, cannot see this shape: a rebase
+/// carrying local commits leaves a `HEAD` that does not descend from the
+/// pre-call one. Opened fresh, because the call wrote the commits it reads.
+/// `None` when it could not look; the caller reads that as "nothing excused".
+#[must_use]
+pub fn rebased_in_from_tips(
+    dir: &Path,
+    before: &str,
+    tips: &[String],
+    paths: &[&str],
+) -> Option<std::collections::BTreeSet<String>> {
+    let repo = open_fresh(dir).ok()?;
+    let head = repo.head_id().ok()?.detach();
+    let before = gix::ObjectId::from_hex(before.as_bytes()).ok()?;
+    let mut moved_in = std::collections::BTreeSet::new();
+    if head == before {
+        return Some(moved_in);
+    }
+    let blobs = |id: gix::ObjectId| -> Option<BTreeMap<String, gix::ObjectId>> {
+        let tree = repo.find_commit(id).ok()?.tree().ok()?;
+        let mut ids = BTreeMap::new();
+        for path in paths {
+            if let Ok(Some(entry)) = tree.lookup_entry_by_path(path)
+                && entry.mode().is_blob()
+            {
+                ids.insert((*path).to_owned(), entry.object_id());
+            }
+        }
+        Some(ids)
+    };
+    let (now, was) = (blobs(head)?, blobs(before)?);
+    for tip in tips {
+        let tip = gix::ObjectId::from_hex(tip.as_bytes()).ok()?;
+        let on_tip = repo
+            .merge_base(tip, head)
+            .is_ok_and(|base| base.is_some_and(|base| base.detach() == tip));
+        let Some(base) = repo
+            .merge_base(before, tip)
+            .ok()
+            .flatten()
+            .map(gix::Id::detach)
+        else {
+            continue;
+        };
+        if !on_tip {
+            continue;
+        }
+        let (at_tip, at_base) = (blobs(tip)?, blobs(base)?);
+        for path in paths {
+            let (was, now) = (was.get(*path), now.get(*path));
+            if was != now && now == at_tip.get(*path) && was == at_base.get(*path) {
+                moved_in.insert((*path).to_owned());
+            }
+        }
+    }
+    Some(moved_in)
+}
+
 /// The blob id of each of `paths` at `reference`, where present.
 ///
 /// # Errors

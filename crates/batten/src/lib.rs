@@ -23060,10 +23060,14 @@ fn moved_in_by_history(
         return std::collections::BTreeSet::new();
     };
     let tips = git::remote_tips_before(root, at);
-    if git::head_moved_onto(root, before, &tips) != Some(true) {
-        return std::collections::BTreeSet::new();
-    }
     let names: Vec<&str> = paths.iter().map(String::as_str).collect();
+    // A REBASE ONTO PUSHED HISTORY (CLOUD-2923, on #1276): `HEAD` no longer
+    // descends from the pre-call one, so the fast-forward arm below cannot see
+    // it, and only paths whose bytes are a tip's, untouched on the local side,
+    // are excused.
+    if git::head_moved_onto(root, before, &tips) != Some(true) {
+        return git::rebased_in_from_tips(root, before, &tips, &names).unwrap_or_default();
+    }
     let (Ok(was), Some(now)) = (
         git::blob_ids_at(root, before, &names),
         git::head_blob_ids(root, &names),
