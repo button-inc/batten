@@ -4620,7 +4620,9 @@ mod tests {
         }
         let root = contained("exec-signalled-run");
         let started = Fifo::at(root.join("started"));
-        let script = format!("{}; exec sleep 10", started.write("started"));
+        // Held by [`spin`], not `sleep 10`: it runs while this case lives and
+        // no clock decides when it stops; the forwarded TERM ends it (CLOUD-2789).
+        let script = format!("{}; {}", started.write("started"), spin());
         let outcomes = std::thread::scope(|scope| {
             scope.spawn(|| {
                 assert_eq!(started.first("the child starting"), "started");
