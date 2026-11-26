@@ -3984,7 +3984,7 @@ pub fn build(
             found
         };
         if ran.passed() {
-            writeln!(
+            crate::mutate::progress!(
                 out,
                 "mutate schema: build {round} clean, {} unviable",
                 skip.len() - handed.len()
@@ -3997,7 +3997,7 @@ pub fn build(
             });
         }
         let refused = unviable(&schema, &ran.stdout);
-        writeln!(
+        crate::mutate::progress!(
             out,
             "mutate schema: build {round} refused {} mutant(s), handed back {} for a const caller, unprobed {} file(s), {} error(s) unowned",
             refused.owned.len(),
@@ -4006,7 +4006,7 @@ pub fn build(
             refused.stray.len()
         )?;
         for message in &refused.stray {
-            writeln!(out, "mutate schema:   unowned: {message}")?;
+            crate::mutate::progress!(out, "mutate schema:   unowned: {message}")?;
         }
         // AN ERROR NO MUTANT OWNS IS THE SCHEMA'S OWN FAULT, never retried:
         // on #1276 two of them were sources edited mid-sweep, which the
@@ -5331,14 +5331,14 @@ fn control_red(
     )?;
     red.extend(found);
     control.extend(times);
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: control ran {} of the {} case(s) still to judge, {} journaled passing",
         cases.len(),
         scope.len(),
         scope.len() - cases.len()
     )?;
-    write!(out, "{}", control_red_lines(&red))?;
+    crate::mutate::progress!(out, "{}", control_red_lines(&red).trim_end())?;
     red.extend(judging.red.clone());
     Ok((red, control))
 }
@@ -7102,7 +7102,7 @@ impl SealContext {
 fn keep_leftovers(state: &std::path::Path, out: &mut dyn std::io::Write) -> anyhow::Result<()> {
     let leftovers = seal_leftovers(&state.join("reach"))?;
     if leftovers > 0 {
-        writeln!(
+        crate::mutate::progress!(
             out,
             "mutate schema: sealed {leftovers} case(s) a stopped run finished"
         )?;
@@ -7248,7 +7248,7 @@ pub fn record_reach(
         (recompute, over),
     )?;
     write_listed(&base, identity)?;
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: reach carried {carried} case(s) across the change, resumed {resumed}"
     )?;
@@ -7278,7 +7278,7 @@ pub fn record_reach(
     // HOW MANY CASES THE RUN STARTS, SAID (CLOUD-2904): a relaunch is checked
     // by this count, never by its seconds, to re-run no case a stopped run
     // finished.
-    writeln!(
+    crate::mutate::progress!(
         out,
         "{}",
         reach_starts_line(listed.as_ref(), filter.as_deref(), &finished_cases(&base))
@@ -7353,7 +7353,7 @@ pub fn record_reach(
     let red = failed_records(&base);
     let after = super::stable::passing(&reach.executed, identity.probes, &red);
     if let Some(line) = stable_line(super::stable::judge(&base, &after)?) {
-        writeln!(out, "{line}")?;
+        crate::mutate::progress!(out, "{line}")?;
     }
     reach.tree = inputs;
     Ok((reach, passed))
@@ -10938,19 +10938,18 @@ fn judge_all(
             verdicts.push(verdict);
             if verdicts.len() % PROGRESS_EVERY == 0 || verdicts.len() == todo.len() {
                 let judged = format!("mutate schema: judged {}/{}", verdicts.len(), todo.len());
-                let _ = writeln!(out, "{judged} in {}s", started.elapsed().as_secs());
-                // THE LAP SEES THE SWEEP MOVE: one step can outlast the stall bound.
-                crate::step::advanced(&judged);
+                let _ =
+                    crate::mutate::progress!(out, "{judged} in {}s", started.elapsed().as_secs());
             }
         }
     });
-    let _ = writeln!(out, "{}", tally.hang_line());
-    let _ = writeln!(out, "{}", tally.line(todo.len()));
+    let _ = crate::mutate::progress!(out, "{}", tally.hang_line());
+    let _ = crate::mutate::progress!(out, "{}", tally.line(todo.len()));
     let journal = journal
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if journal.failed > 0 {
-        let _ = writeln!(
+        let _ = crate::mutate::progress!(
             out,
             "mutate schema: {} journal line(s) could not be written to {}, so the next sweep \
              judges them again: {}",
@@ -11138,13 +11137,13 @@ fn report(
             _ => writeln!(out, "{}\t{}", verdict.name(), mutant.name)?,
         }
     }
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: {counts:?}, {unviable} unviable, {classic} classic, in {seconds}s"
     )?;
     let unjudged = counts.get(Verdict::Unjudged.name()).copied().unwrap_or(0);
     if !red.is_empty() || unjudged > 0 {
-        writeln!(
+        crate::mutate::progress!(
             out,
             "mutate schema: {} baseline-red case(s), {unjudged} unjudged mutant(s)",
             red.len()
@@ -11153,7 +11152,7 @@ fn report(
     // A RUN THAT ERRED DECIDED NOTHING: could-not-look (3), above any verdict,
     // so a sweep whose runs failed never reads as a set of survivors.
     if verdicts.iter().any(|(_, v)| matches!(v, Verdict::Error)) {
-        writeln!(
+        crate::mutate::progress!(
             out,
             "mutate schema: run errors kept under {}",
             state.join("errors").display()
@@ -11164,7 +11163,7 @@ fn report(
     // next sweep with room judges it, since nothing was journaled.
     let no_room = counts.get(Verdict::NoRoom.name()).copied().unwrap_or(0);
     if no_room > 0 {
-        writeln!(
+        crate::mutate::progress!(
             out,
             "mutate schema: {no_room} hand-back(s) had no room to build, which decided nothing; \
              the next sweep with room judges them"
@@ -11175,7 +11174,7 @@ fn report(
     // fail or pass, so a sweep holding one is could-not-look, never green.
     let hung = counts.get(Verdict::Timeout.name()).copied().unwrap_or(0);
     if hung > 0 {
-        writeln!(
+        crate::mutate::progress!(
             out,
             "mutate schema: {hung} run(s) timed out, which decided nothing"
         )?;
@@ -11326,7 +11325,7 @@ impl Scope {
 ///
 /// `out` cannot be written.
 fn reach_sealed(out: &mut dyn std::io::Write, reach: &Reach) -> anyhow::Result<Swept> {
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: {PHASE}=reach: built and reached, {} case record(s) sealed for the \
          shards to judge",
@@ -11717,7 +11716,7 @@ fn handback_run(
     out: &mut dyn std::io::Write,
 ) -> std::io::Result<Result<super::Outcome, Verdict>> {
     if let Err(why) = handback_room(handback, tree) {
-        writeln!(
+        crate::mutate::progress!(
             out,
             "mutate schema: {} was not judged in the hand-back mirror {}: {why:#}",
             mutant.name,
@@ -11735,7 +11734,7 @@ fn handback_run(
         Err(why) => {
             let output = state.join("classic-out");
             let kept = keep_handback_error(state, id, &format!("{why:#}\n"), &output);
-            writeln!(
+            crate::mutate::progress!(
                 out,
                 "mutate schema: {} could not be judged in the hand-back mirror {}: {why:#}; \
                  errors kept under {}",
@@ -11804,7 +11803,7 @@ fn say_siblings(
         .filter(|name| !name.is_empty() && name != target)
         .collect();
     for sibling in &siblings {
-        writeln!(
+        crate::mutate::progress!(
             out,
             "mutate schema: {target}'s run also judged {sibling} under its own cases; \
              that outcome is not a verdict, which is its own hand-back's"
@@ -12019,7 +12018,7 @@ fn judge_handbacks(
     // is could-not-look, and the report of everything else is still printed.
     let still = matches!(super::cover::source_digest(live), Ok(digest) if digest == listed_over);
     if !still {
-        writeln!(
+        crate::mutate::progress!(
             out,
             "mutate schema: the checkout's Rust sources changed during the sweep, so each \
              handed-back mutant not already journaled is an error; run the sweep again once \
@@ -12108,7 +12107,7 @@ fn judge_handbacks(
             // hand-back errors left no cause to read.
             if erred(name) {
                 let kept = keep_handback_error(state, id, &format!("{outcome:?}\n"), output);
-                writeln!(
+                crate::mutate::progress!(
                     out,
                     "mutate schema: {} erred in the hand-back mirror; errors kept under {}",
                     mutant.name,
@@ -12126,7 +12125,7 @@ fn judge_handbacks(
             None => unviable += 1,
         }
     }
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: {} handed-back mutant(s) judged in place, {reused} reused",
         classic.len()
@@ -12205,7 +12204,7 @@ fn journal_or_say(
 ) -> std::io::Result<()> {
     match journal(store, line) {
         Ok(()) => Ok(()),
-        Err(why) => writeln!(
+        Err(why) => crate::mutate::progress!(
             out,
             "mutate schema: {} could not be journaled, so the next sweep judges it again: {why:#}",
             line.trim_end()
@@ -12526,7 +12525,7 @@ fn clear_run_state(state: &std::path::Path) {
 }
 
 fn held_elsewhere(state: &std::path::Path, out: &mut dyn std::io::Write) -> anyhow::Result<Swept> {
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: another sweep holds {}; could not look, run again once it ends",
         state.join(LOCK).display()
@@ -12576,7 +12575,7 @@ fn stage_took(
     stage: &str,
     since: std::time::Instant,
 ) -> std::io::Result<std::time::Instant> {
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: stage {stage} took {:.1}s",
         since.elapsed().as_secs_f64()
@@ -12595,7 +12594,7 @@ fn announce_built(
     (mutants, unviable, classic): (usize, usize, usize),
     seconds: u64,
 ) -> anyhow::Result<()> {
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: {mutants} mutant(s), {unviable} unviable, {classic} classic, built in \
          {seconds}s"
@@ -12820,7 +12819,7 @@ fn announce_reuse(
             None => (None, "rebuild-check the clean build's binaries"),
         },
     };
-    writeln!(out, "mutate schema: judging runs {how}")?;
+    crate::mutate::progress!(out, "mutate schema: judging runs {how}")?;
     Ok(reuse)
 }
 
@@ -12850,7 +12849,7 @@ fn build_journaled(
             .filter(|file| cache.contains_key(&unprobe_key(root, file)))
             .collect(),
     };
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: {} unviable, {} handed back and {} unprobed file(s) known from earlier runs",
         known.unviable.len(),
@@ -12863,7 +12862,7 @@ fn build_journaled(
     if let Some(state) = cache_path.parent()
         && let Some(built) = prebuilt(root, work, state, mutants, &known)?
     {
-        writeln!(
+        crate::mutate::progress!(
             out,
             "mutate schema: the rendered tree is the packed build's; not built again"
         )?;
@@ -13159,11 +13158,13 @@ fn reached(
     // THE SELECTION DIGEST IS AN ECONOMY: one that cannot be taken leaves each
     // record to the suite's build key, and never fails the sweep.
     match seal_tested(&base, root, ids.0, format) {
-        Ok(taken) => writeln!(
+        Ok(taken) => crate::mutate::progress!(
             out,
             "mutate schema: selection digest taken for {taken} case(s)"
         )?,
-        Err(why) => writeln!(out, "mutate schema: no selection digest taken: {why:#}")?,
+        Err(why) => {
+            crate::mutate::progress!(out, "mutate schema: no selection digest taken: {why:#}")?
+        }
     }
     stage_took(out, "selection digest", at)?;
     // ONE RED CASE NO LONGER REFUSES THE SWEEP (#1276: four of ~10,500 left
@@ -13199,17 +13200,17 @@ fn reached_said(
     derived: &Derived,
     out: &mut dyn std::io::Write,
 ) -> std::io::Result<()> {
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: reach recorded for {} site(s), {probes} function(s) probed, in {}s",
         reach.sites.len(),
         started.elapsed().as_secs()
     )?;
-    writeln!(out, "{}", untraced_line(&reach.untraced))?;
+    crate::mutate::progress!(out, "{}", untraced_line(&reach.untraced))?;
     // EVERY CASE'S DIGEST IS TAKEN, so every artifact the current build reads
     // has been read or kept by now.
     let (kept, removed) = derived.retain_touched();
-    writeln!(
+    crate::mutate::progress!(
         out,
         "mutate schema: derived store kept {kept} artifact(s), removed {removed}"
     )
