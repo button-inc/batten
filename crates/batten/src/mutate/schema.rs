@@ -11040,6 +11040,16 @@ fn keep_handback_error(
 ) -> std::path::PathBuf {
     let errors = state.join("errors");
     let mut said = why.to_owned();
+    said.push_str(&handback_logs(output));
+    let _ = std::fs::create_dir_all(&errors);
+    let _ = crate::durable::replace(errors.join(format!("handback-{id}.log")), said);
+    errors
+}
+
+/// Every log cargo-mutants wrote under `output`, each headed by its path;
+/// empty where there is none.
+fn handback_logs(output: &std::path::Path) -> String {
+    let mut said = String::new();
     if let Ok(logs) = std::fs::read_dir(output.join("mutants.out").join("log")) {
         for log in logs.flatten() {
             if let Ok(text) = crate::fsio::read_to_string(log.path()) {
@@ -11050,9 +11060,144 @@ fn keep_handback_error(
             }
         }
     }
-    let _ = std::fs::create_dir_all(&errors);
-    let _ = crate::durable::replace(errors.join(format!("handback-{id}.log")), said);
-    errors
+    said
+}
+
+/// The one of `ran` a hand-back's log reports failing: nextest's `FAIL`
+/// status line ([`failed_in`]), or libtest's `test <name> ... FAILED` under
+/// `cargo test`, cargo-mutants' default runner, where the name alone must
+/// name exactly one of `ran`, since libtest's line carries no binary.
+fn handback_killer(log: &str, ran: &BTreeSet<Case>) -> Option<Case> {
+    failed_in(log, ran).or_else(|| {
+        log.lines().find_map(|line| {
+            let name = line.strip_prefix("test ")?.strip_suffix(" ... FAILED")?;
+            let mut named = ran.iter().filter(|(case, _)| case == name);
+            let only = named.next()?;
+            named.next().is_none().then(|| only.clone())
+        })
+    })
+}
+
+/// `text` without its terminal colour sequences (`ESC [ … letter`).
+///
+/// CARGO-MUTANTS LOGS NEXTEST IN COLOUR, and a `FAIL` status line read with
+/// its escapes held them in its first word, so no killer was ever found.
+fn uncoloured(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if chars.next() == Some('[') {
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            plain.push(ch);
+        }
+    }
+    plain
+}
+
+/// Each of a hand-back's `green` cases with its [`pair_key`], where the
+/// pair can be its unit: the cases are the ones that observe it
+/// (`observed`), and no red case sits among them (`clean`). Empty otherwise,
+/// and the hand-back is keyed as a whole, as before.
+///
+/// THE PAIR IS A HAND-BACK'S UNIT TOO (CLOUD-2253, C8): keyed by every case
+/// that reaches it, a hand-back built again, about 125 s, whenever any one
+/// of them moved, where [`judge`] re-runs only the cases an edit can change.
+fn handback_pairs(
+    judging: &Judging<'_>,
+    mutant: &Listed,
+    green: &BTreeSet<Case>,
+    (observed, clean): (bool, bool),
+) -> std::collections::BTreeMap<Case, String> {
+    if !observed || !clean {
+        return std::collections::BTreeMap::new();
+    }
+    green
+        .iter()
+        .filter_map(|case| {
+            Some((
+                case.clone(),
+                pair_key(judging.root, mutant, case, judging.digests)?,
+            ))
+        })
+        .collect()
+}
+
+/// What a hand-back's journal already holds: the verdict stored under its
+/// whole `key` where it holds (`clean`, no red case among its cases), or else
+/// the one its `pairs` decide ([`pair_decided`]); with neither, the cases a
+/// run need hold, where its pairs left some open.
+fn handback_known(
+    judging: &Judging<'_>,
+    key: Option<&String>,
+    clean: bool,
+    pairs: &std::collections::BTreeMap<Case, String>,
+) -> (Option<String>, Option<BTreeSet<Case>>) {
+    let whole = key
+        .filter(|_| clean)
+        .and_then(|key| judging.cache.get(key))
+        .filter(|verdict| reusable(verdict))
+        .cloned();
+    match (whole, pair_decided(judging, pairs)) {
+        (Some(verdict), _) => (Some(verdict), None),
+        (None, Ok(name)) => (Some(name.to_owned()), None),
+        (None, Err(open)) => (None, (!pairs.is_empty()).then_some(open)),
+    }
+}
+
+/// What the pair journal decides of a hand-back before any build, as
+/// [`judge`] reads it: `caught` where a case's kill is journaled under its
+/// pair, `missed` where every case is journaled passing it; otherwise the
+/// cases still open, the only ones a run need hold.
+fn pair_decided(
+    judging: &Judging<'_>,
+    pairs: &std::collections::BTreeMap<Case, String>,
+) -> Result<&'static str, BTreeSet<Case>> {
+    let recorded = |key: &String| judging.cache.get(key).map(String::as_str);
+    if pairs.values().any(|key| recorded(key) == Some("caught")) {
+        return Ok("caught");
+    }
+    let open: BTreeSet<Case> = pairs
+        .iter()
+        .filter(|(_, key)| recorded(key) != Some(PASSED))
+        .map(|(case, _)| case.clone())
+        .collect();
+    if open.is_empty() && !pairs.is_empty() {
+        Ok("missed")
+    } else {
+        Err(open)
+    }
+}
+
+/// The pair lines a hand-back's run over `ran` earns, by its verdict `name`:
+/// every case it ran passed a `missed` one, and a `caught` one's killer is
+/// the case its log reports `FAIL` ([`failed_in`]). Nothing else is a pair's
+/// outcome: a timeout or an error decided nothing about any one case.
+fn pair_lines(
+    pairs: &std::collections::BTreeMap<Case, String>,
+    ran: &BTreeSet<Case>,
+    (name, mutant): (&str, &str),
+    output: &std::path::Path,
+) -> String {
+    let line = |case: &Case, verdict: &str| {
+        pairs
+            .get(case)
+            .map(|key| journal_line(Some(key), verdict, mutant))
+            .unwrap_or_default()
+    };
+    match name {
+        "missed" => ran.iter().map(|case| line(case, PASSED)).collect(),
+        "caught" => handback_killer(&uncoloured(&handback_logs(output)), ran)
+            .map(|case| line(&case, "caught"))
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 
 /// Sync the mirror at `tree` to `live`, then `run` in it.
@@ -11131,15 +11276,19 @@ fn judge_handbacks(
         let (green, red) = split_red(&cases, judging.red);
         let key = verdict_key(judging.root, mutant, &green, judging.digests);
         let green_observing = observing.as_ref().map(|_| green.clone());
-        let stored = key
-            .as_ref()
-            .filter(|_| red.is_none())
-            .and_then(|key| judging.cache.get(key))
-            .filter(|verdict| reusable(verdict));
+        let pairs = handback_pairs(
+            judging,
+            mutant,
+            &green,
+            (observing.is_some(), red.is_none()),
+        );
+        let (stored, open) = handback_known(judging, key.as_ref(), red.is_none(), &pairs);
         let verdict = if let Some(stored) = stored {
             reused += 1;
-            stored.clone()
+            stored
         } else {
+            // ONLY THE CASES NO PAIR DECIDED ARE RUN ([`pair_decided`]).
+            let green_observing = open.or(green_observing);
             if !still {
                 verdicts.push((id, Verdict::Error));
                 continue;
@@ -11199,11 +11348,10 @@ fn judge_handbacks(
                     kept.display()
                 )?;
             }
-            journal_or_say(
-                judging.store,
-                &journal_line(key.as_deref(), name, &mutant.name),
-                out,
-            )?;
+            let mut lines = journal_line(key.as_deref(), name, &mutant.name);
+            let run_over = green_observing.as_ref().unwrap_or(ran);
+            lines.push_str(&pair_lines(&pairs, run_over, (name, &mutant.name), output));
+            journal_or_say(judging.store, &lines, out)?;
             name.to_owned()
         };
         match handback_tally(&verdict) {
@@ -13066,6 +13214,30 @@ mod tests {
             .expect("one item");
         assert!(matches!(item, ast::Item::MacroCall(_)), "{item:?}");
         assert!(ast::AnyHasName::cast(item.syntax().clone()).is_none());
+    }
+
+    /// A hand-back's killer is read off cargo-mutants' log, coloured nextest
+    /// or plain libtest (CLOUD-2253, C8). Fails by: the escapes kept, so
+    /// `FAIL`'s line opens with them; a `cargo test` log not read; or an
+    /// ambiguous libtest name journaled as one case's kill.
+    #[test]
+    fn a_hand_backs_killer_is_read_off_its_coloured_or_libtest_log() {
+        let log = "\u{1b}[31;1m        FAIL\u{1b}[0m [   0.003s] \u{1b}[35;1mfix\u{1b}[0m \
+                   \u{1b}[36mtests::\u{1b}[0m\u{1b}[34;1mpins\u{1b}[0m\n";
+        let cases: BTreeSet<Case> = [(String::from("tests::pins"), String::from("fix"))].into();
+        assert_eq!(failed_in(log, &cases), None, "the escapes hide it");
+        assert_eq!(
+            handback_killer(&uncoloured(log), &cases),
+            cases.first().cloned(),
+            "{:?}",
+            uncoloured(log)
+        );
+        // `cargo test`'s line names the case alone, so it must name one.
+        let libtest = "test tests::pins ... FAILED\ntest tests::runs ... ok\n";
+        assert_eq!(handback_killer(libtest, &cases), cases.first().cloned());
+        let mut twice = cases.clone();
+        twice.insert((String::from("tests::pins"), String::from("fix::it")));
+        assert_eq!(handback_killer(libtest, &twice), None, "an ambiguous name");
     }
 
     /// THE NAMED-PART MEMO HOLDS NO CASE'S NAMES (the `mutate cargo` OOM: 13.6

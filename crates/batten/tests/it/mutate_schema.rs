@@ -925,3 +925,67 @@ fn a_cargo_run_over_a_tree_seen_passing_whole_is_not_run_again() {
     );
     assert_eq!(code, Some(2), "and its survivor found\n{said}");
 }
+
+/// A library whose `two` only a const calls, so every mutant of it is handed
+/// back ([`seeded_with`]): `pins` kills each, `runs` reaches each and pins
+/// nothing. `RUNS` is `runs`' body, which a case edits to move its digest.
+fn handed_back_lib(runs: &str) -> String {
+    format!(
+        "pub const fn two() -> u8 {{\n    2\n}}\npub const TWO: u8 = two();\n\
+         #[cfg(test)]\nmod tests {{\n    #[test]\n    fn pins() {{\n        \
+         assert_eq!(super::TWO + super::two(), 4);\n    }}\n    #[test]\n    fn runs() {{\n        \
+         {runs}\n    }}\n}}\n"
+    )
+}
+
+/// A HAND-BACK IS JOURNALED BY ITS PAIRS (CLOUD-2253, C8), as a switched
+/// mutant is: once `pins` killed it, an edit to `runs`, another case
+/// observing it, decides it from that journaled kill with no mirror build,
+/// where its key over every observing case moved and it built again.
+///
+/// Fails by: hand-backs keyed only on the whole observing set, so the second
+/// run judges each again ("0 reused"); or a pair kill journaled for a case
+/// that did not fail, which the first run's verdicts would contradict.
+#[test]
+fn a_hand_back_is_decided_by_its_journaled_pairs() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let _ = common::scratch_state_root();
+    let repo = seeded_with("mutate-handback-pairs", "pub fn one() -> u8 {\n    1\n}\n");
+    common::write(
+        &repo,
+        "batten.toml",
+        &format!("version = 1\n{}", crate::step_journal::MUTANTS_PROVISION),
+    );
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-qm", "provision"]);
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let base = base.trim();
+    common::write(
+        &repo,
+        "src/lib.rs",
+        &handed_back_lib("let _ = super::two();"),
+    );
+    common::git_in(&repo, &["commit", "-qam", "two"]);
+    let (code, said) = cargo_sweep(&repo, base);
+    assert_eq!(code, Some(0), "`pins` kills every hand-back\n{said}");
+    let judged = said
+        .lines()
+        .find(|line| line.contains("handed-back mutant(s) judged in place"))
+        .unwrap_or_else(|| panic!("hand-backs judged\n{said}"))
+        .to_owned();
+    assert!(judged.ends_with(", 0 reused"), "{judged}\n{said}");
+    let count = judged
+        .split_whitespace()
+        .nth(2)
+        .expect("a count")
+        .to_owned();
+    common::write(
+        &repo,
+        "src/lib.rs",
+        &handed_back_lib("let two = super::two();\n        let _ = two;"),
+    );
+    let (code, said) = cargo_sweep(&repo, base);
+    assert_eq!(code, Some(0), "{said}");
+    let reused = format!("{count} handed-back mutant(s) judged in place, {count} reused");
+    assert!(said.contains(&reused), "{reused:?} in\n{said}");
+}
