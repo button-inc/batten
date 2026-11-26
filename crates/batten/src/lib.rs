@@ -33973,6 +33973,37 @@ mod mutation_markers;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    /// Fails by: the wait's reading said nowhere (`say_what_the_wait_saw`
+    /// answering `Ok(())` unwritten, a mutant uncovered at 34c6e4d1f,
+    /// CLOUD-2789): a moved base reads on stdout, a closed pull request on
+    /// stderr, each naming the head it waited on.
+    #[test]
+    fn the_waits_reading_is_said_in_its_own_channel() {
+        let said = |waited: &super::land::Waited| {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            super::say_what_the_wait_saw(waited, &[], "abc1234", "main", &mut out, &mut err)
+                .unwrap();
+            (
+                String::from_utf8(out).unwrap(),
+                String::from_utf8(err).unwrap(),
+            )
+        };
+        let (out, err) = said(&super::land::Waited::Stale {
+            base: String::from("def5678"),
+        });
+        assert_eq!(
+            out,
+            "land: main moved to def5678 under abc1234; this lap's run is already waste\n"
+        );
+        assert!(err.is_empty(), "{err}");
+        let (out, err) = said(&super::land::Waited::Closed);
+        assert!(out.is_empty(), "{out}");
+        assert!(
+            err.contains("the pull request for abc1234 was closed or merged"),
+            "{err}"
+        );
+    }
+
     /// Fails by: a wait whose collection freed bytes itself, or found more
     /// space free than before it, read as buying nothing (so the step refuses
     /// beside space still coming free), or one that bought neither read as a
