@@ -663,7 +663,15 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 step,
                 args,
                 command,
-            } => run_step_watched(&step, &args, &command, err),
+            } => {
+                let ran = run_step_watched(&step, &args, &command, err);
+                // AT THE LATEST WHEN THE STEP ENDS (CLOUD-1544): what the step
+                // recorded leaves this container now, not when the lap does.
+                if !crate::step::under_ci() {
+                    carry_quietly(true, err);
+                }
+                ran
+            }
             cli::StepCommand::Graph { groups, jobs } => {
                 crate::step::run_graph(&groups, jobs.as_deref(), err)
             }
@@ -7031,15 +7039,44 @@ fn run_receipt(
 /// spelling, is `state-repo-is-origin`, exit `1`, before a call is made: the
 /// privacy rule's one escape, closed. A publish with no accountable producer
 /// identity (`[attribution]`, row §5) is refused, exit `1`, before a call is
-/// made. Otherwise one pointer line — the ref, the commit
-/// it reads, and how many receipts moved — and never a receipt body. A remote
-/// that cannot be reached is an error, exit `3`; never `2`, because a publish
-/// that fails is not a gate's verdict.
+/// made. Otherwise one pointer line per ref — the receipt set's, then the
+/// mutate carry's: the ref, the commit it reads, and how many entries moved —
+/// and never a body. A remote that cannot be reached is an error, exit `3`;
+/// never `2`, because a publish that fails is not a gate's verdict.
 fn run_receipt_transfer(
     publish: bool,
     overrides: &Overrides,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
+    match carry(publish, overrides)? {
+        Carried::Off => writeln!(out, "off")?,
+        Carried::Refused(word) => {
+            writeln!(out, "{word}")?;
+            return Ok(ExitCode::Usage);
+        }
+        Carried::Moved(moved) => {
+            for one in moved {
+                writeln!(out, "{} {} {}", one.reference, one.commit, one.count)?;
+            }
+        }
+    }
+    Ok(ExitCode::Success)
+}
+
+/// What one carry did (CLOUD-1544).
+enum Carried {
+    /// [`session::STATE_REPO_ENV`] is unset: nothing was derived or called.
+    Off,
+    /// The state repository is misconfigured; the word says how.
+    Refused(&'static str),
+    /// Each ref's pointer: the receipt set's, then the mutate carry's.
+    Moved(Vec<land::receipts::Moved>),
+}
+
+/// Publish (`publish`) or pull this branch's receipt set and mutate state
+/// through the state repository: the one implementation the verbs, the land
+/// lap and `step run` share, so none of them can carry a different set.
+fn carry(publish: bool, overrides: &Overrides) -> Result<Carried> {
     let here = Path::new(".");
     let value = std::env::var(session::STATE_REPO_ENV).ok();
     let origin = git::remotes(here)
@@ -7047,18 +7084,9 @@ fn run_receipt_transfer(
         .into_iter()
         .find_map(|(name, url)| (name == "origin").then_some(url));
     let remote = match land::receipts::state_remote(value.as_deref(), origin.as_deref()) {
-        land::receipts::Remote::Off => {
-            writeln!(out, "off")?;
-            return Ok(ExitCode::Success);
-        }
-        land::receipts::Remote::NoHttpOrigin => {
-            writeln!(out, "no-http-origin")?;
-            return Ok(ExitCode::Usage);
-        }
-        land::receipts::Remote::IsOrigin => {
-            writeln!(out, "state-repo-is-origin")?;
-            return Ok(ExitCode::Usage);
-        }
+        land::receipts::Remote::Off => return Ok(Carried::Off),
+        land::receipts::Remote::NoHttpOrigin => return Ok(Carried::Refused("no-http-origin")),
+        land::receipts::Remote::IsOrigin => return Ok(Carried::Refused("state-repo-is-origin")),
         land::receipts::Remote::At(remote) => remote,
     };
     let repo_root = git::repo_root(here)?;
@@ -7069,37 +7097,58 @@ fn run_receipt_transfer(
         ));
     };
     let name = land::receipts::reference(&branch)?;
-    let receipts_dir = state::repo_state_dir(&repo_root)?.join("receipts");
-    let compat_dir = git_dir.join("batten-receipts");
+    let mutate_name = land::receipts::mutate_reference(&branch)?;
+    let stores = land::receipts::Stores::at(&state::repo_state_dir(&repo_root)?, &git_dir);
     let moved = if publish {
         let producer =
             attribution::producer(here, &attribution_policy(overrides)?)?.unwrap_or_default();
-        let local = land::receipts::produced_by(
-            &land::receipts::local_set(&receipts_dir, &compat_dir, &branch),
-            &producer,
-        )?;
-        land::receipts::publish(
-            &remote,
-            &git_dir,
-            &name,
-            &branch,
-            &local,
-            i64::try_from(now_unix()).unwrap_or(i64::MAX),
-        )?
+        let seconds = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+        let local =
+            land::receipts::produced_by(&land::receipts::local_set(&stores, &branch), &producer)?;
+        vec![
+            land::receipts::publish(&remote, &git_dir, &name, &branch, &local, seconds)?,
+            land::receipts::publish_mutate(
+                &remote,
+                &git_dir,
+                &mutate_name,
+                &stores.mutate,
+                &producer,
+                seconds,
+            )?,
+        ]
     } else {
         let head = git::head_commit(here)?;
-        land::receipts::pull(
-            &remote,
-            &git_dir,
-            &name,
-            &branch,
-            &receipts_dir,
-            &compat_dir,
-            &head,
-        )?
+        vec![
+            land::receipts::pull(&remote, &git_dir, &name, &branch, &stores, &head)?,
+            land::receipts::pull_mutate(&remote, &git_dir, &mutate_name, &stores.mutate)?,
+        ]
     };
-    writeln!(out, "{} {} {}", moved.reference, moved.commit, moved.count)?;
-    Ok(ExitCode::Success)
+    Ok(Carried::Moved(moved))
+}
+
+/// A carry a lifecycle step makes on its own account (CLOUD-1544): the land
+/// lap's pull before it gates and publish after, and `step run`'s publish when
+/// a step ends. It never changes the step's verdict — a carry that fails costs
+/// the next session a re-run, not this one a gate — so it says one line on
+/// `err` and returns. Silent where the feature is off.
+fn carry_quietly(publish: bool, err: &mut dyn Write) {
+    let verb = if publish { "publish" } else { "pull" };
+    let line = match carry(publish, &Overrides::default()) {
+        Ok(Carried::Off) => return,
+        Ok(Carried::Refused(word)) => format!("receipt {verb}: {word}"),
+        Ok(Carried::Moved(moved)) => moved
+            .iter()
+            .map(|one| {
+                format!(
+                    "receipt {verb}: {} {} {}",
+                    one.reference, one.commit, one.count
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(error) => format!("receipt {verb}: could not carry: {error:#}"),
+    };
+    let _ = writeln!(err, "{line}");
 }
 
 /// The task registry's reader (CLOUD-425), ported off `mise-tasks/alive.sh`.
@@ -13285,6 +13334,11 @@ fn run_land_lap(
         )?;
         return Ok(ExitCode::Violation);
     }
+    // BEFORE ANY GATE ASKS (CLOUD-1544): what a sibling container of this
+    // branch already proved — its step receipts, its claim, its verdict
+    // journal and reach record — is here before the claim gate and before
+    // verify, so neither re-asks what is already answered.
+    carry_quietly(false, err);
     if let Some(code) = run_land_entry_gates(root, branch, out, err)? {
         return Ok(code);
     }
@@ -13355,6 +13409,9 @@ fn run_land_lap(
         for line in &lines {
             writeln!(err, "land: {line}")?;
         }
+        // AND AFTER THE LAST: the receipts the lap's own verbs wrote outside a
+        // step (`receipt record verify`, the claim) leave with it.
+        carry_quietly(true, err);
         ended
     })
 }

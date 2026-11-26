@@ -77,6 +77,10 @@ const STATEMENT: &str = "statement";
 const COMPAT: &str = "compat";
 /// Spent override records, by name.
 const OVERRIDE: &str = "override";
+/// Step receipts from `$GIT_DIR/batten-records/step-receipts/<group>/<key>`,
+/// as `<group>.<key>`: both halves digests, so the name is a content key
+/// (CLOUD-2784's layout; CLOUD-2789's manual carry moved exactly these).
+const STEP: &str = "step";
 /// The producer of every other entry, as `<kind>.<name>` holding one
 /// `Name <email>` line (row §5): the accountable identity from `[attribution]`
 /// that published it, so a consumer policy can narrow which producers it
@@ -284,6 +288,33 @@ fn carried_compat(name: &str, claim: &str) -> bool {
         .is_some_and(|(check, sha)| !check.is_empty() && is_hex(sha, 40))
 }
 
+/// The step-receipt group `batten-check` files under, which never travels: its
+/// key is input files and its verdict depends on remote state (CLOUD-725).
+fn batten_check_group() -> String {
+    crate::tools::digest(b"batten-check")
+}
+
+/// Whether `<group>.<key>` names a carried step receipt.
+fn carried_step(name: &str) -> bool {
+    name.split_once('.').is_some_and(|(group, key)| {
+        is_hex(group, 32) && is_hex(key, 32) && group != batten_check_group()
+    })
+}
+
+/// The directories of `dir`, by name; an absent directory is an empty set.
+fn dirs(dir: &Path) -> Vec<(String, std::path::PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<_> = entries
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| Some((entry.file_name().into_string().ok()?, entry.path())))
+        .collect();
+    found.sort();
+    found
+}
+
 /// The name a statement is published under: `<fingerprint>.<subject>.json`,
 /// both halves content keys, so two receipts for one check at two heads are two
 /// blobs and a union keeps both.
@@ -315,19 +346,47 @@ fn files(dir: &Path) -> Vec<(String, std::path::PathBuf)> {
     found
 }
 
+/// Where one checkout keeps what is carried: every path [`local_set`],
+/// [`pull`] and the mutate carry read or write, resolved once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stores {
+    /// The canonical statement store, `<state>/receipts`.
+    pub receipts: std::path::PathBuf,
+    /// `$GIT_DIR/batten-receipts`: step-era compatibility files and claims.
+    pub compat: std::path::PathBuf,
+    /// `$GIT_DIR/batten-records/step-receipts`: the grouped step receipts.
+    pub steps: std::path::PathBuf,
+    /// The schema mirror's state, `<state>/mutate/schema`: the verdict journal
+    /// and the reach record.
+    pub mutate: std::path::PathBuf,
+}
+
+impl Stores {
+    /// The stores of the checkout at `repo_root` with git dir `git_dir`, under
+    /// the state directory `state` resolves for it.
+    #[must_use]
+    pub fn at(state: &Path, git_dir: &Path) -> Self {
+        Self {
+            receipts: state.join("receipts"),
+            compat: git_dir.join("batten-receipts"),
+            steps: git_dir
+                .join(crate::record::KEYED_STORE)
+                .join(crate::step::RECEIPTS),
+            mutate: state.join("mutate").join("schema"),
+        }
+    }
+}
+
 /// The receipt set this checkout holds, as `<kind>/<name>` to bytes.
 ///
-/// `receipts_dir` is the canonical store (`<state>/receipts`) and `compat_dir`
-/// is `$GIT_DIR/batten-receipts`; `branch` is the branch the set is published
-/// for, whose claim alone travels. A file that cannot be read or parsed is left
-/// out rather than refused: one unreadable receipt must not stop the rest
-/// travelling, and it would read `Missing` wherever it landed.
+/// `branch` is the branch the set is published for, whose claim alone travels.
+/// A file that cannot be read or parsed is left out rather than refused: one
+/// unreadable receipt must not stop the rest travelling, and it would read
+/// `Missing` wherever it landed.
 #[must_use]
-pub fn local_set(
-    receipts_dir: &Path,
-    compat_dir: &Path,
-    branch: &str,
-) -> BTreeMap<String, Vec<u8>> {
+pub fn local_set(stores: &Stores, branch: &str) -> BTreeMap<String, Vec<u8>> {
+    let receipts_dir = stores.receipts.as_path();
+    let compat_dir = stores.compat.as_path();
     let claim = claim_of(branch);
     let mut set = BTreeMap::new();
     for (name, path) in files(receipts_dir) {
@@ -362,6 +421,16 @@ pub fn local_set(
             && let Ok(bytes) = std::fs::read(&path)
         {
             set.insert(format!("{COMPAT}/{name}"), bytes);
+        }
+    }
+    for (group, dir) in dirs(&stores.steps) {
+        for (key, path) in files(&dir) {
+            let name = format!("{group}.{key}");
+            if carried_step(&name)
+                && let Ok(bytes) = std::fs::read(&path)
+            {
+                set.insert(format!("{STEP}/{name}"), bytes);
+            }
         }
     }
     set
@@ -443,6 +512,7 @@ fn admissible(path: &str, bytes: &[u8], claim: &str) -> bool {
         }
         OVERRIDE => plain(name) && spent(bytes),
         COMPAT => carried_compat(name, claim),
+        STEP => carried_step(name),
         PRODUCER => {
             plain(name)
                 && producer_line(bytes)
@@ -464,6 +534,7 @@ fn admissible_name(kind: &str, name: &str, claim: &str) -> bool {
             .is_some_and(|(fingerprint, subject)| is_hex(fingerprint, 64) && is_hex(subject, 40)),
         OVERRIDE => plain(name),
         COMPAT => carried_compat(name, claim),
+        STEP => carried_step(name),
         _ => false,
     }
 }
@@ -577,6 +648,24 @@ struct Held {
     root: String,
     /// The set, filtered by [`admissible`].
     set: BTreeMap<String, Vec<u8>>,
+    /// Every object id the ref's commit reaches — what the remote already
+    /// holds, so a publish sends only what is new. A carried reach record is
+    /// tens of megabytes, and re-sending it on every step end would make the
+    /// publish cost what the record saves.
+    known: std::collections::BTreeSet<String>,
+}
+
+/// The local ref a fetched set is kept under, so its objects stay in this
+/// clone's odb and the next fetch names it as a `have`: the remote then sends
+/// only what changed since, and a ref that has not moved costs no fetch at all
+/// (`lease::fetch` answers from the odb). `refs/batten/carried/...`, outside
+/// `refs/heads` and `refs/remotes`, so no branch listing and no tracking-ref
+/// prune ever reads it.
+fn cache_ref(name: &str) -> String {
+    format!(
+        "refs/batten/carried/{}",
+        name.strip_prefix("refs/heads/").unwrap_or(name)
+    )
 }
 
 /// An object's body, from the fetched pack or, where the odb already had it,
@@ -630,15 +719,34 @@ fn entries(body: &[u8]) -> Result<Vec<(String, String, bool)>> {
 /// Read what `remote` holds at `name`, fetching into `repo`'s transport, with
 /// `claim` the one claim receipt the ref may carry.
 fn held(remote: &str, repo: &Path, name: &str, claim: &str) -> Result<Held> {
+    held_by(remote, repo, name, |path, bytes| {
+        admissible(path, bytes, claim)
+    })
+}
+
+/// Read what `remote` holds at `name`, keeping the entries `keep` admits.
+fn held_by(
+    remote: &str,
+    repo: &Path,
+    name: &str,
+    keep: impl Fn(&str, &[u8]) -> bool,
+) -> Result<Held> {
     let advertised = lease::advertise(remote, Service::UploadPack)?;
     if advertised.head_of(name) == ZERO {
         return Ok(Held {
             head: ZERO.to_owned(),
             root: String::new(),
             set: BTreeMap::new(),
+            known: std::collections::BTreeSet::new(),
         });
     }
     let fetched = lease::fetch(remote, repo, name)?;
+    // KEPT, so the next exchange is a delta (see [`cache_ref`]). Best effort:
+    // a clone that will not take the objects still reads them from the answer.
+    if !fetched.objects.is_empty() && crate::gitwrite::write_objects(repo, &fetched.objects).is_ok()
+    {
+        let _ = crate::gitwrite::set_ref(repo, &cache_ref(name), &fetched.head);
+    }
     let objects: BTreeMap<String, Object> = fetched
         .objects
         .into_iter()
@@ -650,19 +758,22 @@ fn held(remote: &str, repo: &Path, name: &str, claim: &str) -> Result<Held> {
         .tree()
         .to_string();
     let mut set = BTreeMap::new();
+    let mut known = std::collections::BTreeSet::from([fetched.head.clone(), root.clone()]);
     for (kind, id, is_tree) in entries(&body_of(&objects, repo, &root, gix::object::Kind::Tree)?)? {
         if !is_tree {
             continue;
         }
+        known.insert(id.clone());
         for (name, blob, nested) in
             entries(&body_of(&objects, repo, &id, gix::object::Kind::Tree)?)?
         {
             if nested {
                 continue;
             }
+            known.insert(blob.clone());
             let path = format!("{kind}/{name}");
             let bytes = body_of(&objects, repo, &blob, gix::object::Kind::Blob)?;
-            if admissible(&path, &bytes, claim) {
+            if keep(&path, &bytes) {
                 set.insert(path, bytes);
             }
         }
@@ -671,6 +782,7 @@ fn held(remote: &str, repo: &Path, name: &str, claim: &str) -> Result<Held> {
         head: fetched.head,
         root,
         set: paired(set),
+        known,
     })
 }
 
@@ -688,8 +800,8 @@ pub struct Moved {
 
 /// Publish `local` to `name` on `remote`, unioned with what is already there.
 ///
-/// `repo` is the checkout whose odb the fetch negotiates from; nothing is
-/// written into it. `branch` is the branch `name` keys, whose claim alone the
+/// `repo` is the checkout whose odb the fetch negotiates from; what the ref
+/// reads is kept in it under [`cache_ref`], so the next exchange is a delta. `branch` is the branch `name` keys, whose claim alone the
 /// ref may carry: what the ref holds is read through that filter, so a claim an
 /// older engine published for another branch is PRUNED here rather than
 /// carried. `local` is [`produced_by`]'s set: a receipt without its producer
@@ -710,23 +822,101 @@ pub fn publish(
     seconds: i64,
 ) -> Result<Moved> {
     let claim = claim_of(branch);
+    publish_with(
+        remote,
+        repo,
+        name,
+        || held(remote, repo, name, &claim),
+        (
+            |_: &BTreeMap<String, Vec<u8>>| Ok(local.clone()),
+            |_: &mut BTreeMap<String, Vec<u8>>| {},
+        ),
+        seconds,
+    )
+}
+
+/// Publish this checkout's mutate state — the journal lines and the sealed
+/// reach record the ref lacks — to `name` on `remote`, bounded by
+/// [`mutate_prune`]. `mutate` is the schema state directory; `producer` is the
+/// accountable identity every added entry carries.
+///
+/// # Errors
+///
+/// As [`publish`].
+pub fn publish_mutate(
+    remote: &str,
+    repo: &Path,
+    name: &str,
+    mutate: &Path,
+    producer: &str,
+    seconds: i64,
+) -> Result<Moved> {
+    publish_with(
+        remote,
+        repo,
+        name,
+        || held_mutate(remote, repo, name),
+        (
+            |theirs: &BTreeMap<String, Vec<u8>>| {
+                mutate_additions(mutate, theirs, producer, seconds)
+            },
+            |union: &mut BTreeMap<String, Vec<u8>>| mutate_prune(union, producer),
+        ),
+        seconds,
+    )
+}
+
+/// A publish: what is added computed against what the ref already holds
+/// (`read`), and the union shaped by `prune` before it is minted.
+///
+/// `additions` sees the remote's set and answers the entries this checkout adds
+/// (producer entries included). It is asked again after a lost swap, so an
+/// addition computed as "what the remote lacks" stays right when a rival moved
+/// the ref. `prune` may drop entries from the union — compaction and a bound —
+/// and is the only way anything leaves a ref: a rival's entry that lands between
+/// the fetch and the swap makes the swap lose, and the retry re-unions it, so a
+/// concurrent publisher's entry is never pruned unseen.
+///
+/// Only objects the ref does not already reach are sent.
+///
+/// # Errors
+///
+/// As [`publish`], or an `additions` that fails.
+fn publish_with(
+    remote: &str,
+    repo: &Path,
+    name: &str,
+    read: impl Fn() -> Result<Held>,
+    (additions, prune): (
+        impl Fn(&BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, Vec<u8>>>,
+        impl Fn(&mut BTreeMap<String, Vec<u8>>),
+    ),
+    seconds: i64,
+) -> Result<Moved> {
     for _ in 0..CAS_TRIES {
-        let theirs = held(remote, repo, name, &claim)?;
+        let theirs = read()?;
+        let local = additions(&theirs.set)?;
         let mut union = theirs.set;
         // Local wins a name both hold: every name is content-keyed but a
         // claim's and a compatibility receipt's, and for those this checkout's
         // reading is the newer one.
-        union.extend(
-            local
-                .iter()
-                .map(|(path, bytes)| (path.clone(), bytes.clone())),
-        );
+        union.extend(local);
+        prune(&mut union);
         let union = paired(union);
         let count = union
             .keys()
             .filter(|path| !path.starts_with("producer/"))
             .count();
-        let mut objects = tree_objects(&union)?;
+        // NOTHING TO CARRY MINTS NO REF: an empty tree under a new ref says
+        // nothing a reader could use, and would answer every pull with a fetch.
+        if union.is_empty() && theirs.head == ZERO {
+            return Ok(Moved {
+                reference: name.to_owned(),
+                commit: ZERO.to_owned(),
+                count: 0,
+            });
+        }
+        let objects = tree_objects(&union)?;
         let root = objects
             .last()
             .cloned()
@@ -740,6 +930,10 @@ pub fn publish(
         }
         let commit = commit_over(&root, count, &theirs.head, seconds)?;
         let new = commit.id.clone();
+        let mut objects: Vec<Object> = objects
+            .into_iter()
+            .filter(|object| !theirs.known.contains(&object.id))
+            .collect();
         objects.push(commit);
         let pack = lease::pack_of(&objects)?;
         let update = Update {
@@ -749,6 +943,11 @@ pub fn publish(
         };
         match lease::swap(remote, &update, &pack)? {
             Outcome::Applied => {
+                // The pushed set is this clone's newest reading: kept, so the
+                // next fetch is answered from the odb.
+                if crate::gitwrite::write_objects(repo, &objects).is_ok() {
+                    let _ = crate::gitwrite::set_ref(repo, &cache_ref(name), &new);
+                }
                 return Ok(Moved {
                     reference: name.to_owned(),
                     commit: new,
@@ -771,12 +970,8 @@ pub fn publish(
 /// file is this checkout's own reading and a pulled one never displaces it —
 /// except an ISSUED override a pulled SPENT one supersedes, which is the
 /// direction that can only refuse a re-spend.
-fn destination(
-    path: &str,
-    receipts_dir: &Path,
-    compat_dir: &Path,
-    head: &str,
-) -> Option<std::path::PathBuf> {
+fn destination(path: &str, stores: &Stores, head: &str) -> Option<std::path::PathBuf> {
+    let (receipts_dir, compat_dir) = (stores.receipts.as_path(), stores.compat.as_path());
     let (kind, name) = path.split_once('/')?;
     match kind {
         STATEMENT => {
@@ -796,6 +991,12 @@ fn destination(
             let local = std::fs::read(&target).ok();
             local.is_none_or(|bytes| !spent(&bytes)).then_some(target)
         }
+        // A step receipt is content-keyed: one already here is the same fact.
+        STEP => {
+            let (group, key) = name.split_once('.')?;
+            let target = stores.steps.join(group).join(key);
+            (!target.exists()).then_some(target)
+        }
         _ => None,
     }
 }
@@ -813,14 +1014,13 @@ pub fn pull(
     repo: &Path,
     name: &str,
     branch: &str,
-    receipts_dir: &Path,
-    compat_dir: &Path,
+    stores: &Stores,
     head: &str,
 ) -> Result<Moved> {
     let theirs = held(remote, repo, name, &claim_of(branch))?;
     let mut count = 0;
     for (path, bytes) in &theirs.set {
-        let Some(target) = destination(path, receipts_dir, compat_dir, head) else {
+        let Some(target) = destination(path, stores, head) else {
             continue;
         };
         if let Some(parent) = target.parent() {
@@ -828,6 +1028,395 @@ pub fn pull(
         }
         crate::durable::replace(&target, bytes)?;
         count += 1;
+    }
+    Ok(Moved {
+        reference: name.to_owned(),
+        commit: theirs.head,
+        count,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// THE MUTATE CARRY (CLOUD-1544 for #1276): the schema sweep's verdict journal
+// and its sealed reach record, on a ref of their own.
+//
+// A REF OF THEIR OWN, `refs/heads/batten/mutate/<branch>`, because of size: the
+// receipt set is kilobytes and is published at every step end, while #1276's
+// journal held 281,351 lines and its reach record 92,506 files (815 MB). On one
+// ref, every step's publish would fetch the whole record.
+//
+// THE JOURNAL TRAVELS AS CHUNKS, each named by the digest of its bytes and
+// holding the lines the ref did not yet hold when it was minted. Two sessions
+// each add a chunk; a lost swap re-reads and re-chunks; the union of chunks is
+// the union of lines, so concurrent publishers lose nothing. Past
+// [`KEPT_CHUNKS`] the union is compacted into one chunk, which is safe for the
+// same reason: a chunk a rival adds between the fetch and the swap loses this
+// swap, and the retry compacts it too.
+//
+// THE REACH RECORD TRAVELS SEALED OR NOT AT ALL: one gzipped tar of the
+// record's directory, cut into parts under [`PART_BYTES`] (a forge refuses a
+// blob over 100 MB), named `<sealed-digest>.<archive-digest>.<i>-of-<n>`, with
+// `<sealed-digest>.<archive-digest>.at` holding the second it was sealed. Two
+// producers sealing one tree mint two archives under two names, so their parts
+// never mix. The newest [`KEPT_REACH`] archives stay.
+// ---------------------------------------------------------------------------
+
+/// The ref namespace a branch's mutate state lives under.
+pub const MUTATE_PREFIX: &str = "refs/heads/batten/mutate/";
+/// Verdict-journal chunks, `<digest>.tsv`.
+const VERDICTS: &str = "verdicts";
+/// Sealed reach archives, in parts.
+const REACH: &str = "reach";
+/// The journal's file name under the schema state (`mutate::schema`'s).
+const JOURNAL: &str = "verdicts";
+/// The reach record's directory under the schema state.
+const REACH_DIR: &str = "reach";
+/// The file a finished reach run writes, holding the tree digest it sealed.
+const SEALED: &str = "sealed";
+/// The largest part a reach archive is cut into.
+const PART_BYTES: usize = 48 << 20;
+/// How many reach archives a ref keeps, newest first.
+const KEPT_REACH: usize = 2;
+/// How many journal chunks a ref holds before a publish compacts them.
+const KEPT_CHUNKS: usize = 32;
+
+/// The ref a branch's mutate state lives at.
+///
+/// # Errors
+///
+/// [`UsageError`] when `branch` does not make a valid ref name.
+pub fn mutate_reference(branch: &str) -> Result<String> {
+    let name = format!("{MUTATE_PREFIX}{branch}");
+    gix::refs::FullName::try_from(name.as_str()).map_err(|_| {
+        UsageError::raise(format!(
+            "receipt: `{branch}` does not make a valid ref name for the mutate carry"
+        ))
+    })?;
+    Ok(name)
+}
+
+/// Whether a verdict chunk's name is the digest of its bytes.
+fn verdict_chunk(name: &str, bytes: &[u8]) -> bool {
+    name.strip_suffix(".tsv")
+        .is_some_and(|stem| is_hex(stem, 32) && crate::tools::digest(bytes) == stem)
+}
+
+/// A reach entry's `(sealed, archive, part)`, where `part` is `Some((i, n))`
+/// for a part and `None` for the `.at` stamp.
+fn reach_name(name: &str) -> Option<(&str, &str, Option<(usize, usize)>)> {
+    let mut halves = name.splitn(3, '.');
+    let (sealed, archive, rest) = (halves.next()?, halves.next()?, halves.next()?);
+    if !is_hex(sealed, 64) || !is_hex(archive, 32) {
+        return None;
+    }
+    if rest == "at" {
+        return Some((sealed, archive, None));
+    }
+    let (first, last) = rest.split_once("-of-")?;
+    let (i, n): (usize, usize) = (first.parse().ok()?, last.parse().ok()?);
+    // ONE SPELLING PER PART: `01-of-2` and `1-of-2` would be two names for one
+    // part, and a union would keep both.
+    (i >= 1 && i <= n && i.to_string() == first && n.to_string() == last).then_some((
+        sealed,
+        archive,
+        Some((i, n)),
+    ))
+}
+
+/// Whether a mutate entry is admissible, judged as [`admissible`] judges a
+/// receipt: on its name, and where the name is a content key, on its bytes.
+fn admissible_mutate(path: &str, bytes: &[u8]) -> bool {
+    let Some((kind, name)) = path.split_once('/') else {
+        return false;
+    };
+    match kind {
+        VERDICTS => verdict_chunk(name, bytes),
+        REACH => reach_name(name).is_some_and(|(_, _, part)| {
+            part.is_some()
+                || std::str::from_utf8(bytes).is_ok_and(|at| at.trim().parse::<i64>().is_ok())
+        }),
+        PRODUCER => {
+            producer_line(bytes)
+                && name.split_once('.').is_some_and(|(kind, rest)| match kind {
+                    VERDICTS => rest
+                        .strip_suffix(".tsv")
+                        .is_some_and(|stem| is_hex(stem, 32)),
+                    REACH => reach_name(rest).is_some(),
+                    _ => false,
+                })
+        }
+        _ => false,
+    }
+}
+
+/// The lines of a journal text, in order, each with its newline.
+fn lines(text: &str) -> impl Iterator<Item = &str> {
+    text.split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
+}
+
+/// Every journal line `set`'s chunks hold.
+fn held_lines(set: &BTreeMap<String, Vec<u8>>) -> std::collections::BTreeSet<String> {
+    set.iter()
+        .filter(|(path, _)| path.starts_with("verdicts/"))
+        .flat_map(|(_, bytes)| {
+            lines(&String::from_utf8_lossy(bytes))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The chunk entry for `text`, as `(path, bytes)`.
+fn chunk(text: String) -> (String, Vec<u8>) {
+    let bytes = text.into_bytes();
+    (
+        format!("{VERDICTS}/{}.tsv", crate::tools::digest(&bytes)),
+        bytes,
+    )
+}
+
+/// The sealed reach record under `mutate`, as `(sealed digest, archive bytes)`,
+/// or `None` where there is none or it moved while it was read.
+///
+/// # Errors
+///
+/// A record that will not archive.
+fn sealed_archive(mutate: &Path) -> Result<Option<(String, Vec<u8>)>> {
+    let dir = mutate.join(REACH_DIR);
+    let Ok(sealed) = std::fs::read_to_string(dir.join(SEALED)) else {
+        return Ok(None);
+    };
+    let sealed = sealed.trim().to_owned();
+    if !is_hex(&sealed, 64) {
+        return Ok(None);
+    }
+    let mut paths = Vec::new();
+    let mut pending = vec![dir.clone()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next)?.filter_map(std::result::Result::ok) {
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                paths.push(entry.path());
+            }
+        }
+    }
+    paths.sort();
+    let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    let mut tarred = tar::Builder::new(gz);
+    for path in &paths {
+        let relative = path.strip_prefix(&dir)?;
+        let bytes = std::fs::read(path)?;
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_mtime(0);
+        header.set_cksum();
+        tarred.append_data(&mut header, relative, bytes.as_slice())?;
+    }
+    let archive = tarred.into_inner()?.finish()?;
+    // MOVED WHILE READ: a sweep that re-sealed under this read made a mixed
+    // archive. Left for the next step end, which reads it whole.
+    let after = std::fs::read_to_string(dir.join(SEALED)).unwrap_or_default();
+    Ok((after.trim() == sealed).then_some((sealed, archive)))
+}
+
+/// What the mutate ref gains from this checkout, given what it holds:
+/// one chunk of the journal lines it lacks, and the sealed reach record where
+/// no archive for that seal is there yet. Producer entries included.
+///
+/// # Errors
+///
+/// No accountable producer, or a reach record that will not archive.
+pub fn mutate_additions(
+    mutate: &Path,
+    theirs: &BTreeMap<String, Vec<u8>>,
+    producer: &str,
+    seconds: i64,
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut added = BTreeMap::new();
+    let journal = std::fs::read_to_string(mutate.join(JOURNAL)).unwrap_or_default();
+    let held = held_lines(theirs);
+    let mut seen = std::collections::BTreeSet::new();
+    let fresh: String = lines(&journal)
+        .filter(|line| !held.contains(*line) && seen.insert(*line))
+        .collect();
+    if !fresh.is_empty() {
+        let (path, bytes) = chunk(fresh);
+        added.insert(path, bytes);
+    }
+    let sealed = std::fs::read_to_string(mutate.join(REACH_DIR).join(SEALED)).unwrap_or_default();
+    let sealed = sealed.trim();
+    let carried = theirs.keys().any(|path| {
+        path.strip_prefix("reach/")
+            .and_then(reach_name)
+            .is_some_and(|(held, _, _)| held == sealed)
+    });
+    if is_hex(sealed, 64)
+        && !carried
+        && let Some((sealed, archive)) = sealed_archive(mutate)?
+    {
+        let id = crate::tools::digest(&archive);
+        let parts: Vec<&[u8]> = archive.chunks(PART_BYTES).collect();
+        let n = parts.len();
+        for (i, part) in parts.into_iter().enumerate() {
+            added.insert(
+                format!("{REACH}/{sealed}.{id}.{}-of-{n}", i + 1),
+                part.to_vec(),
+            );
+        }
+        added.insert(
+            format!("{REACH}/{sealed}.{id}.at"),
+            format!("{seconds}\n").into_bytes(),
+        );
+    }
+    produced_by(&added, producer)
+}
+
+/// Every complete reach archive in `set`, newest first, as
+/// `(seconds, sealed, archive id, part count)`.
+fn reach_archives(set: &BTreeMap<String, Vec<u8>>) -> Vec<(i64, String, String, usize)> {
+    let mut found = Vec::new();
+    for (path, bytes) in set {
+        let Some((sealed, id, None)) = path.strip_prefix("reach/").and_then(reach_name) else {
+            continue;
+        };
+        let Some(at) = std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|at| at.trim().parse::<i64>().ok())
+        else {
+            continue;
+        };
+        let prefix = format!("reach/{sealed}.{id}.");
+        let parts: Vec<(usize, usize)> = set
+            .range(prefix.clone()..)
+            .take_while(|(path, _)| path.starts_with(&prefix))
+            .filter_map(|(path, _)| reach_name(path.strip_prefix("reach/")?)?.2)
+            .collect();
+        let Some(&(_, n)) = parts.first() else {
+            continue;
+        };
+        let whole = parts.len() == n && parts.iter().all(|(_, of)| *of == n);
+        if whole {
+            found.push((at, sealed.to_owned(), id.to_owned(), n));
+        }
+    }
+    found.sort_by(|a, b| b.cmp(a));
+    found
+}
+
+/// Bound the mutate ref: compact the journal chunks past [`KEPT_CHUNKS`], and
+/// keep the newest [`KEPT_REACH`] reach archives. The compacted chunk is this
+/// publisher's, so `producer` is its producer.
+pub fn mutate_prune(union: &mut BTreeMap<String, Vec<u8>>, producer: &str) {
+    let chunks: Vec<String> = union
+        .keys()
+        .filter(|path| path.starts_with("verdicts/"))
+        .cloned()
+        .collect();
+    if chunks.len() > KEPT_CHUNKS {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut text = String::new();
+        for path in &chunks {
+            if let Some(bytes) = union.remove(path) {
+                for line in lines(&String::from_utf8_lossy(&bytes)) {
+                    if seen.insert(line.to_owned()) {
+                        text.push_str(line);
+                    }
+                }
+            }
+        }
+        let (path, bytes) = chunk(text);
+        if let Ok(produced) = produced_by(&BTreeMap::from([(path, bytes)]), producer) {
+            union.extend(produced);
+        }
+    }
+    let dropped: Vec<(String, String)> = reach_archives(union)
+        .into_iter()
+        .skip(KEPT_REACH)
+        .map(|(_, sealed, id, _)| (sealed, id))
+        .collect();
+    union.retain(|path, _| {
+        let name = path
+            .strip_prefix("reach/")
+            .or_else(|| path.strip_prefix("producer/reach."));
+        !name.and_then(reach_name).is_some_and(|(sealed, id, _)| {
+            dropped
+                .iter()
+                .any(|(gone, gone_id)| gone == sealed && gone_id == id)
+        })
+    });
+}
+
+/// Read `remote`'s mutate ref `name`, through [`admissible_mutate`].
+fn held_mutate(remote: &str, repo: &Path, name: &str) -> Result<Held> {
+    held_by(remote, repo, name, admissible_mutate)
+}
+
+/// Pull `name`'s mutate state from `remote` into the schema state `mutate`.
+///
+/// The journal gains every line a chunk holds that it does not: appended, never
+/// rewritten, so a line this checkout journaled is never lost and a sweep that
+/// is appending as this runs loses nothing either. The reach record is written
+/// only where there is none — no `sealed` file and nothing left over — from the
+/// newest whole archive, checked against its own digest, unpacked beside the
+/// record's directory and moved into place, so a reader sees all of it or none.
+///
+/// `count` is journal lines appended plus archives unpacked.
+///
+/// # Errors
+///
+/// A transport failure (could-not-look, exit `3`), or a store that cannot be
+/// written.
+pub fn pull_mutate(remote: &str, repo: &Path, name: &str, mutate: &Path) -> Result<Moved> {
+    let theirs = held_mutate(remote, repo, name)?;
+    let mut count = 0;
+    let journal = mutate.join(JOURNAL);
+    let local = std::fs::read_to_string(&journal).unwrap_or_default();
+    let mut have: std::collections::BTreeSet<String> = lines(&local).map(str::to_owned).collect();
+    let mut fresh = String::new();
+    for (path, bytes) in &theirs.set {
+        if !path.starts_with("verdicts/") {
+            continue;
+        }
+        let text = String::from_utf8_lossy(bytes);
+        for line in lines(&text) {
+            if have.insert(line.to_owned()) {
+                fresh.push_str(line);
+                count += 1;
+            }
+        }
+    }
+    if !fresh.is_empty() {
+        std::fs::create_dir_all(mutate)?;
+        crate::durable::append(&journal, &fresh)?;
+    }
+    let dir = mutate.join(REACH_DIR);
+    let empty = std::fs::read_dir(&dir).map_or(true, |mut entries| entries.next().is_none());
+    if !dir.join(SEALED).exists()
+        && empty
+        && let Some((_, sealed, id, n)) = reach_archives(&theirs.set).into_iter().next()
+    {
+        let mut archive = Vec::new();
+        for part in 1..=n {
+            if let Some(bytes) = theirs
+                .set
+                .get(&format!("reach/{sealed}.{id}.{part}-of-{n}"))
+            {
+                archive.extend_from_slice(bytes);
+            }
+        }
+        if crate::tools::digest(&archive) == id {
+            let staging = mutate.join(format!("{REACH_DIR}.pulling"));
+            let _ = std::fs::remove_dir_all(&staging);
+            std::fs::create_dir_all(&staging)?;
+            tar::Archive::new(flate2::read::GzDecoder::new(archive.as_slice())).unpack(&staging)?;
+            let _ = std::fs::remove_dir(&dir);
+            std::fs::rename(&staging, &dir)?;
+            count += 1;
+        }
     }
     Ok(Moved {
         reference: name.to_owned(),
@@ -953,4 +1542,67 @@ mod tests {
         let kept = paired(orphaned);
         assert_eq!(kept, produced);
     }
+
+    #[test]
+    fn a_step_receipt_travels_and_batten_checks_never_does() {
+        let key = "0".repeat(32);
+        assert!(carried_step(&format!("{}.{key}", "f".repeat(32))));
+        assert!(!carried_step(&format!("{}.{key}", batten_check_group())));
+        assert!(!carried_step(&format!("{}.{key}", "F".repeat(32))));
+        assert!(!carried_step(&key));
+    }
+
+    #[test]
+    fn a_reach_part_has_one_spelling() {
+        let (sealed, id) = ("a".repeat(64), "b".repeat(32));
+        assert_eq!(
+            reach_name(&format!("{sealed}.{id}.1-of-2")),
+            Some((sealed.as_str(), id.as_str(), Some((1, 2))))
+        );
+        assert_eq!(
+            reach_name(&format!("{sealed}.{id}.at")),
+            Some((sealed.as_str(), id.as_str(), None))
+        );
+        for bad in ["01-of-2", "3-of-2", "0-of-2", "1-of-02", "x"] {
+            assert_eq!(reach_name(&format!("{sealed}.{id}.{bad}")), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_verdict_chunk_is_named_by_its_bytes() {
+        let (path, bytes) = chunk("k\tcaught\tm\n".to_owned());
+        assert!(admissible_mutate(&path, &bytes));
+        assert!(!admissible_mutate(&path, b"k\tmissed\tm\n"));
+    }
+
+    #[test]
+    fn pruning_compacts_every_line_and_keeps_the_newest_reach() {
+        let mut union = BTreeMap::new();
+        for n in 0..=KEPT_CHUNKS {
+            let (path, bytes) = chunk(format!("k{n}\tcaught\tm{n}\n"));
+            union.extend(produced_by(&BTreeMap::from([(path, bytes)]), PRODUCER).unwrap());
+        }
+        for (at, sealed) in [(1, "a"), (2, "b"), (3, "c")] {
+            let (sealed, id) = (sealed.repeat(64), "d".repeat(32));
+            union.insert(format!("reach/{sealed}.{id}.1-of-1"), vec![0]);
+            union.insert(
+                format!("reach/{sealed}.{id}.at"),
+                format!("{at}\n").into_bytes(),
+            );
+        }
+        mutate_prune(&mut union, PRODUCER);
+        let chunks: Vec<_> = union
+            .keys()
+            .filter(|path| path.starts_with("verdicts/"))
+            .collect();
+        assert_eq!(chunks.len(), 1, "compacted");
+        assert_eq!(held_lines(&union).len(), KEPT_CHUNKS + 1, "no line lost");
+        let kept: Vec<_> = reach_archives(&union)
+            .into_iter()
+            .map(|(at, ..)| at)
+            .collect();
+        assert_eq!(kept, vec![3, 2], "the newest {KEPT_REACH}");
+    }
+
+    const PRODUCER: &str = "Fixture Producer <producer@example.com>";
 }

@@ -154,6 +154,14 @@ fn receipts_dir(state: &Path, repo: &Path) -> PathBuf {
         .join("receipts")
 }
 
+/// This clone's carried stores under `state`.
+fn stores(state: &Path, repo: &Path) -> receipts::Stores {
+    receipts::Stores::at(
+        &batten::state::repo_state_dir_under(state, repo).unwrap(),
+        &repo.join(".git"),
+    )
+}
+
 fn record(repo: &Path, state: &Path, check: &str) {
     let output = batten()
         .args(["receipt", "record", check])
@@ -177,11 +185,7 @@ fn status(repo: &Path, state: &Path, check: &str) -> (Option<i32>, String) {
 
 /// Publish `repo`'s local set to `name`.
 fn publish(repo: &Path, state: &Path, name: &str, seconds: i64) -> receipts::Moved {
-    let local = receipts::local_set(
-        &receipts_dir(state, repo),
-        &repo.join(".git").join("batten-receipts"),
-        BRANCH,
-    );
+    let local = receipts::local_set(&stores(state, repo), BRANCH);
     let local = receipts::produced_by(&local, PRODUCER).expect("a producer");
     receipts::publish(REMOTE, &repo.join(".git"), name, BRANCH, &local, seconds).expect("publish")
 }
@@ -194,8 +198,7 @@ fn pull(repo: &Path, state: &Path, name: &str) -> receipts::Moved {
         &repo.join(".git"),
         name,
         BRANCH,
-        &receipts_dir(state, repo),
-        &repo.join(".git").join("batten-receipts"),
+        &stores(state, repo),
         &head,
     )
     .expect("pull")
@@ -667,7 +670,12 @@ fn the_compiled_verbs_publish_and_pull_through_a_real_remote() {
     let name = receipts::reference("work").unwrap();
     let line = stdout(&published);
     let head = git_in(&state_git, &["rev-parse", &name]).trim().to_owned();
-    assert_eq!(line, format!("{name} {head} 2\n"), "statement + compat");
+    let mutate = receipts::mutate_reference("work").unwrap();
+    assert_eq!(
+        line,
+        format!("{name} {head} 2\n{mutate} {} 0\n", "0".repeat(40)),
+        "statement + compat, and no mutate state to carry"
+    );
     let listed = git_in(&state_git, &["ls-tree", "-r", "--name-only", &name]);
     let receipts_listed: Vec<&str> = listed
         .lines()
@@ -913,4 +921,271 @@ fn the_session_row_is_inert_on_an_engine_that_lacks_the_verb() {
         "{:?}",
         calls(&new)
     );
+}
+
+// ---------------------------------------------------------------------------
+// THE CARRY IN THE LAND LOOP (CLOUD-1544 for #1276): a second container of the
+// branch gains what the first proved, with no command of its own but the pull
+// every lap and session start makes.
+// ---------------------------------------------------------------------------
+
+/// One step row over `input.txt`, keyed on the stub tool's version.
+const STEP_ROW: &str =
+    "\n[[step]]\nid = \"carried\"\ninputs = [\"input.txt\"]\ntools = [[\"toolv\"]]\n";
+
+/// Write the step stubs into `dir/bin`: the tool the key reads and a command
+/// that leaves a mark when it runs.
+fn step_stubs(dir: &Path) {
+    for (file, body) in [
+        ("bin/toolv", "#!/bin/sh\necho tool-1.0\n"),
+        ("bin/mark", "#!/bin/sh\necho ran >>bin/ran.log\n"),
+    ] {
+        crate::common::write(dir, file, body);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(dir.join(file), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+    }
+}
+
+/// `batten <args>` in `repo` as a container of the branch runs it: the state
+/// repository set, `host` trusted, the step stubs first on `PATH`, and no CI.
+fn in_container(repo: &Path, state: &Path, host: &Host, args: &[&str]) -> std::process::Output {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(repo.join("bin")).chain(std::env::split_paths(&inherited)),
+    )
+    .unwrap();
+    let mut command = batten();
+    command
+        .args(args)
+        .current_dir(repo)
+        .env("PATH", path)
+        .env_remove("CI")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+        .env_remove("BATTEN_TASK_PID")
+        .env(batten::session::STATE_REPO_ENV, STATE_PATH)
+        .env("SSL_CERT_FILE", &host.ca)
+        .env("NO_PROXY", "127.0.0.1")
+        .env("no_proxy", "127.0.0.1")
+        .env("GIT_AUTHOR_NAME", "Fixture Producer")
+        .env("GIT_AUTHOR_EMAIL", "producer@example.com")
+        .env("GIT_COMMITTER_NAME", "Fixture Producer")
+        .env("GIT_COMMITTER_EMAIL", "producer@example.com");
+    command.state_dir(state).streamed_output().unwrap()
+}
+
+/// Fails by: step receipts (`batten-records/step-receipts`) left out of the
+/// carried set, `step run` not publishing when the step ends, or the pull not
+/// materialising them. Container A runs a step, which publishes as it ends; a
+/// fresh container B pulls and runs the same step: a HIT, its command never
+/// run. A's claim travels with it and another branch's does not.
+#[test]
+fn a_second_container_hits_the_step_the_first_ran() {
+    let case = "receipt-carry-step";
+    let (origin, state_git) = (state_repo(&format!("{case}-origin")), state_repo(case));
+    let host = https_host(
+        case,
+        vec![
+            (ORIGIN_PATH, origin.clone()),
+            (STATE_PATH, state_git.clone()),
+        ],
+    );
+    let one = wired_clone(case, &host);
+    crate::common::write(&one, "batten.toml", &format!("{CONFIG}{STEP_ROW}"));
+    crate::common::write(&one, "input.txt", "one\n");
+    crate::common::write(&one, ".gitignore", "bin/\n");
+    git_in(&one, &["add", "-A"]);
+    git_in(&one, &["commit", "-qm", "a step"]);
+    step_stubs(&one);
+    let claims = one.join(".git").join("batten-receipts");
+    std::fs::create_dir_all(&claims).unwrap();
+    let claim = batten::claim::receipt_name("work");
+    std::fs::write(claims.join(&claim), "CLOUD-1\nready-lint pass\n").unwrap();
+    let other = batten::claim::receipt_name("elsewhere");
+    std::fs::write(claims.join(&other), "CLOUD-2\nready-lint pass\n").unwrap();
+    let two = wired_second(case, &one, &host);
+    step_stubs(&two);
+    let (state_one, state_two) = (
+        scratch(&format!("{case}-state-1")).join("state-1"),
+        scratch(&format!("{case}-state-2")).join("state-2"),
+    );
+
+    let ran = in_container(
+        &one,
+        &state_one,
+        &host,
+        &["step", "run", "carried", "--", "mark"],
+    );
+    assert_eq!(ran.status.code(), Some(0), "{ran:?}");
+    assert_eq!(
+        std::fs::read_to_string(one.join("bin/ran.log"))
+            .unwrap_or_default()
+            .lines()
+            .count(),
+        1,
+        "A ran the step"
+    );
+    let name = receipts::reference("work").unwrap();
+    let listed = git_in(&state_git, &["ls-tree", "-r", "--name-only", &name]);
+    assert_eq!(
+        listed
+            .lines()
+            .filter(|path| path.starts_with("step/"))
+            .count(),
+        1,
+        "the step's receipt was published as the step ended: {listed}"
+    );
+
+    let pulled = in_container(&two, &state_two, &host, &["receipt", "pull"]);
+    assert_eq!(pulled.status.code(), Some(0), "{pulled:?}");
+    let hit = in_container(
+        &two,
+        &state_two,
+        &host,
+        &["step", "run", "carried", "--", "mark"],
+    );
+    assert_eq!(hit.status.code(), Some(0), "{hit:?}");
+    assert!(stdout(&hit).starts_with("hit "), "B hits: {hit:?}");
+    assert!(!two.join("bin/ran.log").exists(), "B never ran the command");
+    let carried = two.join(".git").join("batten-receipts");
+    assert_eq!(
+        std::fs::read(carried.join(&claim)).ok(),
+        std::fs::read(claims.join(&claim)).ok(),
+        "the branch's claim is honoured in B"
+    );
+    assert!(
+        !carried.join(&other).exists(),
+        "another branch's claim stays home"
+    );
+    assert!(
+        git_in(&origin, &["for-each-ref"]).trim().is_empty(),
+        "origin received nothing"
+    );
+}
+
+/// A schema state directory holding `journal` and, when `sealed` is given, a
+/// reach record sealed over it.
+fn mutate_state(case: &str, journal: &str, sealed: Option<&str>) -> PathBuf {
+    let dir = scratch(&format!("{case}-mutate")).join("schema");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("verdicts"), journal).unwrap();
+    if let Some(sealed) = sealed {
+        let reach = dir.join("reach");
+        std::fs::create_dir_all(reach.join("cases/one")).unwrap();
+        std::fs::write(reach.join("cases/one/depends"), "Ffn_a\nT12\n").unwrap();
+        std::fs::write(reach.join("context.json"), "{}\n").unwrap();
+        std::fs::write(reach.join("sealed"), sealed).unwrap();
+    }
+    dir
+}
+
+/// Fails by: the journal or the reach record left out of the mutate carry, a
+/// pull that rewrites the journal rather than appending, or one that unpacks
+/// over a reach record already here. A's verdicts and its sealed reach record
+/// reach B whole; a second publish of the same seal sends no second archive.
+#[test]
+fn the_verdict_journal_and_reach_record_reach_a_second_container() {
+    let case = "receipt-carry-mutate";
+    let bare = state_repo(case);
+    stand_up(bare.clone(), |_| {});
+    let name = receipts::mutate_reference(BRANCH).unwrap();
+    let sealed = "a".repeat(64);
+    let one = first_clone(case);
+    let a = mutate_state(
+        &format!("{case}-a"),
+        "k1\tcaught\tm1\nk2\tmissed\tm2\n",
+        Some(&sealed),
+    );
+    let first = receipts::publish_mutate(REMOTE, &one.join(".git"), &name, &a, PRODUCER, 10)
+        .expect("publish");
+    assert_eq!(
+        first.count, 4,
+        "one chunk, one archive part, its stamp: {first:?}"
+    );
+    let again = receipts::publish_mutate(REMOTE, &one.join(".git"), &name, &a, PRODUCER, 11)
+        .expect("publish again");
+    assert_eq!(again.commit, first.commit, "nothing new moves nothing");
+
+    let two = second_clone(case, &one);
+    let b = mutate_state(
+        &format!("{case}-b"),
+        "k3\tcaught\tm3\nk1\tcaught\tm1\n",
+        None,
+    );
+    let pulled = receipts::pull_mutate(REMOTE, &two.join(".git"), &name, &b).expect("pull");
+    assert_eq!(
+        pulled.count, 2,
+        "one line appended, one archive: {pulled:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(b.join("verdicts")).unwrap(),
+        "k3\tcaught\tm3\nk1\tcaught\tm1\nk2\tmissed\tm2\n",
+        "appended, never rewritten"
+    );
+    for file in ["sealed", "context.json", "cases/one/depends"] {
+        assert_eq!(
+            std::fs::read(b.join("reach").join(file)).ok(),
+            std::fs::read(a.join("reach").join(file)).ok(),
+            "{file}"
+        );
+    }
+
+    let c = mutate_state(&format!("{case}-c"), "", Some(&"b".repeat(64)));
+    receipts::pull_mutate(REMOTE, &two.join(".git"), &name, &c).expect("pull over a record");
+    assert_eq!(
+        std::fs::read_to_string(c.join("reach/sealed")).unwrap(),
+        "b".repeat(64),
+        "a reach record already here is never displaced"
+    );
+}
+
+/// Fails by: a publish that does not re-read and re-union after a lost swap,
+/// or additions computed once rather than against the ref it swaps. A second
+/// container's publish lands between A's fetch and A's swap — a real publish
+/// through the same transport — and both containers' verdicts are on the ref.
+#[test]
+fn two_concurrent_mutate_publishers_lose_nothing() {
+    let case = "receipt-carry-concurrent";
+    let bare = state_repo(case);
+    let name = receipts::mutate_reference(BRANCH).unwrap();
+    let one = first_clone(case);
+    let two = second_clone(case, &one);
+    let a = mutate_state(&format!("{case}-a"), "ka\tcaught\tma\n", None);
+    let b = mutate_state(&format!("{case}-b"), "kb\tmissed\tmb\n", None);
+    let rival = std::cell::Cell::new(false);
+    let (bare_for_rival, name_for_rival) = (bare.clone(), name.clone());
+    stand_up(bare.clone(), move |call| {
+        if call.url.ends_with("/git-receive-pack") && !rival.replace(true) {
+            let (bare, name, two, b) = (
+                bare_for_rival.clone(),
+                name_for_rival.clone(),
+                two.clone(),
+                b.clone(),
+            );
+            std::thread::spawn(move || {
+                stand_up(bare, |_| {});
+                receipts::publish_mutate(REMOTE, &two.join(".git"), &name, &b, PRODUCER, 2)
+                    .expect("the rival publishes")
+            })
+            .join()
+            .unwrap();
+        }
+    });
+    receipts::publish_mutate(REMOTE, &one.join(".git"), &name, &a, PRODUCER, 1).expect("publish");
+
+    let fresh = mutate_state(&format!("{case}-fresh"), "", None);
+    let pulled = receipts::pull_mutate(REMOTE, &one.join(".git"), &name, &fresh).expect("pull");
+    let journal = std::fs::read_to_string(fresh.join("verdicts")).unwrap();
+    assert!(
+        journal.contains("ka\tcaught\tma\n"),
+        "A's verdict: {journal}"
+    );
+    assert!(
+        journal.contains("kb\tmissed\tmb\n"),
+        "the rival's verdict: {journal}"
+    );
+    assert_eq!(pulled.count, 2, "{pulled:?}");
 }
