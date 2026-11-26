@@ -689,7 +689,7 @@ pub fn forwarded_items(
         let Some(at_base) = declared_at_base.get(&Vec::new()) else {
             continue;
         };
-        let parsed = ast::SourceFile::parse(text, Edition::Edition2024).tree();
+        let parsed = batten_facts::source::rust_parse(text, Edition::Edition2024).tree();
         for item in parsed.items() {
             let ast::Item::Fn(function) = item else {
                 continue;
