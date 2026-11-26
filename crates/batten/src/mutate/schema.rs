@@ -4554,8 +4554,13 @@ fn packed_paths(document: &str) -> Option<(std::path::PathBuf, Vec<std::path::Pa
 
 /// Pack, under `state`'s reuse directory, every file [`packed_paths`] names
 /// from `document`, and record `tree` as the rendering they were built from,
-/// with `known` the sets it was rendered with. Hard links where the filesystem
-/// allows, so a pack costs no disk.
+/// with `known` the sets it was rendered with.
+///
+/// A COPY, NEVER A LINK (CLOUD-2904): a hand-back judged in place compiles its
+/// mutant into the schema build's target, writing each binary in place, and a
+/// hard-linked pack took those bytes too. The null re-run at 639b0bbb5 then
+/// judged with a `units.rs` field deleted and found two cases red under its
+/// control that pass on the clean build.
 ///
 /// THE BUILD SHARDS NEED, AND NOTHING ELSE (CLOUD-2789): the whole mirror
 /// target, 6 GB on #1276, was more than half the repository's 10 GB cache
@@ -4573,9 +4578,7 @@ fn pack(
     for file in &files {
         let (from, to) = (target.join(file), into.join(file));
         std::fs::create_dir_all(to.parent()?).ok()?;
-        if std::fs::hard_link(&from, &to).is_err() {
-            std::fs::copy(&from, &to).ok()?;
-        }
+        std::fs::copy(&from, &to).ok()?;
     }
     let sets = serde_json::to_string(known).ok()?;
     crate::durable::replace(dir.join(PACKED_KNOWN), sets).ok()?;
@@ -4608,12 +4611,11 @@ fn restore(state: &std::path::Path, tree: &str) -> Option<Reuse> {
     let (target, files) = packed_paths(&document)?;
     for file in &files {
         let to = target.join(file);
-        if to.exists() {
-            continue;
-        }
         std::fs::create_dir_all(to.parent()?).ok()?;
-        // A COPY, NEVER A LINK: a later build writing its output in place
-        // would otherwise rewrite the pack as well.
+        // EVERY FILE, WHATEVER IS THERE (CLOUD-2904): a binary a build wrote
+        // since, a hand-back's mutant compiled in, is not the pack's. A COPY,
+        // NEVER A LINK: a later build writing its output in place would
+        // otherwise rewrite the pack as well.
         std::fs::copy(dir.join(PACKED).join(file), &to).ok()?;
     }
     let metadata = dir.join("cargo-metadata.json");
@@ -22993,6 +22995,55 @@ pub fn repo() -> u8 {{ scratch() }}
         assert!(
             refused.to_string().contains("no build output for crates/x"),
             "{refused:#}"
+        );
+    }
+
+    /// A restored pack is the clean build to every case, whatever wrote the
+    /// target since it was packed: a build writing a binary in place (a
+    /// hand-back judged in place compiles its mutant into the schema build's
+    /// target) changes neither the pack nor what a restore puts back.
+    ///
+    /// Fails by: the pack hard-linked to the target, so the in-place build
+    /// rewrote it too, or a restore that keeps a file already there (the null
+    /// re-run at 639b0bbb5 judged with a `units.rs` field deleted, and its
+    /// control found `shape_names_docs_and_pointers_are_read` red).
+    #[test]
+    fn a_restored_pack_is_the_clean_build_whatever_wrote_the_target_since() {
+        let work = crate::scratch::scratch("schema-pack-work");
+        let state = crate::scratch::scratch("schema-pack-state");
+        std::fs::write(work.join("lib.rs"), "pub fn f() {}\n").unwrap();
+        let target = state.join("target");
+        let binary = target.join("debug/deps/x-1");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "the clean build").unwrap();
+        let document = format!(
+            r#"{{"rust-build-meta":{{"target-directory":"{}"}},"rust-binaries":{{"x":{{"binary-path":"{}"}}}}}}"#,
+            target.display(),
+            binary.display()
+        );
+        let dir = state.join("reuse");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("binaries.json"), &document).unwrap();
+        std::fs::write(dir.join("cargo-metadata.json"), "{}").unwrap();
+        let tree = tree_digest(&work).unwrap();
+        pack(
+            &state,
+            &document,
+            (&tree, &Known::default(), &std::collections::BTreeMap::new()),
+        )
+        .unwrap();
+        // IN PLACE, as a build writes its output: the same file, truncated.
+        std::fs::write(&binary, "a hand-back's mutant").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(PACKED).join("debug/deps/x-1")).unwrap(),
+            "the clean build",
+            "the pack keeps what was packed"
+        );
+        restore(&state, &tree).expect("the pack over this rendering");
+        assert_eq!(
+            std::fs::read_to_string(&binary).unwrap(),
+            "the clean build",
+            "a restore puts the clean build back"
         );
     }
 
