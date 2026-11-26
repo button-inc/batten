@@ -7375,6 +7375,61 @@ const PORTABILITY_RULES: [&str; 6] = [
     "shell guard unsafe",
 ];
 
+/// CLOUD-1544's row: a sibling repository of the vendor's org is a deployment
+/// fact (#1276's state repository lives in one owner's environment), while the
+/// project's own home and the engine's `.git/batten-state*` lock paths are not.
+///
+/// Fails by: the row missing, mis-globbed, or its regex either missing a
+/// sibling (`<home>-state`, another name, another case) or firing on the home
+/// in any of its spellings. Every literal is assembled at runtime: this file
+/// sits under both this row's glob and `forge name other`'s.
+#[test]
+fn the_committed_sibling_repository_row_refuses_only_a_sibling() {
+    let org = format!("button-{}", "inc");
+    let home = format!("bat{}", "ten");
+    let payload = format!(
+        "state = \"{org}/{home}-state\"\n\
+         home = \"https://github.com/{org}/{home}\"\n\
+         git = \"{org}/{home}.git\"\n\
+         slash = \"{org}/{home}/\"\n\
+         lock = \".git/{home}-state.lock\"\n\
+         other = \"{}/tools\"\n\
+         near = \"{org}/{home}_x\"\n",
+        org.to_uppercase()
+    );
+    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-sibling-repo"));
+    let dirty = repo_with_config("config-sibling-repo", &contents);
+    committed_budget_surfaces(&dirty);
+    let state = committed_config_fixture_git(&dirty);
+    let src = dirty.join("crates/demo/src");
+    fs::create_dir_all(&src).expect("create fixture source tree");
+    fs::write(src.join("lib.rs"), &payload).expect("write fixture source");
+
+    let output = batten()
+        .args(["enforce", "--rule", "forge reach other"])
+        .current_dir(&dirty)
+        .state_home(&state)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .streamed_output()
+        .expect("run batten enforce");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "batten deny forge reach other at crates/demo/src/lib.rs:1\n\
+         batten deny forge reach other at crates/demo/src/lib.rs:6\n\
+         batten deny forge reach other at crates/demo/src/lib.rs:7\n",
+        "the sibling, another name and another case; never the home or a lock path"
+    );
+}
+
 #[test]
 fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // Non-negotiable rule 1 — "no consumer-specific identifier anywhere in
