@@ -10642,9 +10642,14 @@ fn run_preset_eject(target: &str, out: &mut dyn Write) -> Result<ExitCode> {
     for path in &ejection.written {
         writeln!(out, "{path} ejected")?;
     }
+    let edited = if ejection.removed {
+        "removed"
+    } else {
+        "except"
+    };
     writeln!(
         out,
-        "{} rule `{}` except",
+        "{} rule `{}` {edited}",
         crate::config_model::CONFIG_FILE,
         ejection.row
     )?;
