@@ -398,12 +398,13 @@ fn no_compile_runs_without_a_source_pin() {
         .filter(|row| {
             matches!(
                 row["id"].as_str(),
-                Some("mediator-matches-the-tree" | "engine-resolves-every-row")
+                // `mediator-matches-the-tree` is withheld until step 14.
+                Some("engine-resolves-every-row")
             )
         })
         .cloned()
         .collect();
-    assert_eq!(rows.len(), 2, "both engine rows are committed");
+    assert_eq!(rows.len(), 1, "the engine row is committed");
     let mut config = toml::Table::new();
     config.insert("version".to_owned(), toml::Value::Integer(1));
     config.insert("startup".to_owned(), toml::Value::Array(rows));
