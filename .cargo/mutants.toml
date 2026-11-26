@@ -237,4 +237,12 @@ exclude_re = [
   # does. Column 28 is the first `||`; the `!` test after it is judged
   # (CLOUD-2789, shard 7/8 at 34c6e4d1f).
   'schema\.rs:\d+:28: replace \|\| with && in Resolver<.r>::owner$',
+  # This file names no feature, so the build every Rust mutant is judged in
+  # leaves `preset-overlay` off, and there `library_overlay`'s body is `None`:
+  # the mutant is the function as compiled. The arm that reads the variable is
+  # built only by `mutant:declared`, whose `policy/library` rows are judged on
+  # the overlay it names; an overlay never read leaves every such row
+  # surviving, so that sweep is this arm's gate (CLOUD-2789, shard 0/8 at
+  # 34c6e4d1f).
+  'preset\.rs:\d+:\d+: replace library_overlay -> Option<std::path::PathBuf> with None$',
 ]
