@@ -9297,9 +9297,17 @@ const DERIVED: &str = "derived";
 /// directory by the code that derives it and the build it is derived under,
 /// so a change to either derives every file afresh rather than reading one
 /// another derivation wrote.
+///
+/// BOUNDED TO WHAT THE CURRENT BUILD READS (CLOUD-2904): each version of this
+/// code took a directory of its own, 2.3 GB over #1276's tree, and none was
+/// ever removed, so a judge's container held 6.9 GB of them and three filled a
+/// 16 GB disk's collector floor. A run records every artifact it reads or
+/// keeps, and a whole reach run ([`reached`]) ends by keeping those alone
+/// ([`Derived::retain_touched`]).
 #[derive(Debug)]
 pub struct Derived {
     dir: std::path::PathBuf,
+    touched: std::sync::Mutex<BTreeSet<std::path::PathBuf>>,
 }
 
 impl Derived {
@@ -9315,6 +9323,51 @@ impl Derived {
             dir: state
                 .join(DERIVED)
                 .join(&code.finalize().to_hex().as_str()[..16]),
+            touched: std::sync::Mutex::default(),
+        }
+    }
+
+    /// Remove every artifact this store's run neither read nor kept, and every
+    /// other version's directory beside it: the artifacts each derived from a
+    /// file's former bytes, by another build or another version of this code.
+    /// Called once a run has derived over the whole tree, so nothing the
+    /// current build reads is removed. Returns how many artifacts were kept
+    /// and removed. Best effort: what cannot be removed is left.
+    fn retain_touched(&self) -> (usize, usize) {
+        let touched = self
+            .touched
+            .lock()
+            .map(|held| held.clone())
+            .unwrap_or_default();
+        let mut removed = 0;
+        if let Some(versions) = self
+            .dir
+            .parent()
+            .and_then(|dir| std::fs::read_dir(dir).ok())
+        {
+            for version in versions.flatten().map(|entry| entry.path()) {
+                if version != self.dir && std::fs::remove_dir_all(&version).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+        let mut kept = 0;
+        if let Ok(artifacts) = std::fs::read_dir(&self.dir) {
+            for artifact in artifacts.flatten().map(|entry| entry.path()) {
+                if touched.contains(&artifact) {
+                    kept += 1;
+                } else if std::fs::remove_file(&artifact).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+        (kept, removed)
+    }
+
+    /// Record `path` as one this store's run reads or keeps.
+    fn touch(&self, path: std::path::PathBuf) {
+        if let Ok(mut held) = self.touched.lock() {
+            held.insert(path);
         }
     }
 
@@ -9343,9 +9396,12 @@ impl Derived {
 
     /// The artifact of `kind` kept for `bytes`, if one is and it reads back.
     fn read<T: serde::de::DeserializeOwned>(&self, kind: &str, bytes: &[u8]) -> Option<T> {
-        crate::fsio::read_to_string(self.path(kind, bytes))
+        let path = self.path(kind, bytes);
+        let held = crate::fsio::read_to_string(&path)
             .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
+            .and_then(|text| serde_json::from_str(&text).ok())?;
+        self.touch(path);
+        Some(held)
     }
 
     /// Keep `artifact` as the one of `kind` for `bytes`. Best effort: one not
@@ -9354,7 +9410,10 @@ impl Derived {
         if let Ok(text) = serde_json::to_string(artifact)
             && std::fs::create_dir_all(&self.dir).is_ok()
         {
-            let _ = crate::durable::replace(self.path(kind, bytes), text);
+            let path = self.path(kind, bytes);
+            if crate::durable::replace(&path, text).is_ok() {
+                self.touch(path);
+            }
         }
     }
 }
@@ -11518,6 +11577,10 @@ fn handback_room(handback: &Handback<'_>, tree: &std::path::Path) -> anyhow::Res
     if let Some(state) = tree.parent() {
         seed_handback_target(&schema_target(state), &handback_target(state));
     }
+    // THE MIRROR'S OWN TARGET IS A FORMER BUILD'S (CLOUD-2904): a hand-back
+    // builds into [`handback_target`] alone, and `classic/target` was left by
+    // builds before it, 10.5 GB on #1276 that no collection ranks.
+    let _ = std::fs::remove_dir_all(tree.join("target"));
     let Some((need_mb, floor_mb)) = handback.disk else {
         return Ok(());
     };
@@ -12986,15 +13049,37 @@ fn reached(
         .as_deref(),
         &failed_records(&base),
     )?;
+    reached_said(&reach, (schema.probes.len(), started), &derived, out)?;
+    Ok((reach, digests, seconds, red))
+}
+
+/// Say what a whole reach run ([`reached`]) recorded over `probes` functions
+/// since `started`, and what it untraced; then bound `derived` to what the run
+/// read, and say that too.
+///
+/// # Errors
+///
+/// `out` cannot be written.
+fn reached_said(
+    reach: &Reach,
+    (probes, started): (usize, std::time::Instant),
+    derived: &Derived,
+    out: &mut dyn std::io::Write,
+) -> std::io::Result<()> {
     writeln!(
         out,
-        "mutate schema: reach recorded for {} site(s), {} function(s) probed, in {}s",
+        "mutate schema: reach recorded for {} site(s), {probes} function(s) probed, in {}s",
         reach.sites.len(),
-        schema.probes.len(),
         started.elapsed().as_secs()
     )?;
     writeln!(out, "{}", untraced_line(&reach.untraced))?;
-    Ok((reach, digests, seconds, red))
+    // EVERY CASE'S DIGEST IS TAKEN, so every artifact the current build reads
+    // has been read or kept by now.
+    let (kept, removed) = derived.retain_touched();
+    writeln!(
+        out,
+        "mutate schema: derived store kept {kept} artifact(s), removed {removed}"
+    )
 }
 
 /// The mutants of `count` the schema judges by switch: every one that built
@@ -15994,6 +16079,34 @@ mod tests {
                 "{name} is the schema build's still"
             );
         }
+    }
+
+    /// A hand-back's room step removes the mirror's own former target, which
+    /// no hand-back builds into and no collection ranks, and leaves its
+    /// sources.
+    ///
+    /// Fails by: `classic/target` kept, 10.5 GB on #1276 left by builds before
+    /// hand-backs had a target of their own.
+    #[test]
+    fn a_handback_removes_the_mirrors_former_target() {
+        let state = crate::scratch::scratch("schema-handback-former-target");
+        let tree = state.join("classic");
+        std::fs::create_dir_all(tree.join("target/debug/deps")).unwrap();
+        std::fs::write(tree.join("target/debug/deps/x-1"), "a former build").unwrap();
+        std::fs::create_dir_all(tree.join("src")).unwrap();
+        std::fs::write(tree.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+        let nowhere = state.join("nowhere");
+        let handback = Handback {
+            runner: &nowhere,
+            diff: None,
+            disk: None,
+        };
+        handback_room(&handback, &tree).expect("no declared cost");
+        assert!(
+            !tree.join("target").exists(),
+            "the former target is removed"
+        );
+        assert!(tree.join("src/lib.rs").is_file(), "its sources stay");
     }
 
     /// A hand-back's run is listed from its target's own line and nothing
@@ -20563,6 +20676,73 @@ mod tests {
         assert_eq!(
             other_build, parsed,
             "another build derives every file afresh"
+        );
+    }
+
+    /// The derived store keeps what the current build reads and nothing else:
+    /// once a run has derived over the whole tree, another version's directory
+    /// and the artifact of a file's former bytes are gone, and a later run over
+    /// the same tree derives nothing afresh.
+    ///
+    /// Fails by: an old version's directory surviving (2.3 GB each on #1276, a
+    /// judge's container held 6.9 GB of them), an artifact of former bytes
+    /// surviving in the current one, or an artifact the run only read removed,
+    /// so the next run parses again what it had.
+    #[test]
+    fn the_derived_store_keeps_only_what_the_current_build_reads() {
+        let root = crate::scratch::scratch("schema-derived-bound");
+        let state = crate::scratch::scratch("schema-derived-bound-state");
+        let write = |file: &str, text: &str| {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write("src/lib.rs", "pub fn f() {}\n");
+        write("tests/it/a.rs", "#[test]\nfn t() { fix::f(); }\n");
+        write("tests/it/b.rs", "#[test]\nfn u() { fix::f(); }\n");
+        let (t, u) = (
+            (String::from("a::t"), String::from("fix::it")),
+            (String::from("b::u"), String::from("fix::it")),
+        );
+        let cases: BTreeSet<Case> = [t.clone(), u.clone()].into();
+        let executed = [(t, BTreeSet::new()), (u, BTreeSet::new())].into();
+        let dirs = [(String::from("fix"), String::new())].into();
+        let sweep = |store: &Derived| {
+            let before = batten_facts::source::parses();
+            let digests = case_digests(
+                &root,
+                &cases,
+                &dirs,
+                &executed,
+                &Depends {
+                    derived: Some(store),
+                    ..depends(&[])
+                },
+            );
+            (digests, batten_facts::source::parses() - before)
+        };
+        let artifacts = |store: &Derived| std::fs::read_dir(&store.dir).map_or(0, Iterator::count);
+        let old = Derived::at(&state, "a former build");
+        sweep(&old);
+        let first = Derived::at(&state, "build");
+        sweep(&first);
+        let whole = artifacts(&first);
+        assert!(whole > 0, "a first run keeps what it derives");
+        write("tests/it/b.rs", "#[test]\nfn u() { fix::f(); fix::f(); }\n");
+        let edited = Derived::at(&state, "build");
+        let (keyed, _) = sweep(&edited);
+        assert!(artifacts(&edited) > whole, "the edit derived b.rs afresh");
+        edited.retain_touched();
+        assert!(!old.dir.exists(), "another version's directory is removed");
+        assert_eq!(
+            artifacts(&edited),
+            whole,
+            "the artifacts of b.rs's former bytes are removed"
+        );
+        assert_eq!(
+            sweep(&Derived::at(&state, "build")),
+            (keyed, 0),
+            "nothing the run read is removed, and every case keys as it did"
         );
     }
 
