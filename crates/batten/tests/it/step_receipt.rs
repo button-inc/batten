@@ -955,7 +955,9 @@ fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
     assert!(
         gated.contains("--continue-on-error verify:commit-lint")
             && gated.contains("--continue-on-error --jobs 2 semver")
-            && gated.contains("--continue-on-error --jobs 1 verify:ci-suite"),
+            && gated.lines().any(|line| {
+                line.contains("--continue-on-error --jobs 1 ") && line.contains("verify:ci-suite")
+            }),
         "every multi-task tier is a `--continue-on-error` fan: {gated}"
     );
 }
@@ -1625,9 +1627,15 @@ fn modules_reaching_a_tracer() -> Vec<String> {
 /// `step run`'s tracer and takes only the fallback, so `test:traced` is the
 /// one local place those branches run.
 ///
+/// THE LANE SETS NO `CI` (CLOUD-2789): cargo tracks the `CI` that
+/// `ra_ap_stdx` reads at compile time, so a lane-wide `CI=true` rebuilt seven
+/// crates against `test:cargo` once each way per lap. A case whose branch
+/// depends on a runtime `CI` sets or clears it on what it spawns.
+///
 /// Fails by: a module that reaches a tracer missing from the lane (its traced
-/// branch first judged on CI), a module the lane names that no longer does, or
-/// the lane run without CI's `CI=true` or the required-trace guard.
+/// branch first judged on CI), a module the lane names that no longer does, the
+/// lane setting `CI` for its whole build again, or the required-trace guard
+/// dropped.
 #[test]
 fn the_traced_lane_runs_every_module_that_reaches_a_tracer() {
     let manifest: toml::Table = std::fs::read_to_string(common::at_root("mise.toml"))
@@ -1654,7 +1662,10 @@ fn the_traced_lane_runs_every_module_that_reaches_a_tracer() {
     named.sort();
     assert_eq!(named, modules_reaching_a_tracer());
     let env = task.get("env").expect("`test:traced` sets its env");
-    assert_eq!(env.get("CI").and_then(toml::Value::as_str), Some("true"));
+    assert!(
+        env.get("CI").is_none(),
+        "the lane's env carries no `CI`, so its build is the suite's: {env}"
+    );
     assert_eq!(
         env.get(common::TRACED_REQUIRED)
             .and_then(toml::Value::as_str),
