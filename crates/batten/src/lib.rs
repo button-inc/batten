@@ -24691,14 +24691,12 @@ fn key_facts(base: &str) -> hook::KeyFacts {
 ///
 /// `#[expect]` rather than `#[allow]` for the spawn census's reason: the day a
 /// caller returns, this annotation is unfulfilled and goes red, so the licence
-/// is deleted by whoever restores the call instead of outliving it. Outside
-/// test builds only: the semantics kept are a case's subject there.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "CLOUD-906: the only consumer is unreachable until CLOUD-892 moves the Stop surface into Rego; the semantics are what is being kept"
-    )
+/// is deleted by whoever restores the call instead of outliving it. In test
+/// builds too since the cases read [`stop_facts_at`] over a fixture
+/// (CLOUD-2789).
+#[expect(
+    dead_code,
+    reason = "CLOUD-906: the only consumer is unreachable until CLOUD-892 moves the Stop surface into Rego; the semantics are what is being kept"
 )]
 fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
     stop_facts_at(Path::new("."), overrides)
