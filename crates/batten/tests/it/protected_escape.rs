@@ -630,6 +630,43 @@ fn a_forward_move_to_a_strict_ancestor_of_a_pushed_tip_is_no_protected_write() {
     assert!(!said.contains("path write refused"), "{said}");
 }
 
+/// A FETCH AND A FAST-FORWARD IN ONE CALL IS STILL HISTORY ARRIVING (CLOUD-2923,
+/// on #1276). Another session pushed a protected change to the remote; this
+/// clone had not fetched it, so no tracking ref reached it when the call began.
+/// The call fetches, and the fetch's reflog entry records the remote's answer,
+/// then fast-forwards onto it. Nothing was authored here.
+///
+/// Fails by: counting only tracking-ref values from before the call, so the
+/// tip the call's own fetch brought in is read as the call's authored write.
+/// `git fetch && git merge --ff-only` is the ordinary way a session syncs.
+#[test]
+fn a_fetch_and_fast_forward_in_one_call_is_no_protected_write() {
+    let dir = fixture("protected-escape-fetch-ff");
+    let remote = dir.with_extension("remote.git");
+    drop(std::fs::remove_dir_all(&remote));
+    common::git_in(
+        &dir,
+        &["init", "-q", "--bare", remote.to_str().expect("utf-8 path")],
+    );
+    std::fs::write(dir.join(GUARDED), "pushed elsewhere\n").expect("the guarded write lands");
+    common::git_in(&dir, &["commit", "-q", "-am", "pushed by another session"]);
+    let url = remote.to_str().expect("utf-8 path").to_owned();
+    common::git_in(&dir, &["push", "-q", &url, "HEAD:refs/heads/main"]);
+    common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
+    let command = "git fetch origin main && git merge --ff-only -q origin/main";
+    let (code, said) = around_with(&dir, "call-fetch-ff", command, |dir| {
+        common::git_in(dir, &["fetch", "-q", &url, "main:refs/remotes/origin/main"]);
+        common::git_in(dir, &["merge", "--ff-only", "-q", "origin/main"]);
+    });
+    drop(std::fs::remove_dir_all(&remote));
+    assert_eq!(
+        code,
+        Some(0),
+        "the call's fetch brought the history in: {said}"
+    );
+    assert!(!said.contains("path write refused"), "{said}");
+}
+
 /// A REF THE CALL MOVED COUNTS AT ITS VALUE BEFORE THE CALL. The remote tip was
 /// written with no reflog before the call; the call fast-forwards onto it and
 /// then moves the ref away. The ref's one reflog entry is the call's own, and
