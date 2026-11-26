@@ -643,8 +643,9 @@ mod tests {
     #[test]
     fn the_spooled_payload_is_the_file_start_writes() {
         let git_dir = Path::new("/repo/.git");
-        let state =
-            crate::state::repo_state_dir(Path::new("/repo")).expect("a state root resolves here");
+        let Ok(state) = crate::state::repo_state_dir(Path::new("/repo")) else {
+            panic!("a state root resolves here");
+        };
         assert_eq!(
             payload_path(git_dir),
             state.join("batten-session-setup").join("payload")
