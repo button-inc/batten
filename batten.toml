@@ -20012,10 +20012,18 @@ tools = [
 # local proof `step cover` reads for `ci` and the `mutants (*)` shards. Keyed on
 # the whole tree because the suite reads the whole tree, and on the merge base,
 # because `mutant:changed` judges the diff from it.
+#
+# AND ON THE CARVE (CLOUD-2789): `verify:ci-suite` sets `HK_SKIP_STEPS` to every
+# step an earlier tier of the same lap ran, so what `ci` runs here is the suite
+# and the mutants. A pass is only ever minted after those tiers passed on the
+# same tree (the gate set's `run` array stops at the first red tier), and the
+# carve is keyed, so a receipt earned under one carve never answers under
+# another.
 [[step]]
 id = "ci-suite"
 inputs = ["."]
 tools = [
+  ["batten", "step", "env", "--", "HK_SKIP_STEPS"],
   ["rustc", "--version"],
   ["cargo", "--version"],
   ["hk", "--version"],
