@@ -19679,9 +19679,10 @@ tools = [
 # THE DIST LEG (CLOUD-2789): `dist:lap` builds the release binary through
 # cargo-dist, 125 s a lap with nothing moved. Keyed on the tree, the toolchain,
 # `dist --version` (cargo-auditable's pin is in `mise.toml`, an input) and the
-# `CARGO_*` profile overrides `dist:lap` sets, plus `test -f` on the binary the
-# next entry (`sbom-binary`) reads: an absent binary is no key, so a wiped
-# target misses and builds. A binary another tree's build left there (T, T+1,
+# `CARGO_*` profile overrides `dist:lap` sets, plus `ls` of the binary the next
+# entry (`sbom-binary`) reads: an absent binary is no key, so a wiped target
+# misses and builds. `ls`, never `test -f`: a tool line that prints nothing keys
+# nothing (`step::material`), so `test -f` left this row with no key on every lap. A binary another tree's build left there (T, T+1,
 # back to T) can only fail `sbom-binary-check` loud, never pass it: its embedded
 # dependency tree is read against this tree's `Cargo.lock`, and where the two
 # agree the verdict is the one this tree's build would have given. UNTRACED: a
@@ -19691,7 +19692,7 @@ id = "dist:lap"
 inputs = ["."]
 tools = [
   ["batten", "step", "untraced"],
-  ["test", "-f", "target/x86_64-unknown-linux-gnu/dist/batten"],
+  ["ls", "target/x86_64-unknown-linux-gnu/dist/batten"],
   ["rustc", "--version"],
   ["cargo", "--version"],
   ["dist", "--version"],
