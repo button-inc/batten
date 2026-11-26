@@ -6139,16 +6139,24 @@ fn carried_unless_ci(
     // is free and [`super::stable::judge`] compares the two.
     let _ = carry_forward(base, inputs, identity, carry, false)?;
     let witnesses = super::stable::witnesses(base);
-    match std::fs::remove_dir_all(base) {
-        Err(gone) if gone.kind() != std::io::ErrorKind::NotFound => return Err(gone.into()),
-        _ => {}
-    }
+    cleared(std::fs::remove_dir_all(base))?;
     std::fs::create_dir_all(base)?;
     for (case, functions) in &witnesses {
         super::stable::keep(base, case, functions)?;
     }
     crate::durable::replace(base.join(TREE), inputs)?;
     Ok((0, 0))
+}
+
+/// A removal's outcome as a clearing reads it: done, or nothing there to
+/// remove; any other failure is the clearing's, since what is left would be
+/// carried. Apart from the removal so the decision is a case of its own: this
+/// sandbox runs as root, where a removal fails on no permission.
+fn cleared(removed: std::io::Result<()>) -> std::io::Result<()> {
+    match removed {
+        Err(gone) if gone.kind() != std::io::ErrorKind::NotFound => Err(gone),
+        _ => Ok(()),
+    }
 }
 
 /// The longest filterset one run is handed, in bytes. The kernel caps ONE
@@ -7267,10 +7275,8 @@ pub fn record_reach(
     if passed && super::stable::twice() {
         let first = collect_reach(&base, identity)?;
         let red = failed_records(&base);
-        for (case, functions) in super::stable::by_digest(&first.executed, identity.probes) {
-            if !red.contains(&case) {
-                super::stable::keep(&base, &case, &functions)?;
-            }
+        for (case, functions) in super::stable::passing(&first.executed, identity.probes, &red) {
+            super::stable::keep(&base, &case, &functions)?;
         }
         for entry in std::fs::read_dir(&base)? {
             let dir = entry?.path();
@@ -7287,8 +7293,7 @@ pub fn record_reach(
     // EVERY CASE RECORDED TWICE OVER IDENTICAL INPUTS RAN THE SAME FUNCTIONS,
     // or the sweep refuses ([`super::stable`]). A red case has its own verdict.
     let red = failed_records(&base);
-    let mut after = super::stable::by_digest(&reach.executed, identity.probes);
-    after.retain(|case, _| !red.contains(case));
+    let after = super::stable::passing(&reach.executed, identity.probes, &red);
     let compared = super::stable::judge(&base, &after)?;
     if compared > 0 {
         writeln!(
@@ -10572,7 +10577,10 @@ pub fn load_verdicts(text: &str) -> std::collections::BTreeMap<String, String> {
         // A BUILD'S FINDINGS LOAD TOO: a hand-back and an unprobed file stand
         // in for no run, but each spares the build round that rediscovers it.
         .filter(|(key, verdict)| {
-            *key != "-" && (reusable(verdict) || [PASSED, HANDED, UNPROBED].contains(verdict))
+            *key != "-"
+                && (reusable(verdict)
+                    || [PASSED, HANDED, UNPROBED].contains(verdict)
+                    || verdict.starts_with(CONTROLLED))
         })
         .map(|(key, verdict)| (key.to_owned(), verdict.to_owned()))
         .collect()
@@ -14162,7 +14170,9 @@ mod tests {
     }
 
     /// Fails by: a verdict name a hand-back journals read as an `error`, so a
-    /// caught mutant is reported as a fault in the sweep.
+    /// caught mutant is reported as a fault in the sweep, or a hand-back that
+    /// found no room reported as one (bootstrap shard 7/8 at 34c6e4d1f left
+    /// the `"no-room"` arm uncovered).
     #[test]
     fn every_journaled_verdict_name_reports_as_its_own_verdict() {
         for (name, verdict) in [
@@ -14171,6 +14181,7 @@ mod tests {
             ("timeout", Verdict::Timeout),
             ("uncovered", Verdict::Uncovered),
             ("unjudged", Verdict::Unjudged),
+            ("no-room", Verdict::NoRoom),
         ] {
             assert_eq!(handback_tally(name), Some(verdict), "{name}");
         }
@@ -14845,6 +14856,25 @@ mod tests {
             carry("schema-ci-carry-ci", true),
             ((0, 0), false),
             "under CI"
+        );
+    }
+
+    /// A clearing fails on any removal failure but the absence of what it
+    /// removes.
+    ///
+    /// Fails by: every removal failure ignored (bootstrap shard 7/8 at
+    /// 34c6e4d1f left `carried_unless_ci`'s guard uncovered), so a CI run
+    /// whose records would not clear carries them.
+    #[test]
+    fn a_clearing_fails_on_anything_but_absence() {
+        use std::io::{Error, ErrorKind};
+        assert!(cleared(Ok(())).is_ok());
+        assert!(cleared(Err(Error::from(ErrorKind::NotFound))).is_ok());
+        assert_eq!(
+            cleared(Err(Error::from(ErrorKind::PermissionDenied)))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::PermissionDenied
         );
     }
 
@@ -18664,6 +18694,49 @@ mod tests {
         );
     }
 
+    /// A workspace crate is named by a path's FIRST segment alone, as the
+    /// extern prelude is reached: after `self::`, or past a module, the same
+    /// name is no crate, so `self::core_x::a::Schema` names nothing of
+    /// `core_x`'s while `core_x::a::Schema` does.
+    ///
+    /// Fails by: any segment a lookup misses read as a crate name (bootstrap
+    /// shard 7/8 at 34c6e4d1f survived `index == 0 && relative` as `true` in
+    /// `Resolver::path`), so an edit to that crate moves a case it never ran.
+    #[test]
+    fn a_crate_is_named_by_a_paths_first_segment_alone() {
+        let (by_crate, by_self) = (case("f"), case("q"));
+        let cases: BTreeSet<Case> = [by_crate.clone(), by_self.clone()].into();
+        let executed = [
+            (by_crate.clone(), [0].into()),
+            (by_self.clone(), [1].into()),
+        ]
+        .into();
+        let core = "pub mod a { pub struct Schema { pub x: u8 } }\n";
+        let app = "pub fn f(s: core_x::a::Schema) -> u8 { 0 }\n\
+                   pub fn q(s: self::core_x::a::Schema) -> u8 { 0 }\n";
+        let digests = |core: &str| {
+            files_digests(
+                &cases,
+                &executed,
+                &[
+                    ("crates/core/src/lib.rs", core),
+                    ("crates/app/src/lib.rs", app),
+                ],
+                &[("core_x", "crates/core"), ("app", "crates/app")],
+            )
+        };
+        let held = digests(core);
+        let edited = digests(&core.replace("pub x: u8", "pub x: u16"));
+        assert_ne!(
+            edited[&by_crate], held[&by_crate],
+            "the premise: core_x::a::Schema is core_x's"
+        );
+        assert_eq!(
+            edited[&by_self], held[&by_self],
+            "self::core_x names no crate"
+        );
+    }
+
     /// CLOUD-2927 (d): an impl is keyed for the type it is written for, as a
     /// path resolves its self type: an edit to `b::Schema`'s impl moves no
     /// case naming `a::Schema`, and one to `a::Schema`'s does.
@@ -19105,6 +19178,61 @@ mod tests {
             "a `///` edit moves the case naming S"
         );
         assert_eq!(item[&plain], held[&plain], "and no other");
+    }
+
+    /// A module path with the block scopes it ends in dropped: a block's
+    /// items resolve `self`, `super` and `crate` from the module around it.
+    ///
+    /// Fails by: any answer but that module (bootstrap shard 7/8 at
+    /// 34c6e4d1f survived `enclosing_module` as `"xyzzy"`).
+    #[test]
+    fn a_block_scope_resolves_from_its_enclosing_module() {
+        assert_eq!(enclosing_module("src::a"), "src::a");
+        assert_eq!(enclosing_module("src::a::#f0::#g1"), "src::a");
+        assert_eq!(enclosing_module("#f0::#g1"), "", "the crate root's blocks");
+        assert_eq!(enclosing_module(""), "");
+    }
+
+    /// An item in an unscoped file is keyed by its bare name with no kind
+    /// marked: with no home, a `use` binding's key is the name it binds.
+    ///
+    /// Fails by: a kind marked where there is no home (bootstrap shard 7/8 at
+    /// 34c6e4d1f survived `free_keys`' `home.is_empty()` guard as `false`), so
+    /// a bare mention of the binding finds no key.
+    #[test]
+    fn an_unscoped_use_binding_is_keyed_by_its_bare_name() {
+        let binding = first_item("use a::b;\n");
+        let keys = definitions(&binding, &FileScope::unscoped(), &BTreeSet::new());
+        assert!(keys.iter().any(|key| key == "b"), "{keys:?}");
+        assert!(
+            keys.iter().all(|key| !key.contains(USE_BOUND)),
+            "no kind without a home: {keys:?}"
+        );
+    }
+
+    /// A name a `::` qualifies inside a macro's tokens is unknown, whichever
+    /// macro holds it: a std macro passing its tokens through passes the
+    /// whole path, which no bare name resolves.
+    ///
+    /// Fails by: the two-colon spelling of `::` not read as a qualifier
+    /// (bootstrap shard 7/8 at 34c6e4d1f survived `||` as `&&` and `==` as
+    /// `!=` in `passed_as_written`), so `LIMIT` in `vec![a::LIMIT]` reads as
+    /// a bare `LIMIT` where `vec!` is called.
+    #[test]
+    fn a_qualified_name_in_a_macros_tokens_is_unknown() {
+        let root = parsed("fn f() { vec![a::LIMIT, LIMIT]; }\n");
+        let named: Vec<ra_ap_syntax::SyntaxToken> = root
+            .descendants_with_tokens()
+            .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+            .filter(|token| token.text() == "LIMIT")
+            .collect();
+        assert_eq!(named.len(), 2);
+        assert_eq!(passed_as_written(&named[0]), format!("{WRITTEN}?"));
+        assert_eq!(
+            passed_as_written(&named[1]),
+            "",
+            "the premise: a bare name vec! passes is resolved as written"
+        );
     }
 
     /// The first item of `source`, parsed as the schema parses a file.
@@ -23121,6 +23249,71 @@ pub fn repo() -> u8 {{ scratch() }}
         assert!(reuse_holds_all(&reuse, &[], &reach), "nothing judged");
     }
 
+    /// Where every judging run reuses the build, the judging sees each
+    /// rendered file's original text until the showing drops; where none is
+    /// recorded, the rendering stands.
+    ///
+    /// Fails by: the originals never shown (bootstrap shard 7/8 at 34c6e4d1f
+    /// survived `shown_over` as `Ok(None)`), so a case reading its crate's
+    /// source reads the schema's switches and fails under every mutant.
+    #[test]
+    fn the_judging_sees_the_originals_while_it_reuses_the_build() {
+        let base = crate::scratch::scratch("schema-shown-over");
+        let (root, work) = (base.join("root"), base.join("work"));
+        let file = "crates/p/src/m.rs";
+        for (dir, text) in [(&root, "original"), (&work, "rendered")] {
+            std::fs::create_dir_all(dir.join("crates/p/src")).unwrap();
+            std::fs::write(dir.join(file), text).unwrap();
+        }
+        let mutants = [Listed {
+            file: file.to_owned(),
+            ..listed("BinaryOperator", "!=", (2, 7), (2, 9))
+        }];
+        let reach = std::collections::BTreeMap::from([(0, BTreeSet::from([case("a::f")]))]);
+        let reuse = Reuse {
+            binaries: std::path::PathBuf::from("/r/binaries.json"),
+            metadata: std::path::PathBuf::from("/r/cargo-metadata.json"),
+            ids: BTreeSet::from([case("a::f").1]),
+        };
+        let (seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let (red, control) = (Red::new(), Control::new());
+        let judging = |reuse| Judging {
+            work: &work,
+            target: &base,
+            scratch: &base,
+            root: &root,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &base,
+            red: &red,
+            control: &control,
+            reuse,
+            threads: None,
+        };
+        let schema = Schema {
+            files: [(file.to_owned(), Rendered::default())].into(),
+            ..Schema::default()
+        };
+        let read = || std::fs::read_to_string(work.join(file)).unwrap();
+        let shown = shown_over(&judging(Some(&reuse)), &[0], &schema).unwrap();
+        assert!(shown.is_some(), "every run reuses the build");
+        assert_eq!(read(), "original");
+        drop(shown);
+        assert_eq!(read(), "rendered", "the rendering goes back");
+        assert!(
+            shown_over(&judging(None), &[0], &schema).unwrap().is_none(),
+            "no reuse record, no showing"
+        );
+        assert_eq!(read(), "rendered");
+    }
+
     /// The control run names each case it found red beside the count, by
     /// label and its failure's first line.
     ///
@@ -26495,6 +26688,49 @@ pub fn repo() -> u8 {{ scratch() }}
         let cache = [(key, format!("{CONTROLLED}2.5"))].into();
         assert_eq!(journaled_control(&judging(&cache), &passed), Some(2.5));
         assert_eq!(journaled_control(&judging(&empty), &passed), None);
+    }
+
+    /// CLOUD-2253 C3: a passing control journaled by one run is read back by
+    /// the next, through the journal as it is written and loaded.
+    ///
+    /// Fails by: the control's journal lines unreadable (bootstrap shard 7/8
+    /// at 34c6e4d1f survived `control_lines` as `"xyzzy"`), or dropped on
+    /// load, which they were: [`load_verdicts`] kept no `control:` line, so
+    /// every run ran every control again.
+    #[test]
+    fn a_journaled_control_survives_the_journal() {
+        let base = std::path::Path::new("/w");
+        let mutants = [listed("BinaryOperator", "!=", (2, 7), (2, 9))];
+        let passed = case("quick");
+        let (reach, seconds) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let digests: std::collections::BTreeMap<Case, String> =
+            [(passed.clone(), String::from("d1"))].into();
+        let empty = std::collections::BTreeMap::new();
+        let (red, control) = (Red::new(), Control::new());
+        let judging = |cache| Judging {
+            work: base,
+            target: base,
+            scratch: base,
+            root: base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache,
+            digests: &digests,
+            store: base,
+            red: &red,
+            control: &control,
+            reuse: None,
+            threads: None,
+        };
+        let times: Control = [(passed.clone(), 2.5)].into();
+        let journal = control_lines(&judging(&empty), &times);
+        let cache = cache_for(&journal, false);
+        assert_eq!(journaled_control(&judging(&cache), &passed), Some(2.5));
+        assert!(cache_for(&journal, true).is_empty(), "never under CI");
     }
 
     /// CLOUD-2789: emptying the scratch parent before a recording pass fails
