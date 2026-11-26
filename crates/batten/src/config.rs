@@ -4692,6 +4692,11 @@ mod tests {
 
     /// A record beside the stamp taken BEFORE the read is not believed when the
     /// file moved across it: the bytes read may be newer than the stamp says.
+    /// Nor is one written: the hash is of bytes the stamp does not describe.
+    ///
+    /// Fails by: a read the file moved across recording its digest beside the
+    /// stamp from before it (bootstrap shard 7/8 at 34c6e4d1f survived `&&`
+    /// as `||` in `text_digest`'s `wanted`).
     #[test]
     fn a_file_changed_across_its_read_is_hashed() {
         let (path, named, later) = digested_authority("config-digest-moving");
@@ -4703,6 +4708,11 @@ mod tests {
         assert_eq!(
             text_digest(&path, &named, (&before, at), text),
             *blake3::hash(text.as_bytes()).as_bytes()
+        );
+        assert_eq!(
+            recorded_digest(&named, &before.fields),
+            Some([7_u8; 32]),
+            "a moved read writes no record"
         );
     }
 
