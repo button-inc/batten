@@ -150,6 +150,80 @@ fn every_spawn_stops_mises_walk_at_the_fixture_root() {
     );
 }
 
+/// EVERY HOST-SESSION VARIABLE THE ENGINE READS IS SCRUBBED FROM EVERY SPAWN
+/// (CLOUD-2789).
+///
+/// A case whose verdict reads the host's live session is a gate that answers
+/// one way in the session that ran it and another on the land or CI. Measured
+/// on #1276: `CLAUDE_PID` handed `doctor` the host session's root, so
+/// `doctor::this_repository_is_healthy` and `init`'s read-verb case were red
+/// wherever that root's wiring differed. So every `"CLAUDE_*"` name the engine
+/// spells is one `common::batten` removes, and a new one fails here until it is
+/// scrubbed or argued below.
+///
+/// `CLAUDE_PROJECT_DIR` is the one argued exception: the engine spells it as
+/// the token a committed wiring row substitutes, and never reads it from its
+/// environment.
+///
+/// Fails by: a host-session name the engine spells reaching a spawn.
+#[test]
+fn every_spawn_scrubs_the_host_session_the_engine_reads() {
+    const NEVER_READ: &[&str] = &["CLAUDE_PROJECT_DIR"];
+    let named: std::collections::BTreeSet<String> = common::rust_sources()
+        .into_iter()
+        .filter(|path| path.components().any(|part| part.as_os_str() == "src"))
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .flat_map(|text| host_session_names(&text))
+        .filter(|name| !NEVER_READ.contains(&name.as_str()))
+        .collect();
+    assert!(
+        named.contains("CLAUDE_PID"),
+        "the census read no engine source naming the session: {named:?}"
+    );
+    let command = common::batten();
+    let scrubbed: Vec<String> = command
+        .get_envs()
+        .filter(|(_, value)| value.is_none())
+        .filter_map(|(name, _)| name.to_str().map(str::to_owned))
+        .collect();
+    let reaching: Vec<&String> = named
+        .iter()
+        .filter(|name| !scrubbed.contains(name))
+        .collect();
+    assert!(
+        reaching.is_empty(),
+        "these host-session variables reach every spawn: {reaching:?}"
+    );
+}
+
+/// Every `"CLAUDE_<NAME>"` string literal in `source`.
+fn host_session_names(source: &str) -> Vec<String> {
+    let prefix = concat!("\"CLAUDE", "_");
+    source
+        .match_indices(prefix)
+        .filter_map(|(at, _)| {
+            let rest = &source[at + 1..];
+            let end = rest.find('"')?;
+            let name = &rest[..end];
+            name.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                .then(|| name.to_owned())
+        })
+        .collect()
+}
+
+/// The reader the census above stands on: a quoted name is found, prose and a
+/// lower-case word are not.
+///
+/// Fails by: the reader matching nothing, which passes the census vacuously.
+#[test]
+fn the_host_session_reader_finds_a_quoted_name_only() {
+    let quoted = concat!("std::env::var(\"CLAUDE", "_PID\")");
+    assert_eq!(host_session_names(quoted), vec!["CLAUDE_PID".to_owned()]);
+    assert!(host_session_names("reads `CLAUDE_PID` from the host").is_empty());
+    assert!(host_session_names(concat!("\"CLAUDE", "_pid\"")).is_empty());
+}
+
 /// REFUSED BEFORE THE CHILD EXISTS, not reported after it ran: the point is that
 /// a falling-through fixture never touches the checkout. `init` writes
 /// `batten.toml` into its working directory, so a child that ran leaves one.

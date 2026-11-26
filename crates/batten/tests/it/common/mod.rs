@@ -873,6 +873,17 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
         // that means a host sets it.
         "CLAUDE_CODE_REMOTE",
         "BATTEN_ENVIRONMENT",
+        // NOR THE HOST'S LIVE SESSION (CLOUD-2789): `wiring::live_session_root`
+        // reads the cwd of the process this names, so `doctor`'s `hook-wiring`
+        // judged the host container's session root, and
+        // `doctor::this_repository_is_healthy` and `init`'s read-verb case were
+        // red wherever that session's wiring differed from the land's. A case
+        // that means a live session sets it.
+        "CLAUDE_PID",
+        // NOR THE HOST SESSION'S OWNER (CLOUD-2789): the attribution and
+        // identity judgments read it, so a case inherited whoever ran the suite.
+        // A case that means an owner sets it, as `attribution.rs` does.
+        "CLAUDE_CODE_USER_EMAIL",
         // THE LAP'S GATE MARKER (CLOUD-2707): a lap exports it to the whole gate,
         // the suite included, so a placement case would read every head as the
         // lap's own and its refusal arm could never fail.
