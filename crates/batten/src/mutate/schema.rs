@@ -20802,6 +20802,20 @@ mod tests {
         files: &[(&str, &str)],
         resources: &std::collections::BTreeMap<String, String>,
     ) -> std::collections::BTreeMap<Case, String> {
+        stored_tree_digests(name, (cases, executed), files, resources, None)
+    }
+
+    /// [`tree_digests`] through the derived store `derived`.
+    fn stored_tree_digests(
+        name: &str,
+        (cases, executed): (
+            &BTreeSet<Case>,
+            &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+        ),
+        files: &[(&str, &str)],
+        resources: &std::collections::BTreeMap<String, String>,
+        derived: Option<&Derived>,
+    ) -> std::collections::BTreeMap<Case, String> {
         let root = crate::scratch::scratch(name);
         for (path, text) in files {
             let at = root.join(path);
@@ -20836,7 +20850,7 @@ mod tests {
             resources,
             untraced: "",
             compiled: &rendered.compiled,
-            derived: None,
+            derived,
         };
         let dirs = [(String::from("fix"), String::new())].into();
         case_digests(&root, cases, &dirs, executed, &depends)
@@ -21569,6 +21583,48 @@ mod tests {
                 .clone()
         };
         assert_ne!(digest("schema-r4-8-a", ""), digest("schema-r4-8-b", "\n"));
+    }
+
+    /// An integration case's held entry in the derived store holds only while
+    /// its unprobed callers sit where they sat: a line added above the test
+    /// keys it as afresh, and as with no store at all.
+    ///
+    /// Fails by: a held entry checked without its callers' position
+    /// (`CaseKeys::callers` answering nothing, which the sweep at 9eb88c0a3
+    /// reported uncovered: every caller-position case keyed with no store),
+    /// so the moved `Location::caller()` kept the entry's old digest.
+    #[test]
+    fn a_stored_entry_holds_only_while_its_callers_sit_where_they_sat() {
+        let case = (String::from("o::t"), String::from("fix::it"));
+        let cases: BTreeSet<Case> = [case.clone()].into();
+        let executed = [(case.clone(), [0].into())].into();
+        let none = std::collections::BTreeMap::new();
+        let state = crate::scratch::scratch("schema-stored-callers-state");
+        let digest = |above: &str, derived: Option<&Derived>| {
+            let test = format!("{above}#[test]\nfn t() {{ fix::check(); }}\n");
+            stored_tree_digests(
+                "schema-stored-callers",
+                (&cases, &executed),
+                &[
+                    ("src/lib.rs", "#[track_caller]\npub fn check() {}\n"),
+                    ("tests/it/main.rs", "mod o;\n"),
+                    ("tests/it/o.rs", &test),
+                ],
+                &none,
+                derived,
+            )[&case]
+                .clone()
+        };
+        let held = digest("", Some(&Derived::at(&state, "build")));
+        assert_eq!(held, digest("", None), "a stored entry keys as a fresh one");
+        assert_eq!(
+            digest("", Some(&Derived::at(&state, "build"))),
+            held,
+            "and holds over the same tree"
+        );
+        let moved = digest("\n", Some(&Derived::at(&state, "build")));
+        assert_ne!(moved, held, "a caller moved by a line");
+        assert_eq!(moved, digest("\n", None), "keyed as afresh");
     }
 
     /// S12 (CLOUD-2904, round 4 #20): a package's build script and the file
