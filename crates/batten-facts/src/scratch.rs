@@ -86,9 +86,16 @@ pub fn root() -> PathBuf {
 /// sibling reaps it mid-seed. Given a parent of its own the case asserts both
 /// the collection and the returned path, and deleting the reap below reddens
 /// it — which calling `reap_the_dead` from the case directly did not.
+///
+/// THIS PROCESS'S OWN ROOT IS MADE BEFORE THE REAP (CLOUD-2904), so the reap
+/// always reads at least one pid and asks whether it lives. Made after, whether
+/// the probe ran was whether some other process had left a root behind, and a
+/// case's executed functions moved with what else had run on the host.
 fn root_in(parent: &Path) -> PathBuf {
+    let own = parent.join(std::process::id().to_string());
+    let _ = std::fs::create_dir_all(&own);
     reap_the_dead(parent);
-    parent.join(std::process::id().to_string())
+    own
 }
 
 /// An EMPTY scratch directory named `name`, under this process's root.
