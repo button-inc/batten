@@ -1525,6 +1525,156 @@ fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
     );
 }
 
+/// A three-crate cargo workspace over `dir`: `app` uses `dep` and `other`,
+/// path dependencies only, so a build needs no registry.
+fn cargo_workspace(dir: &Path) {
+    let write = |path: &str, text: &str| {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"app\", \"dep\", \"other\"]\nresolver = \"2\"\n",
+    );
+    for leaf in ["dep", "other"] {
+        write(
+            &format!("{leaf}/Cargo.toml"),
+            &format!("[package]\nname = \"{leaf}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+        );
+        write(
+            &format!("{leaf}/src/lib.rs"),
+            "pub fn value() -> u8 { 1 }\n",
+        );
+    }
+    write(
+        "app/Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [dependencies]\ndep = { path = \"../dep\" }\nother = { path = \"../other\" }\n",
+    );
+    write(
+        "app/src/main.rs",
+        "fn main() { println!(\"{}\", dep::value() + other::value()); }\n",
+    );
+}
+
+/// `cargo build --offline` in `dir`, into `dir/target`, with nothing
+/// redirecting it; the packages it compiled, sorted.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the case is what a real cargo rebuilds after a collection, so it runs cargo"
+)]
+fn cargo_build(dir: &Path) -> Vec<String> {
+    use batten::capture::Streamed as _;
+    let built = std::process::Command::new(env!("CARGO"))
+        .current_dir(dir)
+        .args(["build", "--offline", "--message-format=json"])
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_BUILD_DIR")
+        .env_remove("CARGO_BUILD_TARGET_DIR")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("cargo runs");
+    let said = common::stderr(&built);
+    assert!(built.status.success(), "cargo build: {said}");
+    // CARGO'S OWN ACCOUNT, never its progress lines, which a quiet terminal
+    // setting hides: an artifact that is not `fresh` was compiled.
+    let mut compiled: Vec<String> = common::stdout(&built)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| message["reason"] == "compiler-artifact" && message["fresh"] == false)
+        .filter_map(|message| message["target"]["name"].as_str().map(str::to_owned))
+        .collect();
+    compiled.sort();
+    compiled
+}
+
+/// `batten target prune -y` in `dir` below the floor: the collection run to
+/// `max_free_mb`, with no floor of its own (CLOUD-2198); what it said.
+fn collected_below_the_floor(dir: &Path) -> String {
+    let ran = common::batten()
+        .current_dir(dir)
+        .env("TMPDIR", own_temp(dir))
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .args(["target", "prune", "-y"])
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    let said = format!("{}{}", common::stdout(&ran), common::stderr(&ran));
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    said
+}
+
+/// A WARM TARGET COLLECTED UNDER PRESSURE STAYS WARM (CLOUD-2789). Every unit a
+/// built workspace holds is in its current build graph, so a collection that
+/// cannot reach the band from anything else stops there and says so, and the
+/// next no-op build compiles nothing. Measured on #1276: ranked by mtime, which
+/// cargo never moves for a unit it reuses, the stable dependencies went first
+/// and the next build recompiled 67 units.
+///
+/// Fails by: a unit of the current graph collected for its age.
+#[test]
+fn a_warm_target_collected_under_pressure_rebuilds_nothing() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("collect-warm-graph", true);
+    cargo_workspace(&dir);
+    assert_eq!(
+        cargo_build(&dir),
+        ["app", "dep", "other"],
+        "THE PREMISE: a cold build compiles every package"
+    );
+    let said = collected_below_the_floor(&dir);
+    assert!(
+        said.contains("disk-live"),
+        "the pass stopped at the graph and said so: {said}"
+    );
+    assert!(
+        !present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
+        "what is outside the graph still goes: {said}"
+    );
+    assert_eq!(
+        cargo_build(&dir),
+        Vec::<String>::new(),
+        "a no-op build after the collection: {said}"
+    );
+}
+
+/// AFTER A ONE-CRATE EDIT, ONLY THAT CRATE AND ITS DEPENDENTS REBUILD
+/// (CLOUD-2789). The collection runs between the edit and the build: the graph
+/// it reads is the pre-edit one, every unit of which the next build reuses but
+/// the edited crate's and its dependents'.
+///
+/// Fails by: a dependency the edit did not touch collected, so it recompiles.
+#[test]
+fn a_collection_after_an_edit_costs_only_the_edited_crate_and_its_dependents() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("collect-edit-graph", true);
+    cargo_workspace(&dir);
+    assert_eq!(cargo_build(&dir), ["app", "dep", "other"], "THE PREMISE");
+    std::fs::write(dir.join("dep/src/lib.rs"), "pub fn value() -> u8 { 2 }\n").unwrap();
+    let said = collected_below_the_floor(&dir);
+    assert_eq!(
+        cargo_build(&dir),
+        ["app", "dep"],
+        "the edited crate and its dependent, and nothing else: {said}"
+    );
+}
+
 /// `BATTEN_DISK_TRACE=1` writes each sample the watcher takes to stderr, the
 /// one record of how often the volume was read.
 ///
