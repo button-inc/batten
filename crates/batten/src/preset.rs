@@ -461,8 +461,11 @@ fn ejected_source(manifest: &Manifest, module: &PresetModule) -> String {
 pub struct Ejection {
     /// The files written, repository-relative, in manifest order.
     pub written: Vec<String>,
-    /// The preset row that now excepts them.
+    /// The preset row that now excepts them, or that was removed.
     pub row: String,
+    /// Whether the preset row was removed because the eject left it compiling
+    /// no module, rather than given an `except`.
+    pub removed: bool,
     /// The row that loads the copies.
     pub copies: String,
     /// Whether this eject appended `copies` rather than finding it.
@@ -549,18 +552,8 @@ pub fn eject(root: &Path, config: &Path, rules: &[Rule], target: &str) -> anyhow
         crate::durable::replace(root.join(path), ejected_source(manifest, member))?;
     }
 
-    let mut except: Vec<String> = row.except.clone();
-    except.extend(closure.iter().map(|member| member.name().to_owned()));
-    except.sort();
-    except.dedup();
-    let mut edits = vec![crate::config_edit::Edit::InRow {
-        array: String::from("rule"),
-        id: row.id.clone(),
-        edits: vec![crate::config_edit::Edit::Set {
-            path: vec![String::from("except")],
-            value: crate::config_edit::Scalar::Strings(except),
-        }],
-    }];
+    let (preset_edit, emptied) = switch_off(manifest, row, &closure);
+    let mut edits = vec![preset_edit];
     let copies = existing.map_or(copies_id, |rule| rule.id.clone());
     if existing.is_none() {
         edits.push(crate::config_edit::Edit::AppendRow {
@@ -572,9 +565,48 @@ pub fn eject(root: &Path, config: &Path, rules: &[Rule], target: &str) -> anyhow
     Ok(Ejection {
         written,
         row: row.id.clone(),
+        removed: emptied,
         copies,
         added: existing.is_none(),
     })
+}
+
+/// The edit that switches the ejected `closure` off on the preset `row`, and
+/// whether it removes the row.
+///
+/// A ROW LEFT COMPILING NOTHING IS REMOVED, not excepted: the engine refuses a
+/// preset row whose `except` covers every module it compiles at its scope
+/// ("delete the row instead"), so ejecting a preset's last module there would
+/// otherwise write a config `check` cannot load. The same selection the engine
+/// compiles decides it.
+fn switch_off(
+    manifest: &Manifest,
+    row: &Rule,
+    closure: &[&PresetModule],
+) -> (crate::config_edit::Edit, bool) {
+    let mut except: Vec<String> = row.except.clone();
+    except.extend(closure.iter().map(|member| member.name().to_owned()));
+    except.sort();
+    except.dedup();
+    if manifest
+        .modules_for(row.scope, row.provider.as_deref(), &except)
+        .is_empty()
+    {
+        let edit = crate::config_edit::Edit::RemoveRow {
+            array: String::from("rule"),
+            id: row.id.clone(),
+        };
+        return (edit, true);
+    }
+    let edit = crate::config_edit::Edit::InRow {
+        array: String::from("rule"),
+        id: row.id.clone(),
+        edits: vec![crate::config_edit::Edit::Set {
+            path: vec![String::from("except")],
+            value: crate::config_edit::Scalar::Strings(except),
+        }],
+    };
+    (edit, false)
 }
 
 /// The row that loads the copies: the preset row's scope, severity, remedy and
@@ -982,16 +1014,25 @@ mod tests {
                 "policy/git/host-decided.rego"
             ]
         );
+        // THE CLOSURE IS EVERY MODULE `git` SHIPS AT THIS SCOPE, so the preset
+        // row would compile nothing: it is REMOVED, not excepted, because the
+        // engine refuses a row whose `except` covers its whole selection
+        // ("delete the row instead") and `check` could not load the config.
         assert_eq!(
-            (done.row.as_str(), done.copies.as_str(), done.added),
-            ("git calls", "git ejected", true)
+            (
+                done.row.as_str(),
+                done.removed,
+                done.copies.as_str(),
+                done.added
+            ),
+            ("git calls", true, "git ejected", true)
         );
         let copy = crate::fsio::read_to_string(root.join(&done.written[0])).unwrap();
         assert!(copy.starts_with("# batten-ejected: git/git-call-is-preapproved version "));
         let edited = crate::fsio::read_to_string(&config).unwrap();
         assert!(
-            edited.contains("except = [\"git-call-is-preapproved\", \"host-decided\"]"),
-            "{edited}"
+            !edited.contains("id = \"git calls\"") && !edited.contains("except"),
+            "the emptied preset row is gone: {edited}"
         );
         assert!(edited.contains("bundle = \"policy/git\""), "{edited}");
         assert!(
