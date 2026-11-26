@@ -16499,7 +16499,7 @@ fn spend_the_matrix(
     // **THE FORGE'S HEAD, NEVER THIS CLONE'S**: `Readiness::head` says why. A
     // ready pull request's push that bought a run is asked its receipts by the
     // Push row's precheck (CLOUD-2436), since this may then buy `Nothing`.
-    let read = verdict_reading(&repo, &head);
+    let read = verdict_reading(&repo, &head, &land_roster());
     let reading = read.as_ref().map(|(verdict, _)| verdict.clone());
     let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
     // KEPT FOR THE WAIT ONLY WHEN THIS READY BUYS NOTHING (CLOUD-2253 A7): a
@@ -16803,29 +16803,13 @@ fn take_ready_reading(repo: &str, sha: &str) -> Option<rest::Answer> {
 ///
 /// Beside the verdict, the reading it was decided over, which Ready keeps for
 /// the Wait over the same head (CLOUD-2253 A7).
-fn verdict_reading(repo: &str, sha: &str) -> Option<(checks_green::Verdict, rest::Answer)> {
-    let sha = sha.to_owned();
-    let roster = checks_green::Roster {
-        required: roster_field(std::env::var("CI_REQUIRED_CHECKS").ok().as_deref()),
-        absent_ok: roster_field(std::env::var("CI_ABSENT_OK_CHECKS").ok().as_deref()),
-        // THE SAME DEFAULT `run_land_wait` USES, and the asymmetry was a silent
-        // disable (review of #848). `checks_green::decide` REFUSES an empty
-        // `answered` set, and this reads the verdict through `.ok()`, so a
-        // consumer who set a required roster and left the conclusions to the
-        // default got `None` here — could-not-look — which `buys_a_matrix` reads
-        // as "needs no ready". The step that buys CI then did nothing, `Push`
-        // updated a branch nobody had readied, and every later line said "no
-        // answer yet".
-        answered: roster_field(Some(
-            &std::env::var("CI_ANSWERED_CONCLUSIONS")
-                .unwrap_or_else(|_| String::from("success,failure,timed_out,action_required")),
-        )),
-        fanin: std::env::var("CI_FANIN_CHECK")
-            .ok()
-            .filter(|name| !name.is_empty()),
-    };
+fn verdict_reading(
+    repo: &str,
+    sha: &str,
+    roster: &checks_green::Roster,
+) -> Option<(checks_green::Verdict, rest::Answer)> {
     let config = pr_watch::Config {
-        sha,
+        sha: sha.to_owned(),
         repo: repo.to_owned(),
         interval: 1,
         progress: None,
@@ -16851,9 +16835,40 @@ fn verdict_reading(repo: &str, sha: &str) -> Option<(checks_green::Verdict, rest
     }
     // The interval it returns is for a LOOP to honour, and this is one read.
     let _pace = poll.absorb(Some(&raw), config.interval);
-    checks_green::decide(poll.runs(), &roster)
+    checks_green::decide(poll.runs(), roster)
         .ok()
         .map(|verdict| (verdict, raw))
+}
+
+/// The required-checks roster a lap reads from the environment, ONE reader for
+/// Ready and the Wait alike (CLOUD-2789).
+///
+/// **ONE SPELLING, because the asymmetry was a silent disable** (review of
+/// #848). `checks_green::decide` REFUSES an empty `answered` set and Ready reads
+/// its verdict through `.ok()`, so a Ready that left the conclusions to no
+/// default got `None` — could-not-look — which `buys_a_matrix` reads as "needs no
+/// ready". The step that buys CI then did nothing, `Push` updated a branch nobody
+/// had readied, and every later line said "no answer yet". Two inline copies are
+/// how that drifted; one reader cannot.
+fn land_roster() -> checks_green::Roster {
+    checks_green::Roster {
+        required: roster_field(std::env::var("CI_REQUIRED_CHECKS").ok().as_deref()),
+        absent_ok: roster_field(std::env::var("CI_ABSENT_OK_CHECKS").ok().as_deref()),
+        answered: roster_field(Some(
+            &std::env::var("CI_ANSWERED_CONCLUSIONS")
+                .unwrap_or_else(|_| String::from("success,failure,timed_out,action_required")),
+        )),
+        fanin: std::env::var("CI_FANIN_CHECK")
+            .ok()
+            .filter(|name| !name.is_empty()),
+    }
+}
+
+/// What the Wait over a head starts from: Ready's `kept` reading of it, unless
+/// this lap's Ready `fresh_ready` fired and started runs that reading never saw
+/// (CLOUD-2253 A7).
+fn wait_primer(kept: Option<rest::Answer>, fresh_ready: bool) -> Option<rest::Answer> {
+    kept.filter(|_| !fresh_ready)
 }
 
 /// `batten land wait` (CLOUD-1338): the lap's raced wait, and the record it
@@ -16886,18 +16901,7 @@ fn run_land_wait(
         writeln!(err, "::error:: land: cannot read this clone's HEAD")?;
         return Ok((ExitCode::Internal, None, None));
     };
-    let required = std::env::var("CI_REQUIRED_CHECKS").unwrap_or_default();
-    let roster = checks_green::Roster {
-        required: roster_field(Some(&required)),
-        absent_ok: roster_field(std::env::var("CI_ABSENT_OK_CHECKS").ok().as_deref()),
-        answered: roster_field(Some(
-            &std::env::var("CI_ANSWERED_CONCLUSIONS")
-                .unwrap_or_else(|_| String::from("success,failure,timed_out,action_required")),
-        )),
-        fanin: std::env::var("CI_FANIN_CHECK")
-            .ok()
-            .filter(|n| !n.is_empty()),
-    };
+    let roster = land_roster();
     // BEFORE THE LOOP, exactly as `pr_watch::watch` does it: a roster that can
     // decide nothing is a statement about the invocation, and one polled forever
     // would be a hang whose cause is a typo.
@@ -16956,7 +16960,7 @@ fn run_land_wait(
     // CI path longer than it was abandoned on every lap.
     let trunk = trunk_watch(reference, &base, &config.repo, config.interval);
     let holding = Heartbeat::for_clone(root);
-    let primed = take_ready_reading(&config.repo, &sha).filter(|_| !fresh_ready);
+    let primed = wait_primer(take_ready_reading(&config.repo, &sha), fresh_ready);
     let (waited, red) = land::wait_reading(
         (&config, &roster, &trunk),
         (fresh_ready, Some(branch)),
@@ -34003,6 +34007,93 @@ mod tests {
             assert_eq!(super::cancel_observed("o/r", " 2 "), Some(false));
             assert_eq!(super::cancel_observed("o/r", "3"), None);
         });
+    }
+
+    /// Fails by: Ready's verdict reading answering nothing over a forge that
+    /// answered, so `buys_a_matrix` reads could-not-look and the step that buys
+    /// CI buys nothing, and no reading is kept for the Wait (CLOUD-2789).
+    #[test]
+    fn ready_reads_the_verdict_the_forge_answered() {
+        let roster = crate::checks_green::Roster {
+            required: vec![String::from("ci")],
+            absent_ok: Vec::new(),
+            answered: vec![String::from("success"), String::from("failure")],
+            fanin: None,
+        };
+        let dir = crate::rest::routed(
+            "ready-verdict",
+            &[(
+                "commits/s/check-runs",
+                200,
+                r#"{"check_runs":[{"status":"completed","conclusion":"success","name":"ci","id":1}]}"#,
+            )],
+        );
+        let read = crate::rest::with_fixture(&dir, || super::verdict_reading("o/r", "s", &roster));
+        let (verdict, raw) = read.expect("an answered forge is a reading");
+        assert_eq!(verdict, crate::checks_green::Verdict::Green);
+        assert!(raw.is_reading());
+    }
+
+    /// Fails by: the Wait starting from Ready's reading after Ready fired, so it
+    /// grades runs that reading never saw, or dropping the reading when Ready
+    /// bought nothing, so it reads the forge twice for one fact (CLOUD-2253 A7).
+    #[test]
+    fn the_wait_starts_from_ready_s_reading_only_when_ready_bought_nothing() {
+        let kept = || {
+            Some(crate::rest::Answer {
+                status: 200,
+                etag: None,
+                poll_floor: None,
+                backoff: None,
+                body: String::from("[]"),
+                headers: std::collections::BTreeMap::new(),
+            })
+        };
+        assert!(super::wait_primer(kept(), false).is_some());
+        assert!(super::wait_primer(kept(), true).is_none());
+        assert!(super::wait_primer(None, false).is_none());
+    }
+
+    /// Fails by: the Replay row's precheck answering Go without settling, so a
+    /// speculation left in the clone is replayed on and pushed rather than
+    /// adopted and settled first (CLOUD-2789).
+    #[test]
+    fn the_replay_row_adopts_a_bet_left_in_the_clone_before_it_answers() {
+        let root = crate::scratch::scratch("bet-settled-row");
+        crate::gitwrite::seed(&root).unwrap();
+        let head = crate::git::head_commit(&root).unwrap();
+        crate::gitwrite::set_ref(&root, crate::speculation::BASE_REF, &head).unwrap();
+        let row = crate::pipeline::Pipeline::default()
+            .steps
+            .into_iter()
+            .find(|row| row.precheck == Some(crate::pipeline::Precheck::BetSettled))
+            .expect("the shipped composition settles a bet");
+        let asked = super::Asked {
+            root: &root,
+            url: "",
+            reference: "main",
+            branch: "topic",
+            lap: 1,
+        };
+        let mut bet = crate::speculation::Bet::default();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        // No forge is reachable: every read the settle makes finds no answer.
+        let forge = crate::rest::routed("bet-settled-row-forge", &[]);
+        let _ = crate::rest::with_fixture(&forge, || {
+            super::asks_before_the_step(
+                row,
+                asked,
+                &mut crate::main_watch::Poll::default(),
+                &mut bet,
+                &mut out,
+                &mut err,
+            )
+        });
+        let said = String::from_utf8_lossy(&out);
+        assert!(
+            said.contains("adopting an unsettled speculation"),
+            "the bet was settled before the row answered: {said}"
+        );
     }
 
     /// Fails by: the could-not-look count not counting each unanswered read,
