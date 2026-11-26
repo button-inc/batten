@@ -235,6 +235,7 @@
             "additionalProperties": false,
             "properties": {
               "assigns": {
+                "description": "Every assignment the segment's programs run under, as `NAME=value` with quotes resolved, wrappers included: read per line (a later line of a newline-joined segment keeps its own prefix) and through `env -S`, whose string is split into the command. The value rides with the name, because an inert name can carry a value that is not (`GIT_PAGER=./x`).",
                 "items": {
                   "type": "string"
                 },
