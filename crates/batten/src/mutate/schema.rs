@@ -15512,6 +15512,32 @@ mod tests {
         );
     }
 
+    /// An impl is followed beside a name's own definition, never beside an
+    /// associated name alone.
+    ///
+    /// Fails by: an associated name counted as the name's own definition, so
+    /// a method name reached the one impl holding it, or the name's own
+    /// definition not counted, so its one impl was never followed.
+    #[test]
+    fn an_impl_is_followed_only_beside_an_owned_definition() {
+        let imp = format!("S{IMPL_DEFINED}");
+        let member = format!("{ASSOCIATED}m");
+        let items: std::collections::BTreeMap<String, BTreeSet<String>> =
+            [(imp.clone(), ["impl S".to_owned()].into())].into();
+        let owned = ["S", imp.as_str()];
+        assert_eq!(
+            followed(&[0, 1], &owned, &items).collect::<Vec<_>>(),
+            [0, 1],
+            "the type's one impl"
+        );
+        let associated = [member.as_str(), imp.as_str()];
+        assert_eq!(
+            followed(&[0, 1], &associated, &items).collect::<Vec<_>>(),
+            [0],
+            "a method name's impl"
+        );
+    }
+
     /// B16 (CLOUD-2904, round 3): a name with several definitions is followed
     /// through its non-impl ones and keys its impls without following them,
     /// so an edit a type's own definition reaches moves the case naming it
