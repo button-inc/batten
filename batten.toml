@@ -19950,8 +19950,10 @@ id = "darwin-link"
 # whole, the lint refused both as undeclared reads. `.gitignore` for the same
 # reason (CLOUD-2789): `cargo zigbuild` reads the root one on a one-triple run
 # too, measured at 5241db48d with 11 GB free, so it is the step's own read,
-# not the rustc wrapper's collector (CLOUD-2925).
-inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", ".cargo", "build.zig", ".gitignore"]
+# not the rustc wrapper's collector (CLOUD-2925). NOT `batten.toml` (CLOUD-2789):
+# only the `it` tests `include_str!` it, and `cargo zigbuild --workspace` builds
+# libraries and binaries, so a config-only edit no longer relinks two triples.
+inputs = ["crates", "Cargo.toml", "Cargo.lock", ".cargo", "build.zig", ".gitignore"]
 tools = [
   ["cargo-zigbuild", "--version"],
   ["zig", "version"],
@@ -19960,11 +19962,29 @@ tools = [
 
 [[step]]
 id = "deny"
+# THE MANIFESTS, NOT THE SOURCES (CLOUD-2789): cargo-deny judges licenses,
+# advisories and sources from the dependency graph, which the member manifests
+# and the lockfile fix. `crates` whole made every source edit a miss. Cargo's
+# workspace load still probes each member's target paths, so that is keyed on
+# presence below, as `lint:clippy:facts` keys it.
 inputs = [
-  "crates",
+  "crates/batten/Cargo.toml",
+  "crates/batten-base/Cargo.toml",
+  "crates/batten-codemods/Cargo.toml",
+  "crates/batten-core/Cargo.toml",
+  "crates/batten-facts/Cargo.toml",
+  "crates/batten-fsio/Cargo.toml",
+  "crates/batten-stream/Cargo.toml",
+  # Target autodiscovery LISTS a member's `tests` and `examples` where they
+  # exist, which is a read rather than a probe: the trace refused all four. A
+  # listing cannot be keyed apart from its content, so a test edit still moves
+  # this key; a `src` edit no longer does.
+  "crates/batten/tests",
+  "crates/batten/examples",
+  "crates/batten-codemods/tests",
+  "crates/batten-codemods/examples",
   "Cargo.toml",
   "Cargo.lock",
-  "batten.toml",
   "deny.toml",
   # cargo reads its config under `.cargo`, and cargo-deny looks for an
   # exceptions file beside `deny.toml` and in `.cargo`; the trace refused
@@ -19973,7 +19993,85 @@ inputs = [
   "deny.exceptions.toml",
   ".deny.exceptions.toml",
 ]
-tools = [["cargo", "deny", "--version"]]
+tools = [
+  ["cargo", "deny", "--version"],
+  [
+    "batten",
+    "step",
+    "exists",
+    "--",
+    "crates/batten/README",
+    "crates/batten/README.md",
+    "crates/batten/README.txt",
+    "crates/batten/benches",
+    "crates/batten/build.rs",
+    "crates/batten/examples",
+    "crates/batten/src/bin",
+    "crates/batten/src/lib.rs",
+    "crates/batten/src/main.rs",
+    "crates/batten/tests",
+    "crates/batten-base/README",
+    "crates/batten-base/README.md",
+    "crates/batten-base/README.txt",
+    "crates/batten-base/benches",
+    "crates/batten-base/build.rs",
+    "crates/batten-base/examples",
+    "crates/batten-base/src/bin",
+    "crates/batten-base/src/lib.rs",
+    "crates/batten-base/src/main.rs",
+    "crates/batten-base/tests",
+    "crates/batten-codemods/README",
+    "crates/batten-codemods/README.md",
+    "crates/batten-codemods/README.txt",
+    "crates/batten-codemods/benches",
+    "crates/batten-codemods/build.rs",
+    "crates/batten-codemods/examples",
+    "crates/batten-codemods/src/bin",
+    "crates/batten-codemods/src/lib.rs",
+    "crates/batten-codemods/src/main.rs",
+    "crates/batten-codemods/tests",
+    "crates/batten-core/README",
+    "crates/batten-core/README.md",
+    "crates/batten-core/README.txt",
+    "crates/batten-core/benches",
+    "crates/batten-core/build.rs",
+    "crates/batten-core/examples",
+    "crates/batten-core/src/bin",
+    "crates/batten-core/src/lib.rs",
+    "crates/batten-core/src/main.rs",
+    "crates/batten-core/tests",
+    "crates/batten-facts/README",
+    "crates/batten-facts/README.md",
+    "crates/batten-facts/README.txt",
+    "crates/batten-facts/benches",
+    "crates/batten-facts/build.rs",
+    "crates/batten-facts/examples",
+    "crates/batten-facts/src/bin",
+    "crates/batten-facts/src/lib.rs",
+    "crates/batten-facts/src/main.rs",
+    "crates/batten-facts/tests",
+    "crates/batten-fsio/README",
+    "crates/batten-fsio/README.md",
+    "crates/batten-fsio/README.txt",
+    "crates/batten-fsio/benches",
+    "crates/batten-fsio/build.rs",
+    "crates/batten-fsio/examples",
+    "crates/batten-fsio/src/bin",
+    "crates/batten-fsio/src/lib.rs",
+    "crates/batten-fsio/src/main.rs",
+    "crates/batten-fsio/tests",
+    "crates/batten-stream/README",
+    "crates/batten-stream/README.md",
+    "crates/batten-stream/README.txt",
+    "crates/batten-stream/benches",
+    "crates/batten-stream/build.rs",
+    "crates/batten-stream/examples",
+    "crates/batten-stream/src/bin",
+    "crates/batten-stream/src/lib.rs",
+    "crates/batten-stream/src/main.rs",
+    "crates/batten-stream/tests",
+  ],
+]
 
 # THE WORKFLOW AUDIT (CLOUD-2789): `[tasks.zizmor]` runs through this row wherever
 # an engine is built (`BATTEN_BIN`, which `verify:gated` sets), so `step cover`
