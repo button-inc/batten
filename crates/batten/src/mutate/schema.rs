@@ -13163,7 +13163,7 @@ fn reached(
             "mutate schema: selection digest taken for {taken} case(s)"
         )?,
         Err(why) => {
-            crate::mutate::progress!(out, "mutate schema: no selection digest taken: {why:#}")?
+            crate::mutate::progress!(out, "mutate schema: no selection digest taken: {why:#}")?;
         }
     }
     stage_took(out, "selection digest", at)?;
