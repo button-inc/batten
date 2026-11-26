@@ -1958,7 +1958,8 @@ pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> a
         "invalid config {source}: {err}\n\
          This build is batten {VERSION}, and an unknown key has two readings it \
          cannot tell apart: the config declares a key this build predates — \
-         rebuild with `mise run install:local` — or the key is a typo. The error \
+         install the engine it pins with `batten engine install` — or the key is \
+         a typo. The error \
          above names the line for either.",
     ))
 }

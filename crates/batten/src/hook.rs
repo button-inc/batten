@@ -3500,8 +3500,8 @@ impl FieldExt for Field {
 /// entirely", and that is not expressible in this return type. Since CLOUD-824
 /// there is no launcher to report it: an absent binary is a command the host
 /// cannot run, which every supported host reports through its own channel, and
-/// this consumer's provisioning (`mise run install:local`, from
-/// `session-start.sh`) fails loudly at the moment it could still be fixed.
+/// provisioning (`batten engine install`, the pinned engine and never a tree
+/// build — CLOUD-2840) fails loudly at the moment it could still be fixed.
 #[must_use]
 pub fn field(harness: Harness, raw: &str, field: Field) -> Option<String> {
     field.read(&decode(harness, raw)?)

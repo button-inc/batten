@@ -456,6 +456,7 @@ mod session_ids;
 mod session_provisioning;
 mod session_start;
 mod session_watch;
+mod setup_never_compiles;
 mod shell_authored;
 mod shell_banned;
 mod shell_retirement;

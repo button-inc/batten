@@ -18204,9 +18204,10 @@ target = "policy/spawn-adapters.rego"
 # `install.sh` into a one-liner that takes the script from `main` and the binary
 # from the latest release, so a container puts `batten` on PATH before any hook
 # fires and this handler is dispatched by a binary that already exists. Nothing
-# moved out of the program: `install:local` stays because on a dev clone the
-# working tree's build must supersede the released binary, and it is the recovery
-# path when the setup step never ran. An earlier plan proposed hoisting
+# moved out of the program: `install:local` stays for a SOURCE pin, where the
+# working tree's build is the engine. Under a release pin it refuses and names
+# `batten engine install`, which is also the recovery path when the setup step
+# never ran (CLOUD-2840). An earlier plan proposed hoisting
 # provisioning into the environment's setup script and was wrong — it would have
 # cost both of those for nothing.
 #

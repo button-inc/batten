@@ -392,7 +392,7 @@ BATTEN_CLI_REFERENCE = "batten-cli-reference.md"
 # `target/release` IS THE ONE ENTRY, AND IT IS THIS CHECKOUT'S BINARY WINNING
 # OVER AN INSTALLED ONE. Four task bodies invoke `batten` as a bare word —
 # `checks green`, `pr watch`, `task`, `task alive` — and nothing put a build
-# directory on PATH, so they resolved whatever `install:local` last copied to
+# directory on PATH, so they resolved whatever was last installed to
 # `~/.local/bin`. That is a DIFFERENT binary from the tree the task is running
 # against the moment anybody edits `crates/`, and it answers confidently.
 #
@@ -415,11 +415,11 @@ BATTEN_CLI_REFERENCE = "batten-cli-reference.md"
 # worse than a stated gap, which is this repository's own recurring lesson.
 #
 # The compensating control is provisioning rather than resolution:
-# `[tasks."session:batten"]` runs `install:local`, which BUILDS the release
-# binary at session start and reports an `::error::` with a log pointer when it
-# cannot. So the ordinary session has the tree's own binary before any task runs,
-# and a session that does not has already said so out loud. Making the fallback
-# itself refuse needs a mechanism `_.path` has no spelling for. Found in review.
+# `[tasks."session:batten"]` runs `batten engine install`, which puts the engine
+# the pin names over whatever shadows it, `target/release` included, and never
+# compiles under a release pin (CLOUD-2840). So the ordinary session runs the
+# pinned engine before any task runs. Making the fallback itself refuse needs a
+# mechanism `_.path` has no spelling for. Found in review.
 _.path = ["target/release"]
 # EVERY COMPILE UNIT PASSES THE DISK COLLECTOR (CLOUD-2197): cargo hands each
 # rustc invocation to `RUSTC_WRAPPER`, whoever started the build, so this is the
@@ -2145,7 +2145,7 @@ description = "Gate: no other OPEN pull request already claims a key this branch
 # THROUGH THE TASK RUNNER RATHER THAN A BARE `batten`, and that is the defect
 # this row was FIRST written with. `check = "batten claim race"` resolves the
 # INSTALLED binary from PATH, so a checkout whose source has moved ahead of its
-# last `install:local` is judged by an older program — measured here: the row
+# last install is judged by an older program — measured here: the row
 # reported a finding against `crates/batten/src/race.rs` because the installed
 # batten had no `claim race` verb at all and exited on usage. A gate answered by
 # a stale binary is a gate that decides about a tree nobody has.
@@ -3041,9 +3041,11 @@ description = "Build the release binary the hook registrations execute"
 # NO `depends` ON `target-prune` (CLOUD-2198): the floor model it judged is
 # retired, and the hook collects before this task's own spawn.
 #
-# The one place the hook's binary is produced, so `install:local`,
-# `session-start.sh` and `mise-tasks/perf.sh` name a task rather than three copies
-# of a cargo line that could drift in their flags.
+# The one place a tree build of the engine is produced, so `install:local` and
+# `perf` name a task rather than copies of a cargo line that could drift in their
+# flags. NOT SETUP'S: under a release pin the hook's binary is the release, which
+# `batten engine install` places, and `install:local` refuses before reaching
+# this task (CLOUD-2840).
 #
 # Release, not debug, and not `cargo run`: this runs on EVERY mediated tool call.
 # `cargo run` re-walks the build graph per invocation and contends for the
@@ -3242,8 +3244,7 @@ description = "Report whether this container can reach what the work needs, befo
 run = "batten doctor egress"
 
 [tasks."install:local"]
-description = "Put the built binary where the hook registrations resolve it — `install.sh`'s own destination"
-depends = ["build:release"]
+description = "Under a source pin, build this tree and put it where the hook registrations resolve it; under a release pin, refuse and name `batten engine install`"
 # CLOUD-824. This is the half of `.claude/hooks/batten-hook.sh` that was never a
 # hook concern: the launcher carried a four-candidate search (`BATTEN_BIN`,
 # `target/release`, `target/debug`, PATH) because "there is no `batten` on PATH
@@ -3276,7 +3277,17 @@ depends = ["build:release"]
 # every task's PATH, so a bare `batten engine stamp` re-stamped the build and left
 # the installed copy unstamped. Measured on #1132: the copy the hook ran carried
 # a stale stamp, and every call was refused until it was replaced.
+#
+# A RELEASE PIN IS INSTALLED, NEVER BUILT (CLOUD-2840). The first step is the
+# engine's own reading of the pin, and under a release pin it exits 2 naming
+# `batten engine install` before cargo is reached. So the build is a STEP after
+# it rather than a `depends`: mise runs every `depends` before the first run
+# step, which would compile the tree and only then refuse. The guard runs the
+# `batten` on PATH, never `{{vars.batten}}`, whose default is `cargo run` — a
+# compile to decide whether to compile.
 run = [
+  "batten engine pin --require-source",
+  "mise run build:release",
   "mkdir -p {% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}",
   "install -m 0755 target/release/batten {% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}/batten",
   "{% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}/batten engine stamp",
@@ -3634,8 +3645,10 @@ description = "Session start: install the latest RELEASE over whatever `deps-ins
 # exactly the branches that need a build.
 #
 # SO COMPILING IS OPT-IN, AND THE BAR IS STATED: you are changing
-# `crates/batten/**` and need the tree's engine to mediate your own calls.
-# `mise run install:local` is that route, and `verify` and `batten-check` already
+# `crates/batten/**` and need the tree's engine to mediate your own calls, which
+# is a SOURCE pin's case. `mise run install:local` is that route under a source
+# pin and refuses under a release pin, naming `batten engine install`, the
+# route there (CLOUD-2840); `verify` and `batten-check` already
 # build on that path anyway — so the case needs no session-start step to serve it.
 #
 # `./install.sh` AND NOT `mise run deps-install`, WHICH IS THE OBVIOUS SPELLING
@@ -5357,9 +5370,9 @@ description = "Gate: one pending commit message's subject follows the convention
 # not a slow gate, it is a different program. The build belongs at provisioning,
 # where `session:batten` already puts it. The
 # `_.path` entry above already resolves a bare `batten` to THIS checkout's
-# `target/release`, built by `session:batten` -> `install:local` at session start
-# with an `::error::` when it cannot be — so the fast branch is the tree's own
-# engine, not a stale installed one, and the property the previous comment claimed
+# `target/release` where one exists, and `session:batten` runs `batten engine
+# install`, which puts the pinned engine over it at session start — so the fast
+# branch is the pinned engine, not a stale build, and the property the previous comment claimed
 # for `cargo run` ("judge the working tree's engine and config as the pair that
 # ships") is kept rather than traded.
 #

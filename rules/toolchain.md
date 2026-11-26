@@ -425,9 +425,9 @@ guard's predicate; which of them a hook actually fires is the settings file's
 answer, not this list's.
 
 **A missing binary fails open, and the report moved forward** (CLOUD-824).
-`session-start.sh` builds AND installs it (`mise run install:local`, whose
-destination is `install.sh`'s own), so a failure is an `::error::` line, a log
-pointer and a non-zero exit at provisioning time — where it can still be fixed —
+Setup installs it (`batten engine install`, the release the pin names and never
+a tree build under one — CLOUD-2840), so a failure is a non-zero exit at
+provisioning time — where it can still be fixed —
 rather than the launcher's per-call stderr line and once-per-session
 `systemMessage`. At hook time a `batten` that is not there is a command the host
 cannot run, reported through the host's own channel. Silence still means it is
