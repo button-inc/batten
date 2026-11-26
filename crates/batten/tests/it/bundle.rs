@@ -386,21 +386,32 @@ fn read_spool(lock: &Path, watermark: &Path, data: &Path, from: u64) -> String {
 /// Linux only, as `flock(1)` already makes every caller.
 fn await_in<T>(dir: &Path, mut ready: impl FnMut() -> Option<T>) -> T {
     use rustix::fs::inotify::{self, CreateFlags, WatchFlags};
+    let deepest = || {
+        dir.ancestors()
+            .find(|ancestor| ancestor.is_dir())
+            .expect("an existing ancestor")
+            .to_path_buf()
+    };
     loop {
         let watch = inotify::init(CreateFlags::CLOEXEC).expect("an inotify instance");
-        let watched = dir
-            .ancestors()
-            .find(|ancestor| ancestor.is_dir())
-            .expect("an existing ancestor");
+        let watched = deepest();
         inotify::add_watch(
             &watch,
-            watched,
+            &watched,
             WatchFlags::CREATE
                 | WatchFlags::MOVED_TO
                 | WatchFlags::CLOSE_WRITE
                 | WatchFlags::MODIFY,
         )
         .expect("watch the directory");
+        // ARMED, THEN CHECKED AGAIN (CLOUD-2789): a directory the engine made
+        // below `watched` between choosing it and arming the watch raised its
+        // event before anything listened, and every later event lands in that
+        // deeper directory, which this watch never sees. Under load that gap
+        // was a hang. So a deeper ancestor now is watched afresh.
+        if deepest() != watched {
+            continue;
+        }
         if let Some(found) = ready() {
             return found;
         }
