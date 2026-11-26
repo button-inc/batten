@@ -35047,6 +35047,73 @@ mod tests {
         );
     }
 
+    /// A BET PRECHECK'S TRUNK FETCH MOVES THE TRACKING REF AND IS RECORDED for
+    /// the Replay after it (CLOUD-2253 A8). The remote stands in on this thread
+    /// and advertises a tip the clone already holds, so the fetch needs no pack
+    /// and the case reaches no network.
+    ///
+    /// Fails by: `advance_trunk` fetching nothing, so settling, unwinding and
+    /// placing a bet each read a stale trunk and the Replay fetches it again
+    /// (CLOUD-2789).
+    #[test]
+    fn a_bet_prechecks_trunk_fetch_moves_the_tracking_ref() {
+        fn frame(payload: &str) -> Vec<u8> {
+            format!("{:04x}{payload}", payload.len() + 4).into_bytes()
+        }
+        let repo = crate::scratch::scratch("advance-trunk").join("repo");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        std::fs::write(repo.join("a.txt"), "one").expect("write");
+        crate::gitwrite::commit_paths(&repo, &[String::from("a.txt")], "seed").expect("commit");
+        let tip = crate::git::resolve_ref(&repo, "HEAD")
+            .expect("read HEAD")
+            .expect("HEAD names a commit");
+        let config = repo.join(".git").join("config");
+        let mut text = std::fs::read_to_string(&config).expect("read the config");
+        for part in [
+            "[remote \"",
+            &crate::lease::remote_name(),
+            "\"]\n\turl = https://stand-in.invalid/repo\n",
+            // THE REFLOG NAMES WHO MOVED THE REF, so the fixture says who.
+            "[user]\n\tname = fixture\n\temail = fixture@example.invalid\n",
+        ] {
+            text.push_str(part);
+        }
+        std::fs::write(&config, text).expect("name the remote");
+        let advertised = tip.clone();
+        crate::fetch::stand_in(Box::new(move |calls: &[crate::fetch::Call<'_>]| {
+            Ok(calls
+                .iter()
+                .map(|_| {
+                    let mut body = frame("# service=git-upload-pack\n");
+                    body.extend_from_slice(b"0000");
+                    body.extend(frame(&format!(
+                        "{advertised} refs/heads/main\0report-status\n"
+                    )));
+                    body.extend_from_slice(b"0000");
+                    crate::fetch::Response {
+                        status: 200,
+                        body,
+                        headers: Vec::new(),
+                    }
+                })
+                .collect())
+        }));
+        let tracking = crate::land::tracking_ref("main");
+        assert_eq!(
+            crate::git::resolve_ref(&repo, &tracking).expect("read the tracking ref"),
+            None,
+            "the tracking ref starts absent"
+        );
+        super::forget_trunk_advance();
+        super::advance_trunk(&repo, "main");
+        assert_eq!(
+            crate::git::resolve_ref(&repo, &tracking).expect("read the tracking ref"),
+            Some(tip),
+            "the fetch moved the tracking ref"
+        );
+        assert!(super::trunk_advanced(&tracking), "the Replay is told");
+    }
+
     /// Ready's reading reaches the Wait over the same head once, and never the
     /// Wait over another (CLOUD-2253 A7).
     ///

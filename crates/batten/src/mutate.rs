@@ -2621,6 +2621,15 @@ async fn lapsed(bound: std::time::Duration, raised: &Raised) -> bool {
     .await
 }
 
+/// [`lapsed`] where no runtime could be built: the clock's sliced blocking
+/// face serves `bound`, and the bound lapsed unless `dropped` was raised first.
+/// Its own function so the drop test is driven directly, since no kernel this
+/// suite runs on refuses the runtime (as `disk_watch`'s blocking floor).
+fn lapsed_blocking(bound: std::time::Duration, dropped: &std::sync::atomic::AtomicBool) -> bool {
+    crate::pr_watch::pause_until(bound.as_secs_f64(), dropped);
+    !dropped.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 impl Deadline {
     /// Send `fired` on `send` once `bound` has passed, unless dropped first.
     pub(crate) fn arm<T: Send + 'static>(
@@ -2636,8 +2645,7 @@ impl Deadline {
             let lapsed = if let Ok(runtime) = compio::runtime::Runtime::new() {
                 runtime.block_on(lapsed(bound, &held))
             } else {
-                crate::pr_watch::pause_until(bound.as_secs_f64(), &held.flag);
-                !held.flag.load(std::sync::atomic::Ordering::SeqCst)
+                lapsed_blocking(bound, &held.flag)
             };
             if lapsed {
                 let _ = send.send(fired);
@@ -2670,29 +2678,37 @@ fn terminate_group(leader: u32) {
 
 /// [`wait_bounded`] off unix, as it was: no `waitid`, no group, and no `kill(2)`
 /// to reach for, so a hung suite there is waited out rather than ended.
+///
+/// NAMED APART from the unix arm, so the mutation config can say this one is
+/// compiled out on every platform mutants run on without excusing the arm they
+/// judge (CLOUD-2789).
 #[cfg(not(unix))]
-fn wait_bounded(
-    mut child: std::process::Child,
-    bound: std::time::Duration,
-) -> std::io::Result<(std::process::ExitStatus, bool)> {
-    let (send, statuses) = std::sync::mpsc::channel();
-    let exited = send.clone();
-    let worker = std::thread::spawn(move || {
-        let _ = exited.send(Some(child.wait()));
-    });
-    let _deadline = Deadline::arm(bound, &send, None);
-    let lost = || std::io::Error::other("mutate: the wait for the suite was lost");
-    let (status, timed_out) = match statuses.recv().map_err(|_| lost())? {
-        Some(status) => (status?, false),
-        // The bound fired first; the next event is the exit, waited out.
-        None => (
-            statuses.recv().map_err(|_| lost())?.ok_or_else(lost)??,
-            true,
-        ),
-    };
-    let _ = worker.join();
-    Ok((status, timed_out))
+mod off_unix {
+    pub(super) fn wait_bounded(
+        mut child: std::process::Child,
+        bound: std::time::Duration,
+    ) -> std::io::Result<(std::process::ExitStatus, bool)> {
+        let (send, statuses) = std::sync::mpsc::channel();
+        let exited = send.clone();
+        let worker = std::thread::spawn(move || {
+            let _ = exited.send(Some(child.wait()));
+        });
+        let _deadline = super::Deadline::arm(bound, &send, None);
+        let lost = || std::io::Error::other("mutate: the wait for the suite was lost");
+        let (status, timed_out) = match statuses.recv().map_err(|_| lost())? {
+            Some(status) => (status?, false),
+            // The bound fired first; the next event is the exit, waited out.
+            None => (
+                statuses.recv().map_err(|_| lost())?.ok_or_else(lost)??,
+                true,
+            ),
+        };
+        let _ = worker.join();
+        Ok((status, timed_out))
+    }
 }
+#[cfg(not(unix))]
+use off_unix::wait_bounded;
 
 /// Block until `pid` has exited, WITHOUT reaping it (`WNOWAIT`), so its pid and
 /// its group id stay reserved until [`wait_bounded`] has signalled the group.
@@ -6663,6 +6679,24 @@ pub fn disk_short(at: &Path, disk_mb: u64, floor_mb: u64) -> Result<Option<u64>>
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// WHERE NO RUNTIME CAN BE BUILT, A DROPPED DEADLINE HAS NOT LAPSED and an
+    /// undropped one whose bound has passed has. Both bounds end at once: a
+    /// raised drop stops the clock before its first slice, and a zero bound
+    /// has no slice to wait.
+    ///
+    /// Fails by: the drop's reading inverted, so a deadline dropped before its
+    /// bound still fires and one that ran out never does (CLOUD-2789).
+    #[test]
+    fn a_blocking_deadline_lapses_only_when_not_dropped() {
+        let dropped = std::sync::atomic::AtomicBool::new(true);
+        assert!(!lapsed_blocking(
+            std::time::Duration::from_secs(3600),
+            &dropped
+        ));
+        let kept = std::sync::atomic::AtomicBool::new(false);
+        assert!(lapsed_blocking(std::time::Duration::ZERO, &kept));
+    }
 
     /// A `mutate cargo` pass key moves with every input a verdict hangs on and
     /// with nothing else (CLOUD-2253, C7).

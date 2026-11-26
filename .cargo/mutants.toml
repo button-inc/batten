@@ -92,6 +92,10 @@ exclude_re = [
   # = "linux"))]` in `off_linux`, named apart from the Linux arm, whose mutants
   # stay judged: no Linux build compiles it (CLOUD-2902).
   'trace\.rs:\d+:\d+: replace off_linux::await_trace -> Option<String> with ',
+  # The same for the mutation sweep's off-unix `wait_bounded`, `#[cfg(not(unix))]`
+  # in `off_unix`, named apart from the unix arm, whose mutants stay judged: no
+  # Linux build compiles it (CLOUD-2789).
+  'mutate\.rs:\d+:\d+: replace off_unix::wait_bounded -> ',
   # A fork's `= 0` keyed as a child: `>=` adds only the parent row keyed "0",
   # which `walk_back` reads for no pid but one a trace line is prefixed with,
   # and no traced process is pid 0 (the kernel's idle task). Every other row

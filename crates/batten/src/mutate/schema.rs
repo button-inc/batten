@@ -20091,6 +20091,49 @@ mod tests {
             .collect()
     }
 
+    /// CLOUD-2789: a macro's own name and a name in an attribute are written
+    /// unknowably, each on its own: neither needs the other to be `?`.
+    ///
+    /// Fails by: the macro and attribute tests joined with `&&` (a mutant
+    /// missed at 34c6e4d1f), so each reads as a bare name resolved in its
+    /// own module.
+    #[test]
+    fn a_macros_name_and_an_attributes_are_each_written_unknowably() {
+        let root = parsed("#[inline]\nfn f() { shout!(); }\n");
+        let written = |name: &str| {
+            let token = root
+                .descendants_with_tokens()
+                .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+                .find(|token| token.text() == name)
+                .unwrap_or_else(|| panic!("{name} is written"));
+            written_as(&token, "")
+        };
+        let unknown = format!("{WRITTEN}?");
+        assert_eq!(written("shout"), unknown, "a macro's own name");
+        assert_eq!(written("inline"), unknown, "a name in an attribute");
+    }
+
+    /// CLOUD-2789: a glob `use` beside a module of the name it globs leaves
+    /// the module alone answering to it: `a::K` in `c` is `c::a`'s `K`.
+    ///
+    /// Fails by: the glob's name unmarked (a mutant missed at 34c6e4d1f), so
+    /// it is taken for a definition a path resolves through, `a` is
+    /// ambiguous, and an edit to the root's `a::K` moves `g`.
+    #[test]
+    fn a_glob_uses_name_is_no_definition_a_path_resolves_through() {
+        let calls = case("g");
+        let cases: BTreeSet<Case> = [calls.clone()].into();
+        let base = "mod a { pub const K: u8 = 1; }\n\
+                    mod c { use super::a::*; mod a { pub const K: u8 = 2; } \
+                    pub fn g() -> u8 { a::K } }\n";
+        let executed = [(calls.clone(), [probe_of(base, "g")].into())].into();
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(&cases, &executed, &base.replace("K: u8 = 1", "K: u8 = 3"));
+        assert_eq!(other[&calls], held[&calls], "the root's a::K is not named");
+        let own = source_digests(&cases, &executed, &base.replace("K: u8 = 2", "K: u8 = 4"));
+        assert_ne!(own[&calls], held[&calls], "c::a::K is");
+    }
+
     /// The parsed root of `source`.
     fn parsed(source: &str) -> SyntaxNode {
         batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
@@ -23315,6 +23358,62 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).unwrap(),
             "mutate schema: 13869 mutant(s), 2180 unviable, 281 classic, built in 695s\n"
+        );
+    }
+
+    /// CLOUD-2789: the control covers the cases a hand-back judged here can
+    /// observe, and none for one judged elsewhere.
+    ///
+    /// Fails by: the hand-backs' cases answered empty (a mutant missed at
+    /// 34c6e4d1f), so a case only a hand-back reaches runs unmutated nowhere
+    /// and a red one is read as the mutant's kill.
+    #[test]
+    fn the_control_covers_the_cases_a_judged_handback_observes() {
+        let schema = Schema {
+            probes: vec![String::from("f-body")],
+            mutant_fns: [(0, String::from("f-body"))].into(),
+            probed: [String::from("src/lib.rs")].into(),
+            ..Schema::default()
+        };
+        let body = case("body");
+        let reach = Reach {
+            executed: [(body.clone(), BTreeSet::from([0]))].into(),
+            ..Reach::default()
+        };
+        let base = std::path::Path::new("/nonexistent-batten-handed-cases");
+        let mutants = [listed("FnValue", "0", (1, 1), (1, 2))];
+        let (listed_reach, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let judging = Judging {
+            work: base,
+            target: base,
+            scratch: base,
+            root: base,
+            mutants: &mutants,
+            reach: &listed_reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: base,
+            red: &Red::new(),
+            control: &Control::new(),
+            reuse: None,
+            threads: None,
+        };
+        let classic = BTreeSet::from([0]);
+        assert_eq!(
+            handed_cases(&judging, true, &classic, (&schema, &reach)),
+            Some(BTreeSet::from([body])),
+            "the case that ran the hand-back's function"
+        );
+        assert_eq!(
+            handed_cases(&judging, false, &classic, (&schema, &reach)),
+            Some(BTreeSet::new()),
+            "a hand-back judged elsewhere asks nothing of this control"
         );
     }
 
@@ -27156,6 +27255,58 @@ pub fn repo() -> u8 {{ scratch() }}
         assert_ne!(own[&calls], held[&calls], "a::T::K is");
     }
 
+    /// A resolver over nothing: every lookup misses, so a path answers from
+    /// its own `self`, `super` and depth alone.
+    fn with_empty_resolver<T>(read: impl FnOnce(&Resolver<'_>) -> T) -> T {
+        let by_base = std::collections::HashMap::new();
+        let items = std::collections::BTreeMap::new();
+        let mentions = std::collections::BTreeMap::new();
+        let globs = Globs::new();
+        let crates = std::collections::HashMap::new();
+        let macros = std::collections::HashMap::new();
+        read(&Resolver::new(
+            &by_base,
+            &[],
+            &items,
+            &mentions,
+            (&globs, &crates, &macros),
+        ))
+    }
+
+    /// CLOUD-2789: a `super` written in a block that holds items starts from
+    /// the module around the block, so from `a`'s block it names the root.
+    ///
+    /// Fails by: the `self`/`super` test joined with `&&` (a mutant missed at
+    /// 34c6e4d1f), so the block's own scope is taken for the module and
+    /// `super` names `a`.
+    #[test]
+    fn a_super_in_a_block_starts_from_the_module_around_it() {
+        with_empty_resolver(|resolver| {
+            assert_eq!(
+                resolver.path("p", "a::#f0", &["super"], 0),
+                Place::Module("p", String::new())
+            );
+        });
+    }
+
+    /// CLOUD-2789: a path is followed to [`RESOLVE_DEPTH`] and no further.
+    ///
+    /// Fails by: the bound compared with `==` (a mutant missed at 34c6e4d1f),
+    /// so a path at exactly the bound is unknown.
+    #[test]
+    fn a_path_is_followed_to_the_resolve_depth_and_no_further() {
+        with_empty_resolver(|resolver| {
+            assert_eq!(
+                resolver.path("p", "a::b", &["super"], RESOLVE_DEPTH),
+                Place::Module("p", String::from("a"))
+            );
+            assert_eq!(
+                resolver.path("p", "a::b", &["super"], RESOLVE_DEPTH + 1),
+                Place::Unknown
+            );
+        });
+    }
+
     /// CLOUD-2789: a `use` of a module its path does not hold names nothing,
     /// so a path through it reaches no workspace definition.
     ///
@@ -27208,6 +27359,91 @@ pub fn repo() -> u8 {{ scratch() }}
             std::fs::read_to_string(kept.join("handback-7.log")).unwrap(),
             "why\n"
         );
+    }
+
+    /// CLOUD-2789: a case that runs an observer keeps an entry that holds only
+    /// while its callers sit where they did: a line added above its call in
+    /// its unprobed file moves the location the observer reports, so a warm
+    /// sweep derives it again and keys it apart.
+    ///
+    /// Fails by: the callers' digest answered as a constant (a mutant
+    /// uncovered at 34c6e4d1f), so the kept entry holds over the moved caller
+    /// and the warm sweep keys the case as before.
+    #[test]
+    fn a_kept_entry_holds_only_while_its_callers_sit_where_they_did() {
+        let root = crate::scratch::scratch("schema-case-memo-callers");
+        let state = crate::scratch::scratch("schema-case-memo-callers-state");
+        let write = |path: &str, text: &str| {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        };
+        let lib = "#[track_caller]\npub fn check() {}\n";
+        write("src/lib.rs", lib);
+        write("tests/it/main.rs", "mod o;\n");
+        write("tests/it/o.rs", "#[test]\nfn t() { fix::check(); }\n");
+        let rendered = render_in(
+            lib,
+            &[],
+            &BTreeSet::new(),
+            Some(0),
+            &FileScope::of("src/lib.rs"),
+        );
+        let mut items: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (name, digest) in &rendered.items {
+            items
+                .entry(name.clone())
+                .or_default()
+                .insert(digest.clone());
+        }
+        let mut mentions: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (name, mentioned) in &rendered.mentions {
+            mentions
+                .entry(name.clone())
+                .or_default()
+                .extend(mentioned.iter().cloned());
+        }
+        let (read, resources) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let t = (String::from("o::t"), String::from("fix::it"));
+        let cases: BTreeSet<Case> = [t.clone()].into();
+        let executed = [(t.clone(), [0].into())].into();
+        let dirs = [(String::from("fix"), String::new())].into();
+        let sweep = || {
+            let before = case_derivations();
+            let store = Derived::at(&state, "build");
+            let digests = case_digests(
+                &root,
+                &cases,
+                &dirs,
+                &executed,
+                &Depends {
+                    probes: &rendered.probes,
+                    names: &rendered.names,
+                    items: &items,
+                    mentions: &mentions,
+                    read: &read,
+                    resources: &resources,
+                    untraced: "",
+                    compiled: &rendered.compiled,
+                    derived: Some(&store),
+                },
+            );
+            (digests, case_derivations() - before)
+        };
+        let (first, cold) = sweep();
+        assert_eq!(cold, 1, "a cold sweep derives it");
+        let (warm, derived_warm) = sweep();
+        assert_eq!(derived_warm, 0, "a warm sweep takes its kept entry");
+        assert_eq!(warm, first);
+        write("tests/it/o.rs", "\n#[test]\nfn t() { fix::check(); }\n");
+        let (moved, derived_moved) = sweep();
+        assert_eq!(derived_moved, 1, "its caller moved");
+        assert_ne!(moved[&t], first[&t]);
     }
 
     /// CLOUD-2789: a case with no text of its own (a macro's test) reads its

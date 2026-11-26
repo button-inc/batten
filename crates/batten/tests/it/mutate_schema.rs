@@ -167,6 +167,10 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     ] {
         assert!(said.contains(line), "{line:?} in {said}");
     }
+    // OFF CI NO CASE IS RECORDED TWICE, so no stability is claimed: a line
+    // reporting "stable for 0 case(s)" says a comparison ran that did not
+    // (CLOUD-2789).
+    assert!(!said.contains("reach stable"), "{said}\n{err}");
     let (code, again, err) = sweep();
     assert_eq!(code, Some(2), "{again}\n{err}");
     // NO BUILD ROUND REDISCOVERS WHAT THE FIRST SWEEP FOUND: the unviable
