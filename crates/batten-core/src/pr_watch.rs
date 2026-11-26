@@ -919,6 +919,15 @@ pub fn pause_until(seconds: f64, stop: &std::sync::atomic::AtomicBool) {
               stop flag (CLOUD-1177, CLOUD-497, CLOUD-2782)"
 )]
 pub mod clock {
+    // HOW MANY WAITS THIS THREAD HAS SERVED, for a case to assert the pause
+    // went through the clock without reading the clock itself (CLOUD-2789).
+    // Per thread, because a hold blocks the thread that asked for it, so a
+    // case running beside another cannot see that one's holds.
+    #[cfg(test)]
+    thread_local! {
+        pub(crate) static HELD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
     /// Wait `duration` on the current compio runtime.
     pub async fn pause_for(duration: std::time::Duration) {
         compio::time::sleep(duration).await;
@@ -926,6 +935,8 @@ pub mod clock {
 
     /// Wait `duration` on `runtime`, or on the thread where none could be built.
     pub fn hold(duration: std::time::Duration, runtime: Option<&compio::runtime::Runtime>) {
+        #[cfg(test)]
+        HELD.with(|held| held.set(held.get() + 1));
         match runtime {
             Some(runtime) => runtime.block_on(pause_for(duration)),
             None => std::thread::sleep(duration),
@@ -1007,37 +1018,35 @@ mod tests {
         assert_eq!(slices(5.0, 2), vec![1.0, 1.0]);
     }
 
-    /// The real pause holds its thread for the wait it was asked: measured
-    /// across the call as it RETURNS, the event, and never waited on with a
-    /// clock of the case's own (CLOUD-2789). A pause that let its thread go
-    /// at once reads a span short of the wait.
+    /// The holds this thread has served through [`clock::hold`].
+    fn held() -> u32 {
+        clock::HELD.with(std::cell::Cell::get)
+    }
+
+    /// The real pause serves its wait through the crate's one clock, and a
+    /// raised flag ends it before the next slice: counted in holds served, the
+    /// outcome, never read off the clock (CLOUD-2789, `wall_clock.rs`).
     #[test]
     fn a_pause_holds_until_its_flag_is_raised() {
         let stop = std::sync::atomic::AtomicBool::new(false);
-        let asked = std::time::Duration::from_millis(50);
-        let began = std::time::Instant::now();
-        pause_until(asked.as_secs_f64(), &stop);
-        assert!(
-            began.elapsed() >= asked,
-            "a pause of {asked:?} let its thread go at once"
-        );
-        // AND THE FLAG ENDS IT: ten minutes over a flag already raised
-        // returns. A pause that ignored the flag never returns, and the
+        let before = held();
+        pause_until(0.05, &stop);
+        assert_eq!(held() - before, 1, "a pause under one slice is one hold");
+        // AND THE FLAG ENDS IT: ten minutes over a flag already raised holds
+        // nothing. A pause that ignored the flag never returns, and the
         // mutation judge's per-case cut files that as the timeout it is.
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let before = held();
         pause_until(600.0, &stop);
+        assert_eq!(held() - before, 0, "a raised flag ends the pause unheld");
     }
 
-    /// The unstoppable pause holds its thread too, measured the same way.
+    /// The unstoppable pause serves its wait through the clock too.
     #[test]
     fn a_pause_with_no_flag_holds_its_thread() {
-        let asked = std::time::Duration::from_millis(50);
-        let began = std::time::Instant::now();
-        pause(asked.as_secs_f64());
-        assert!(
-            began.elapsed() >= asked,
-            "a pause of {asked:?} let its thread go at once"
-        );
+        let before = held();
+        pause(0.05);
+        assert_eq!(held() - before, 1, "a pause under one slice is one hold");
     }
 
     fn config_for(repo: &str) -> Config {
