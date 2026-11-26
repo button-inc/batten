@@ -438,6 +438,20 @@ fn a_signal_in_the_spawn_window_leaves_no_orphan() {
         // ends that orphan with the case.
         await_tree_gone(life);
     }
+
+    // AND ONCE PAST THE WINDOW, ON AN EVENT (CLOUD-2936): the grandchild's note
+    // is written only once Batten has spawned the tree and installed its
+    // forwarder, so this attempt runs the whole path every swept attempt runs a
+    // prefix of. Without it, how far the furthest attempt got was the
+    // scheduler's draw, and one reach recording ran Batten's config load and
+    // the next did not, with no code changed.
+    let dir = repo("pgroup-window-past", true);
+    let (child, note, _leash) = leaky_child(&dir);
+    let (mut batten, life) = spawn_exec_held(&dir, &home, &child, &[]);
+    let _grandchild = note.read();
+    signal(batten.id(), "TERM");
+    let _ = batten.wait().expect("batten exits");
+    await_tree_gone(life);
 }
 
 #[test]
