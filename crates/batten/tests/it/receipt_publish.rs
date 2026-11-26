@@ -156,7 +156,7 @@ fn receipts_dir(state: &Path, repo: &Path) -> PathBuf {
 
 /// This clone's carried stores under `state`.
 fn stores(state: &Path, repo: &Path) -> receipts::Stores {
-    receipts::Stores::at(
+    batten::receipt_stores(
         &batten::state::repo_state_dir_under(state, repo).unwrap(),
         &repo.join(".git"),
     )
