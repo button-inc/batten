@@ -2556,10 +2556,65 @@ const TERMINATE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 /// The waiter makes ONE blocking `recv` over every event it waits for — an
 /// exit, a close, the bound — so no receive carries a clock and no wait polls.
 /// The bound itself is served by the crate's one clock,
-/// [`crate::pr_watch::pause_until`], which checks its stop between slices: a
-/// dropped deadline's thread ends within a slice and sends nothing, so an
-/// answered wait leaves no timer behind it.
-pub(crate) struct Deadline(std::sync::Arc<std::sync::atomic::AtomicBool>);
+/// [`crate::pr_watch::clock::pause_for`], raced against the drop as an EVENT
+/// ([`Raised`]): a dropped deadline wakes its thread at once and sends nothing.
+///
+/// THE THREAD NEVER OUTLIVES THE DEADLINE (CLOUD-2904). It was detached, so a
+/// process that answered and exited cut it off wherever the scheduler had left
+/// it: one reach recording ran the clock's functions, the next did not, and the
+/// case's mutant key moved with no code changed. Dropping the deadline now
+/// joins it, and it always polls the clock before it reads the drop, so it runs
+/// the same functions on every path. The join costs nothing: the drop is an
+/// event the thread is woken by.
+pub(crate) struct Deadline {
+    raised: std::sync::Arc<Raised>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// A deadline's drop, as a flag and the waker of the thread waiting on it.
+#[derive(Default)]
+struct Raised {
+    flag: std::sync::atomic::AtomicBool,
+    waker: std::sync::Mutex<Option<std::task::Waker>>,
+}
+
+impl Raised {
+    /// Raise the flag, then wake whatever registered: a waiter that registered
+    /// before this reads the flag after its wake; one that registers after
+    /// reads it raised.
+    fn raise(&self) {
+        self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        let waker = self.waker.lock().ok().and_then(|mut held| held.take());
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// Whether the flag is raised, registering `cx`'s waker first so a raise
+    /// in between is never missed.
+    fn raised(&self, cx: &std::task::Context<'_>) -> bool {
+        if let Ok(mut held) = self.waker.lock() {
+            *held = Some(cx.waker().clone());
+        }
+        self.flag.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Whether `bound` lapsed before `raised` was: the clock polled FIRST on every
+/// turn, so it runs on every path, and the drop read after it.
+async fn lapsed(bound: std::time::Duration, raised: &Raised) -> bool {
+    let mut clock = std::pin::pin!(crate::pr_watch::clock::pause_for(bound));
+    std::future::poll_fn(|cx| {
+        if clock.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(true);
+        }
+        if raised.raised(cx) {
+            return std::task::Poll::Ready(false);
+        }
+        std::task::Poll::Pending
+    })
+    .await
+}
 
 impl Deadline {
     /// Send `fired` on `send` once `bound` has passed, unless dropped first.
@@ -2568,21 +2623,35 @@ impl Deadline {
         send: &std::sync::mpsc::Sender<T>,
         fired: T,
     ) -> Self {
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (send, held) = (send.clone(), std::sync::Arc::clone(&stop));
-        std::thread::spawn(move || {
-            crate::pr_watch::pause_until(bound.as_secs_f64(), &held);
-            if !held.load(std::sync::atomic::Ordering::Relaxed) {
+        let raised = std::sync::Arc::new(Raised::default());
+        let (send, held) = (send.clone(), std::sync::Arc::clone(&raised));
+        let thread = std::thread::spawn(move || {
+            // Where no runtime can be built, the clock's sliced blocking face
+            // serves the bound, and the join waits out at most one slice.
+            let lapsed = match compio::runtime::Runtime::new() {
+                Ok(runtime) => runtime.block_on(lapsed(bound, &held)),
+                Err(_) => {
+                    crate::pr_watch::pause_until(bound.as_secs_f64(), &held.flag);
+                    !held.flag.load(std::sync::atomic::Ordering::SeqCst)
+                }
+            };
+            if lapsed {
                 let _ = send.send(fired);
             }
         });
-        Self(stop)
+        Self {
+            raised,
+            thread: Some(thread),
+        }
     }
 }
 
 impl Drop for Deadline {
     fn drop(&mut self) {
-        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.raised.raise();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
