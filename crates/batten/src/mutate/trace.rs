@@ -623,17 +623,31 @@ pub(crate) fn await_trace(path: &Path) -> Option<String> {
         return read();
     }
     let (closed, woken) = std::sync::mpsc::channel();
-    // THE GRACE IS AN EVENT ON THE SAME CHANNEL (CLOUD-2789): a close is
-    // `Some`, the bound `None`, and the wait is one blocking receive.
-    let _grace = crate::mutate::Deadline::arm(TRACE_GRACE, &closed, None);
-    std::thread::spawn(move || {
-        let mut events = [0_u8; 1024];
-        forward_closes(
-            || rustix::io::read(&watch, &mut events).is_ok(),
-            || closed.send(Some(())).is_ok(),
-        );
+    // NOTHING IS STARTED FOR A TRACE ALREADY WHOLE (CLOUD-2936): the grace
+    // and the forwarder are armed on the first wait, which a whole first read
+    // never asks for. Started up front, both were threads left running when the
+    // read returned, and how far each got before the process ended moved one
+    // function between two recordings of unchanged code.
+    let mut grace = None;
+    let mut forward = Some((watch, closed));
+    let text = wait_whole(read, || {
+        if let Some((watch, closed)) = forward.take() {
+            // THE GRACE IS AN EVENT ON THE SAME CHANNEL (CLOUD-2789): a close
+            // is `Some`, the bound `None`, and the wait is one blocking receive.
+            grace = Some(crate::mutate::Deadline::arm(TRACE_GRACE, &closed, None));
+            std::thread::spawn(move || {
+                let mut events = [0_u8; 1024];
+                forward_closes(
+                    || rustix::io::read(&watch, &mut events).is_ok(),
+                    || closed.send(Some(())).is_ok(),
+                );
+            });
+        }
+        woke_by_a_close(woken.recv())
     });
-    wait_whole(read, || woke_by_a_close(woken.recv()))
+    // The grace ends with the wait, as it did when it was armed up front.
+    drop(grace);
+    text
 }
 
 /// Whether a wake was a close: the grace is `None` and a channel every sender
