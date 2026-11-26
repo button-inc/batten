@@ -355,7 +355,7 @@ pub fn run_validate(id: &str, overrides: &Overrides, err: &mut dyn Write) -> Res
 /// Where `record validate` keeps the argv each clean record was answered to,
 /// under the git directory and beside — never inside — the tool store, so the
 /// reader's keyed lookup can never mistake one for a verdict.
-const RECEIPTS: &str = "batten-tools-asked";
+pub(crate) const RECEIPTS: &str = "batten-tools-asked";
 
 /// Whether this exact question — these bytes, this tool at this version, this
 /// argv — was already answered `0` (CLOUD-843, carrying CLOUD-1891's step
@@ -1142,10 +1142,10 @@ fn plan_validated(raw: &str) -> Result<()> {
 // (`Effect::Read`) or a fact. Nothing on the read path writes.
 
 /// Where the keyed put/hit family stores its records.
-const KEYED_STORE: &str = "batten-records";
+pub(crate) const KEYED_STORE: &str = "batten-records";
 
 /// Where the append-and-fold family stores its shards.
-const JOURNAL_STORE: &str = "batten-journals";
+pub(crate) const JOURNAL_STORE: &str = "batten-journals";
 
 /// A journal family's store directory under `git_dir` — the one spelling of
 /// where `record journal` / `record fold` keep a family, so an in-process
