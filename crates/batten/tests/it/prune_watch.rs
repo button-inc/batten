@@ -1455,17 +1455,12 @@ fn a_forced_collection_exits_from_a_worktree_and_waits_out_a_held_tree() {
 ///
 /// Fails by: a compile under a watched step collecting inside the command.
 #[test]
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only: `which` finds the tracer the case needs, and skips it where there is none"
-)]
 fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
-    if !cfg!(target_os = "linux")
-        || !std::process::Command::new("strace")
-            .arg("-V")
-            .output()
-            .is_ok_and(|ran| ran.status.success())
-    {
+    // The tracer on `PATH`, found without running anything: the case is the
+    // tracer's, and a host with none has nothing for it to look at.
+    let traced = std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("strace").is_file()));
+    if !cfg!(target_os = "linux") || !traced {
         return;
     }
     let dir = hooked("step-run-uncharged", true);
