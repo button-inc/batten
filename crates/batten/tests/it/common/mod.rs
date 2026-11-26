@@ -892,6 +892,12 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
         // handed it to every case, and 17 that read a child's stderr found a
         // `disk-call` line before the one they assert. A case tracing sets it.
         "BATTEN_DISK_TRACE",
+        // NOR THE RUNNER'S WATCH (CLOUD-2789): `step run` publishes
+        // `BATTEN_DISK_WATCHED` to the command it watches, the suite under
+        // `test:cargo` and `test:traced` included, and a wrapped compile that
+        // sees it collects nothing. Both `a_wrapped_compile_*` cases failed in
+        // every lap and passed bare. A case about a watched step sets it.
+        batten::step::DISK_WATCHED,
         // NOR THE SCHEMA SWEEP'S RECORDER (#1276): the reach baseline runs this
         // suite with both exported, so every `batten` a case started recorded
         // into the OUTER sweep's reach and read its tree. The cases driving a
