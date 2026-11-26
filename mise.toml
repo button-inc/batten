@@ -4864,20 +4864,39 @@ description = "The hk gate minus the slow tier — what a diff that cannot move 
 # deliberately left as the full `hk check --all`.
 #
 # NOT CARGO-FREE, and the comment says so because the measurement is misleading
-# otherwise: 49 steps in 14s against a warm `target/`, but `policy-budget` shells
+# otherwise: its steps ran in 14s against a warm `target/` (nine of `hk check`'s
+# 43 since CLOUD-2789, every one without a profile), but `policy-budget` shells
 # `cargo run -p batten`, and `cargo-fmt`, `schema-check` and `config-lint` reach
 # the binary too. On a cold runner this pays a `batten` debug build first.
 run = "hk check --all --profile '!slow'"
 
-# EVERY hk STEP BUT THE SUITE AND THE MUTANTS (CLOUD-2789), so `verify`'s second
-# tier reports `schema-check`, `reference-check`, `skill-check` and the rest in
-# minutes, beside clippy, rather than after `test:cargo` and `mutant:changed`
-# end an hour in. Each is keyed by its own `step run` receipt, so `ci` in the
-# third tier reads them back as hits and is left with the suite alone.
+# EVERY hk STEP NO OTHER TIER RUNS (CLOUD-2789), so `verify`'s second tier
+# reports clippy, the slow lints and the record checks in minutes, rather than
+# after `test:cargo` and `mutant:changed` end an hour in.
+#
+# A STEP RUNS ONCE PER LAP, AND EACH SKIP NAMES WHERE ELSE IT RUNS. This used to
+# be `hk check --all` minus the suite and the mutants alone, on the claim that
+# each step was keyed by its own `step run` receipt, so a repeat read back as a
+# hit. That was false for every builtin and every step whose task has no row:
+# measured on #1276, tier 1's nine untagged steps ran again here, and every step
+# here ran a third time in tier 3's `ci`. So each skip names a step run elsewhere
+# in the same lap:
+#   - the nine steps without a profile, which tier 1's `ci:quick` runs;
+#   - `policy-budget`, `policy-test` and `batten-check`, whose `mise run` tier 1
+#     names itself, and `signing-posture-record` and `pkl` (`record validate
+#     config-validator`), which `verify:gated` writes before tier 1 so that
+#     `batten-check` never judges a stale record;
+#   - `reference-check`, `schema-check` and `skill-check`, narrow `it` lanes each
+#     compiling the `it` binary alone (≈200 s each, measured) to run cases
+#     `test:cargo` runs again in tier 3.
+# `test` and `mutant:changed` are tier 3's, and `verify:ci-suite` skips every
+# other step, so the three spellings partition `hk check`'s steps:
+# `verify_chain.rs`'s `each_hk_step_runs_in_exactly_one_place_per_lap` refuses a
+# step two tiers run, or one that no tier and no other entry of the lap runs.
 [tasks."ci:checks"]
-description = "Every hk step except the test suite and the mutation sweep — `verify`'s second tier"
+description = "Every hk step no other tier of `verify` runs — its second tier"
 depends = ["pkl-package"]
-run = "hk check --all --skip-step test --skip-step mutant:changed"
+run = "hk check --all --skip-step test --skip-step mutant:changed --skip-step actionlint --skip-step cargo-fmt --skip-step memories-check --skip-step pkl-format --skip-step prettier --skip-step shellcheck --skip-step shfmt --skip-step taplo --skip-step taplo-format --skip-step policy-budget --skip-step policy-test --skip-step batten-check --skip-step signing-posture-record --skip-step pkl --skip-step reference-check --skip-step schema-check --skip-step skill-check"
 
 [tasks.ci]
 description = "Everything CI runs"
@@ -5180,8 +5199,17 @@ run = [
 # THE SUITE TIER'S TWO NODES, as tasks (CLOUD-2789): a `[[step]]` row's argv
 # reaches the tree's engine through `mise run batten`, and mise drops the `--`
 # that `step run` and `ci step` need before the wrapped command.
+#
+# `ci` IS STILL `ci`, CARVED BY ENVIRONMENT (CLOUD-2789), as CI's own `ci` job
+# carves it: `HK_SKIP_STEPS` names every `hk check` step but `test` and
+# `mutant:changed`, each of which `ci:quick`, `ci:checks` or an earlier entry of
+# this lap already ran. Measured on #1276 without it, this tier re-ran every
+# one of them a third time before the suite started. The `ci-suite` row keys
+# the carve (`batten step env`), and `verify_chain.rs` holds the three tiers to
+# a partition of `hk check`.
 [tasks."verify:ci-suite"]
 description = "The suite, through its keyed `ci-suite` step — invoked through `verify`'s third tier"
+env = { HK_SKIP_STEPS = "hk-version,mcp-timeout-budget,no-docs-tree,no-armed-ripcord,hook-profile-check,hk-contract-check,mutant-census,rules-drift,hooks-wiring-check,reference-check,token-bench-check,config-lint,renovate-config-validator,schema-check,sbom-check,install-check,release-tracking-check,lock-complete,policy-budget,skill-check,macos-link-check,ntia-check,shfmt,shellcheck,taplo,taplo-schema,taplo-format,taplo-format-schema,pkl,pkl-format,prettier,deno-fmt,engine-pin,rego,actionlint,cargo-fmt,cargo-clippy,signing-posture-record,batten-check,policy-test,memories-check" }
 run = "{{vars.batten}} step run ci-suite -- mise run ci"
 
 [tasks."verify:ci-slow-needed"]

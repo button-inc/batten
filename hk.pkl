@@ -760,6 +760,14 @@ local gate = new Mapping<String, Step> {
     // the same shape, and like `fuzz/` nothing lints them yet: both are retired
     // (folded into a verb or a preset remedy, CLOUD-2812/CLOUD-2817), not linted.
     exclude = List("fuzz/**", "tools/batten-profile/**", "tools/batten-semantic/**")
+    // AND THE INDICATOR IS CLEARED, because excluding the nested workspaces did not
+    // leave one job (CLOUD-2789). hk reads `workspace_indicator` as the NEAREST
+    // `Cargo.toml` above each selected file, and every member crate has one, so the
+    // plan held seven jobs, one per crate, each running the whole `lint:clippy`:
+    // measured on #1276, `cargo-clippy [0/7]`, and every one of `lint:clippy`'s
+    // four `step run` rows answered seven times per hk run. The command reads no
+    // `{{workspace}}` and no `{{files}}`, so one job is the whole step.
+    workspace_indicator = null
     // CHEAP FIRST. Every sub-second lint over a file the build or the gate reads
     // runs before the first compile, so a Rego parse error, a TOML typo or an
     // unformatted file fails in under two seconds instead of after the whole
