@@ -1534,16 +1534,24 @@ fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
     // fixture's last component, `repo`, which a case beside this one remakes.
     let temp = common::scratch("step-run-uncharged-tmp");
     let engine = common::batten().get_program().to_owned();
+    // THE COMMAND'S WRAPPER READS BELOW THE FLOOR, so it would walk the build
+    // tree were it not told a watcher covers it: the discriminating half.
     let compile = |step: &mut common::Batten| {
-        step.arg(&engine)
+        step.args(["env", "TARGET_PRUNE_FREE_MB=50"])
+            .arg(&engine)
             .arg(&rustc)
             .args(["--crate-name", "probe", "--out-dir"])
             .arg(dir.join("target/debug/deps"));
     };
+    // THE STEP'S OWN WATCHER READS ABOVE THE BAND'S 100 MB FLOOR (CLOUD-2936),
+    // so it arms, tells its command, and never collects. Below it, whether the
+    // watcher sampled before a millisecond command ended was a draw: recorded
+    // twice over unchanged code, one run walked and reclaimed the tree and the
+    // other did not. The watcher's collection is not this case's subject.
     let mut step = common::batten();
     step.current_dir(&dir)
         .env("TMPDIR", &temp)
-        .env("TARGET_PRUNE_FREE_MB", "50")
+        .env("TARGET_PRUNE_FREE_MB", "150")
         .args(["step", "run", "probe", "--"]);
     // TRACED OR NOT, BY THE HOST ([`common::traced`]), and each branch asserts.
     let traced = common::traced();

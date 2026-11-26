@@ -1691,9 +1691,25 @@ fn a_stop_whose_store_lock_is_held_elsewhere_still_speaks() {
     held.try_lock()
         .expect("hold the store's write lock, free in a fresh fixture");
 
+    // THE HOOK'S DRAIN IS JOINED BEFORE THE LOCK IS LET GO (CLOUD-2936). The
+    // Stop detaches a `state record` drain that tries this same lock after its
+    // scan. Released as soon as the hook returned, whether the drain found the
+    // lock held or free was a draw between its scan and this line: recorded
+    // twice over unchanged code, one run folded the journal and collected dead
+    // refs and the other did not. As this process's subreaper, the orphaned
+    // drain is re-parented here and waited for, so it always finds the lock
+    // held, which is the state the case is about.
+    #[cfg(target_os = "linux")]
+    rustix::process::set_child_subreaper(Some(rustix::process::getpid()))
+        .expect("adopt the hook's detached drain");
+
     let output = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     let stdout = stdout_of(&output);
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    // Every orphan adopted above, until none is left to wait for.
+    #[cfg(target_os = "linux")]
+    while let Ok(Some(_)) = rustix::process::wait(rustix::process::WaitOptions::empty()) {}
 
     drop(fs4::FileExt::unlock(&held));
 
