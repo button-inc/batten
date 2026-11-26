@@ -404,7 +404,7 @@ const HOOK_HANDLERS: &str = "hook-handlers";
 /// **A residual false positive is accepted, on an asymmetry that paragraph does
 /// not weigh.** A source file can still take a fresh mtime with unchanged
 /// content on an A→B→A branch round trip. The cost of that is one unnecessary
-/// `mise run install:local`, which is idempotent and cheap. The cost of the
+/// `batten engine install`, which is idempotent and cheap. The cost of the
 /// false NEGATIVE it replaces is an entire unenforced session — `config.rs`'s
 /// own record has three mediated gates permitting for a whole session and six
 /// commits carrying a denied trailer reaching the remote. Those are not

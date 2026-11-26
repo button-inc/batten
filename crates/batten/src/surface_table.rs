@@ -639,6 +639,23 @@ pub(crate) const ENGINE_PIN_CHECK: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `engine pin --require-source` (CLOUD-2840): the guard a tree build runs
+/// before it compiles anything. A release pin names a published engine, and the
+/// one way to that engine is `batten engine install`, never this tree's build.
+pub(crate) const ENGINE_PIN_REQUIRE_SOURCE: FlagDecl = FlagDecl {
+    id: "require_source",
+    long: Some("require-source"),
+    short: None,
+    help: "Exit 2 under a release pin, naming `batten engine install`, and write nothing; exit 0 under a source pin or none",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// `engine outdated --notice` (CLOUD-2279): the session's half.
 pub(crate) const ENGINE_OUTDATED_NOTICE: FlagDecl = FlagDecl {
     id: "notice",
@@ -7936,7 +7953,11 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[ENGINE_PIN_VALUE, ENGINE_PIN_CHECK],
+        flags: &[
+            ENGINE_PIN_VALUE,
+            ENGINE_PIN_CHECK,
+            ENGINE_PIN_REQUIRE_SOURCE,
+        ],
     },
     // `write`, for the cache: a release pin's binary is fetched, verified and
     // kept under git's common directory, then run over this tree (CLOUD-2063).

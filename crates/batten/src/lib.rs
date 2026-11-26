@@ -2453,7 +2453,11 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
             writeln!(out, "{}", engine::stamp_path(&binary).display())?;
         }
         cli::EngineCommand::Update => return engine_update(out),
-        cli::EngineCommand::Pin { value, check } => {
+        cli::EngineCommand::Pin {
+            require_source: true,
+            ..
+        } => return engine_pin_source_only(&root, out),
+        cli::EngineCommand::Pin { value, check, .. } => {
             return engine_pin(&root, value.as_deref(), check, out);
         }
         cli::EngineCommand::Gate { lanes } => return engine_gate(&root, &lanes, out),
@@ -2559,6 +2563,37 @@ fn engine_pin(
     durable::replace(&path, rewritten)?;
     writeln!(out, "{}", path.display())?;
     Ok(ExitCode::Success)
+}
+
+/// `batten engine pin --require-source` (CLOUD-2840): refuse a release pin
+/// before anything compiles.
+///
+/// A release pin names a published engine, and setup reaches it by
+/// `batten engine install` — the download, verified, and nothing else. A tree
+/// build under one is the engine nobody pinned, and the cold compile it costs
+/// is what CLOUD-2840 removed from setup. So a task that builds this tree (`mise
+/// run install:local`) asks here first, through the engine's own reading of the
+/// pin rather than a shell's reading of the text, and a release pin stops it
+/// with `2` before cargo is reached. A source pin, or none, is a tree build's
+/// own case and passes. A malformed pin is refused as every pin verb refuses it.
+fn engine_pin_source_only(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
+    let path = root.join(crate::config_model::CONFIG_FILE);
+    let text = crate::fsio::read_to_string(&path)?;
+    match engine::declared(&text).map(crate::config_model::Pin::kind) {
+        None | Some(engine::PinKind::Source(_)) => Ok(ExitCode::Success),
+        Some(engine::PinKind::Release(tag)) => {
+            writeln!(
+                out,
+                "{} engine pin release {tag}: a release pin is installed, never built; run batten engine install",
+                path.display()
+            )?;
+            Ok(ExitCode::Violation)
+        }
+        Some(engine::PinKind::Malformed) => {
+            writeln!(out, "{} {}", path.display(), engine::MALFORMED_PIN)?;
+            Ok(ExitCode::Violation)
+        }
+    }
 }
 
 /// `batten engine gate` (CLOUD-2063): the pin as the landing path judges it.
@@ -33479,7 +33514,8 @@ fn run_doctor_config(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
 /// One pointer line, never a digest: a hash is stable per content but varies per
 /// machine, so emitting one would defeat the byte-stability §6 requires of this
 /// verb's output while telling the reader nothing they can act on. The remedy is
-/// `mise run install:local` and the verdict is what says whether to run it.
+/// `batten engine install` — the pin's engine, built only under a source pin
+/// (CLOUD-2840) — and the verdict is what says whether to run it.
 /// Would the agent proxy carry this container's requests (CLOUD-1399)?
 ///
 /// Reads THIS process's environment, which is the whole point: a consumer's own

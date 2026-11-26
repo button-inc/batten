@@ -1760,7 +1760,7 @@ const CENSUS: &[Verb] = &[
     // a stable token, and a digest is deliberately withheld because it is stable
     // per content but varies per machine, so printing one would defeat §6's
     // byte-stability while telling the reader nothing they can act on. The remedy
-    // is `mise run install:local`, and the verdict is what says whether to run it.
+    // is `batten engine install`, and the verdict is what says whether to run it.
     Verb {
         path: "doctor mediator",
         args: &[],
