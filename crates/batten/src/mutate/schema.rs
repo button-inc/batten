@@ -2798,25 +2798,49 @@ fn rendered_files(work: &std::path::Path, mutants: &[Listed], schema: &Schema) -
     files
 }
 
-/// The originals of every file the schema rendered, shown over the copy at
-/// `work` for the judging runs, where they run `reuse`'s binaries; nothing
-/// shown where they do not.
+/// The originals of every file the schema rendered, shown over the copy for
+/// the judging of `todo`, where every one of its runs runs the reused
+/// binaries; nothing shown where any would build its own.
 ///
-/// THE ORIGINALS ONLY OVER REUSED BINARIES (CLOUD-2911): a judging run cargo
-/// builds would compile them beside the rendering, as the reach suite did.
+/// NEVER WHILE A JUDGING RUN BUILDS (CLOUD-2911): a run whose cases the reuse
+/// record does not hold asks cargo to build, which would compile the shown
+/// originals without the switches, and every mutant it judged would survive.
 ///
 /// # Errors
 ///
 /// An original cannot be shown.
 fn shown_over(
-    reuse: Option<&Reuse>,
-    (root, work): (&std::path::Path, &std::path::Path),
-    mutants: &[Listed],
+    judging: &Judging<'_>,
+    todo: &[u32],
     schema: &Schema,
 ) -> anyhow::Result<Option<Shown>> {
-    reuse
-        .map(|_| Shown::originals(root, work, &rendered_files(work, mutants, schema)))
+    judging
+        .reuse
+        .filter(|reuse| reuse_holds_all(reuse, todo, judging.reach))
+        .map(|_| {
+            Shown::originals(
+                judging.root,
+                judging.work,
+                &rendered_files(judging.work, judging.mutants, schema),
+            )
+        })
         .transpose()
+}
+
+/// Whether `reuse` holds every case reaching any mutant of `todo`: whether
+/// every judging run of them runs its binaries and builds none.
+fn reuse_holds_all(
+    reuse: &Reuse,
+    todo: &[u32],
+    reach: &std::collections::BTreeMap<u32, BTreeSet<Case>>,
+) -> bool {
+    let cases: BTreeSet<Case> = todo
+        .iter()
+        .filter_map(|id| reach.get(id))
+        .flatten()
+        .cloned()
+        .collect();
+    reuse.holds(&cases)
 }
 
 /// The crate roots of the packages `mutants` live in: each package's
@@ -10021,7 +10045,7 @@ pub fn sweep(
         control: &Control::new(),
         reuse: reuse.as_ref(),
     };
-    let shown = shown_over(reuse.as_ref(), (&root, &work), mutants, &schema)?;
+    let shown = shown_over(&judging, &todo, &schema)?;
     let (red, control) = control_red(&judging, out)?;
     let judging = judging.with_red(&red).with_control(&control);
     let mut verdicts = judge_all(&judging, &todo, jobs, out);
@@ -19546,6 +19570,32 @@ pub fn repo() -> u8 {{ scratch() }}
         );
         assert_eq!(reuse_ids("not json"), None);
         assert_eq!(reuse_ids("{}"), None, "no `rust-binaries` is no record");
+    }
+
+    /// The originals are shown to the judging only where every run of it
+    /// reuses the build: a case of a binary the reuse record does not hold
+    /// would be built, from the originals, with no switch in it.
+    ///
+    /// Fails by: originals shown while a run builds, so every mutant that run
+    /// judges survives (165 survived against 18 caught on a #1276 shard).
+    #[test]
+    fn originals_are_shown_only_where_no_judging_run_builds() {
+        let reuse = Reuse {
+            binaries: std::path::PathBuf::from("/r/binaries.json"),
+            metadata: std::path::PathBuf::from("/r/cargo-metadata.json"),
+            ids: BTreeSet::from([String::from("batten")]),
+        };
+        let case = |name: &str, binary: &str| (name.to_owned(), binary.to_owned());
+        let reach = std::collections::BTreeMap::from([
+            (0, BTreeSet::from([case("a", "batten")])),
+            (1, BTreeSet::from([case("b", "batten::it")])),
+        ]);
+        assert!(reuse_holds_all(&reuse, &[0], &reach), "every case held");
+        assert!(
+            !reuse_holds_all(&reuse, &[0, 1], &reach),
+            "one case in a binary it does not hold"
+        );
+        assert!(reuse_holds_all(&reuse, &[], &reach), "nothing judged");
     }
 
     /// A judging run reuses the binaries the build recorded when every case's
