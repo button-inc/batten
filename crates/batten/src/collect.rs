@@ -1790,6 +1790,24 @@ mod tests {
         SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
     }
 
+    /// Fails by: the stop dropped on its way to `prune`'s walks (`walk`
+    /// answering no halt, a mutant missed at 34c6e4d1f, CLOUD-2789), so a pass
+    /// told to stop walks every directory of a tree first.
+    #[test]
+    fn a_walk_is_handed_the_passs_own_stop() {
+        let stop = batten_facts::lock_wait::Stop::new().expect("a stop");
+        assert!(
+            !crate::prune::halted(super::walk(Some(&stop))),
+            "not yet raised"
+        );
+        stop.raise();
+        assert!(
+            crate::prune::halted(super::walk(Some(&stop))),
+            "raised, it halts the walk"
+        );
+        assert!(!crate::prune::halted(super::walk(None)), "no stop, no halt");
+    }
+
     /// One `kinfo_proc`: `p_starttime` at offset 0, `p_pid` at 40, `p_comm` at
     /// 243, the rest filler that must never be read; `p_nice`, the byte before
     /// `p_comm`, is filler too.

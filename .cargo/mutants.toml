@@ -215,6 +215,12 @@ exclude_re = [
   # are written; only the wall time changes, and `run_filter`
   # already answers no filter when half the cases or more are due (CLOUD-2789).
   'schema\.rs:\d+:\d+: replace listed_cases -> Option<BTreeSet<Case>> with None$',
+  # `finished_cases` likewise feeds only `run_filter`: with none finished,
+  # every listed case is due, `due * 2 >= listed` answers no filter, and the
+  # recorder's own skip (`record_into`) passes over each case whose record
+  # finished passing, so the same records are written and only the wall time
+  # changes (CLOUD-2789, shard 6/8 at 34c6e4d1f).
+  'schema\.rs:\d+:\d+: replace finished_cases -> BTreeSet<Case> with BTreeSet::new\(\)$',
   # The inotify mask's flags are distinct bits, so `^` before the last one
   # sets the same mask `|` does (CLOUD-2789, shard 3/8 at 34c6e4d1f).
   'lock_wait\.rs:\d+:\d+: replace \| with \^ in wait$',
