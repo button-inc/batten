@@ -219,4 +219,22 @@ exclude_re = [
   # told from it by `whole` already, so `crate_held` there decides no
   # comparison (CLOUD-2789, shard 3/8 at 34c6e4d1f).
   'schema\.rs:\d+:\d+: delete field crate_held from struct Self expression in CrateRead::whole$',
+  # `macro_passes` reads a `macro_rules!` body's TOKEN_TREE, where the lexer
+  # keeps `::` as two `:` tokens (the `colons` window above it reads that
+  # spelling): no token there is COLON2, so `pasted` is false whatever its
+  # second compare says. Column 78 is that compare; the COLON2 one at the
+  # start of the line is not this argument's (CLOUD-2789, shard 7/8 at 34c6e4d1f).
+  'schema\.rs:\d+:78: replace == with != in macro_passes$',
+  # The guard admits a non-member item to the member arm, whose
+  # `parent().parent()` is an impl only for a member: an item is an impl's
+  # child only through its ASSOC_ITEM_LIST. Where it is not, its owner is read
+  # by nothing: `associated_names` and `owner_type_names` read it only for an
+  # impl or a member (CLOUD-2789, shard 7/8 at 34c6e4d1f).
+  'schema\.rs:\d+:\d+: replace match guard is_member\(item\) with true in impl_owner$',
+  # `Self` and an `@` crate-root segment are never a definition's name (one is
+  # a keyword, the other no identifier), so the lookup the narrowed guard lets
+  # them reach finds nothing, and `Nothing` answers `Unknown`, as the guard
+  # does. Column 28 is the first `||`; the `!` test after it is judged
+  # (CLOUD-2789, shard 7/8 at 34c6e4d1f).
+  'schema\.rs:\d+:28: replace \|\| with && in Resolver<.r>::owner$',
 ]

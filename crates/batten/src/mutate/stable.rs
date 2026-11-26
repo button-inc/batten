@@ -46,7 +46,7 @@ pub const UNSTABLE: &str = "reach unstable";
 /// Whether [`TWICE`] asks for the whole suite to be recorded twice.
 #[must_use]
 pub fn twice() -> bool {
-    asks_twice(std::env::var(TWICE).ok().as_deref())
+    asks_twice(super::overlay_var(TWICE).as_deref())
 }
 
 /// Whether a [`TWICE`] of `value` asks: any value but none, empty or `0`.
@@ -127,6 +127,19 @@ pub fn by_digest(executed: &BTreeMap<Case, BTreeSet<usize>>, probes: &[String]) 
             )
         })
         .collect()
+}
+
+/// [`by_digest`] over the cases that passed: a case `red` holds has its own
+/// verdict, so it is neither a witness nor compared with one.
+#[must_use]
+pub fn passing(
+    executed: &BTreeMap<Case, BTreeSet<usize>>,
+    probes: &[String],
+    red: &BTreeSet<Case>,
+) -> Witness {
+    let mut witness = by_digest(executed, probes);
+    witness.retain(|case, _| !red.contains(case));
+    witness
 }
 
 /// One case that executed different functions on two recordings over the
@@ -291,5 +304,31 @@ mod tests {
         assert!(!asks_twice(Some("")));
         assert!(!asks_twice(Some("0")));
         assert!(asks_twice(Some("1")));
+    }
+
+    /// [`twice`] reads [`TWICE`] from the environment. Fails by: the variable
+    /// ignored, so a sweep asked to prove the suite clean records it once.
+    #[test]
+    fn twice_reads_its_variable() {
+        assert!(super::super::with_overlay_vars(&[(TWICE, "1")], twice));
+        assert!(!super::super::with_overlay_vars(&[], twice));
+    }
+
+    /// A red case is dropped from what a recording witnesses, a passing one
+    /// kept. Fails by: the filter inverted, so only red cases were witnessed
+    /// and compared (bootstrap shard 7/8 at 34c6e4d1f survived the `!` in
+    /// `record_reach`'s `retain`).
+    #[test]
+    fn only_a_passing_case_is_witnessed() {
+        let probes = vec![String::from("d0")];
+        let executed = BTreeMap::from([
+            (case("green"), BTreeSet::from([0])),
+            (case("red"), BTreeSet::from([0])),
+        ]);
+        let red = BTreeSet::from([case("red")]);
+        assert_eq!(
+            passing(&executed, &probes, &red),
+            Witness::from([(case("green"), set(&["d0"]))])
+        );
     }
 }
