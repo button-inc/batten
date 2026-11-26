@@ -103,12 +103,19 @@ substituted contains task if {
 # array is built to be taken apart again. `program` rather than `name`, because a
 # task's argv is the spelling the manifest carries and comparing a basename
 # against it would match a different binary reached by the same name.
+#
+# AND WHAT THE CALL STOPS BEFORE IS AN OPTION (CLOUD-2840). Where the first word
+# the call drops is a sub-verb — `batten doctor` against `batten doctor egress` —
+# the call names a different command, here a broader one, not this task with
+# something left out. Refusing it refused the engine's own printed remedy
+# (`run batten doctor`), a remedy cycle measured on a cold container.
 weaker_than_program(entry, argv) if {
 	argv[0] == entry.program
 	count(entry.arguments) + 1 < count(argv)
 	every index, word in entry.arguments {
 		argv[index + 1] == word
 	}
+	startswith(argv[count(entry.arguments) + 1], "-")
 }
 
 violation contains {
@@ -233,6 +240,29 @@ test_the_tasks_own_argv_spelled_out_is_not_a_substitution if {
 # so refusing it would name a task that does less than the call.
 test_a_call_that_extends_the_task_is_not_a_substitution if {
 	count(violation) == 0 with input as call("cargo clippy --all-targets --fix", verbs)
+}
+
+# A DROPPED SUB-VERB NAMES A DIFFERENT COMMAND, NOT A WEAKER ONE (CLOUD-2840).
+# `batten doctor` stops where `[tasks."doctor:egress"]`'s `batten doctor egress`
+# continues, so the bare prefix relation refused it, and `batten doctor` is the
+# remedy the engine's own `workspace state broken` refusal names: a remedy cycle,
+# measured on a cold container. The word the call stops before is a sub-verb,
+# so the call asks a different (here broader) question rather than the task's
+# question with options dropped. Only a dropped OPTION is a weakening.
+doctor := {
+	"doctor:egress": ["batten", "doctor", "egress"],
+	"doctor:mediator": ["batten", "doctor", "mediator"],
+	"provision:startup": ["batten", "startup", "--repair"],
+}
+
+test_a_parent_verb_is_not_a_substitution_for_its_sub_verb_task if {
+	count(violation) == 0 with input as call("batten doctor", doctor)
+}
+
+# THE MIRROR: under the same table, a call that drops only an option still fires.
+test_a_dropped_option_under_the_same_table_is_still_refused if {
+	some v in violation with input as call("batten startup", doctor)
+	v.subjects[0].artifact == "provision:startup"
 }
 
 # A task whose body is not a single command carries `null`, and comparing against
