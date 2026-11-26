@@ -6187,7 +6187,18 @@ pub fn record_reach(
     ]);
     // THE CASES READ THE ORIGINALS, THE BUILD'S BINARIES RUN (CLOUD-2911): a
     // case scanning the tree read the rendering and went red here alone.
+    //
+    // EACH PASS STARTS ON AN EMPTY SCRATCH PARENT (CLOUD-2936): a case's first
+    // fixture reaps every finished run it finds there, so a run a stopped sweep
+    // or an earlier pass left was an input one recording saw and the next did
+    // not, and 310 cases moved three functions on the full double recording.
     let suite = || -> anyhow::Result<bool> {
+        match std::fs::remove_dir_all(target.join("tmp")) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(error.into());
+            }
+            _ => {}
+        }
         let shown = Shown::originals(root, work, rendered)?;
         let ran = super::spawn_suite(
             work,
