@@ -7200,6 +7200,47 @@ mod tests {
         }
     }
 
+    /// A FORGE FAULT STOPS THE LAP AT THE WAIT, AND NOWHERE ELSE (CLOUD-2253
+    /// A2): `(Wait, Internal, Unread)` is `Stop`, and an unread reading leaves
+    /// every other cell as the table reads it.
+    ///
+    /// Fails by: the fault lapping back into the same unanswering forge, or the
+    /// unread reading stopping a step whose own exit the table already reads.
+    #[test]
+    fn a_forge_fault_stops_at_the_wait_and_moves_no_other_cell() {
+        use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+        assert_eq!(
+            progress_of(Step::Wait, Internal, Some(TapVerdict::Unread), Basis::Own),
+            Progress::Stop,
+            "another lap re-asks the forge that answered nothing"
+        );
+        assert_eq!(
+            progress(Step::Wait, Internal),
+            Progress::Lap,
+            "the cell the reading moves laps on the bare code"
+        );
+        for step in [
+            Step::Replay,
+            Step::Verify,
+            Step::Ready,
+            Step::Push,
+            Step::Wait,
+            Step::FastForward,
+        ] {
+            for code in [Success, Usage, Violation, Internal] {
+                if step == Step::Wait && code == Internal {
+                    continue;
+                }
+                assert_eq!(
+                    progress_of(step, code, Some(TapVerdict::Unread), Basis::Own),
+                    progress(step, code),
+                    "{step:?}/{code:?} is not the wait's fault"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_wait_that_read_nothing_is_not_a_pending_reading() {
         // NO WAIT ENDS PENDING ANY MORE (CLOUD-2253 A2): with no ask count, a

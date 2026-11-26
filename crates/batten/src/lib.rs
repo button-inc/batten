@@ -34595,6 +34595,65 @@ mod tests {
         assert_eq!(asked.get(), super::pr_watch::UNANSWERED_BEFORE_REFUSING);
     }
 
+    /// THE POLL PAUSES BETWEEN ASKS AND NEVER AFTER THE LAST, A REFUSAL ENDS
+    /// IT AT ONCE, AND ONLY AN UNBROKEN RUN OF UNKNOWNS IS THE FAULT (CLOUD-2253
+    /// A2).
+    ///
+    /// Fails by: asks fired back to back against the forge, a refusal asked
+    /// again, or a pending reading between unknowns not resetting the run, which
+    /// refuses a bot that was answering.
+    #[test]
+    fn the_fast_forward_poll_paces_its_asks_and_counts_only_an_unbroken_fault() {
+        use super::fast_forward::Answer;
+
+        let asked = std::cell::Cell::new(0_u32);
+        let paused = std::cell::Cell::new(0_u32);
+        let answered = super::bot_answer(
+            || {
+                asked.set(asked.get() + 1);
+                if asked.get() == 4 {
+                    Answer::Accepted
+                } else {
+                    Answer::Pending
+                }
+            },
+            || paused.set(paused.get() + 1),
+        );
+        assert_eq!(answered, Answer::Accepted);
+        assert_eq!(paused.get(), 3, "one pause between each pair of asks");
+
+        let asked = std::cell::Cell::new(0_u32);
+        let answered = super::bot_answer(
+            || {
+                asked.set(asked.get() + 1);
+                Answer::Refused
+            },
+            || {},
+        );
+        assert_eq!(answered, Answer::Refused);
+        assert_eq!(asked.get(), 1, "a refusal is an answer");
+
+        // An unknown short of the bound, a pending, and again: the run restarts,
+        // so the bot's acceptance after two near-misses is still read.
+        let near = super::pr_watch::UNANSWERED_BEFORE_REFUSING - 1;
+        let asked = std::cell::Cell::new(0_u64);
+        let answered = super::bot_answer(
+            || {
+                asked.set(asked.get() + 1);
+                let n = asked.get();
+                if n == 2 * near + 2 {
+                    Answer::Accepted
+                } else if n == near + 1 {
+                    Answer::Pending
+                } else {
+                    Answer::Unknown(String::from("x"))
+                }
+            },
+            || {},
+        );
+        assert_eq!(answered, Answer::Accepted);
+    }
+
     /// One trunk fetch answers a whole bet precheck and the Replay after it
     /// (CLOUD-2253 A8); a new precheck fetches again.
     ///
