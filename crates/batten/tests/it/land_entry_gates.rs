@@ -275,3 +275,56 @@ fn retiring_a_landed_branch_drops_every_branch_keyed_receipt() {
         "a sha-keyed receipt belongs to no branch and must survive"
     );
 }
+
+/// Fails by: a state repository the lap cannot reach changing the lap's
+/// verdict (CLOUD-1544). The carry's pull runs before the entry gates; with
+/// `BATTEN_STATE_REPO` naming a repository on a host that refuses the
+/// connection, the lap says one line about it and reaches exactly the verdict,
+/// and the stdout, it reaches with the variable unset.
+#[test]
+fn an_unreachable_state_repository_never_changes_the_laps_verdict() {
+    let run = |name: &str, state_repo: Option<&str>| {
+        let dir = fixture(name);
+        // An http(s) origin, so a state repository derives from it — on a port
+        // nothing listens on, so every call to it is refused.
+        common::git_in(
+            &dir,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://127.0.0.1:9/owner/repo",
+            ],
+        );
+        let refuses = gate(&dir, "refuses.sh", 1);
+        let mut command = common::batten();
+        command
+            .args(["land", "lap", "main", "--hold"])
+            .env("GH_REPO", REPO)
+            .env("LAND_ENTRY_GATES", &refuses)
+            .env("BATTEN_REST_FIXTURE", &dir)
+            .env("LAND_MAX_LAPS", "1")
+            .current_dir(&dir);
+        if let Some(value) = state_repo {
+            command.env(batten::session::STATE_REPO_ENV, value);
+        }
+        let output = command.streamed_output().expect("the compiled binary runs");
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let (unset_code, unset_out, unset_err) = run("land-carry-unset", None);
+    let (code, out, err) = run("land-carry-unreachable", Some("owner/state"));
+    assert_eq!(code, unset_code, "the same verdict: {err}");
+    assert_eq!(out, unset_out, "the same stdout");
+    assert!(
+        !unset_err.contains("receipt pull"),
+        "unset says nothing: {unset_err}"
+    );
+    assert!(
+        err.contains("receipt pull: could not carry"),
+        "one line about the carry: {err}"
+    );
+}
