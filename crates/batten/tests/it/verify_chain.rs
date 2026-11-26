@@ -384,6 +384,140 @@ fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
     assert_eq!(depends_of("verify:gated"), ["tree-clean"]);
 }
 
+/// `hk check`'s steps as `hk.pkl` resolves them: each step's name, its profiles
+/// and its `check` text (`""` for a builtin whose check is not a string).
+///
+/// `BATTEN_BIN` is removed for the evaluation, so `\(batten)` resolves to its
+/// own fallback and an engine-run check reads the same under `verify` as alone.
+fn hk_check_steps() -> std::collections::BTreeMap<String, (Vec<String>, String)> {
+    use batten::capture::Streamed as _;
+    let mut command = common::pkl_command();
+    command
+        .args(["-f", "json", "hk.pkl"])
+        .env_remove("BATTEN_BIN")
+        .current_dir(common::at_root("."));
+    let output = command.streamed_output().expect("pkl evaluates hk.pkl");
+    assert!(
+        output.status.success(),
+        "pkl eval hk.pkl failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("`-f json` prints one JSON document");
+    config["hooks"]["check"]["steps"]
+        .as_object()
+        .expect("hk.pkl declares a `check` hook with steps")
+        .iter()
+        .map(|(name, step)| {
+            let profiles = step["profiles"]
+                .as_array()
+                .map(|all| {
+                    all.iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let check = step["check"].as_str().unwrap_or_default().to_owned();
+            (name.clone(), (profiles, check))
+        })
+        .collect()
+}
+
+/// EACH `hk check` STEP RUNS ONCE PER LAP (CLOUD-2789). Measured on #1276, tier
+/// 1's nine untagged steps ran again in `ci:checks`, and every step there ran a
+/// third time in tier 3's `ci` before the suite started: a step a tier repeats
+/// costs its whole run whenever it holds no receipt, and most hold none. So the
+/// three hk spellings must partition `hk check`'s steps, and a step none of them
+/// runs must be one the lap runs elsewhere: a `mise run` of it in
+/// `verify:gated`, the engine command an entry there spells, or a narrow `it`
+/// lane of the suite tier 3 runs whole.
+///
+/// Fails by: a step two tiers run; a step tagged `slow` while its name stays in
+/// `ci:checks`' skips (tier 1 stops running it, and nothing else does); a skip
+/// naming no step (it skips nothing, so the step runs twice); or tier 3 losing
+/// `test` or `mutant:changed`.
+#[test]
+fn each_hk_step_runs_in_exactly_one_place_per_lap() {
+    let hk = hk_check_steps();
+    assert!(
+        hk.contains_key("test") && hk.contains_key("mutant:changed"),
+        "the case reads the committed `check` hook: {:?}",
+        hk.keys()
+    );
+    assert_eq!(
+        steps("ci:quick"),
+        ["hk check --all --profile '!slow'"],
+        "tier 1's hk selection is every step without a profile"
+    );
+    let quick: std::collections::BTreeSet<&str> = hk
+        .iter()
+        .filter(|(_, (profiles, _))| profiles.is_empty())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let checks_run = steps("ci:checks");
+    let mut words = checks_run[0].split_whitespace();
+    let mut checks_skips = Vec::new();
+    while let Some(word) = words.next() {
+        if word == "--skip-step" {
+            checks_skips.push(words.next().expect("a skip names a step").to_owned());
+        }
+    }
+    let suite_skips: Vec<String> = env_of("verify:ci-suite", "HK_SKIP_STEPS")
+        .split(',')
+        .map(|name| name.trim().to_owned())
+        .collect();
+    for skipped in checks_skips.iter().chain(&suite_skips) {
+        assert!(
+            hk.contains_key(skipped),
+            "`{skipped}` is skipped but names no `hk check` step, so it skips nothing"
+        );
+    }
+    let gated = steps("verify:gated");
+    let elsewhere: Vec<String> = gated
+        .iter()
+        .filter(|step| step.starts_with("mise run "))
+        .flat_map(|step| members(step))
+        .collect();
+    let engine = "cargo run --quiet -p batten -- ";
+    let narrow_lane = |check: &str| {
+        check.strip_prefix("mise run ").is_some_and(|task| {
+            common::task_body(task)
+                .contains("cargo nextest run -p batten --no-tests=fail --test it ")
+        })
+    };
+    let suite_runs_whole = !suite_skips.iter().any(|skipped| skipped == "test");
+    for (name, (_, check)) in &hk {
+        let tiers: Vec<&str> = [
+            ("ci:quick", quick.contains(name.as_str())),
+            ("ci:checks", !checks_skips.contains(name)),
+            ("verify:ci-suite", !suite_skips.contains(name)),
+        ]
+        .into_iter()
+        .filter_map(|(tier, runs)| runs.then_some(tier))
+        .collect();
+        assert!(tiers.len() <= 1, "`{name}` runs in {tiers:?}: once per lap");
+        if tiers.is_empty() {
+            let run_by_an_entry = check
+                .strip_prefix("mise run ")
+                .is_some_and(|task| elsewhere.iter().any(|member| member == task))
+                || check
+                    .strip_prefix(engine)
+                    .is_some_and(|words| gated.iter().any(|step| step.contains(words)));
+            assert!(
+                run_by_an_entry || (narrow_lane(check) && suite_runs_whole),
+                "`{name}` (`{check}`) runs in no tier and nowhere else in the lap"
+            );
+        }
+    }
+    for tier_three in ["test", "mutant:changed"] {
+        assert!(
+            !suite_skips.iter().any(|skipped| skipped == tier_three),
+            "tier 3 runs `{tier_three}`"
+        );
+    }
+}
+
 /// THE RETIRED BODY'S ORDER, which the old suite pinned by behaviour and by text:
 /// the toolchain first, then the claim receipt (a question cheaper than any below it),
 /// then linearity (a branch that is behind laps regardless, so the gate set is
