@@ -953,6 +953,17 @@ fn step_stubs(dir: &Path) {
 /// `batten <args>` in `repo` as a container of the branch runs it: the state
 /// repository set, `host` trusted, the step stubs first on `PATH`, and no CI.
 fn in_container(repo: &Path, state: &Path, host: &Host, args: &[&str]) -> std::process::Output {
+    in_container_naming(repo, state, host, STATE_PATH, args)
+}
+
+/// [`in_container`], with `BATTEN_STATE_REPO` set to `state_repo`.
+fn in_container_naming(
+    repo: &Path,
+    state: &Path,
+    host: &Host,
+    state_repo: &str,
+    args: &[&str],
+) -> std::process::Output {
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(
         std::iter::once(repo.join("bin")).chain(std::env::split_paths(&inherited)),
@@ -966,7 +977,7 @@ fn in_container(repo: &Path, state: &Path, host: &Host, args: &[&str]) -> std::p
         .env_remove("CI")
         .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
         .env_remove("BATTEN_TASK_PID")
-        .env(batten::session::STATE_REPO_ENV, STATE_PATH)
+        .env(batten::session::STATE_REPO_ENV, state_repo)
         .env("SSL_CERT_FILE", &host.ca)
         .env("NO_PROXY", "127.0.0.1")
         .env("no_proxy", "127.0.0.1")
@@ -1191,4 +1202,87 @@ fn two_concurrent_mutate_publishers_lose_nothing() {
         "the rival's verdict: {journal}"
     );
     assert_eq!(pulled.count, 2, "{pulled:?}");
+}
+
+/// Fails by: any publish — the receipt set's, the claim it carries, or the
+/// mutate carry's — resolving to origin. The step-end publish runs with a
+/// step receipt, a claim AND mutate state to carry, under every spelling of
+/// origin's own repository; each says `state-repo-is-origin`, the step's own
+/// verdict stands, and origin holds no ref of any kind afterwards. Origin is a
+/// real repository on the same host, so a publish that resolved to it would
+/// land there.
+#[test]
+fn no_publish_of_any_ref_reaches_origin() {
+    let case = "receipt-carry-never-origin";
+    let origin = state_repo(&format!("{case}-origin"));
+    let host = https_host(case, vec![(ORIGIN_PATH, origin.clone())]);
+    let one = wired_clone(case, &host);
+    crate::common::write(&one, "batten.toml", &format!("{CONFIG}{STEP_ROW}"));
+    crate::common::write(&one, "input.txt", "one\n");
+    crate::common::write(&one, ".gitignore", "bin/\n");
+    git_in(&one, &["add", "-A"]);
+    git_in(&one, &["commit", "-qm", "a step"]);
+    step_stubs(&one);
+    let claims = one.join(".git").join("batten-receipts");
+    std::fs::create_dir_all(&claims).unwrap();
+    std::fs::write(
+        claims.join(batten::claim::receipt_name("work")),
+        "CLOUD-1\nready-lint pass\n",
+    )
+    .unwrap();
+    let state = scratch(&format!("{case}-state")).join("state");
+    let schema = batten::state::repo_state_dir_under(&state, &one)
+        .unwrap()
+        .join("mutate")
+        .join("schema");
+    std::fs::create_dir_all(schema.join("reach")).unwrap();
+    std::fs::write(schema.join("verdicts"), "k\tcaught\tm\n").unwrap();
+    std::fs::write(schema.join("reach/sealed"), "a".repeat(64)).unwrap();
+    let port_host = host.base.trim_start_matches("https://").to_owned();
+    let bare_host = port_host.split(':').next().unwrap().to_owned();
+    for spelling in [
+        ORIGIN_PATH.to_owned(),
+        ORIGIN_PATH.to_uppercase(),
+        format!("{ORIGIN_PATH}.git"),
+        format!("/{ORIGIN_PATH}/"),
+        format!("{}/{ORIGIN_PATH}", host.base),
+        format!("{port_host}/{ORIGIN_PATH}"),
+        format!("{bare_host}/{ORIGIN_PATH}"),
+    ] {
+        let ran = in_container_naming(
+            &one,
+            &state,
+            &host,
+            &spelling,
+            &["step", "run", "carried", "--", "mark"],
+        );
+        assert_eq!(
+            ran.status.code(),
+            Some(0),
+            "the step's verdict stands: {spelling}"
+        );
+        assert!(
+            String::from_utf8_lossy(&ran.stderr).contains("receipt publish: state-repo-is-origin"),
+            "{spelling}: {ran:?}"
+        );
+        let published =
+            in_container_naming(&one, &state, &host, &spelling, &["receipt", "publish"]);
+        assert_eq!(
+            published.status.code(),
+            Some(1),
+            "{spelling}: {published:?}"
+        );
+        assert_eq!(stdout(&published), "state-repo-is-origin\n", "{spelling}");
+        assert!(
+            git_in(&origin, &["for-each-ref"]).trim().is_empty(),
+            "{spelling}: origin holds no receipt, claim or mutate ref"
+        );
+    }
+    assert!(
+        host.requests()
+            .iter()
+            .all(|path| !path.contains("receive-pack")),
+        "no push of any ref was attempted: {:?}",
+        host.requests()
+    );
 }
