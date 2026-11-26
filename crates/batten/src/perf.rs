@@ -4032,14 +4032,13 @@ mod tests {
         build(&base, Some(&shared), "base", PAIR_PROFILE)?;
         assert!(build(&head, Some(&shared), "head", PAIR_PROFILE)?);
         let binary = shared.join(PAIR_PROFILE).join("batten");
-        #[expect(
-            clippy::disallowed_types,
-            reason = "stays: the case runs the binary the pair built, which is the fact under test"
-        )]
-        let printed = std::process::Command::new(&binary).output()?;
+        let argv = vec![binary.to_string_lossy().into_owned()];
+        let printed =
+            crate::exec::piped_argv(&root, &argv, "", crate::exec::Diagnostics::Drop, &[])
+                .map(|(_, stdout)| stdout);
         assert_eq!(
-            String::from_utf8_lossy(&printed.stdout).trim(),
-            "head",
+            printed.as_deref().map(str::trim),
+            Some("head"),
             "the head arm links its own members"
         );
         Ok(())
