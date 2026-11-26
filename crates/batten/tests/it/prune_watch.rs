@@ -350,6 +350,17 @@ fn the_least_recently_used_live_unit_goes_first() {
     );
 }
 
+/// Returns once the process `pid` is blocked reading a pipe, which the kernel
+/// names in `/proc/<pid>/wchan` (`pipe_read`, `anon_pipe_read` on newer
+/// kernels): a fact about the process, never a clock. Off Linux, or once the
+/// process is gone, it answers at once.
+fn await_reading_a_pipe(pid: u32) {
+    let wchan = PathBuf::from(format!("/proc/{pid}/wchan"));
+    while std::fs::read_to_string(&wchan).is_ok_and(|now| !now.trim().ends_with("pipe_read")) {
+        std::thread::yield_now();
+    }
+}
+
 #[test]
 fn a_unit_a_running_program_executes_is_never_collected() {
     // Measured on #1132: a hook collecting during a nextest run removed the
@@ -385,6 +396,11 @@ fn a_unit_a_running_program_executes_is_never_collected() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let mut running = common::spawn_copy(&mut command);
+    // THE RUNNER IS AT ITS READ BEFORE THE COLLECTOR LOOKS (CLOUD-2936). It is
+    // the engine, so it records what it runs; killed wherever its start had
+    // reached, it ran 13 functions fewer on one recording of unchanged code
+    // than on the other.
+    await_reading_a_pipe(running.id());
     let kept = batten::collect::engine_kept();
     let trees = [root.join("target")];
     let _ = batten::collect::collect(&request(&trees, &kept, u64::MAX));
