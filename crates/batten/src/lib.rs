@@ -18934,6 +18934,26 @@ fn mutate_cargo_runner(
     Ok(nextest_absent.is_none().then_some(runner))
 }
 
+/// A `mutate cargo` run's exit, its `pass` recorded where it passed whole.
+fn recorded(pass: Option<&mutate::CargoPass>, code: ExitCode) -> ExitCode {
+    if let (ExitCode::Success, Some(pass)) = (code, pass) {
+        pass.record();
+    }
+    code
+}
+
+/// Whether `pass` answers a `mutate cargo` run, said where it does.
+fn passed_whole(pass: Option<&mutate::CargoPass>, out: &mut dyn Write) -> Result<bool> {
+    let passed = pass.is_some_and(mutate::CargoPass::passed);
+    if passed {
+        writeln!(
+            out,
+            "mutate cargo: this tree passed whole under the same change, scope and engine, so it is not run again"
+        )?;
+    }
+    Ok(passed)
+}
+
 fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     // THE REACH SEED IS DETACHED ON PURPOSE (CLOUD-2842): it outlives the step
     // that spawned it, so it is dispatched before the orphan watch below.
@@ -19011,6 +19031,13 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         }
         None => (String::from("the whole workspace"), None),
     };
+    // A RUN OVER A TREE ALREADY SEEN PASSING WHOLE IS ANSWERED (CLOUD-2253,
+    // C7) before anything is listed, rendered or reached: a land lap's rerun
+    // over the same tree paid all of it to find every verdict journaled.
+    let pass = mutate::CargoPass::of(root, listing);
+    if passed_whole(pass.as_ref(), out)? {
+        return Ok(ExitCode::Success);
+    }
     let Some(runner) = mutate_cargo_runner(root, out, err)? else {
         return Ok(ExitCode::Internal);
     };
@@ -19050,7 +19077,7 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(&handback),
         out,
     )?;
-    Ok(mutate::schema::exit_of(swept.code))
+    Ok(recorded(pass.as_ref(), mutate::schema::exit_of(swept.code)))
 }
 
 /// `batten mutate sweep`: the declared runner over the narrowed set, or the one

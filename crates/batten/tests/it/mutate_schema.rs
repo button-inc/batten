@@ -850,3 +850,78 @@ fn a_record_run_with_no_reach_directory_fails() {
         "{ran:?}"
     );
 }
+
+/// The library a whole-pass case judges: while the file `pin` stands beside
+/// it, `two`'s only case pins its value, so each mutant cargo-mutants makes of
+/// it is caught, and without it the case still runs `two`, so each survives
+/// rather than goes unreached. The pin is not Rust, so moving it moves the tree and never
+/// the patch.
+const PASSING_LIB: &str = "pub fn two() -> u8 {\n    2\n}\n\
+#[cfg(test)]\nmod tests {\n    #[test]\n    fn twos() {\n        \
+let got = super::two();\n        \
+if std::path::Path::new(\"pin\").exists() {\n            assert_eq!(got, 2);\n        }\n    }\n}\n";
+
+/// `batten mutate cargo` over `repo`'s change since `base`, off CI.
+fn cargo_sweep(repo: &std::path::Path, base: &str) -> (Option<i32>, String) {
+    let output = common::batten()
+        .args(["mutate", "cargo"])
+        .current_dir(repo)
+        .env("MUTANT_RUNNERS", "cargo-mutants=**/*.rs")
+        .env("MUTANT_CHANGED_SINCE", base)
+        // `mutant:rust`'s per-job cost, which a hand-back is sized by.
+        .env("MUTANT_JOB_DISK_MB", "6200")
+        .env("MUTANT_JOB_MEMORY_MB", "4000")
+        .env_remove("CI")
+        .env_remove(batten::mutate::WHOLE_TREE)
+        .streamed_output()
+        .expect("run batten mutate cargo");
+    let mut said = common::stdout(&output);
+    said.push_str(&common::stderr(&output));
+    (output.status.code(), said)
+}
+
+/// A `mutate cargo` RUN OVER A TREE SEEN PASSING WHOLE IS ANSWERED (CLOUD-2253,
+/// C7): a land lap's rerun over the same tree lists nothing, builds nothing
+/// and reaches nothing. A file outside the patch that a case reads is a tree
+/// that moved, judged again, and here the survivor it now lets through is
+/// found.
+///
+/// Fails by: no pass record, so the second run lists and builds again; or a
+/// record keyed on the patch alone, so the third run answers 0 over a tree
+/// whose only case no longer pins the value.
+#[test]
+fn a_cargo_run_over_a_tree_seen_passing_whole_is_not_run_again() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let _ = common::scratch_state_root();
+    let repo = seeded_with("mutate-cargo-pass", "pub fn one() -> u8 {\n    1\n}\n");
+    common::write(
+        &repo,
+        "batten.toml",
+        &format!("version = 1\n{}", crate::step_journal::MUTANTS_PROVISION),
+    );
+    common::write(&repo, "pin", "two\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-qm", "provision and pin"]);
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let base = base.trim();
+    common::write(&repo, "src/lib.rs", PASSING_LIB);
+    common::git_in(&repo, &["commit", "-qam", "two"]);
+    let answered = "mutate cargo: this tree passed whole";
+    let (code, said) = cargo_sweep(&repo, base);
+    assert_eq!(code, Some(0), "every mutant of `two` is caught\n{said}");
+    assert!(!said.contains(answered), "{said}");
+    let (code, said) = cargo_sweep(&repo, base);
+    assert_eq!(code, Some(0), "{said}");
+    assert!(
+        said.contains(answered),
+        "the second run is answered\n{said}"
+    );
+    assert!(!said.contains("mutant(s) of"), "nothing is listed\n{said}");
+    std::fs::remove_file(repo.join("pin")).expect("unpin");
+    let (code, said) = cargo_sweep(&repo, base);
+    assert!(
+        !said.contains(answered),
+        "a moved tree is judged again\n{said}"
+    );
+    assert_eq!(code, Some(2), "and its survivor found\n{said}");
+}

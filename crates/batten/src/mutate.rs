@@ -5058,6 +5058,104 @@ impl ChangeInputs {
     }
 }
 
+/// Where `batten mutate cargo` records a run it saw pass whole, beside
+/// [`PASSED_RECORD`] in [`record_dir`] (CLOUD-2253).
+const CARGO_PASSED_RECORD: &str = "mutate-cargo-passed.tsv";
+
+/// The environment a `mutate cargo` run's scope and judging are read from:
+/// whose sources, which shard, which phase, the whole tree or a change, and
+/// the nextest profile every case runs under.
+const CARGO_PASS_ENV: [&str; 5] = [RUNNERS, SHARD, schema::PHASE, WHOLE_TREE, "NEXTEST_PROFILE"];
+
+/// One `batten mutate cargo` run, keyed so a whole passing run is recorded once
+/// and answered after (CLOUD-2253, the stage audit's C7): a land lap's rerun
+/// over an unchanged tree listed, synced, snapshotted and digested it again,
+/// then re-ran the reach recorder over every case to find each one sealed.
+///
+/// THE KEY IS THE WHOLE TREE, NEVER THE PATCH ALONE: a mutant's verdict
+/// depends on every case that can reach it, and a case can live anywhere in
+/// the workspace, so a moved test anywhere is a key that moved. It is also the
+/// running engine's bytes, so a sweep fixed in between judges again. So this
+/// answers only a lap over the very tree a pass was seen on, and never under
+/// `$CI` ([`crate::step::bypassed`]), [`ChangePass`]'s reason.
+#[derive(Debug)]
+pub struct CargoPass {
+    root: PathBuf,
+    diff: Option<PathBuf>,
+    key: String,
+}
+
+impl CargoPass {
+    /// The pass of a run over `root` judging the change `diff` holds, or the
+    /// whole workspace where it is `None`; `None` under [`crate::step::bypassed`]
+    /// or where a part of the key cannot be read, and the run goes on as before.
+    #[must_use]
+    pub fn of(root: &Path, diff: Option<&Path>) -> Option<Self> {
+        if crate::step::bypassed() {
+            return None;
+        }
+        let engine = std::fs::read(running_image().ok()?).ok()?;
+        let key = cargo_pass_key(root, diff, &engine, &|name| std::env::var(name).ok())?;
+        Some(Self {
+            root: root.to_path_buf(),
+            diff: diff.map(Path::to_path_buf),
+            key,
+        })
+    }
+
+    /// Whether a run under the same key already passed whole.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        recorded_caught(&record_dir(&self.root).join(CARGO_PASSED_RECORD)).contains(&self.key)
+    }
+
+    /// Record this run as passing whole, ONLY WHERE THE TREE STILL KEYS AS IT
+    /// DID WHEN THE RUN BEGAN: an edit made while it ran was never judged.
+    pub fn record(&self) {
+        let Ok(engine) = running_image().and_then(std::fs::read) else {
+            return;
+        };
+        let now = cargo_pass_key(&self.root, self.diff.as_deref(), &engine, &|name| {
+            std::env::var(name).ok()
+        });
+        if now.as_deref() == Some(self.key.as_str()) {
+            record_caught(&record_dir(&self.root).join(CARGO_PASSED_RECORD), &self.key);
+        }
+    }
+}
+
+/// A [`CargoPass`] key: each part prefixed with its length, so two different
+/// scopes cannot serialise to the same bytes. Its material: [`CARGO_PASS_ENV`]'s
+/// values as `env` answers them, trimmed; the change's patch where there is
+/// one; the [`schema::tree_digest`] of `root`, every file but its build output
+/// and history; and `engine`, the judging binary's bytes. `None` where the
+/// patch or the tree cannot be read.
+fn cargo_pass_key(
+    root: &Path,
+    diff: Option<&Path>,
+    engine: &[u8],
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let mut material = Vec::new();
+    let mut put = |part: &[u8]| {
+        material.extend_from_slice(&part.len().to_le_bytes());
+        material.extend_from_slice(part);
+    };
+    for name in CARGO_PASS_ENV {
+        put(env(name).unwrap_or_default().trim().as_bytes());
+    }
+    match diff {
+        Some(diff) => {
+            put(b"change");
+            put(&crate::fsio::read(diff).ok()?);
+        }
+        None => put(b"workspace"),
+    }
+    put(schema::tree_digest(root).ok()?.as_bytes());
+    put(blake3::hash(engine).as_bytes());
+    Some(blake3::hash(&material).to_hex().to_string())
+}
+
 /// The one suite build every Cargo row runs against, written by
 /// [`build_if_owed`].
 ///
@@ -6460,6 +6558,50 @@ pub fn disk_short(at: &Path, disk_mb: u64, floor_mb: u64) -> Result<Option<u64>>
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A `mutate cargo` pass key moves with every input a verdict hangs on and
+    /// with nothing else (CLOUD-2253, C7).
+    ///
+    /// Fails by: a test file outside the patch left out of the key, so a lap
+    /// that deleted the case killing a mutant answers from the record; the
+    /// patch, the shard, the engine or the build output's absence ignored; or
+    /// a build under `target/` moving the key so no lap ever hits.
+    #[test]
+    fn a_cargo_pass_key_moves_with_the_tree_the_patch_the_scope_and_the_engine() {
+        let root = crate::scratch::scratch("mutate-cargo-pass-key");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn one() -> u8 { 1 }\n").unwrap();
+        std::fs::write(root.join("tests/it.rs"), "#[test] fn t() {}\n").unwrap();
+        // OUTSIDE THE TREE, where the sweep writes it, so the patch is keyed
+        // as itself and not as one more file of the tree.
+        let diff = crate::scratch::scratch("mutate-cargo-pass-key-diff").join("change.diff");
+        std::fs::write(&diff, "+pub fn one() -> u8 { 1 }\n").unwrap();
+        let none = |_: &str| None;
+        let shard = |name: &str| (name == SHARD).then(|| String::from("1/2"));
+        let key = |engine: &[u8], env: &dyn Fn(&str) -> Option<String>| {
+            cargo_pass_key(&root, Some(&diff), engine, env).unwrap()
+        };
+        let first = key(b"engine", &none);
+        assert_eq!(first, key(b"engine", &none), "the same inputs key alike");
+        std::fs::create_dir_all(root.join("target/debug")).unwrap();
+        std::fs::write(root.join("target/debug/out"), "built").unwrap();
+        assert_eq!(first, key(b"engine", &none), "build output is not an input");
+        assert_ne!(first, key(b"engine", &shard), "the shard is an input");
+        assert_ne!(first, key(b"other engine", &none), "the engine is an input");
+        let whole = cargo_pass_key(&root, None, b"engine", &none).unwrap();
+        assert_ne!(first, whole, "a change and the workspace are two scopes");
+        std::fs::write(&diff, "+pub fn one() -> u8 { 2 }\n").unwrap();
+        let moved_patch = key(b"engine", &none);
+        assert_ne!(first, moved_patch, "the patch is an input");
+        std::fs::write(root.join("tests/it.rs"), "").unwrap();
+        assert_ne!(
+            moved_patch,
+            key(b"engine", &none),
+            "a case outside the patch is an input"
+        );
+    }
+
     #[cfg(test)]
     /// A kept run's stderr is shown nowhere; a captured or streamed one's is.
     ///
