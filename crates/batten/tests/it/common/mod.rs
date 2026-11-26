@@ -98,7 +98,7 @@ pub(crate) fn target_tmp() -> PathBuf {
 }
 
 /// The directory every run's scratch lives under.
-fn scratch_parent() -> PathBuf {
+pub(crate) fn scratch_parent() -> PathBuf {
     // A RUNTIME OVERRIDE FIRST: cargo bakes `CARGO_TARGET_TMPDIR` into the
     // binary, so a mutation sweep running one case on several workers at once
     // gives each its own root here, or two runs would share a fixture path.
