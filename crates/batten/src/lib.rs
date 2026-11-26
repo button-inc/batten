@@ -12453,7 +12453,21 @@ fn run_land(
     // the record is keyed by it, the push names it, and the pull request is found
     // by it. A detached HEAD can answer none of those, and that is a statement
     // about the clone rather than about the work.
-    let Ok(Some(branch)) = git::current_branch(root) else {
+    //
+    // A CLOUD CHECKOUT IS DETACHED AT ITS BRANCH'S NEWER TIP (CLOUD-2840), so the
+    // one branch that fast-forwards to `HEAD` and whose upstream carries it is
+    // put back first; any other detached `HEAD` is refused as before.
+    let branch = match git::current_branch(root) {
+        Ok(Some(branch)) => Some(branch),
+        Ok(None) => crate::gitwrite::attach_detached(root)
+            .ok()
+            .flatten()
+            .inspect(|branch| {
+                let _ = writeln!(err, "land: attached HEAD to {branch} (fast-forward)");
+            }),
+        Err(_) => None,
+    };
+    let Some(branch) = branch else {
         writeln!(err, "::error:: land: a detached HEAD has no branch to key")?;
         return Ok(ExitCode::Internal);
     };
