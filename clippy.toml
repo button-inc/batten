@@ -138,4 +138,90 @@ disallowed-methods = [
   { path = "nix::fcntl::Flock::lock", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
   { path = "rustix::fs::flock", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
   { path = "libc::flock", reason = "take try_lock and wait on the holder's release or a stop event; a blocking lock with no stop is a hang (CLOUD-2789): call `lock_wait::acquire`", allow-invalid = true },
+  # TIMED WAITS (CLOUD-1177, CLOUD-2789). A sleep is the open-coded timer; a
+  # TIMED WAIT is the same guess wearing an event's clothes: it waits for the
+  # event, then gives up on a wall-clock budget, so a run that never signals
+  # passes as one that signalled late. A test waits for the EVENT it is about
+  # (a child's exit, a pipe's EOF, a channel or condvar the code under test
+  # signals) and never on a clock: a mutant that suppresses the event hangs,
+  # and the mutation judge's per-case cut files that honestly as a timeout.
+  # Production keeps a timed wait only where the bound IS the design (the
+  # judge's per-case cut, a hook's budget, a drain grace), annotated the way a
+  # sleep is; `tests/sleep_ban.rs` holds test code to no annotation at all.
+  #
+  # The rows are every timed wait the dependency graph reaches. std is linked
+  # by every crate; tokio (`time`), compio (`time`) and hyper-util are direct
+  # dependencies with the feature on, so their rows RESOLVE and bite. The rest
+  # take `allow-invalid = true` for the reason the daemon rows above do: the
+  # crate or feature is out of reach (unix-only types on Windows, rustix's
+  # `thread`, nix's `poll`/`time`, crossbeam, flume and parking_lot, which are
+  # transitive only, and libc, which `unsafe_code = "forbid"` fences off), and
+  # the row is the bound the day somebody widens that.
+  #
+  # NOT A ROW: `rustix::event::poll` and `rustix::event::epoll::wait`. Their
+  # timeout is an ARGUMENT, and clippy matches the call, not the argument, so a
+  # row would flag the untimed `poll(fds, None)` that IS the event wait.
+  # `tests/sleep_ban.rs` holds those calls to a `None` timeout as source.
+  #
+  # NOT A ROW EITHER: `mpsc::Receiver::recv_timeout`, `tokio::time::timeout`,
+  # `Runtime::shutdown_timeout` and hyper's `set_connect_timeout`. Each one's only
+  # production calls are a bound that IS the design (the fetch's connect, total
+  # and drain bounds; a pump's drain grace; the forge notice's fail-open budget),
+  # and a row would buy each one a waiver the `waiver add refused` ratchet does
+  # not have. `tests/sleep_ban.rs` pins every call of the four to the sites that
+  # carry them today, and admits none in test code.
+  { path = "std::sync::mpsc::Receiver::recv_deadline", reason = "a timed wait is an inventory row (CLOUD-1177, CLOUD-2789): wait for the event with `recv`", allow-invalid = true },
+  { path = "std::sync::Condvar::wait_timeout", reason = "a timed wait is an inventory row (CLOUD-1177, CLOUD-2789): wait for the signal with `wait`" },
+  { path = "std::sync::Condvar::wait_timeout_while", reason = "a timed wait is an inventory row (CLOUD-1177, CLOUD-2789): wait for the condition with `wait_while`" },
+  { path = "std::sync::Condvar::wait_timeout_ms", reason = "a timed wait is an inventory row (CLOUD-1177, CLOUD-2789): wait for the signal with `wait`" },
+  { path = "std::thread::park_timeout", reason = "a timed wait is an inventory row (CLOUD-1177, CLOUD-2789): `park` until the thread that owns the event unparks you" },
+  { path = "std::thread::park_timeout_ms", reason = "a timed wait is an inventory row (CLOUD-1177, CLOUD-2789): `park` until the thread that owns the event unparks you" },
+  { path = "std::thread::sleep_ms", reason = "the deprecated spelling of `std::thread::sleep` (CLOUD-1177)" },
+  { path = "std::thread::sleep_until", reason = "a sleep to a deadline is a sleep (CLOUD-1177)", allow-invalid = true },
+  { path = "std::net::TcpStream::connect_timeout", reason = "a timed wait is an inventory row (CLOUD-1177, CLOUD-2789): annotate the site naming the bound the budget comes from, in backticks" },
+  { path = "std::net::TcpStream::set_read_timeout", reason = "a timed read is a timed wait (CLOUD-1177, CLOUD-2789): read to EOF, or annotate the site naming the bound" },
+  { path = "std::net::TcpStream::set_write_timeout", reason = "a timed write is a timed wait (CLOUD-1177, CLOUD-2789): annotate the site naming the bound" },
+  { path = "std::net::UdpSocket::set_read_timeout", reason = "a timed read is a timed wait (CLOUD-1177, CLOUD-2789): annotate the site naming the bound" },
+  { path = "std::net::UdpSocket::set_write_timeout", reason = "a timed write is a timed wait (CLOUD-1177, CLOUD-2789): annotate the site naming the bound" },
+  { path = "std::os::unix::net::UnixStream::set_read_timeout", reason = "a timed read is a timed wait (CLOUD-1177, CLOUD-2789): read to EOF, or annotate the site naming the bound", allow-invalid = true },
+  { path = "std::os::unix::net::UnixStream::set_write_timeout", reason = "a timed write is a timed wait (CLOUD-1177, CLOUD-2789): annotate the site naming the bound", allow-invalid = true },
+  { path = "std::os::unix::net::UnixDatagram::set_read_timeout", reason = "a timed read is a timed wait (CLOUD-1177, CLOUD-2789): annotate the site naming the bound", allow-invalid = true },
+  { path = "std::os::unix::net::UnixDatagram::set_write_timeout", reason = "a timed write is a timed wait (CLOUD-1177, CLOUD-2789): annotate the site naming the bound", allow-invalid = true },
+  { path = "tokio::time::timeout_at", reason = "a timed wait is an inventory row (CLOUD-1177, CLOUD-2789): await the future, or annotate the site naming the bound" },
+  { path = "tokio::time::sleep_until", reason = "the async half of the sleep inventory (CLOUD-1177); it RESOLVES today, because the workspace tokio entry enables `time`" },
+  { path = "tokio::time::interval", reason = "a ticker is a timer standing in for an event (CLOUD-1177, CLOUD-2789)" },
+  { path = "tokio::time::interval_at", reason = "a ticker is a timer standing in for an event (CLOUD-1177, CLOUD-2789)" },
+  { path = "compio::time::timeout", reason = "the compio half of the timed-wait inventory (CLOUD-1177, CLOUD-2789): wait on the event, or on `pr_watch::clock`, the crate's one clock" },
+  { path = "compio::time::timeout_at", reason = "the compio half of the timed-wait inventory (CLOUD-1177, CLOUD-2789): wait on the event, or on `pr_watch::clock`, the crate's one clock" },
+  { path = "hyper_util::client::legacy::connect::HttpConnector::set_happy_eyeballs_timeout", reason = "a timed connect is a timed wait (CLOUD-1177, CLOUD-2789): annotate the site naming the bound", allow-invalid = true },
+  { path = "rustix::thread::nanosleep", reason = "a sleep (CLOUD-1177): rustix's `thread` feature is off, so this is unreachable today", allow-invalid = true },
+  { path = "rustix::thread::clock_nanosleep_relative", reason = "a sleep (CLOUD-1177): rustix's `thread` feature is off", allow-invalid = true },
+  { path = "rustix::thread::clock_nanosleep_absolute", reason = "a sleep (CLOUD-1177): rustix's `thread` feature is off", allow-invalid = true },
+  { path = "nix::poll::poll", reason = "a timed poll (CLOUD-1177, CLOUD-2789): nix's `poll` feature is off; the event wait is `rustix::event::poll` with a `None` timeout", allow-invalid = true },
+  { path = "nix::poll::ppoll", reason = "a timed poll (CLOUD-1177, CLOUD-2789): nix's `poll` feature is off", allow-invalid = true },
+  { path = "nix::unistd::sleep", reason = "a sleep (CLOUD-1177): nix's feature is off", allow-invalid = true },
+  { path = "nix::time::clock_nanosleep", reason = "a sleep (CLOUD-1177): nix's `time` feature is off", allow-invalid = true },
+  { path = "libc::sleep", reason = "a sleep (CLOUD-1177); `unsafe_code = \"forbid\"` already fences it off", allow-invalid = true },
+  { path = "libc::usleep", reason = "a sleep (CLOUD-1177); `unsafe_code = \"forbid\"` already fences it off", allow-invalid = true },
+  { path = "libc::nanosleep", reason = "a sleep (CLOUD-1177); `unsafe_code = \"forbid\"` already fences it off", allow-invalid = true },
+  { path = "libc::poll", reason = "a timed poll (CLOUD-1177, CLOUD-2789); `unsafe_code = \"forbid\"` already fences it off", allow-invalid = true },
+  { path = "libc::select", reason = "a timed wait (CLOUD-1177, CLOUD-2789); `unsafe_code = \"forbid\"` already fences it off", allow-invalid = true },
+  { path = "libc::epoll_wait", reason = "a timed wait (CLOUD-1177, CLOUD-2789); `unsafe_code = \"forbid\"` already fences it off", allow-invalid = true },
+  { path = "libc::pthread_cond_timedwait", reason = "a timed wait (CLOUD-1177, CLOUD-2789); `unsafe_code = \"forbid\"` already fences it off", allow-invalid = true },
+  { path = "crossbeam_channel::Receiver::recv_timeout", reason = "a timed wait (CLOUD-1177, CLOUD-2789): crossbeam-channel is transitive only, so this is unreachable until it is declared", allow-invalid = true },
+  { path = "crossbeam_channel::Receiver::recv_deadline", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "crossbeam_channel::Sender::send_timeout", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "crossbeam_channel::Sender::send_deadline", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "crossbeam_channel::Select::select_timeout", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "crossbeam_channel::Select::ready_timeout", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "crossbeam_channel::after", reason = "a timer channel (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "crossbeam_channel::tick", reason = "a ticker channel (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "flume::Receiver::recv_timeout", reason = "a timed wait (CLOUD-1177, CLOUD-2789): flume is transitive only", allow-invalid = true },
+  { path = "flume::Receiver::recv_deadline", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "flume::Sender::send_timeout", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "flume::Sender::send_deadline", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "parking_lot::Condvar::wait_for", reason = "a timed wait (CLOUD-1177, CLOUD-2789): parking_lot is transitive only", allow-invalid = true },
+  { path = "parking_lot::Condvar::wait_until", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "parking_lot::Condvar::wait_while_for", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
+  { path = "parking_lot::Condvar::wait_while_until", reason = "a timed wait (CLOUD-1177, CLOUD-2789): transitive only", allow-invalid = true },
 ]
