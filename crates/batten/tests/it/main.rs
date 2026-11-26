@@ -507,6 +507,7 @@ mod test_targets;
 mod timeout_budget;
 mod timeout_drift;
 mod todo_promotion;
+mod tool_install_locked;
 mod tool_selector;
 mod tool_verdict_facts;
 mod tracked_absent;
