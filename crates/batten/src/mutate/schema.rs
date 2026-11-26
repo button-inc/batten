@@ -4447,13 +4447,27 @@ fn control_red(
         }
         red.extend(found.into_iter().filter(|(case, _)| batch.contains(case)));
     }
-    writeln!(
-        out,
-        "mutate schema: control run found {} case(s) red under the judge",
-        red.len()
-    )?;
+    write!(out, "{}", control_red_lines(&red))?;
     red.extend(judging.red.clone());
     Ok((red, control))
+}
+
+/// The control run's report ([`control_red`]): how many cases it found red
+/// under the judge, and each by label with its failure's first line.
+///
+/// A COUNT NAMES NOTHING (rule 4: a pointer, never the payload, but a pointer
+/// to each): "1 case(s) red under the judge" left the reader to dig the case
+/// out of the report at the end of the sweep.
+fn control_red_lines(red: &Red) -> String {
+    let mut lines = format!(
+        "mutate schema: control run found {} case(s) red under the judge\n",
+        red.len()
+    );
+    for (case, failure) in red {
+        let first = failure.lines().next().unwrap_or_default();
+        let _ = writeln!(lines, "control-red\t{}\t{first}", case_label(case));
+    }
+    lines
 }
 
 /// The nextest profile every judging run uses ([`nextest_args`]).
@@ -19596,6 +19610,36 @@ pub fn repo() -> u8 {{ scratch() }}
             "one case in a binary it does not hold"
         );
         assert!(reuse_holds_all(&reuse, &[], &reach), "nothing judged");
+    }
+
+    /// The control run names each case it found red beside the count, by
+    /// label and its failure's first line.
+    ///
+    /// Fails by: a bare count ("1 case(s) red under the judge") naming no
+    /// case, or a failure's whole text printed (rule 4).
+    #[test]
+    fn the_control_names_each_red_case() {
+        let red: Red = [
+            (
+                (String::from("tests::one"), String::from("fix")),
+                String::from("left != right\nat crates/fix/src/lib.rs:3"),
+            ),
+            (
+                (String::from("two"), String::from("fix::it")),
+                String::from("timed out"),
+            ),
+        ]
+        .into();
+        assert_eq!(
+            control_red_lines(&red),
+            "mutate schema: control run found 2 case(s) red under the judge\n\
+             control-red\tfix tests::one\tleft != right\n\
+             control-red\tfix::it two\ttimed out\n"
+        );
+        assert_eq!(
+            control_red_lines(&Red::new()),
+            "mutate schema: control run found 0 case(s) red under the judge\n"
+        );
     }
 
     /// A judging run reuses the binaries the build recorded when every case's
