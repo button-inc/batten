@@ -11569,7 +11569,10 @@ fn handback_run(
     match synced_run(live, tree, || {
         run_from_own_line((handback, state), mutant, filter, bound)
     }) {
-        Ok(outcome) => Ok(Ok(outcome)),
+        Ok(outcome) => {
+            say_siblings(&state.join("classic-out"), &mutant.name, out)?;
+            Ok(Ok(outcome))
+        }
         Err(why) => {
             let output = state.join("classic-out");
             let kept = keep_handback_error(state, id, &format!("{why:#}\n"), &output);
@@ -11931,7 +11934,6 @@ fn judge_handbacks(
                 }
             };
             let unobserved = observing.as_ref().is_some_and(BTreeSet::is_empty);
-            say_siblings(output, &mutant.name, out)?;
             let name = unpoisoned(
                 handback_verdict(outcome, output, &mutant.name, unobserved),
                 poisoner.is_some(),
