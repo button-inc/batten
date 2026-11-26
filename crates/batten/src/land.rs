@@ -4813,15 +4813,29 @@ mod forge_tests {
         // A RACE NO ARM ENDS FAILS RATHER THAN HANGS: with no ask count left in
         // the wait, a regression would spin forever, so the trunk "moves" after
         // far more asks than any case makes and the verdict assertion names it.
+        // Its asks are paced on the checks arm's (the pause below), so the count
+        // is the checks arm's too.
         let trunk_asked = std::sync::atomic::AtomicUsize::new(0);
         let trunk_read = |_: Option<&str>| {
             let n = trunk_asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let sha = if n > 100_000 { "runaway" } else { BASE };
             Some(reading(&format!(r#"{{"object":{{"sha":"{sha}"}}}}"#)))
         };
-        let pause = |seconds: f64, _: &std::sync::atomic::AtomicBool| {
+        // THE TRUNK ARM PACES ON THE CHECKS ARM, NOT ON A CLOCK (CLOUD-2253 A2):
+        // a no-op pause let it spin past the runaway guard while the checks arm
+        // was still on an honest ask (`Stale { base: "runaway" }` at 82e566618).
+        // It asks again only once the checks arm has, or once the race is
+        // decided, so it reaches the guard only behind a checks arm that ran away.
+        let pause = |seconds: f64, decided: &std::sync::atomic::AtomicBool| {
             if (seconds - 7.0).abs() < f64::EPSILON {
                 paused.lock().unwrap().push(seconds);
+                return;
+            }
+            let seen = asked.load(std::sync::atomic::Ordering::Relaxed);
+            while asked.load(std::sync::atomic::Ordering::Relaxed) == seen
+                && !decided.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                std::thread::yield_now();
             }
         };
         let Beside {
