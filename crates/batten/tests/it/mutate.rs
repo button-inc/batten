@@ -3022,7 +3022,7 @@ fn overlay_reader_toy(name: &str, looked: &str) -> PathBuf {
 }
 
 /// A toy crate that EMBEDS a library module outside the presets
-/// (`lib/r.rego`), read the way `policy::library_text` reads it: under the
+/// (`lib/r.rego`), read the way `preset::library_text` reads it: under the
 /// `overlay` feature the mutated copy at `$TOY_OVERLAY/lib/r.rego`, receipted,
 /// else the `include_str!`'d text. `rows` rows all name one case, which counts
 /// its runs into `$TOY_RUN_COUNTER`; the build script counts builds into

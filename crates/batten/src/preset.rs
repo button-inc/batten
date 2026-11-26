@@ -110,6 +110,53 @@ pub fn read_overlay(dir: Option<&Path>, relative: &str) -> Overlaid {
     }
 }
 
+/// The overlay directory a sweep's suite build reads the engine-default
+/// library from (CLOUD-2253): `$BATTEN_PRESET_OVERLAY` under the
+/// `preset-overlay` feature, and `None` in every other build, whatever the
+/// environment says ([`library_text`]).
+#[must_use]
+pub fn library_overlay() -> Option<std::path::PathBuf> {
+    #[cfg(feature = "preset-overlay")]
+    return std::env::var_os("BATTEN_PRESET_OVERLAY").map(std::path::PathBuf::from);
+    #[cfg(not(feature = "preset-overlay"))]
+    None
+}
+
+/// The text of the library module at `path` (CLOUD-2253): `embedded`, or under
+/// the `preset-overlay` feature the mutated copy at `<overlay>/<path>` where one
+/// is there ([`read_overlay`]), so a sweep judges a library row on binaries
+/// built once rather than recompiling the crate twice per row.
+///
+/// A BUILD FEATURE, NEVER A RUNTIME SWITCH ALONE, for [`PresetModuleExt::text`]'s
+/// reason: a shipped build ignores `overlay` whatever it names, so no caller
+/// under judgement can swap the library it is judged by for a file. The copy
+/// the overlay names as its target and that will not read exits 3 rather than
+/// judging the embedded text (CLOUD-2839).
+#[must_use]
+pub fn library_text(
+    overlay: Option<&Path>,
+    path: &str,
+    embedded: &'static str,
+) -> std::borrow::Cow<'static, str> {
+    #[cfg(feature = "preset-overlay")]
+    match read_overlay(overlay, path) {
+        Overlaid::Mutated(text) => return std::borrow::Cow::Owned(text),
+        Overlaid::Unreadable(copy) => {
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
+                "batten: library overlay: {} will not read; could-not-look",
+                copy.display()
+            );
+            std::process::exit(3);
+        }
+        Overlaid::Embedded => {}
+    }
+    #[cfg(not(feature = "preset-overlay"))]
+    let _ = (overlay, path);
+    std::borrow::Cow::Borrowed(embedded)
+}
+
 /// `PresetModule` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
 pub trait PresetModuleExt: Sized {
     /// The source an engine compiles: the embedded one, or under the
@@ -744,6 +791,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("demo")).expect("create overlay dir");
         dir
+    }
+
+    /// A SHIPPED BUILD NEVER READS THE LIBRARY OVERLAY (CLOUD-2253): only the
+    /// sweep's `preset-overlay` build reads a mutated copy, and every other
+    /// build answers the embedded text whatever the overlay holds, so no
+    /// variable redirects the rules a shipped engine enforces.
+    ///
+    /// Fails by: the overlay honoured without the feature (a bypass of the
+    /// shipped library), or ignored with it (every library row judged on the
+    /// unmutated module).
+    #[test]
+    fn only_the_sweep_build_reads_the_library_overlay() {
+        use super::{OVERLAY_READ, library_text};
+        let (path, embedded) = crate::policy::LIBRARY[0];
+        let dir = overlay_dir("library");
+        let copy = dir.join(path);
+        std::fs::create_dir_all(copy.parent().expect("a parent")).expect("the copy's dir");
+        std::fs::write(&copy, "package batten.library\n").expect("write the copy");
+        let read = library_text(Some(&dir), path, embedded);
+        let receipted = dir.join(format!("{path}{OVERLAY_READ}")).is_file();
+        if cfg!(feature = "preset-overlay") {
+            assert_eq!(
+                read, "package batten.library\n",
+                "the sweep build reads the copy"
+            );
+            assert!(receipted, "and leaves its receipt");
+        } else {
+            assert_eq!(read, embedded, "a shipped build reads the embedded text");
+            assert!(!receipted, "and never touches the overlay");
+        }
+        assert_eq!(library_text(None, path, embedded), embedded);
+        assert_eq!(
+            super::library_overlay().is_some(),
+            cfg!(feature = "preset-overlay") && std::env::var_os("BATTEN_PRESET_OVERLAY").is_some(),
+            "only the sweep build reads the variable"
+        );
     }
 
     /// CLOUD-2839's three cases at the reader, plus the module the sweep did not

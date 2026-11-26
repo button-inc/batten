@@ -93,7 +93,7 @@ live-remote = ["batten-core/live-remote"]
 # the engine-default library read their source from `$BATTEN_PRESET_OVERLAY`
 # where a mutated copy is there, so a row runs without recompiling the crate.
 # Never in a shipped build: it is the feature that lets a file replace a shipped
-# rule (`PresetModule::text`, `policy::library_text`).
+# rule (`PresetModule::text`, `preset::library_text`).
 preset-overlay = []
 
 [dependencies]
