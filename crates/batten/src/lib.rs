@@ -15767,11 +15767,19 @@ fn run_land_placed(root: &Path, err: &mut dyn Write) -> Result<ExitCode> {
 /// pid can be a recycled one whose dead record the gate's steps would refresh,
 /// which both arms this stall on another task and moves that record's
 /// `last_alive` past the reap's age proof. The beat is the lease's.
+///
+/// **THE BOUND IS OFF UNLESS ASKED FOR** (CLOUD-2789): `$LAND_SELF_STALL_BEATS`
+/// sets one, and its absence is `0`. Every time the old default of 240 beats
+/// fired on #1276 it ended a gate that was still working — the judging sweep at
+/// 8,193 s, then the declared sweep at 9,754 s with all 204 rows reported — and
+/// a single nextest or cargo run inside a step has no per-unit hook through
+/// which it could say it moved. A gate making progress is never ended by a
+/// clock; the bound on a gate is the task's own limit.
 fn verify_stall(root: &Path, registered: Option<u32>) -> Option<land::Stall> {
     let beats = std::env::var("LAND_SELF_STALL_BEATS")
         .ok()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
-        .unwrap_or(240);
+        .unwrap_or(0);
     // `0` SWITCHES OFF THE STALL BOUND AND NOTHING ELSE (CLOUD-2253 C12).
     // `land::stalled` never fires on `0` beats, so the arm still runs and still
     // reads the red slot; returning `None` here dropped the red reader with it,
@@ -34935,20 +34943,23 @@ mod tests {
         );
     }
 
-    /// Fails by: `verify_stall` answering `None` with the bound switched on
-    /// and a registered task to watch, so a verify that stopped advancing is
-    /// never ended (CLOUD-2789).
+    /// Fails by: `verify_stall` answering `None` for a registered task, so the
+    /// red slot goes unread, or the bound switched on by default, so a gate
+    /// still working is ended by a clock (CLOUD-2789, CLOUD-2253 C12).
     #[test]
     fn a_registered_verify_is_watched_for_a_stall() {
         assert!(
             std::env::var_os("LAND_SELF_STALL_BEATS").is_none(),
-            "the premise: the bound is the default, switched on"
+            "the premise: the bound is the default"
         );
         let repo = crate::scratch::scratch("lib-verify-stall");
         crate::gitwrite::init_on_main(&repo).unwrap();
         let stall = super::verify_stall(&repo, Some(4242)).expect("a registered task is watched");
         assert_eq!(stall.pid, 4242);
-        assert_eq!(stall.beats, 240);
+        assert_eq!(
+            stall.beats, 0,
+            "no clock ends a gate unless one is asked for"
+        );
     }
 
     /// Fails by: a lap whose engine sources moved never building them (the
