@@ -52,6 +52,14 @@ pub const ACTIVE: &str = "BATTEN_MUTANT";
 /// once each, to a file named by its pid in that directory, written
 /// unbuffered so a process killed mid-case still leaves its record. A
 /// function's probe costs one relaxed load once it has fired.
+///
+/// ONE `write` PER LINE (CLOUD-2936). A child forked from a recording process
+/// shares its append handle until it execs, and probes in the child's
+/// `pre_exec` code write through that handle. `write_fmt` issued one `write`
+/// per piece (`f`, the digits, the newline), so two writers tore `f26881` and
+/// `f7742` into `f268817742`: two real functions lost and one id that names
+/// none, on 87 of 884 cases recorded twice. An append of one buffer lands
+/// whole.
 #[must_use]
 pub fn prelude(probes: usize) -> String {
     format!(
@@ -63,7 +71,7 @@ let dir = std::env::var_os(\"BATTEN_MUTANT_RECORD\")?;\n        \
 let file = std::fs::OpenOptions::new().create(true).append(true).open(std::path::Path::new(&dir).join(std::process::id().to_string())).ok()?; // stream: probe lines, committed by the case record's done file\n        \
 Some(std::sync::Mutex::new(file))\n    \
 }}) && let Ok(mut file) = file.lock() {{\n        \
-let _ = std::io::Write::write_fmt(&mut *file, format_args!(\"{{line}}\\n\"));\n    \
+let _ = std::io::Write::write_all(&mut *file, format!(\"{{line}}\\n\").as_bytes()); // one write per line: a forked child shares this append handle\n    \
 }}\n}}\n\
 #[doc(hidden)]\n#[allow(dead_code, unreachable_pub, clippy::all)]\n\
 pub(crate) fn __batten_mutant(id: u32) -> bool {{\n    \
@@ -12478,6 +12486,25 @@ mod tests {
             ((0, 0), false),
             "under CI"
         );
+    }
+
+    /// The probe runtime writes each record line as ONE buffer, so a forked
+    /// child writing through the same append handle never tears it
+    /// (CLOUD-2936): `f26881` and `f7742` interleaved into `f268817742` on 87
+    /// of 884 cases recorded twice.
+    ///
+    /// Fails by: a line written piecewise (`write_fmt` of format arguments,
+    /// one `write` per piece), which the double recording refuses as moved.
+    #[test]
+    fn a_record_line_is_written_whole_in_one_append() {
+        let prelude = prelude(1);
+        assert!(
+            prelude.contains(
+                "std::io::Write::write_all(&mut *file, format!(\"{line}\\n\").as_bytes())"
+            ),
+            "{prelude}"
+        );
+        assert!(!prelude.contains("write_fmt"), "{prelude}");
     }
 
     /// A sealed record is carried across a change when its functions still
