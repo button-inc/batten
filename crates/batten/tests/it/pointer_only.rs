@@ -2545,6 +2545,21 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-1544: a ref, a commit id and a count, never a receipt body; `off`
+    // here, because the corpus spawns them with the state repository variable
+    // removed.
+    Verb {
+        path: "receipt publish",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "receipt pull",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The API-compatibility gate (CLOUD-1050). It reads a delegated analyser's
     // report and a range of commit messages — two of the content-richest inputs
     // on this surface — and emits the failing LINT IDS and a short sha, never a

@@ -389,6 +389,7 @@ mod ready_event;
 mod ready_routes;
 mod rebase;
 mod receipt_clean;
+mod receipt_publish;
 mod receipt_verified;
 mod reclaim_census;
 mod reclaim_report_once;
