@@ -31,9 +31,11 @@ time; batching laps removes no refusal and only makes each one bigger. An agent
 that infers "a race I keep losing" and wraps the loop in bespoke retry is
 optimising against the design — measured, CLOUD-238.
 
-`LAND_MAX_LAPS` is a **count** of laps, `LAND_LOCK_MAX_WAITS` a count of lease
-turns lost, `LAND_ANSWER_MAX_UNKNOWNS` a count of unreadable bot answers. None is
-a clock. A hang is fixed by an exit condition that can fire; a wall-clock cap
+`LAND_MAX_LAPS` is a **count** of laps and `LAND_LOCK_MAX_WAITS` a count of lease
+turns lost. None is a clock. The CI wait and the fast-forward answer poll carry
+no count at all (CLOUD-2253 A2): each ends on an event — a terminal reading, the
+trunk or the pull request moving, the pull request closing, the bot's answer —
+or on a forge fault, named. A hang is fixed by an exit condition that can fire; a wall-clock cap
 reintroduces the VM-reap gap it was meant to close and lands as a false
 "refused" on a slow bot.
 
