@@ -94,24 +94,30 @@ fn the_collector_ran_for_this_run() {
 ///
 /// Fails by: the scratch root no longer per run, or the lock not held by a live
 /// case, so another run's reap could take this one's fixtures mid-case.
+///
+/// THE PARENT AS THE RUN RESOLVES IT, never the baked `CARGO_TARGET_TMPDIR`
+/// (CLOUD-2911): a mutation judge hands each run its own fixture root through
+/// the runtime override, so under the judge the baked parent named a directory
+/// this run never used and the case was red in the control run alone.
 #[test]
 fn this_runs_scratch_is_its_own_and_held_while_it_runs() {
     let root = crate::common::target_tmp();
+    let parent = crate::common::scratch_parent();
     let name = root
         .file_name()
         .and_then(|name| name.to_str())
         .expect("a named run directory")
         .to_owned();
     assert!(
-        name.starts_with("run-") && root.parent() == Some(parent().as_path()),
+        name.starts_with("run-") && root.parent() == Some(parent.as_path()),
         "{} is not one run's directory under {}",
         root.display(),
-        parent().display()
+        parent.display()
     );
     if !cfg!(target_os = "linux") {
         return;
     }
-    let lock = parent().join(format!("{name}{}", crate::common::RUN_LOCK));
+    let lock = parent.join(format!("{name}{}", crate::common::RUN_LOCK));
     assert!(
         !free_elsewhere(&lock),
         "{} is free while this run is alive, so another run's reap would take it",
