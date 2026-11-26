@@ -6284,7 +6284,7 @@ fn mem_available_mb(meminfo: &str) -> Option<u64> {
 ///
 /// RECLAIMABLE CACHE IS NOT USED: a level's usage counts the page cache its
 /// builds left, 10 GB of 10.9 GB measured, which the kernel drops before it
-/// kills, so its inactive file pages count as remaining.
+/// kills, so its file pages count as remaining ([`cgroup_level_mb`]).
 fn cgroup_remaining_mb(root: &Path, own: &str) -> Option<u64> {
     let mut leaves: Vec<(PathBuf, PathBuf, bool)> = Vec::new();
     for line in own.lines() {
@@ -6312,33 +6312,40 @@ fn cgroup_remaining_mb(root: &Path, own: &str) -> Option<u64> {
 }
 
 /// What remains of one cgroup level's memory limit, in megabytes: its limit
-/// less its usage, its inactive file pages counted as free; `None` where it
-/// has no readable, bounded limit.
+/// less its usage, its file pages, active and inactive, counted as free;
+/// `None` where it has no readable, bounded limit.
+///
+/// ACTIVE FILE PAGES TOO: counted as used, a host with 15,049 MB available
+/// read 5,577 MB and judged on one worker, since a build's page cache is
+/// mostly active, and the kernel reclaims it before it kills.
 fn cgroup_level_mb(dir: &Path, v2: bool) -> Option<u64> {
     let read = |name: &str| -> Option<String> {
         crate::fsio::read_to_string(dir.join(name))
             .ok()
             .map(|text| text.trim().to_owned())
     };
-    let (limit, usage, inactive) = if v2 {
-        ("memory.max", "memory.current", "inactive_file")
+    let (limit, usage, file) = if v2 {
+        (
+            "memory.max",
+            "memory.current",
+            ["inactive_file", "active_file"],
+        )
     } else {
         (
             "memory.limit_in_bytes",
             "memory.usage_in_bytes",
-            "total_inactive_file",
+            ["total_inactive_file", "total_active_file"],
         )
     };
     let limit: u64 = read(limit)?.parse().ok()?;
     let usage: u64 = read(usage)?.parse().ok()?;
-    let cache: u64 = read("memory.stat")
-        .and_then(|stat| {
-            stat.lines().find_map(|line| {
-                let (name, value) = line.split_once(' ')?;
-                (name == inactive).then(|| value.trim().parse().ok())?
-            })
-        })
-        .unwrap_or(0);
+    let stat = read("memory.stat").unwrap_or_default();
+    let cache: u64 = stat
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(name, _)| file.contains(name))
+        .filter_map(|(_, value)| value.trim().parse::<u64>().ok())
+        .sum();
     // v1 spells "unbounded" as a page-rounded i64::MAX; anything past a
     // petabyte is that, not a limit.
     (limit < 1 << 50).then(|| limit.saturating_sub(usage.saturating_sub(cache)) / (1024 * 1024))
@@ -7068,7 +7075,8 @@ mod tests {
     /// Fails by: usage ignored, v1 not read, or v1's unbounded limit taken as
     /// one; the mount's root read in place of the process's own nested group,
     /// whose 14,338 MB limit a 16 GB host's sweep then ran past (137); an
-    /// ancestor's tighter limit ignored; or reclaimable cache counted as used.
+    /// ancestor's tighter limit ignored; or reclaimable cache, inactive or
+    /// active, counted as used.
     #[test]
     fn the_cgroup_limit_is_what_remains_of_it() {
         let v2 = crate::scratch::scratch("mutate-cgroup-v2");
@@ -7118,6 +7126,21 @@ mod tests {
             cgroup_remaining_mb(&v1, path),
             Some(7 * 1024),
             "the nested limit"
+        );
+        // ACTIVE FILE PAGES ARE RECLAIMED TOO: 4 GB inactive and 5 GB active.
+        std::fs::write(
+            own.join("memory.stat"),
+            format!(
+                "total_inactive_file {}\ntotal_active_file {}\n",
+                4u64 << 30,
+                5u64 << 30
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            cgroup_remaining_mb(&v1, path),
+            Some(12 * 1024),
+            "every file page"
         );
         assert_eq!(
             cgroup_remaining_mb(&v1, "4:memory:/\n"),

@@ -3432,7 +3432,7 @@ fn sync_dir(
             }
         } else if rendered.contains(relative.to_string_lossy().as_ref()) && dest.exists() {
             // The build writes it, only when its rendering changes.
-        } else if crate::fsio::read(&dest).ok() != crate::fsio::read(&source).ok() {
+        } else if !same_bytes(&dest, &source) {
             std::fs::copy(&source, &dest)?;
         }
     }
@@ -3450,6 +3450,46 @@ fn sync_dir(
         }
     }
     Ok(())
+}
+
+/// Whether the files at `a` and `b` hold the same bytes, or are both
+/// unreadable: lengths first, then a buffer of each at a time.
+///
+/// NEVER BOTH READ WHOLE (CLOUD-2253): [`sync_dir`] compared every file of the
+/// checkout by reading the destination and the source into memory together,
+/// so one large untracked file cost twice its size at once, and the land's
+/// `mutate cargo` was killed at 13.6 GB of its own, twice, on two heads.
+fn same_bytes(one: &std::path::Path, other: &std::path::Path) -> bool {
+    use std::io::BufRead as _;
+    let (Ok(first), Ok(second)) = (std::fs::File::open(one), std::fs::File::open(other)) else {
+        return std::fs::File::open(one).is_err() && std::fs::File::open(other).is_err();
+    };
+    let lengths = (
+        first.metadata().map(|meta| meta.len()),
+        second.metadata().map(|meta| meta.len()),
+    );
+    if !matches!(lengths, (Ok(left), Ok(right)) if left == right) {
+        return false;
+    }
+    let mut left = std::io::BufReader::with_capacity(1 << 16, first);
+    let mut right = std::io::BufReader::with_capacity(1 << 16, second);
+    loop {
+        let step = match (left.fill_buf(), right.fill_buf()) {
+            (Ok(held), Ok(theirs)) if held.is_empty() || theirs.is_empty() => {
+                return held.is_empty() && theirs.is_empty();
+            }
+            (Ok(held), Ok(theirs)) => {
+                let common = held.len().min(theirs.len());
+                if held.get(..common) != theirs.get(..common) {
+                    return false;
+                }
+                common
+            }
+            _ => return false,
+        };
+        left.consume(step);
+        right.consume(step);
+    }
 }
 
 /// Write `text` to `path` only if it differs, keeping an unchanged file's time.
@@ -7229,7 +7269,7 @@ pub fn resource_digest(live: &std::path::Path) -> anyhow::Result<String> {
         hash_file(
             &mut hasher,
             path.as_bytes(),
-            crate::fsio::read(&file),
+            std::fs::File::open(&file),
             &file,
         )?;
     }
@@ -7251,14 +7291,20 @@ pub fn resource_digest(live: &std::path::Path) -> anyhow::Result<String> {
 fn hash_file(
     hasher: &mut blake3::Hasher,
     name: &[u8],
-    read: std::io::Result<Vec<u8>>,
+    read: std::io::Result<impl std::io::Read>,
     path: &std::path::Path,
 ) -> anyhow::Result<()> {
     match read {
-        Ok(bytes) => {
+        // STREAMED, NEVER READ WHOLE (CLOUD-2253): the walk takes every file
+        // in the tree, untracked and ignored ones too, and one held whole is
+        // a peak its size alone sets. The bytes hashed are the same, so no
+        // key a journal holds moves.
+        Ok(mut file) => {
             hasher.update(name);
             hasher.update(&[0]);
-            hasher.update(&bytes);
+            crate::stream::pump(&mut file, &mut [hasher]).map_err(|why| {
+                anyhow::Error::new(why).context(format!("read {}", path.display()))
+            })?;
             hasher.update(&[0]);
         }
         // `\x01` WHERE A READ FILE HAS ITS `\x00`: no file's bytes can stand in.
@@ -7294,21 +7340,43 @@ pub fn resource_ids(
             ids.insert(entry.path, entry.oid);
         }
         for path in fact.diverged.into_iter().chain(fact.untracked) {
-            match crate::fsio::read(live.join(&path)) {
-                Ok(bytes) => {
-                    let id = std::str::from_utf8(&bytes)
-                        .ok()
-                        .and_then(crate::git::blob_id)
-                        .unwrap_or_else(|| format!("b3:{}", blake3::hash(&bytes).to_hex()));
+            match content_id(&live.join(&path)) {
+                Some(id) => {
                     ids.insert(path, id);
                 }
-                Err(_) => {
+                None => {
                     ids.remove(&path);
                 }
             }
         }
     }
     Ok(ids)
+}
+
+/// The largest file [`content_id`] reads whole for its git blob id; past it,
+/// a file is hashed a buffer at a time.
+const WHOLE_READ_BYTES: u64 = 64 << 20;
+
+/// A file's content id ([`resource_ids`]): its git blob id where it is UTF-8
+/// text no larger than [`WHOLE_READ_BYTES`], else the BLAKE3 of its bytes,
+/// streamed; `None` where it cannot be read.
+///
+/// NEVER A LARGE FILE WHOLE (CLOUD-2253): an untracked file of any size was
+/// read into memory to name it, so its size alone set the sweep's peak.
+fn content_id(path: &std::path::Path) -> Option<String> {
+    let len = std::fs::metadata(path).ok()?.len();
+    if len <= WHOLE_READ_BYTES {
+        let bytes = crate::fsio::read(path).ok()?;
+        return Some(
+            std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(crate::git::blob_id)
+                .unwrap_or_else(|| format!("b3:{}", blake3::hash(&bytes).to_hex())),
+        );
+    }
+    let mut hasher = blake3::Hasher::new();
+    crate::stream::pump(std::fs::File::open(path).ok()?, &mut [&mut hasher]).ok()?;
+    Some(format!("b3:{}", hasher.finalize().to_hex()))
 }
 
 /// The content id a case keys a path it touched on: the file's, a directory's
@@ -7366,7 +7434,7 @@ pub fn tree_digest(work: &std::path::Path) -> anyhow::Result<String> {
             .unwrap_or(&file)
             .as_os_str()
             .as_encoded_bytes();
-        hash_file(&mut hasher, name, std::fs::read(&file), &file)?;
+        hash_file(&mut hasher, name, std::fs::File::open(&file), &file)?;
     }
     Ok(hasher.finalize().to_hex().to_string())
 }
@@ -13684,6 +13752,87 @@ mod tests {
             .expect("one item");
         assert!(matches!(item, ast::Item::MacroCall(_)), "{item:?}");
         assert!(ast::AnyHasName::cast(item.syntax().clone()).is_none());
+    }
+
+    /// Where a bounded child of [`the_tree_walks_hold_no_file_whole`] finds
+    /// the trees it walks.
+    const BOUNDED_WALK: &str = "BATTEN_TEST_BOUNDED_WALK";
+
+    /// The sweep's walks over the checkout hold no file whole (CLOUD-2253):
+    /// a child whose data segment is capped at 128 MiB syncs, digests and
+    /// names a tree holding a 512 MiB untracked file, and succeeds.
+    ///
+    /// Fails by: any walk reading a file whole, which in the capped child
+    /// cannot allocate it; `sync_dir` read the destination and the source
+    /// together, and the land's `mutate cargo` was killed at 13.6 GB of its
+    /// own, twice, the same size on two heads. Under the cap a whole read
+    /// fails rather than aborts, so the old compare read two failures as
+    /// equal and left a stale copy: the destination is one byte short, and
+    /// the case asserts it was replaced. The source is sparse.
+    #[test]
+    fn the_tree_walks_hold_no_file_whole() {
+        use crate::capture::Streamed as _;
+        const LIMIT: u64 = 128 << 20;
+        const BIG: u64 = 512 << 20;
+        if let Some(dir) = std::env::var_os(BOUNDED_WALK) {
+            let dir = std::path::PathBuf::from(dir);
+            let cap = rustix::process::Rlimit {
+                current: Some(LIMIT),
+                maximum: Some(LIMIT),
+            };
+            rustix::process::setrlimit(rustix::process::Resource::Data, cap).expect("cap");
+            let (live, work) = (dir.join("live"), dir.join("work"));
+            sync(&live, &work, &BTreeSet::new()).expect("sync");
+            assert_eq!(
+                std::fs::metadata(work.join("big.bin"))
+                    .map(|m| m.len())
+                    .ok(),
+                Some(BIG),
+                "the differing copy is replaced"
+            );
+            tree_digest(&live).expect("digest");
+            let ids = resource_ids(&live).expect("ids");
+            assert!(
+                ids.get("big.bin").is_some_and(|id| id.starts_with("b3:")),
+                "{ids:?}"
+            );
+            return;
+        }
+        let dir = crate::scratch::scratch("schema-bounded-walk");
+        let (live, work) = (dir.join("live"), dir.join("work"));
+        for (tree, len) in [(&live, BIG), (&work, BIG - 1)] {
+            std::fs::create_dir_all(tree).unwrap();
+            std::fs::write(tree.join("a.txt"), "a\n").unwrap();
+            std::fs::File::create(tree.join("big.bin"))
+                .and_then(|file| file.set_len(len))
+                .unwrap();
+        }
+        crate::gitwrite::init_on_main(&live).expect("a repository");
+        crate::gitwrite::commit_paths(&live, &[String::from("a.txt")], "base").expect("commit");
+        #[expect(
+            clippy::disallowed_types,
+            reason = "test-only: the case runs itself again as a child whose data limit is capped, which only a spawn can hold apart from the suite"
+        )]
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "mutate::schema::tests::the_tree_walks_hold_no_file_whole",
+                "--nocapture",
+            ])
+            .env(BOUNDED_WALK, &dir)
+            .streamed_output()
+            .expect("run the capped child");
+        assert!(
+            child.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&child.stdout).contains("1 passed"),
+            "the child ran the case: {}",
+            String::from_utf8_lossy(&child.stdout)
+        );
     }
 
     /// A hand-back's killer is read off cargo-mutants' log, coloured nextest
@@ -23458,12 +23607,12 @@ pub fn repo() -> u8 {{ scratch() }}
     /// as an empty one.
     #[test]
     fn a_file_that_cannot_be_read_refuses_its_digest() {
-        let hashed = |read: std::io::Result<Vec<u8>>| {
+        let hashed = |read: std::io::Result<&[u8]>| {
             let mut hasher = blake3::Hasher::new();
             hash_file(&mut hasher, b"f", read, std::path::Path::new("f"))
                 .map(|()| hasher.finalize().to_hex().to_string())
         };
-        let empty = hashed(Ok(Vec::new())).unwrap();
+        let empty = hashed(Ok(&[])).unwrap();
         let absent = hashed(Err(std::io::ErrorKind::NotFound.into())).unwrap();
         assert_ne!(absent, empty);
         assert!(hashed(Err(std::io::ErrorKind::PermissionDenied.into())).is_err());
