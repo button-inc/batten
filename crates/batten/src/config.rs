@@ -3309,8 +3309,23 @@ fn recorded_digest(named: &str, fields: &str) -> Option<[u8; 32]> {
         .map(|hash| *hash.as_bytes())
 }
 
-/// Record `digest` for `named`, read while its stamp was `fields`.
-fn record_digest(named: &str, fields: &str, digest: &[u8; 32]) {
+/// Record `digest` for `named`, read at `at` while its stamp was `stamp`, when
+/// `wanted` and the read was clear of the racy window measured from before it.
+///
+/// CALLED ON EVERY PATH, SO THE CLOCK DECIDES WHAT IS WRITTEN, NEVER WHICH
+/// FUNCTION RUNS (CLOUD-2904): the racy test sat in the caller, so whether this
+/// ran was a race between a fixture's write and the machine's speed, and 24
+/// cases ran it on one reach recording of unchanged code and not on the next,
+/// moving their mutant keys for nothing.
+fn record_digest(
+    named: &str,
+    (stamp, at): (&crate::cache::Stamp, std::time::Duration),
+    digest: &[u8; 32],
+    wanted: bool,
+) {
+    if !wanted || stamp.racily_clean(at) {
+        return;
+    }
     let Some(path) = digest_path(named) else {
         return;
     };
@@ -3318,7 +3333,7 @@ fn record_digest(named: &str, fields: &str, digest: &[u8; 32]) {
     crate::cache::write(
         &path,
         &digest_key(named),
-        format!("{fields}\n{hex}").as_bytes(),
+        format!("{}\n{hex}", stamp.fields).as_bytes(),
     );
 }
 
@@ -3339,13 +3354,13 @@ fn text_digest(
 ) -> [u8; 32] {
     let still = crate::cache::stamp(path).is_some_and(|after| after == *stamp);
     let believed = still && cfg!(unix);
-    if believed && let Some(recorded) = recorded_digest(named, &stamp.fields) {
-        return recorded;
-    }
-    let digest = *blake3::hash(text.as_bytes()).as_bytes();
-    if still && cfg!(unix) && !stamp.racily_clean(at) {
-        record_digest(named, &stamp.fields, &digest);
-    }
+    let recorded = if believed {
+        recorded_digest(named, &stamp.fields)
+    } else {
+        None
+    };
+    let digest = recorded.unwrap_or_else(|| *blake3::hash(text.as_bytes()).as_bytes());
+    record_digest(named, (stamp, at), &digest, believed && recorded.is_none());
     digest
 }
 
@@ -4564,6 +4579,17 @@ mod tests {
         (path, named, later)
     }
 
+    /// Plant `digest` as `named`'s record beside stamp `fields`, as
+    /// [`record_digest`] writes one clear of its racy window.
+    fn plant_digest(named: &str, fields: &str, digest: &[u8; 32]) {
+        let hex = blake3::Hash::from(*digest).to_hex();
+        crate::cache::write(
+            &digest_path(named).unwrap(),
+            &digest_key(named),
+            format!("{fields}\n{hex}").as_bytes(),
+        );
+    }
+
     /// Forget both in-process memos, so the next read answers from disk.
     fn forget_reads() {
         *LAST_TEXT.lock().unwrap() = None;
@@ -4583,7 +4609,7 @@ mod tests {
         read_at(&path, later);
         let planted = [7_u8; 32];
         let fields = crate::cache::stamp(&path).unwrap().fields;
-        record_digest(&named, &fields, &planted);
+        plant_digest(&named, &fields, &planted);
         forget_reads();
         let text = read_at(&path, later);
         let expected = if cfg!(unix) {
@@ -4635,7 +4661,7 @@ mod tests {
             format!("{fields}\n{hex}").as_bytes(),
         );
         assert_eq!(recorded_digest(&named, &fields), None);
-        record_digest(&named, &fields, &[7_u8; 32]);
+        plant_digest(&named, &fields, &[7_u8; 32]);
         assert_eq!(
             recorded_digest(&named, &fields),
             Some([7_u8; 32]),
@@ -4649,7 +4675,7 @@ mod tests {
     fn a_file_changed_across_its_read_is_hashed() {
         let (path, named, later) = digested_authority("config-digest-moving");
         let before = crate::cache::stamp(&path).unwrap();
-        record_digest(&named, &before.fields, &[7_u8; 32]);
+        plant_digest(&named, &before.fields, &[7_u8; 32]);
         let text = "version = 1\n# moved\n";
         fs::write(&path, text).unwrap();
         let at = later.duration_since(std::time::UNIX_EPOCH).unwrap();

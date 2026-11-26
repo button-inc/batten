@@ -638,8 +638,13 @@ fn numbered_patch(name: &str, lines: u32, changed: &[u32]) -> String {
 /// A MODULE'S OWN TEST IS RUN IN PROCESS, AS `policy test` RUNS IT (CLOUD-2255):
 /// the case a `.rego` row names in its own module is judged by that `test_`
 /// rule, under the committed config's registry, with no conftest spawned.
+///
+/// IN THIS PROCESS'S OWN STATE (CLOUD-2904): uncontained, the compile read the
+/// developer's policy cache, which whatever ran before had or had not filled,
+/// so one recording compiled the bundle and the next read it back.
 #[test]
 fn a_modules_own_test_is_run_in_process() {
+    common::scratch_state_root();
     let root = common::at_root("");
     assert_eq!(
         batten::policy_case(

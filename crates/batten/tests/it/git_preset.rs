@@ -254,9 +254,16 @@ fn a_destructive_git_call_is_left_to_the_host() {
 /// preset's own `reset` arm gone the case still passed and its declared mutant
 /// survived. Under a config carrying only the git preset row, `destructive` is
 /// the one thing withholding the grant.
+///
+/// TO `HEAD`, NEVER `HEAD~1` (CLOUD-2904): the committed config is judged in
+/// this live checkout, and a hard reset that would strand an unpushed commit is
+/// refused by `history drop` before the preset is asked. Whether `HEAD~1..HEAD`
+/// was pushed is the checkout's state, not the case's input, so the case ran a
+/// whole refusal path on one recording and not on the next. A reset to `HEAD`
+/// strands nothing, and `--hard` is what the preset withholds.
 #[test]
 fn a_global_option_never_hides_a_destructive_git_call() {
-    for call in ["git -C -c reset --hard HEAD~1", "git reset --hard HEAD~1"] {
+    for call in ["git -C -c reset --hard HEAD", "git reset --hard HEAD"] {
         assert!(
             !granted("default", call),
             "must be left to the host: {call}"
