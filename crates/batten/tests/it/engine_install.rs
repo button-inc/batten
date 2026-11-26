@@ -1518,11 +1518,24 @@ mod repair {
     }
 
     /// [`run`], standing in `cwd` rather than in the repository.
+    fn run_from(binary: &Path, dir: &Path, cwd: &Path, args: &[&str], stdin: &str) -> Output {
+        run_with(binary, dir, cwd, args, stdin, &[])
+    }
+
+    /// [`run_from`], with `served` set after the case's own environment: a
+    /// fixture release host's address and trust, which the case otherwise strips.
     #[expect(
         clippy::disallowed_types,
         reason = "stays, and test-only: the update replaces the binary it runs, so each case runs a private COPY of the compiled binary, which `common::batten` cannot target"
     )]
-    fn run_from(binary: &Path, dir: &Path, cwd: &Path, args: &[&str], stdin: &str) -> Output {
+    fn run_with(
+        binary: &Path,
+        dir: &Path,
+        cwd: &Path,
+        args: &[&str],
+        stdin: &str,
+        served: &[(String, String)],
+    ) -> Output {
         use std::io::Write as _;
         // THE CASE'S OWN `bin` AND THE SYSTEM'S, NEVER THE CALLER'S `PATH`. An update
         // installs over the `batten` it resolves there (CLOUD-2226), and with the
@@ -1553,6 +1566,7 @@ mod repair {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        command.envs(served.iter().map(|(name, value)| (name, value)));
         let mut child = common::spawn_copy(&mut command);
         child
             .stdin
@@ -1702,6 +1716,48 @@ mod repair {
             "the rewritten copy is listed: {listed}"
         );
         assert_eq!(listed.lines().count(), 1, "and only it: {listed}");
+    }
+
+    /// A STAMPED BUILD AT THE PINNED VERSION IS NOT THE RELEASE (CLOUD-2840). A
+    /// tree build reports the release's version, so the tag alone took it for the
+    /// release and `engine install` rewrote it over itself, exiting 0 with the pin
+    /// unserved: measured on #1276, `~/.local/bin/batten` kept its build stamp
+    /// and bytes after the repair the owner names.
+    ///
+    /// Fails by: the build's own bytes installed in place of the published
+    /// release, or its stamp left beside the release it was replaced with.
+    #[test]
+    fn a_stamped_build_at_the_pinned_version_is_replaced_by_the_release() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let dir = repo("engine-install-stamped-build");
+        stub_cargo(&dir);
+        let binary = private_binary(&dir);
+        let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+        common::write(
+            &dir,
+            "batten.toml",
+            &format!("version = 1\nengine = {{ release = \"{tag}\" }}\n"),
+        );
+        let stamp = format!("{}\n", "a".repeat(64));
+        common::write(binary.parent().unwrap(), "batten.source", &stamp);
+        let on_path = hook_bin(&dir).join("batten");
+        std::fs::create_dir_all(hook_bin(&dir)).unwrap();
+        std::fs::copy(&binary, &on_path).unwrap();
+        common::write(&hook_bin(&dir), "batten.source", &stamp);
+        let (_host, served) = super::release_host(&dir, &tag, &tag);
+        let output = run_with(&binary, &dir, &dir, &["engine", "install"], "", &served);
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            std::fs::read(&on_path).unwrap() == super::SHIPPED,
+            "the build on PATH became the published release: {}",
+            text(&output)
+        );
+        assert!(
+            !engine_stamp(&on_path).exists(),
+            "and the build's stamp went with it"
+        );
     }
 
     /// The case's stand-in for `~/.local/bin`: a sibling of the repository, on `PATH`
