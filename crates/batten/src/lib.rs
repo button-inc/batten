@@ -32384,24 +32384,53 @@ fn run_lint_brief(path: Option<&str>, json: bool, out: &mut dyn Write) -> Result
 /// either: reporting "no key was removed" having compared nothing is the vacuous
 /// pass CLOUD-251 names, and it is the failure this gate would have if an
 /// unreadable baseline were treated as an empty schema.
-/// The `config deprecations` baseline that names the newest `v*` release tag.
+/// The `config deprecations` baseline that names the tree's own last release:
+/// the tag `install.lock` records, else the newest `v*` tag.
 pub const LATEST_RELEASE: &str = "latest";
 
+/// The release `latest` names in the repository at `root` (CLOUD-2789).
+///
+/// THE TREE'S OWN RECORD FIRST. `install.lock` is committed by every release's
+/// bake and names the tag it baked, so every clone of one commit resolves the
+/// same baseline. The newest tag a clone happened to fetch did not: a clone
+/// holding no tags refused the gate, and one missing a newer tag judged against
+/// an older release, so `config retire unnamed` answered by container. A
+/// repository with no lock falls back to the newest `v*` tag by version order.
+///
+/// # Errors
+///
+/// Could-not-look (exit `3`), never a usage refusal and never a pass, when the
+/// recorded tag is not in this clone (naming the fetch that brings it) or no
+/// tag exists at all.
+fn release_baseline(root: &Path) -> Result<String> {
+    if let Ok(text) = crate::fsio::read_to_string(root.join(crate::install::LOCK_FILE)) {
+        let tag = crate::install::Lock::parse(&text)?.tag;
+        if git::resolve_ref(root, &format!("refs/tags/{tag}"))?.is_none() {
+            anyhow::bail!(
+                "{tag}, the release {} records, is not in this clone, so no baseline \
+                 could be read (fetch it: git fetch origin tag {tag})",
+                crate::install::LOCK_FILE
+            );
+        }
+        return Ok(tag);
+    }
+    git::newest_version_tag(root)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no `v*` release tag in this clone, so no baseline to compare against \
+             (fetch tags, or name the ref)"
+        )
+    })
+}
+
 fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Result<ExitCode> {
-    // `latest` NAMES A BASELINE, IT DOES NOT DEFAULT ONE (#1276): the newest `v*`
-    // tag by version order, resolved in-process, and every line below carries
-    // the tag it resolved to. The rule `config retire unnamed` used to reach this
-    // verb through an integration suite, which compiled the whole `it` binary in
-    // verify's seconds tier; the test's tag lookup now lives here instead.
+    // `latest` NAMES A BASELINE, IT DOES NOT DEFAULT ONE (#1276): the release the
+    // tree records ([`release_baseline`]), resolved in-process, and every line
+    // below carries the tag it resolved to. The rule `config retire unnamed`
+    // used to reach this verb through an integration suite, which compiled the
+    // whole `it` binary in verify's seconds tier; the lookup now lives here.
     let resolved;
     let against = if against == LATEST_RELEASE {
-        resolved = git::newest_version_tag(Path::new("."))?.ok_or_else(|| {
-            UsageError::raise(
-                "no `v*` release tag in this clone, so no baseline to compare against \
-                 (fetch tags, or name the ref)"
-                    .to_owned(),
-            )
-        })?;
+        resolved = release_baseline(Path::new("."))?;
         resolved.as_str()
     } else {
         against

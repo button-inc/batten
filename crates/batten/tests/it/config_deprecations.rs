@@ -395,19 +395,63 @@ fn this_repositorys_schema_has_lost_no_key_since_its_last_release() {
     }
 }
 
-/// Fails by: `latest` resolving a different tag than version order names, or
-/// answering anything but could-not-look where no tag is fetched (#1276). The
-/// gate `config retire unnamed` asks `latest`, so this is what it relies on.
+/// `latest` IS THE RELEASE THE TREE RECORDS, NOT THE NEWEST TAG A CLONE HOLDS
+/// (CLOUD-2789).
+///
+/// The gate `config retire unnamed` asks `latest`. Resolved as the newest tag
+/// in the clone, it refused in a container that fetched no tags and judged an
+/// older release in one that fetched only some, so the land and a session
+/// disagreed on one commit. `install.lock`, committed by every release's bake,
+/// names one tag for every clone of a commit; a newer tag beside it is not the
+/// tree's baseline.
+///
+/// Fails by: `latest` taking the newest tag over the recorded one, or answering
+/// differently from the same comparison named outright.
 #[test]
-fn latest_names_the_newest_tag_by_version_order() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (code, said) = deprecations(&root, "latest");
-    match latest_release_tag(&root) {
-        Some(against) => {
-            let (explicit_code, explicit) = deprecations(&root, &against);
-            assert_eq!((code, &said), (explicit_code, &explicit), "{against}");
-            assert!(said.contains(&against), "the line names {against}: {said}");
-        }
-        None => assert_ne!(code, 0, "no tag is could-not-look, never clean: {said}"),
+fn latest_is_the_release_the_tree_records() {
+    let fixture = Published::new("config-deprecations-recorded");
+    git_in(&fixture.root, &["tag", "v0.0.2"]);
+    fs::write(fixture.root.join("install.lock"), "tag v0.0.1\n").expect("the lock");
+    let (code, said) = deprecations(&fixture.root, "latest");
+    let (explicit_code, explicit) = deprecations(&fixture.root, "v0.0.1");
+    assert_eq!((code, &said), (explicit_code, &explicit));
+    assert!(
+        said.contains("v0.0.1") && !said.contains("v0.0.2"),
+        "the line names the recorded release: {said}"
+    );
+}
+
+/// A recorded release this clone never fetched is could-not-look, naming the
+/// one fetch that brings it: never a usage refusal, and never a pass.
+///
+/// Fails by: a missing baseline read as clean, refused as a usage error, or
+/// resolved to some other tag the clone holds.
+#[test]
+fn a_recorded_release_missing_from_the_clone_is_could_not_look() {
+    let fixture = Published::new("config-deprecations-unfetched");
+    fs::write(fixture.root.join("install.lock"), "tag v9.9.9\n").expect("the lock");
+    let (code, said) = deprecations(&fixture.root, "latest");
+    assert_eq!(code, 3, "an unfetched baseline is could-not-look: {said}");
+    assert!(
+        said.contains("git fetch origin tag v9.9.9"),
+        "the answer names the fetch: {said}"
+    );
+}
+
+/// Where no lock records a release, `latest` is the newest tag by version
+/// order; with no tag at all it is could-not-look.
+///
+/// Fails by: the fallback taking another tag, or a tagless clone passing.
+#[test]
+fn without_a_lock_latest_is_the_newest_tag_and_none_is_could_not_look() {
+    let fixture = Published::new("config-deprecations-unlocked");
+    git_in(&fixture.root, &["tag", "v0.0.10"]);
+    git_in(&fixture.root, &["tag", "v0.0.9"]);
+    let (_, said) = deprecations(&fixture.root, "latest");
+    assert!(said.contains("v0.0.10"), "the newest by version: {said}");
+    for tag in ["v0.0.1", "v0.0.9", "v0.0.10"] {
+        git_in(&fixture.root, &["tag", "-d", tag]);
     }
+    let (code, said) = deprecations(&fixture.root, "latest");
+    assert_eq!(code, 3, "no tag is could-not-look: {said}");
 }
