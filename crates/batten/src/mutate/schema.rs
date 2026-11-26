@@ -1763,6 +1763,20 @@ fn use_names(it: &ast::Use) -> Vec<String> {
     use_leaf_names(it, true)
 }
 
+/// Each name a `use` binds by renaming (`as`), with the last segment of the
+/// path it renames; a rename of `self` is left out, its target then unknown.
+fn use_renames(it: &ast::Use) -> std::collections::BTreeMap<String, String> {
+    it.syntax()
+        .descendants()
+        .filter_map(ast::UseTree::cast)
+        .filter_map(|tree| {
+            let alias = ast::HasName::name(&tree.rename()?)?.text().to_string();
+            let original = tree.path()?.segment()?.name_ref()?.text().to_string();
+            (alias != "_").then_some((alias, original))
+        })
+        .collect()
+}
+
 /// [`use_names`], each glob's module among them only where `globs` says: a
 /// glob binds no name of its own, so without them these are the names the
 /// `use` binds.
@@ -1953,6 +1967,9 @@ const OWNED: char = '\u{10}';
 /// passes the names it is handed through as written (`pass`) or may put
 /// them where no call site says (`path`) ([`macro_passes`]).
 const MACRO_PASSES: char = '\u{11}';
+/// After a renamed `use` binding's [`USE_BOUND`], the name it imports: `c` of
+/// `use a::b as c` is followed as `b` ([`Resolver::use_target`]).
+const RENAMED: char = '\u{12}';
 /// The macros that pass a name through as written, where it is called: what
 /// they are handed resolves as it would outside them.
 const PASSED_AS_WRITTEN: [&str; 21] = [
@@ -2340,26 +2357,11 @@ fn impl_owner(item: &ast::Item, place: &FileScope) -> Option<String> {
             .and_then(ast::Impl::cast)?,
         _ => return None,
     };
-    let generic: BTreeSet<String> = ast::HasGenericParams::generic_param_list(&it)
-        .into_iter()
-        .flat_map(|list| {
-            list.syntax()
-                .descendants()
-                .filter_map(ast::TypeParam::cast)
-                .collect::<Vec<_>>()
-        })
-        .filter_map(|param| ast::HasName::name(&param).map(|name| name.text().to_string()))
-        .collect();
     let written = |ty: Option<ast::Type>| -> String {
-        let Some(ast::Type::PathType(path)) = ty else {
-            return String::from("?");
-        };
-        match path.path().as_ref().and_then(path_segments) {
-            Some(segments) if !(segments.len() == 1 && generic.contains(&segments[0])) => {
-                rooted(&segments, &place.root)
-            }
-            _ => String::from("?"),
-        }
+        type_segments(&it, ty).map_or_else(
+            || String::from("?"),
+            |segments| rooted(&segments, &place.root),
+        )
     };
     let trait_path = if it.trait_().is_some() {
         written(it.trait_())
@@ -2370,6 +2372,27 @@ fn impl_owner(item: &ast::Item, place: &FileScope) -> Option<String> {
         "{OWNED}{}{OWNED}{trait_path}",
         written(it.self_ty())
     ))
+}
+
+/// The segments of the path `ty`, a type in the header of `it`, is written
+/// with; `None` where it is no plain path or is one of `it`'s generic
+/// parameters, which may be any type.
+fn type_segments(it: &ast::Impl, ty: Option<ast::Type>) -> Option<Vec<String>> {
+    let Some(ast::Type::PathType(path)) = ty else {
+        return None;
+    };
+    let segments = path.path().as_ref().and_then(path_segments)?;
+    let generic = ast::HasGenericParams::generic_param_list(it)
+        .into_iter()
+        .flat_map(|list| {
+            list.syntax()
+                .descendants()
+                .filter_map(ast::TypeParam::cast)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|param| ast::HasName::name(&param).map(|name| name.text().to_string()))
+        .any(|name| segments.len() == 1 && segments[0] == name);
+    (!generic).then_some(segments)
 }
 
 /// The keys an item's own names are defined under ([`definitions`]): each
@@ -2390,19 +2413,26 @@ fn free_keys(
         ast::Item::Use(it) => use_leaf_names(it, false).into_iter().collect(),
         _ => BTreeSet::new(),
     };
-    let kind = |name: &str| -> Option<char> {
+    let renamed: std::collections::BTreeMap<String, String> = match item {
+        ast::Item::Use(it) => use_renames(it),
+        _ => std::collections::BTreeMap::new(),
+    };
+    let kind = |name: &str| -> String {
         match item {
-            _ if home.is_empty() => None,
-            ast::Item::Use(_) if bound.contains(name) => Some(USE_BOUND),
-            ast::Item::Use(_) => Some(GLOB_NAMED),
-            ast::Item::Module(_) => Some(MODULE_ITEM),
-            _ => None,
+            _ if home.is_empty() => String::new(),
+            ast::Item::Use(_) if bound.contains(name) => match renamed.get(name) {
+                Some(original) => format!("{USE_BOUND}{RENAMED}{original}"),
+                None => USE_BOUND.to_string(),
+            },
+            ast::Item::Use(_) => GLOB_NAMED.to_string(),
+            ast::Item::Module(_) => MODULE_ITEM.to_string(),
+            _ => String::new(),
         }
     };
     item_names(item)
         .into_iter()
         .map(|name| {
-            let kind = kind(&name).map(String::from).unwrap_or_default();
+            let kind = kind(&name);
             if place.unscoped || visible == Visible::Workspace {
                 format!("{name}{home}{kind}")
             } else if visible == Visible::Package {
@@ -2780,6 +2810,18 @@ fn written_as(token: &ra_ap_syntax::SyntaxToken, root: &str) -> String {
     if segments.is_empty() {
         return String::new();
     }
+    // `Self` IS ITS IMPL'S SELF TYPE (CLOUD-2927), written as the impl writes
+    // it; in a trait it may be any implementing type.
+    if segments.first().is_some_and(|first| first == "Self") {
+        let Some(own) = token
+            .parent_ancestors()
+            .find_map(ast::Impl::cast)
+            .and_then(|it| type_segments(&it, it.self_ty()))
+        else {
+            return unknown;
+        };
+        segments.splice(0..1, own);
+    }
     format!("{WRITTEN}{}", rooted(&segments, root))
 }
 
@@ -2798,20 +2840,32 @@ fn rooted(segments: &[String], root: &str) -> String {
     }
 }
 
-/// A path's segments, each a plain name or `crate`, `self` or `super`; none
-/// where one carries generics or a type.
+/// A path's segments, each a name or `crate`, `self`, `super` or `Self`, its
+/// generic arguments dropped (`Vec::<T>::new` is `Vec`'s `new`), the first
+/// marked `^` after a leading `::`; none where one is a type (`<T>::f`).
 fn path_segments(path: &ast::Path) -> Option<Vec<String>> {
-    if path.syntax().to_string().trim_start().starts_with("::") {
-        return None;
-    }
-    path.segments()
+    let mut segments: Vec<String> = path
+        .segments()
         .map(|segment| {
-            let text = segment.syntax().to_string();
-            let text = text.trim();
-            (!text.is_empty() && text.chars().all(|c| c.is_alphanumeric() || c == '_'))
-                .then(|| text.to_owned())
+            if segment.type_anchor().is_some() {
+                return None;
+            }
+            match segment.kind()? {
+                ast::PathSegmentKind::Name(name) => Some(name.text().to_string()),
+                ast::PathSegmentKind::SelfTypeKw => Some(String::from("Self")),
+                ast::PathSegmentKind::SelfKw => Some(String::from("self")),
+                ast::PathSegmentKind::SuperKw => Some(String::from("super")),
+                ast::PathSegmentKind::CrateKw => Some(String::from("crate")),
+                ast::PathSegmentKind::Type { .. } => None,
+            }
         })
-        .collect()
+        .collect::<Option<_>>()?;
+    // A LEADING `::` NAMES AN EXTERNAL CRATE'S ROOT (CLOUD-2927): its first
+    // segment is a crate's name and nothing in scope.
+    if path.syntax().to_string().trim_start().starts_with("::") {
+        segments.first_mut()?.insert(0, '^');
+    }
+    Some(segments)
 }
 
 /// How `token`, in a macro's tokens, is written ([`written_as`]): bare where
@@ -7334,6 +7388,11 @@ impl<'r> Resolver<'r> {
     fn use_target(&self, id: usize, segment: &str) -> Option<&'r str> {
         let definition = self.definitions[id];
         let (package, home) = home_of(definition)?;
+        let segment = definition
+            .split_once(RENAMED)
+            .map_or(segment, |(_, original)| {
+                original.split(IMPL_DEFINED).next().unwrap_or(original)
+            });
         self.mentions.get(definition).and_then(|mentioned| {
             mentioned
                 .iter()
@@ -7365,7 +7424,7 @@ impl<'r> Resolver<'r> {
         match self.use_target(id, segment) {
             Some(target) => match self.named(target) {
                 Found::One(next) if next != id => {
-                    self.through_uses(Found::One(next), segment, depth + 1)
+                    self.through_uses(Found::One(next), key_base(target), depth + 1)
                 }
                 Found::Nothing => Found::Nothing,
                 _ => Found::Unknown,
@@ -7649,6 +7708,17 @@ impl<'r> Resolver<'r> {
             rest = tail;
         }
         for (index, segment) in rest.iter().enumerate() {
+            if let Some(name) = segment.strip_prefix('^') {
+                match (index, self.crates.get(name)) {
+                    (0, Some(Some(dir))) => {
+                        at_package = dir;
+                        at = String::from("src");
+                        continue;
+                    }
+                    (0, None) => return Place::Nothing,
+                    _ => return Place::Unknown,
+                }
+            }
             let scope = format!("{segment}{MENTIONED_IN}{at_package}{MENTIONED_IN}{at}");
             match self.lookup(&scope, segment, at_package, at.clone(), depth + 1) {
                 Found::One(id) => match self.module_of(id, segment, depth + 1) {
@@ -7706,8 +7776,11 @@ impl<'r> Resolver<'r> {
         let segments: Vec<&str> = raw.split("::").collect();
         match self.path(package, home, &segments, depth + 1) {
             Place::Module(next_package, next) => {
-                let scope = format!("{segment}{MENTIONED_IN}{next_package}{MENTIONED_IN}{next}");
-                match self.lookup(&scope, segment, next_package, next, depth + 1) {
+                let scope = format!(
+                    "{}{MENTIONED_IN}{next_package}{MENTIONED_IN}{next}",
+                    key_base(target)
+                );
+                match self.lookup(&scope, key_base(target), next_package, next, depth + 1) {
                     Found::One(next_id) if next_id != id => {
                         self.module_of(next_id, segment, depth + 1)
                     }
@@ -17472,6 +17545,66 @@ mod tests {
         assert_ne!(
             own[&wrapped], held[&wrapped],
             "a::LIMIT is the one wrap! is handed"
+        );
+    }
+
+    /// CLOUD-2927 (g): a path resolves through what its spelling adds:
+    /// generic arguments (`W::<u8>::K`), a renamed `use` (`Alias` of
+    /// `use super::a::W as Alias`), `Self` in an impl, and a leading `::`,
+    /// which names an external crate's root.
+    ///
+    /// Fails by: any of these read as unknown, so an edit to `b`'s `K` (or
+    /// to `a`'s `LIMIT`, for `::ext::LIMIT`) moves a case naming none of
+    /// them; or the one named dropped.
+    #[test]
+    fn a_path_resolves_through_generics_renames_self_and_a_leading_root() {
+        let (in_impl, generic, renamed, external) = (case("m"), case("f"), case("g"), case("k"));
+        let cases: BTreeSet<Case> = [
+            in_impl.clone(),
+            generic.clone(),
+            renamed.clone(),
+            external.clone(),
+        ]
+        .into();
+        let executed = [
+            (in_impl.clone(), [0].into()),
+            (generic.clone(), [1].into()),
+            (renamed.clone(), [2].into()),
+            (external.clone(), [3].into()),
+        ]
+        .into();
+        let base = "mod a { pub struct W<T>(T); \
+                    impl<T> W<T> { pub const K: u8 = 1; pub fn m() -> u8 { Self::K } } \
+                    pub const LIMIT: u8 = 5; }\n\
+                    mod b { pub struct W<T>(T); impl<T> W<T> { pub const K: u8 = 2; } }\n\
+                    mod c { use super::a::W; pub fn f() -> u8 { W::<u8>::K } }\n\
+                    mod d { use super::a::W as Alias; pub fn g() -> u8 { Alias::<u8>::K } }\n\
+                    mod e { pub fn k() -> u8 { ::ext::LIMIT } }\n";
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(&cases, &executed, &base.replace("K: u8 = 2", "K: u8 = 3"));
+        for (named, by) in [
+            (&in_impl, "Self"),
+            (&generic, "W::<u8>"),
+            (&renamed, "Alias"),
+        ] {
+            assert_eq!(other[named], held[named], "{by} is a::W, not b::W");
+        }
+        let own = source_digests(&cases, &executed, &base.replace("K: u8 = 1", "K: u8 = 4"));
+        for (named, by) in [
+            (&in_impl, "Self"),
+            (&generic, "W::<u8>"),
+            (&renamed, "Alias"),
+        ] {
+            assert_ne!(own[named], held[named], "{by} names a::W's K");
+        }
+        let limit = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 5", "LIMIT: u8 = 6"),
+        );
+        assert_eq!(
+            limit[&external], held[&external],
+            "::ext::LIMIT is no workspace LIMIT"
         );
     }
 
