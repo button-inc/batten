@@ -516,7 +516,7 @@ fn a_step_that_passes_says_nothing() {
         document,
         serde_json::json!({"hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": batten::session_setup::instruction(),
+            "additionalContext": batten::session_setup::instruction(true),
         }}),
         "a passing step announces nothing beside the dispatch notice: {}",
         door.out
