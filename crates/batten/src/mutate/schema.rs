@@ -23302,17 +23302,17 @@ pub fn repo() -> u8 {{ scratch() }}
             files: [(file.to_owned(), Rendered::default())].into(),
             ..Schema::default()
         };
-        let read = || std::fs::read_to_string(work.join(file)).unwrap();
+        let contents = || std::fs::read_to_string(work.join(file)).unwrap();
         let shown = shown_over(&judging(Some(&reuse)), &[0], &schema).unwrap();
         assert!(shown.is_some(), "every run reuses the build");
-        assert_eq!(read(), "original");
+        assert_eq!(contents(), "original");
         drop(shown);
-        assert_eq!(read(), "rendered", "the rendering goes back");
+        assert_eq!(contents(), "rendered", "the rendering goes back");
         assert!(
             shown_over(&judging(None), &[0], &schema).unwrap().is_none(),
             "no reuse record, no showing"
         );
-        assert_eq!(read(), "rendered");
+        assert_eq!(contents(), "rendered");
     }
 
     /// The control run names each case it found red beside the count, by
