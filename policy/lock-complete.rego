@@ -1,12 +1,9 @@
 #MUTANT-SUITE crates/batten/tests/it/lock_complete.rs
 #MUTANT residue-unread|s@not platform in known_platforms@false@|a_platform_key_mise_does_not_emit_is_reported
 #MUTANT required-platform-unread|s@count(names) > 0@false@|a_required_platform_missing_entirely_is_reported
-# CLOUD-2881's four, one per term of the locked-install claim: each half of the
-# `[settings]` conjunction, the off-switch match, and the writer exemption.
-#MUTANT locked-mode-unread|s@^\tmanifest.settings.locked == true$@\ttrue@|a_lockfile_without_locked_mode_is_reported
-#MUTANT lockfile-setting-unread|s@^\tmanifest.settings.lockfile == true$@\ttrue@|the_lockfile_off_is_reported
-#MUTANT lock-switch-unread|s@^\tswitches_off(text)$@\tfalse@|a_task_env_switching_the_lock_off_is_reported
-#MUTANT lock-writer-widened|s@^\ttable_of(lines, index) in lock_writer_tables$@\ttrue@|a_task_env_switching_the_lock_off_is_reported
+# CLOUD-2881: locked mode is what makes the read safe, so ignoring it refuses the
+# repository's own settings.
+#MUTANT locked-mode-ignored|s@^\tnot locked_on$@\ttrue@|a_locked_lockfile_permits_no_write
 # THE CASE HAS TO BE DECIDED OPPOSITELY BY THE TWO SPELLINGS (CLOUD-1444). This
 # row turns the component-boundary test into a plain prefix test, and it used to
 # name `a_pin_its_entry_does_not_name_is_reported` — a case pinning `2.0.0`
@@ -330,8 +327,9 @@ violation contains {
 #
 # CLOUD-333. Every predicate above judges an entry that is PRESENT, so the gate
 # was blind to the omission — and the omission is the one failure a local run
-# structurally cannot see. `[settings] lockfile = false` means nothing here ever
-# installs `--locked`, so an unlocked tool installs fine on this machine forever;
+# structurally cannot see. Under `[settings] lockfile = false` (this repository's
+# setting until CLOUD-2881) nothing here installed `--locked`, so an unlocked tool
+# installed fine on this machine forever;
 # CI passes `--locked` and dies at the INSTALL step, before a single gate runs, in
 # every job whose install list names the tool. Measured on PR #272, where `msrv`
 # and `commit-lint` went red for a `cargo-msrv` pin neither of them owns, past a
@@ -421,25 +419,29 @@ violation contains {
 
 # --- predicate 6: the setting that permits the write --------------------------
 #
-# CLOUD-223 and CLOUD-2881, the two halves of one setting. Every residue key
-# this module rejects was written by an install, so the gate is half a mechanism
-# while any `mise install` can produce one; and every install that is NOT locked
-# resolves through the forges' release APIs, which a cloud session's proxy
-# refuses for a third party. `lockfile = false` closed the first half and opened
-# the second: it denied the write by turning the lockfile off, so `mise run`'s
-# pre-task install, `mise exec`'s auto-install and a by-hand `mise install` all
-# ran unlocked, and a cold session's toolchain 403'd before any task body could
-# opt back in (CLOUD-2881). Locked mode closes both: it installs from the lock's
-# URLs and checksums, makes no release-API call, and never writes the file.
-# Measured cold on mise 2026.9.1: a plain `mise install` and a `mise run`
-# pre-task install each installed all 32 tools with zero api.github.com requests
-# and left `mise.lock` byte-identical.
+# CLOUD-223, and it is the other half of predicate 1 rather than a separate
+# concern: every residue key this module rejects was written by an install, so the
+# gate is half a mechanism while any `mise install` can produce one. The
+# per-caller opt-out this repo tried first (`MISE_LOCKFILE=false` in the
+# session-start hook) cannot reach a caller it does not own, which is exactly how
+# a sandbox's own provisioning kept dirtying the tree afterwards.
 #
-# So the predicate is the conjunction, over the parsed node: both keys true, in
-# `[settings]`. A repository declaring no tools has no subject.
-locked_install if {
-	manifest.settings.lockfile == true
-	manifest.settings.locked == true
+# LOCKED MODE NEVER WRITES (CLOUD-2881). mise gates every install-time lock write
+# on `locked` (mise 2026.9.1 `src/lockfile.rs:1903`, `:2596`), so the lockfile
+# read with locked mode on permits no write; measured cold, a full `mise install`
+# under both left `mise.lock` byte-identical. That conjunction is the setting
+# this repository holds, and `tool install loose` refuses anything less.
+lockfile_on if manifest.settings.lockfile == true
+
+lockfile_on if manifest.settings.lockfile == 1
+
+locked_on if manifest.settings.locked == true
+
+locked_on if manifest.settings.locked == 1
+
+writes_enabled if {
+	lockfile_on
+	not locked_on
 }
 
 violation contains {
@@ -447,18 +449,19 @@ violation contains {
 	"verdict": "lock write unsafe",
 	"subjects": [pointer("mise.toml", ["lockfile"])],
 } if {
-	declares_tools
-	not locked_install
+	writes_enabled
 }
 
 # --- predicate 7: a workflow that installs unlocked ---------------------------
 #
-# The belt to predicate 6's braces. Under `lockfile = false` a workflow had to
-# set `MISE_LOCKFILE` itself, and one that forgot did not fail loudly:
-# mise-action only passes `--locked` when it detects a lockfile, so the job
-# installed UNLOCKED and went green — a checksum check silently dropped. Locked
-# `[settings]` now hold a workflow without it; the assignment stays required so
-# a workflow keeps its locked install through any edit to `[settings]`.
+# The other half of that setting. Under `lockfile = false` (until CLOUD-2881)
+# the whole lockfile feature was off, so `mise install --locked` failed outright
+# with "locked mode requires lockfile to be enabled", and a workflow had to set
+# `MISE_LOCKFILE` itself. One that forgot did not fail loudly: mise-action only
+# passes `--locked` when it detects a lockfile, so the job installed UNLOCKED and
+# went green — a checksum check silently dropped. Locked `[settings]` now hold a
+# workflow without it; the assignment stays required so a workflow keeps its
+# locked install through any later edit to `[settings]`.
 #
 # THE LINE SURFACE RATHER THAN `staged`, AND IT IS THE ONE PLACE A VERDICT READS
 # THE WORKTREE. `staged` takes literal paths — `git.rs::staged_facts` looks each
@@ -493,77 +496,6 @@ violation contains {
 	some path, _ in workflows
 	uses_mise_action(path)
 	not sets_lockfile(path)
-}
-
-# --- predicate 8: an env that turns the lock back off -------------------------
-#
-# CLOUD-2881's other half. `[settings]` is the authority, and an env assignment
-# outranks it for the one command it wraps: a task's `env`, a handler's or a
-# startup row's argv (`MISE_LOCKED=false mise …`), or a workflow's `env:` puts
-# that command back on the unlocked path predicate 6 closes. The writer is the
-# one exception and it is DECLARED here, by the table that holds it:
-# `[tasks.lock-check]` regenerates `mise.lock` on the currency schedule. Measured
-# on mise 2026.9.1, `mise lock` writes under `MISE_LOCKED=true` too, so its
-# opt-out declares that this task alone may write, as its `MISE_LOCKFILE =
-# "true"` did under CLOUD-223.
-#
-# THE LINE SURFACE, for predicate 7's reason: an off-switch is spelled in three
-# formats — a TOML inline table, an argv string, a YAML mapping — so no one
-# parsed node holds them all. A comment line is prose about a switch, not one.
-lock_writer_tables := {"[tasks.lock-check]"}
-
-lock_env_source(path) if path in {"mise.toml", "batten.toml", "renovate.json5"}
-
-lock_env_source(path) if {
-	startswith(path, "mise.")
-	endswith(path, ".toml")
-}
-
-lock_env_source(path) if workflows[path]
-
-lock_env_sources[path] := lines if {
-	some path, lines in input.tree.lines
-	lock_env_source(path)
-}
-
-commented(text) if startswith(trim_space(text), "#")
-
-commented(text) if startswith(trim_space(text), "//")
-
-switches_off(text) if {
-	not commented(text)
-	regex.match(data.batten.patterns["mise-lock-switched-off"], text)
-}
-
-table_header(text) if {
-	trimmed := trim_space(text)
-	startswith(trimmed, "[")
-	endswith(trimmed, "]")
-}
-
-# The table a line sits in: the nearest header at or above it.
-table_of(lines, index) := trim_space(lines[header]) if {
-	header := max({at |
-		some at, text in lines
-		at <= index
-		table_header(text)
-	})
-}
-
-declared_writer(path, lines, index) if {
-	path == "mise.toml"
-	table_of(lines, index) in lock_writer_tables
-}
-
-violation contains {
-	"rule": "lock write unsafe",
-	"verdict": "lock write unsafe",
-	"subjects": [{"path": path, "line": index + 1}],
-} if {
-	some path, lines in lock_env_sources
-	some index, text in lines
-	switches_off(text)
-	not declared_writer(path, lines, index)
 }
 
 # --- could-not-look -----------------------------------------------------------
@@ -607,9 +539,7 @@ fixture_lock := {"tools": {"t": [{
 	"platforms.macos-arm64": {"url": "https://e/x"},
 }]}}
 
-fixture_locked := {"lockfile": true, "locked": true}
-
-fixture_manifest := {"settings": fixture_locked, "tools": {"t": "1.0.0"}}
+fixture_manifest := {"settings": {"lockfile": false}, "tools": {"t": "1.0.0"}}
 
 fixture_input(lockfile, mise) := {"tree": {
 	"staged": {"mise.lock": lockfile, "mise.toml": mise},
@@ -721,7 +651,7 @@ test_a_required_platform_missing_entirely_is_a_finding if {
 test_a_backend_that_cannot_lock_is_exempt_from_locking_nothing if {
 	count(violation) == 0 with input as fixture_input(
 		{"tools": {"rust": [{"version": "1.85.0", "backend": "core:rust"}]}},
-		{"settings": fixture_locked, "tools": {"rust": "1.85.0"}},
+		{"settings": {"lockfile": false}, "tools": {"rust": "1.85.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
 }
@@ -734,7 +664,7 @@ test_an_asset_backend_that_locks_nothing_is_a_finding if {
 			"version": "0.23.0",
 			"backend": "ubi:rust-cross/cargo-zigbuild",
 		}]}},
-		{"settings": fixture_locked, "tools": {}},
+		{"settings": {"lockfile": false}, "tools": {}},
 	)
 		with data.batten.patterns as fixture_patterns
 	v.rule == "tool pin partial"
@@ -743,7 +673,7 @@ test_an_asset_backend_that_locks_nothing_is_a_finding if {
 test_a_tool_declaring_no_backend_is_a_finding if {
 	some v in violation with input as fixture_input(
 		{"tools": {"mystery": [{"version": "1"}]}},
-		{"settings": fixture_locked, "tools": {}},
+		{"settings": {"lockfile": false}, "tools": {}},
 	)
 		with data.batten.patterns as fixture_patterns
 	v.verdict == "tool declare missing"
@@ -752,7 +682,7 @@ test_a_tool_declaring_no_backend_is_a_finding if {
 test_a_declared_tool_with_no_lock_entry_is_a_finding if {
 	some v in violation with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools": {
+		{"settings": {"lockfile": false}, "tools": {
 			"t": "1.0.0",
 			"aqua:foresterre/cargo-msrv": "0.18.0",
 		}},
@@ -766,7 +696,7 @@ test_a_declared_tool_with_no_lock_entry_is_a_finding if {
 test_a_bare_name_other_than_rust_must_lock if {
 	some v in violation with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools": {"t": "1.0.0", "node": "24"}},
+		{"settings": {"lockfile": false}, "tools": {"t": "1.0.0", "node": "24"}},
 	)
 		with data.batten.patterns as fixture_patterns
 	v.rule == "tool pin absent"
@@ -775,7 +705,7 @@ test_a_bare_name_other_than_rust_must_lock if {
 test_a_pin_its_entry_does_not_name_is_a_finding if {
 	some v in violation with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools": {"t": "2.0.0"}},
+		{"settings": {"lockfile": false}, "tools": {"t": "2.0.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
 	v.rule == "pin read stale"
@@ -784,7 +714,7 @@ test_a_pin_its_entry_does_not_name_is_a_finding if {
 test_a_partial_pin_the_lock_extends_is_not if {
 	count({v | some v in violation; v.rule == "pin read stale"}) == 0 with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools": {"t": "1.0"}},
+		{"settings": {"lockfile": false}, "tools": {"t": "1.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
 }
@@ -801,7 +731,7 @@ test_the_extension_must_be_at_a_component_boundary if {
 			"platforms.linux-arm64": {"url": "https://e/x"},
 			"platforms.macos-arm64": {"url": "https://e/x"},
 		}]}},
-		{"settings": fixture_locked, "tools": {"t": "1.9"}},
+		{"settings": {"lockfile": false}, "tools": {"t": "1.9"}},
 	)
 		with data.batten.patterns as fixture_patterns
 	v.rule == "pin read stale"
@@ -812,7 +742,7 @@ test_the_extension_must_be_at_a_component_boundary if {
 test_an_inline_table_pin_is_read if {
 	some v in violation with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools": {"t": {
+		{"settings": {"lockfile": false}, "tools": {"t": {
 			"version": "2.0.0",
 			"components": "clippy",
 		}}},
@@ -824,15 +754,12 @@ test_an_inline_table_pin_is_read if {
 test_a_pin_that_is_not_a_dotted_version_is_skipped if {
 	count({v | some v in violation; v.rule == "pin read stale"}) == 0 with input as fixture_input(
 		fixture_lock,
-		{"settings": fixture_locked, "tools": {"t": "latest"}},
+		{"settings": {"lockfile": false}, "tools": {"t": "latest"}},
 	)
 		with data.batten.patterns as fixture_patterns
 }
 
-# Each half of the conjunction, off alone, is a finding (CLOUD-2881): a lockfile
-# that is read but not enforced still installs unlocked and writes residue, and
-# the old `lockfile = false` turns the read off entirely.
-test_a_lockfile_without_locked_mode_is_a_finding if {
+test_re_enabled_lockfile_writes_are_a_finding if {
 	some v in violation with input as fixture_input(
 		fixture_lock,
 		{"settings": {"lockfile": true}, "tools": {"t": "1.0.0"}},
@@ -841,66 +768,26 @@ test_a_lockfile_without_locked_mode_is_a_finding if {
 	v.rule == "lock write unsafe"
 }
 
-test_the_lockfile_off_is_a_finding if {
-	some v in violation with input as fixture_input(
+# Locked mode never writes the lock (CLOUD-2881), so the lockfile read with it
+# on permits no residue.
+test_a_locked_lockfile_permits_no_write if {
+	count(violation) == 0 with input as fixture_input(
 		fixture_lock,
-		{"settings": {"lockfile": false, "locked": true}, "tools": {"t": "1.0.0"}},
+		{"settings": {"lockfile": true, "locked": true}, "tools": {"t": "1.0.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
-	v.rule == "lock write unsafe"
 }
 
-# A key outside `[settings]` is not the setting. The predecessor needed an `awk`
-# table-tracking reset for this; a parsed node has it by construction, and the
-# case stays because the claim is worth pinning rather than because the spelling
-# is still at risk.
+# A `lockfile` key outside `[settings]` is not the setting. The predecessor needed
+# an `awk` table-tracking reset for this; a parsed node has it by construction, and
+# the case stays because the claim is worth pinning rather than because the
+# spelling is still at risk.
 test_a_lockfile_key_outside_settings_is_not_the_setting if {
 	count(violation) == 0 with input as fixture_input(
 		fixture_lock,
-		{"env": {"lockfile": false, "locked": false}, "settings": fixture_locked, "tools": {"t": "1.0.0"}},
+		{"env": {"lockfile": true}, "settings": {"lockfile": false}, "tools": {"t": "1.0.0"}},
 	)
 		with data.batten.patterns as fixture_patterns
-}
-
-# Predicate 8: an env off-switch anywhere but the declared writer's table.
-test_a_task_env_switching_the_lock_off_is_a_finding if {
-	some v in violation with input as object.union(
-		fixture_input(fixture_lock, fixture_manifest),
-		{"tree": {"lines": {"mise.toml": [
-			"[tasks.build]",
-			"env = { MISE_LOCKED = \"false\" }",
-		]}}},
-	)
-		with data.batten.patterns as fixture_patterns
-	v.rule == "lock write unsafe"
-	v.subjects == [{"path": "mise.toml", "line": 2}]
-}
-
-test_the_declared_writer_may_switch_it_off if {
-	count(violation) == 0 with input as object.union(
-		fixture_input(fixture_lock, fixture_manifest),
-		{"tree": {"lines": {"mise.toml": [
-			"[tasks.lock-check]",
-			"# a comment that says MISE_LOCKED = \"false\" is prose",
-			"env = { MISE_LOCKFILE = \"true\", MISE_LOCKED = \"false\" }",
-		]}}},
-	)
-		with data.batten.patterns as fixture_patterns
-}
-
-test_an_argv_or_workflow_switch_is_a_finding if {
-	found := {v.subjects[0].path |
-		some v in violation with input as object.union(
-			fixture_input(fixture_lock, fixture_manifest),
-			{"tree": {"lines": {
-				"batten.toml": ["run = [\"env\", \"MISE_LOCKFILE=false\", \"mise\", \"install\"]"],
-				".github/workflows/w.yml": ["  MISE_LOCKFILE: \"true\"", "  MISE_LOCKED: 0", "- uses: jdx/mise-action@abc"],
-			}}},
-		)
-			with data.batten.patterns as fixture_patterns
-		v.rule == "lock write unsafe"
-	}
-	found == {"batten.toml", ".github/workflows/w.yml"}
 }
 
 test_a_workflow_installing_without_the_lockfile_env_is_a_finding if {
@@ -954,7 +841,4 @@ test_an_unreadable_lockfile_no_manifest_depends_on_is_silent if {
 		with data.batten.patterns as fixture_patterns
 }
 
-fixture_patterns := {
-	"plain-dotted-version": "^[0-9]+(\\.[0-9]+)*$",
-	"mise-lock-switched-off": `MISE_LOCK(ED|FILE)["']?\s*[:=]\s*["']?(?i:false|0|no|off)\b`,
-}
+fixture_patterns := {"plain-dotted-version": "^[0-9]+(\\.[0-9]+)*$"}
