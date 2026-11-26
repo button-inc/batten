@@ -885,6 +885,25 @@ const fn mebibytes(bytes: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A walk ends only on a flag that is set: no flag and an unset one never
+    /// stop it.
+    ///
+    /// Fails by: `halted` answering `false` always, so a stoppable walk ran to
+    /// the end of a tree after its watcher stopped (the census timed out on it
+    /// rather than failing).
+    #[test]
+    fn a_walk_is_halted_only_by_a_set_flag() {
+        let flag = match batten_facts::lock_wait::Stop::new() {
+            Ok(flag) => flag,
+            Err(why) => panic!("a stop: {why}"),
+        };
+        assert!(!halted(None), "a walk no one stops");
+        assert!(!halted(Some(&flag)), "an unset flag");
+        flag.raise();
+        assert!(halted(Some(&flag)), "a set flag halts");
+    }
+
     #[cfg(test)]
     /// The volume a suite is writing to has room for more than the one MiB a
     /// constant reading would claim.

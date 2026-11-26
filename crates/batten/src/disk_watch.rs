@@ -658,6 +658,53 @@ mod tests {
         PathBuf::new()
     }
 
+    /// A finished collection's answer is taken by the next wake, so the one
+    /// after it may start another; one still running is left in place.
+    ///
+    /// Fails by: `reap` taking nothing, so the first pass's answer was never
+    /// recorded and no second pass ever started (the census timed out on it
+    /// rather than failing).
+    #[test]
+    fn a_finished_collection_is_reaped_and_a_running_one_kept() {
+        let config: crate::config_model::Prune = match serde_json::from_str("{}") {
+            Ok(config) => config,
+            Err(why) => panic!("an empty table: {why}"),
+        };
+        let sampler = Sampler {
+            repo: PathBuf::new(),
+            config: &config,
+            kept: Vec::new(),
+            copies: no_copies(),
+            min: 1,
+            reader: std::cell::RefCell::new(
+                Box::new(|| Ok(7_u64)) as Box<dyn FnMut() -> anyhow::Result<u64> + Send>
+            ),
+            lines: std::cell::RefCell::new(Vec::new()),
+            sink: None,
+            settled: std::cell::Cell::new(u64::MAX),
+            pending: std::cell::RefCell::new(None),
+            halt: Arc::new(match batten_facts::lock_wait::Stop::new() {
+                Ok(stop) => stop,
+                Err(why) => panic!("a stop: {why}"),
+            }),
+            trace: false,
+            started: std::time::Instant::now(),
+            last_wake: std::cell::Cell::new(None),
+        };
+        let (answer, answered) = std::sync::mpsc::channel();
+        sampler.pending.replace(Some(answered));
+        sampler.reap();
+        assert!(sampler.pending.borrow().is_some(), "a running pass is kept");
+        assert_eq!(sampler.settled.get(), u64::MAX);
+        assert!(answer.send(None).is_ok(), "the receiver is held");
+        sampler.reap();
+        assert!(
+            sampler.pending.borrow().is_none(),
+            "a finished pass is taken"
+        );
+        assert_eq!(sampler.settled.get(), 7, "where the pass left the volume");
+    }
+
     /// Fails by: the floor's stop test inverted, so a watcher with no runtime
     /// never samples until it is stopped, and then never ends.
     #[test]
