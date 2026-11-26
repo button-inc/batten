@@ -2100,19 +2100,76 @@ impl FileScope {
     /// The module path at `node` in this file: the file's own, then each
     /// inline `mod` holding it, joined by `::`.
     fn module_at(&self, node: Option<&SyntaxNode>) -> String {
+        // A BLOCK HOLDING ITEMS IS A SCOPE OF ITS OWN (CLOUD-2927): what it
+        // defines is named from inside it alone ([`block_label`]).
         let mut inline: Vec<String> = node
             .into_iter()
             .flat_map(SyntaxNode::ancestors)
-            .filter(|ancestor| ancestor.kind() == SyntaxKind::ITEM_LIST)
-            .filter_map(|list| ast::Module::cast(list.parent()?))
-            .filter_map(|module| ast::HasName::name(&module))
-            .map(|name| name.text().to_string())
+            .filter_map(|ancestor| {
+                if ancestor.kind() == SyntaxKind::ITEM_LIST {
+                    let module = ast::Module::cast(ancestor.parent()?)?;
+                    return Some(ast::HasName::name(&module)?.text().to_string());
+                }
+                holds_items(&ancestor).then(|| block_label(&ancestor))
+            })
             .collect();
         inline.reverse();
         let mut path = self.module.clone();
         path.extend(inline);
         path.join("::")
     }
+}
+
+/// Whether `node` is a block holding an item or a `use`: a scope of its own.
+fn holds_items(node: &SyntaxNode) -> bool {
+    node.kind() == SyntaxKind::STMT_LIST
+        && node
+            .children()
+            .any(|child| ast::Item::can_cast(child.kind()))
+}
+
+/// The scope segment of the block `block` ([`holds_items`]): `#`, the name
+/// of the outermost item holding it, and its rank among that item's blocks
+/// holding items, which an edit elsewhere in the file does not move.
+fn block_label(block: &SyntaxNode) -> String {
+    let outer = block
+        .ancestors()
+        .filter_map(ast::Item::cast)
+        .filter(|item| {
+            !item
+                .syntax()
+                .ancestors()
+                .skip(1)
+                .any(|ancestor| ancestor.kind() == SyntaxKind::STMT_LIST)
+        })
+        .last();
+    let name = outer
+        .as_ref()
+        .and_then(|item| own_names(item).into_iter().next())
+        .unwrap_or_default();
+    let rank = outer
+        .as_ref()
+        .and_then(|item| {
+            item.syntax()
+                .descendants()
+                .filter(holds_items)
+                .position(|other| &other == block)
+        })
+        .unwrap_or_default();
+    format!("#{name}{rank}")
+}
+
+/// `module` with the block scopes it ends in dropped: the module a `self`,
+/// `super` or `crate` path in a block starts from.
+fn enclosing_module(module: &str) -> &str {
+    let mut at = module;
+    while let Some((parent, last)) = at.rsplit_once("::") {
+        if !last.starts_with('#') {
+            break;
+        }
+        at = parent;
+    }
+    if at.starts_with('#') { "" } else { at }
 }
 
 /// How far a definition is visible: its package and module, its package,
@@ -2268,7 +2325,7 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
     // impl's self type and trait are written with, so `T::f` names the
     // members of `T`'s impls alone.
     let owned = impl_owner(item, place)
-        .map(|owner| format!("{}{owner}", home_suffix(item, place, &module, widened)))
+        .map(|owner| format!("{}{owner}", home_suffix(place, &module, widened)))
         .unwrap_or_default();
     free.into_iter()
         .chain(
@@ -2320,24 +2377,13 @@ fn macro_passes(it: &ast::MacroRules) -> bool {
             .is_none_or(|last| !["use", "mod", "impl", "extern"].contains(&last.text()))
 }
 
-/// Where a path names `item` from ([`HOMED`]): its package and `module`.
+/// Where a path names an item from ([`HOMED`]): its package and `module`.
 ///
-/// HOMED WHERE A PATH NAMES IT FROM (CLOUD-2927), unless it is in a block or
-/// its module's tree is not the one its path says ([`FileScope::flat`]).
-fn home_suffix(
-    item: &ast::Item,
-    place: &FileScope,
-    module: &str,
-    widened: &BTreeSet<String>,
-) -> String {
-    if place.unscoped
-        || place.flat
-        || widened.contains(module)
-        || item
-            .syntax()
-            .ancestors()
-            .any(|node| node.kind() == SyntaxKind::STMT_LIST)
-    {
+/// HOMED WHERE A PATH NAMES IT FROM (CLOUD-2927), a block's item in its
+/// block's scope ([`block_label`]), unless its module's tree is not the one
+/// its path says ([`FileScope::flat`]).
+fn home_suffix(place: &FileScope, module: &str, widened: &BTreeSet<String>) -> String {
+    if place.unscoped || place.flat || widened.contains(module) {
         String::new()
     } else {
         format!("{HOMED}{}{HOMED}{module}", place.package)
@@ -2408,7 +2454,7 @@ fn free_keys(
         Visible::Module if place.flat || widened.contains(module) => Visible::Package,
         other => other,
     };
-    let home = home_suffix(item, place, module, widened);
+    let home = home_suffix(place, module, widened);
     let bound: BTreeSet<String> = match item {
         ast::Item::Use(it) => use_leaf_names(it, false).into_iter().collect(),
         _ => BTreeSet::new(),
@@ -2695,11 +2741,14 @@ fn token_mentions(
         // GLOBS (CLOUD-2904): swapping the trait in scope changes what a call
         // dispatches to, and a glob what an unqualified name resolves to,
         // with no name of the `use` written.
+        let enclosing = enclosing_module(&module);
         mentions.insert(use_globs(place, &module));
+        mentions.insert(use_globs(place, enclosing));
         // AND A MACRO CALL ITS `use`S (round 4 #7): a `macro_rules!` body's
         // method call dispatches through the traits in scope where it expands.
         if method_call(token) || macro_called(token) {
             mentions.insert(use_scope(place, &module));
+            mentions.insert(use_scope(place, enclosing));
         }
         format!(
             "{MENTIONED_IN}{}{MENTIONED_IN}{module}{}",
@@ -7648,6 +7697,13 @@ impl<'r> Resolver<'r> {
                 found.extend(here);
                 continue;
             }
+            // A BLOCK SEES WHAT ENCLOSES IT (CLOUD-2927), its own items and
+            // `use`s first.
+            if let Some((parent, last)) = at.rsplit_once("::").or(Some(("", at.as_str())))
+                && last.starts_with('#')
+            {
+                frontier.push((at_package, parent.to_owned()));
+            }
             let Some(globbed) = self.globs.get(&(at_package, at.as_str())) else {
                 continue;
             };
@@ -7689,6 +7745,12 @@ impl<'r> Resolver<'r> {
         }
         let mut at_package = package;
         let mut at = module.to_owned();
+        if segments
+            .first()
+            .is_some_and(|first| ["self", "super"].contains(first) || first.starts_with('@'))
+        {
+            enclosing_module(module).clone_into(&mut at);
+        }
         let mut rest = segments;
         let mut relative = true;
         while let Some((first, tail)) = rest.split_first() {
@@ -17608,6 +17670,71 @@ mod tests {
         );
     }
 
+    /// CLOUD-2927 (h): an item in a block is named from inside the block
+    /// alone: a `const` block's own `LIMIT` answers the mention in it, and a
+    /// mention outside the block resolves past it to the `LIMIT` its module
+    /// imports.
+    ///
+    /// Fails by: a block's item read as having no home, so every `LIMIT` its
+    /// module mentions is keyed on all of them (an edit to `b::LIMIT` moves
+    /// `g`); or the block's own item not the one its block names.
+    #[test]
+    fn an_item_in_a_block_is_named_from_inside_its_block_alone() {
+        let (through_value, outside, through_more) = (case("f"), case("g"), case("h"));
+        let cases: BTreeSet<Case> =
+            [through_value.clone(), outside.clone(), through_more.clone()].into();
+        let executed = [
+            (through_value.clone(), [0].into()),
+            (outside.clone(), [1].into()),
+            (through_more.clone(), [2].into()),
+        ]
+        .into();
+        let base = "mod a { pub const LIMIT: u8 = 1; }\n\
+                    mod b { pub const LIMIT: u8 = 2; }\n\
+                    mod c { use super::a::LIMIT; \
+                    pub const VALUE: u8 = { const LIMIT: u8 = 9; LIMIT }; \
+                    pub const MORE: u8 = { const X: u8 = 1; X + LIMIT }; \
+                    pub fn f() -> u8 { VALUE } pub fn g() -> u8 { LIMIT } \
+                    pub fn h() -> u8 { MORE } }\n";
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 2", "LIMIT: u8 = 3"),
+        );
+        assert_eq!(other[&outside], held[&outside], "g names a::LIMIT");
+        assert_eq!(
+            other[&through_value], held[&through_value],
+            "VALUE names its own LIMIT"
+        );
+        let own = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 9", "LIMIT: u8 = 8"),
+        );
+        assert_ne!(
+            own[&through_value], held[&through_value],
+            "the block's LIMIT is VALUE's"
+        );
+        let imported = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 1", "LIMIT: u8 = 4"),
+        );
+        assert_ne!(
+            imported[&outside], held[&outside],
+            "a::LIMIT is the one g names"
+        );
+        assert_ne!(
+            imported[&through_more], held[&through_more],
+            "MORE's block names its X and, past it, a::LIMIT"
+        );
+        assert_eq!(
+            other[&through_more], held[&through_more],
+            "and not b::LIMIT"
+        );
+    }
+
     /// CLOUD-2927 (b): a mention no path narrows to one definition is keyed on
     /// every definition it sees and followed through none (owner ruling
     /// 2026-11-24): handed to a macro the workspace does not define, whose
@@ -18598,12 +18725,13 @@ mod tests {
              macro_rules! m { () => { inside() } }\n",
         );
         let scoped = mentions_in(&root, &FileScope::of("src/lib.rs"));
-        let made = |name: &str| format!("{name}{MENTIONED_IN}{MENTIONED_IN}src");
+        // `f`'S BODY HOLDS A `use`, SO IT IS A SCOPE OF ITS OWN ([`block_label`]).
+        let made = |name: &str| format!("{name}{MENTIONED_IN}{MENTIONED_IN}src::#f0");
         for expected in [
             made("helper"),
-            format!("{ASSOCIATED}here{MENTIONED_IN}{MENTIONED_IN}src{WRITTEN}Host"),
-            format!("{ASSOCIATED}b{MENTIONED_IN}{MENTIONED_IN}src{WRITTEN}a"),
-            format!("b{MENTIONED_IN}{MENTIONED_IN}src{WRITTEN}a"),
+            format!("{ASSOCIATED}here{MENTIONED_IN}{MENTIONED_IN}src::#f0{WRITTEN}Host"),
+            format!("{ASSOCIATED}b{MENTIONED_IN}{MENTIONED_IN}src::#f0{WRITTEN}a"),
+            format!("b{MENTIONED_IN}{MENTIONED_IN}src::#f0{WRITTEN}a"),
             format!("{ASSOCIATED}cap"),
             String::from("inside"),
         ] {
