@@ -19129,6 +19129,20 @@ repair = ["mise", "run", "session:git-hooks"]
 # tree move MID-session and needs `command_matcher`, which is unlanded. This is the
 # session-start half, needs no new mechanism, and covers the moment a container
 # comes up already stale — which is how this one came up.
+# THE CLONE CARRIES ITS HISTORY (CLOUD-2840). A cloud container clones shallow,
+# and `land` replays the branch onto `origin/main` from their merge-base, which
+# a shallow clone does not hold: measured, `mise run land --hold` in a fresh
+# container exited 3 before `verify` with "34c6e4d1f… will not read: An object
+# … could not be found". `land linear` refuses a shallow clone and names the
+# remedy rather than deepening in place, so the deepening is setup's. A ROW, so
+# it runs inside the one setup command and finishes before it exits: nothing
+# later can find it still running. `env -S` for the pkl row's reason: no shell.
+[[startup]]
+id = "clone-carries-history"
+gloss = "the clone is not shallow, so land can reach the merge-base it replays from"
+check = ["env", "-S", "test ! -e .git/shallow"]
+repair = ["git", "fetch", "--unshallow", "origin"]
+
 # PKL TRUSTS THE EGRESS CA (CLOUD-2840). `pkl` trusts only its own bundle,
 # never `SSL_CERT_FILE`, so behind a TLS-intercepting proxy every `hk.pkl`
 # evaluation failed its handshake to github.com (`unable to find valid
