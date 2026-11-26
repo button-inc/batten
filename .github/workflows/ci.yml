@@ -540,6 +540,15 @@ jobs:
           # `mutants` job below runs it as a `MUTANT_SHARD` matrix, so CI's
           # confirmation of a change's mutants costs a shard, not a serial run.
           HK_SKIP_STEPS: batten-check,mutant:changed
+          # THE TRACED BRANCH, REQUIRED IN THE SUITE ITSELF (CLOUD-2789). Under
+          # `CI=true` this job runs the suite OUTSIDE `step run` (bypassed here),
+          # so with the `strace` installed above every case that asks for a
+          # tracer already takes its traced branch. `verify`'s suite runs under
+          # `step run`'s tracer, which is why `verify` has a separate
+          # `test:traced` lane; here that lane re-ran the same cases on the same
+          # branch, 322 of them. The guard it carried moves here instead: with
+          # this set, a case that cannot trace fails rather than falling back.
+          BATTEN_TEST_TRACED_REQUIRED: "1"
       # THE GATES LEFT THE CHECKOUT AS THEY FOUND IT (CLOUD-1953). `test:cargo`'s
       # retired shell body compared tracked state before and after the suite, and
       # that comparison fired here, inside `mise run ci`. The body is one argv now
@@ -548,14 +557,6 @@ jobs:
       # reaches through the same task `verify:gated` names, so `ci-local-parity`
       # property 3 holds. Gated on the same verdict as the step above: the quick
       # tier runs no suite that could write.
-      # THE TRACED BRANCH (CLOUD-2789): under `CI=true` `mise run ci` runs the
-      # suite OUTSIDE `step run` (bypassed here), so with the `strace` installed
-      # above its cases already take their traced branches; `verify`'s suite
-      # runs under `step run`'s tracer and takes only the fallback. This task
-      # is the lane `verify` runs those branches in, run here too for parity,
-      # and it fails rather than fall back where it cannot trace.
-      - run: mise run test:traced
-        if: steps.slow.outputs.needed == 'true'
       - run: mise run tree-clean
         if: steps.slow.outputs.needed == 'true'
       # THE OTHER BRANCH, and it is not merely `ci` minus the slow steps.
