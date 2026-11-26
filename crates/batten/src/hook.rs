@@ -166,6 +166,20 @@ pub trait HarnessExt: Sized {
     #[must_use]
     fn host_signal(self) -> Option<crate::environment::HostSignal>;
 
+    /// Whether this host's shell tool can run a call as a background task the
+    /// host itself tracks and reports the end of: the one way the session's
+    /// setup ([`crate::session_setup::DISPATCH`]) runs without holding the turn
+    /// (CLOUD-2840).
+    ///
+    /// Claude Code's Bash tool takes `run_in_background` (measured in this
+    /// repository's own sessions). Every other host answers `false` until its
+    /// facility is measured, for [`Harness::question_tool`]'s reason. On such a
+    /// host the dispatch it CAN make, inline, is the one the install gate admits
+    /// and the instruction asks for; a process detached past the host is not an
+    /// option, because the host can neither see it nor report its end.
+    #[must_use]
+    fn backgrounds(self) -> bool;
+
     /// The tools on this host whose call **writes the path it names**.
     ///
     /// A host fact, so it lives in the adapter rather than in `[[rule]]`: the
@@ -454,6 +468,17 @@ impl HarnessExt for Harness {
             | Harness::GeminiCli
             | Harness::Cursor
             | Harness::ExitCode => None,
+        }
+    }
+
+    fn backgrounds(self) -> bool {
+        match self {
+            Harness::ClaudeCode => true,
+            Harness::CodexCli
+            | Harness::CopilotCli
+            | Harness::GeminiCli
+            | Harness::Cursor
+            | Harness::ExitCode => false,
         }
     }
 
