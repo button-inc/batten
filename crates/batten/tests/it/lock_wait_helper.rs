@@ -147,6 +147,58 @@ fn a_holder_that_dies_hands_the_lock_over() {
     assert!(taken, "a dead holder's lock is the waiter's");
 }
 
+/// Fails by HANGING: a FOREIGN holder (not a `Held`, as cargo is to the
+/// collector's waits on its lock files) whose release no close event follows.
+/// The kernel notifies a close before it drops the lock, so a holder that only
+/// closes can be released after its waiter looked; this holder makes that
+/// deterministic by unlocking with its descriptor still open. With the binary's
+/// spawner installed, `acquire` must wait in the kernel through a helper, which
+/// sees every release, rather than on close events.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: a foreign holder is a property of another process, so only a \
+              real spawn can be one"
+)]
+fn a_foreign_holder_released_with_no_close_event_hands_the_lock_over() {
+    use std::io::{BufRead as _, Write as _};
+
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    // The binary installs this at startup; this process stands in for it.
+    drop(batten_facts::lock_wait::install(helper));
+    let (path, file) = lock_file("lock-foreign-unlock");
+    let mut holder = std::process::Command::new("sh")
+        .args([
+            "-c",
+            r#"exec 9>"$0"; flock -x 9; echo held; read _; flock -u 9; read _"#,
+        ])
+        .arg(&path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn a holder");
+    let mut line = String::new();
+    std::io::BufReader::new(holder.stdout.take().expect("piped"))
+        .read_line(&mut line)
+        .expect("the holder says it holds");
+    assert_eq!(line.trim(), "held");
+    let mut stdin = holder.stdin.take().expect("piped");
+    let taken =
+        batten_facts::lock_wait::acquire_announced(file, &path, Mode::Exclusive, None, &mut || {
+            // Unlock, descriptor kept open: a release with no close.
+            stdin.write_all(b"\n").expect("tell the holder to unlock");
+        })
+        .expect("the wait ends");
+    assert!(
+        matches!(taken, batten_facts::lock_wait::Taken::Held(_)),
+        "the foreign holder's release is the waiter's lock"
+    );
+    drop(stdin);
+    holder.wait().expect("reap the holder");
+}
+
 /// Fails by: the helper blocking in a mode other than the waiter's — a shared
 /// waiter's helper asking for the lock exclusively would wait on other
 /// readers it never had to.
