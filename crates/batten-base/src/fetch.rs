@@ -1158,6 +1158,62 @@ mod tests {
         outcome
     }
 
+    /// The connect bound ends a connect the peer never answers, with the
+    /// bound's own expiry as the cause. The peer is a listener whose accept
+    /// queue is full, which Linux answers by dropping the SYN, so nothing but
+    /// the bound can end the connect.
+    ///
+    /// Fails by: the bound never set on the connector, so the connect waits on
+    /// the kernel's SYN retries and ends, if at all, with no expiry behind it
+    /// (bootstrap shard 7/8 at 34c6e4d1f survived `bound::connect` as `()`).
+    #[test]
+    fn a_connect_nobody_answers_ends_at_its_bound() {
+        if !cfg!(target_os = "linux") {
+            // Elsewhere a full queue may refuse rather than drop, so no
+            // connect is left to hang for the bound to end.
+            return;
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap_or_else(|err| panic!("runtime: {err}"));
+        let outcome = runtime.block_on(async {
+            let socket = tokio::net::TcpSocket::new_v4().unwrap_or_else(|err| panic!("{err}"));
+            socket
+                .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+                .unwrap_or_else(|err| panic!("bind: {err}"));
+            let listener = socket
+                .listen(0)
+                .unwrap_or_else(|err| panic!("listen: {err}"));
+            let at = listener.local_addr().unwrap_or_else(|err| panic!("{err}"));
+            // The one connection a zero backlog queues, never accepted.
+            let _queued = tokio::net::TcpStream::connect(at)
+                .await
+                .unwrap_or_else(|err| panic!("connect: {err}"));
+            let mut connector = hyper_util::client::legacy::connect::HttpConnector::new();
+            bound::connect(&mut connector, Duration::from_millis(50));
+            let uri: hyper::Uri = format!("http://{at}/")
+                .parse()
+                .unwrap_or_else(|err| panic!("{err}"));
+            tower_service::Service::call(&mut connector, uri).await
+        });
+        let Err(err) = outcome else {
+            panic!("a connect to a full queue completed");
+        };
+        let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&err);
+        let mut expired = false;
+        while let Some(at) = cause {
+            // `io::Error` hides the error it wraps from `source`, so it is read.
+            expired |= at.is::<tokio::time::error::Elapsed>()
+                || at
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::get_ref)
+                    .is_some_and(|inner| inner.is::<tokio::time::error::Elapsed>());
+            cause = at.source();
+        }
+        assert!(expired, "the bound's expiry is the cause: {err:?}");
+    }
+
     /// A head of exactly `len` bytes answering `status`.
     fn head_of(status: &str, len: usize) -> Vec<u8> {
         let open = format!("HTTP/1.1 {status} OK\r\nX-Pad: ");
