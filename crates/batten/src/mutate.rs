@@ -6285,7 +6285,8 @@ pub fn exactly(name: &str) -> String {
 /// listing's package scope and from `own`, [`target_diff`]'s for it: no copy and no
 /// baseline, since the schema's reach run proved the unmutated suite on this
 /// source; its tests narrowed to the nextest filterset `filter` when one is
-/// given; its outcome files under `output`.
+/// given; its outcome files under `output`; and `cargo`, each passed on to
+/// every cargo invocation as one `--cargo-arg`.
 /// AN ARGV, NEVER A HARNESS, like [`cargo_mutants`]: the verdict is read back
 /// by the caller.
 ///
@@ -6295,13 +6296,13 @@ pub fn exactly(name: &str) -> String {
 pub fn cargo_mutant_in_place(
     (tree, runner): (&Path, &Path),
     (listed, own): (Option<&Path>, &Path),
-    name: &str,
-    filter: Option<&str>,
+    (name, filter): (&str, Option<&str>),
     (timeout, output): (std::time::Duration, &Path),
+    cargo: &[String],
 ) -> Result<Outcome> {
     let args = cargo_mutants_argv(
         (listed, Some(own)),
-        in_place_rest(name, filter, timeout, output),
+        in_place_rest((name, filter), timeout, output, cargo),
     );
     let runner = runner.to_string_lossy();
     let ran = spawn_as(
@@ -6345,10 +6346,10 @@ pub fn target_diff(file: &str, source: &str, line: usize) -> Option<String> {
 /// `--in-diff` is [`target_diff`]'s, which already scopes it to the target's
 /// file and line.
 fn in_place_rest(
-    name: &str,
-    filter: Option<&str>,
+    (name, filter): (&str, Option<&str>),
     timeout: std::time::Duration,
     output: &Path,
+    cargo: &[String],
 ) -> Vec<String> {
     let mut rest: Vec<String> = [
         "--in-place",
@@ -6367,6 +6368,9 @@ fn in_place_rest(
         String::from("--re"),
         exactly(name),
     ]);
+    for arg in cargo {
+        rest.extend([String::from("--cargo-arg"), arg.clone()]);
+    }
     if let Some(filter) = filter {
         rest.extend([
             String::from("--"),
@@ -6692,7 +6696,8 @@ mod tests {
         let output = Path::new("/o");
         let bound = std::time::Duration::from_secs(9);
         let name = "crates/a/src/b.rs:3:5: delete field x from struct C expression in d";
-        let rest = in_place_rest(name, Some("test(=t)"), bound, output);
+        let cargo = [String::from("--target-dir"), String::from("/t")];
+        let rest = in_place_rest((name, Some("test(=t)")), bound, output, &cargo);
         assert!(!rest.iter().any(|arg| arg == "--file"), "{rest:?}");
         assert_eq!(
             rest[rest.len() - 4..],
@@ -6702,8 +6707,14 @@ mod tests {
         assert_eq!(rest[at + 1], exactly(name));
         let at = rest.iter().position(|arg| arg == "--timeout").unwrap();
         assert_eq!(rest[at + 1], "9");
-        let bare = in_place_rest(": no path", None, bound, output);
+        // EACH CARGO ARGUMENT ITS OWN `--cargo-arg`, ahead of the filter's `--`.
+        let at = rest.iter().position(|arg| arg == "--target-dir").unwrap();
+        assert_eq!(rest[at - 1], "--cargo-arg");
+        assert_eq!(rest[at + 1..at + 3], ["--cargo-arg", "/t"]);
+        assert!(at < rest.iter().position(|arg| arg == "--").unwrap());
+        let bare = in_place_rest((": no path", None), bound, output, &[]);
         assert!(!bare.iter().any(|arg| arg == "--"), "{bare:?}");
+        assert!(!bare.iter().any(|arg| arg == "--cargo-arg"), "{bare:?}");
     }
 
     /// A hand-back's run reads its listing's package scope and its own diff:
