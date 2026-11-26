@@ -5667,22 +5667,13 @@ mod lap_tests {
     /// would burn a lap per network hiccup.
     #[test]
     fn a_race_neither_arm_answers_returns_rather_than_waiting_on_a_sender() {
-        // THIS CASE DIALS, so it needs the credential a real run would have
-        // (CLOUD-1622). The engine used to name two variables itself, and this
-        // test inherited that for free; now a consumer declares them, and a
-        // process that declared none reads unauthenticated. MEASURED: without
-        // this line the case stops failing and starts HANGING — the unauthenticated
-        // request is swallowed rather than refused, so the arms never exhaust and
-        // the very hang this case exists to pin is what it produces. `declare`
-        // ignores a later call, so whichever test in this binary reaches it first
-        // sets the same names.
-        crate::rest::declare(crate::rest::Forge {
-            credential_names: vec![String::from("GH_TOKEN"), String::from("GITHUB_TOKEN")],
-            query: Vec::new(),
-            probe: Vec::new(),
-            nothing_graded: None,
-            source: Vec::new(),
-        });
+        // THE FORGE IS THE CASE'S, NOT THE NETWORK'S (CLOUD-2936). Dialled for
+        // real, whichever arm's first read came back first decided whether the
+        // trunk arm reached its pause: on two recordings of unchanged code it
+        // ran `pause_until`'s sleep on one and not the other. Through the
+        // race's own seam each read is an answer the case chose and the pause
+        // returns at once, so an arm that loses runs nothing the winner's
+        // order could add.
         let config = crate::pr_watch::Config {
             sha: String::from("0000000000000000000000000000000000000000"),
             repo: String::from("nobody/nothing"),
@@ -5701,30 +5692,38 @@ mod lap_tests {
             base: String::from("1111111111111111111111111111111111111111"),
             interval: 1,
         };
-
-        let mut out = Vec::new();
-        // `Ok(_)` matched rather than unwrapped: the only `Err` here is a stream
-        // that will not accept output, and a `Vec` always accepts, so a panic
-        // would be reporting the impossible case as the interesting one.
         // NO ASK COUNT ENDS IT ANY MORE (CLOUD-2253 A2): a repository the forge
         // will not serve is a refusal, named on the first ask, and a forge that
         // answers nothing at all is the could-not-look fault. Neither is a
         // verdict about the work.
-        let waited = super::wait_reading(
-            (&config, &roster, &trunk),
-            (false, None),
-            None,
-            &|_| (),
-            &mut out,
-        )
-        .ok()
-        .map(|(waited, _)| waited);
+        let race = |checks: &(dyn Fn(Option<&str>) -> Option<crate::rest::Answer> + Sync)| {
+            let unread = |_: Option<&str>| -> Option<crate::rest::Answer> { None };
+            super::raced(
+                (&config, &roster, &trunk),
+                false,
+                &|_| (),
+                &mut Vec::new(),
+                &super::Waiting {
+                    checks,
+                    trunk: &unread,
+                    pause: &|_: f64, _: &std::sync::atomic::AtomicBool| (),
+                    primed: None,
+                    pull: None,
+                    suites: None,
+                },
+            )
+            .ok()
+            .map(|(waited, _)| waited)
+        };
+        let refused = race(&|_: Option<&str>| Some(super::mutate_tests::answer(404, "{}")));
         assert!(
-            matches!(
-                waited,
-                Some(super::Waited::Refused { .. } | super::Waited::Unread)
-            ),
-            "an unreachable forge is a fault, never a verdict about the work: {waited:?}"
+            matches!(refused, Some(super::Waited::Refused { status: 404 })),
+            "a repository the forge will not serve is a refusal: {refused:?}"
+        );
+        let silent = race(&|_: Option<&str>| -> Option<crate::rest::Answer> { None });
+        assert!(
+            matches!(silent, Some(super::Waited::Unread)),
+            "a forge that answers nothing is could-not-look: {silent:?}"
         );
     }
 
