@@ -1941,9 +1941,9 @@ run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
 #MUTANT changed-base-overrides-caller|s@^env = { MUTANT_CHANGED_SINCE = .*@env = { MUTANT_CHANGED_SINCE = "origin/main" }@|mutant_changed_hands_a_callers_base_to_both_runners
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change is caught, and every declared Rego, Pkl or manifest gate it touched has a mutation its suite catches"
 # ON ADMISSION, AT LANDING (CLOUD-1746, the owner's 2026-10-16 ruling, with
-# local and CI parity). `hk.pkl`'s `mutant:changed` step runs it in `verify`; CI
-# runs the same task in its `mutants` job as a `MUTANT_SHARD` matrix and carves it
-# out of the `ci` job with `HK_SKIP_STEPS`. The whole sweep is `mutant`'s, on a
+# local and CI parity). `verify:mutant-changed` runs it in `verify`, and CI runs
+# the same task in its `mutants` job as a `MUTANT_SHARD` matrix; both carve it out
+# of the traced suite with `HK_SKIP_STEPS`. The whole sweep is `mutant`'s, on a
 # schedule.
 #
 # TWO RUNNERS, EACH OVER WHAT IT OWNS:
@@ -5225,7 +5225,7 @@ run = [
   "mise run dist:lap",
   "mise run sbom-binary target/{{vars.dist_host}}/dist/batten {{vars.dist_host}}",
   "mise run sbom-binary-check",
-  "mise run --continue-on-error --jobs 1 test:traced ::: verify:ci-suite ::: verify:ci-slow-needed",
+  "mise run --continue-on-error --jobs 1 test:traced ::: verify:ci-suite ::: verify:mutant-changed ::: verify:ci-slow-needed",
   "mise run perf-gate",
   "{{vars.batten}} step cover",
   "{{vars.batten}} receipt record verify",
@@ -5236,16 +5236,29 @@ run = [
 # that `step run` and `ci step` need before the wrapped command.
 #
 # `ci` IS STILL `ci`, CARVED BY ENVIRONMENT (CLOUD-2789), as CI's own `ci` job
-# carves it: `HK_SKIP_STEPS` names every `hk check` step but `test` and
-# `mutant:changed`, each of which `ci:quick`, `ci:checks` or an earlier entry of
-# this lap already ran. Measured on #1276 without it, this tier re-ran every
+# carves it: `HK_SKIP_STEPS` names every `hk check` step but `test`, each of
+# which `ci:quick`, `ci:checks`, an earlier entry of this lap or
+# `verify:mutant-changed` (below) runs. Measured on #1276 without it, this tier re-ran every
 # one of them a third time before the suite started. The `ci-suite` row keys
 # the carve (`batten step env`), and `verify_chain.rs` holds the three tiers to
 # a partition of `hk check`.
 [tasks."verify:ci-suite"]
 description = "The suite, through its keyed `ci-suite` step — invoked through `verify`'s third tier"
-env = { HK_SKIP_STEPS = "hk-version,mcp-timeout-budget,no-docs-tree,no-armed-ripcord,hook-profile-check,hk-contract-check,mutant-census,rules-drift,hooks-wiring-check,token-bench-check,config-lint,renovate-config-validator,sbom-check,install-check,release-tracking-check,lock-complete,policy-budget,macos-link-check,ntia-check,shfmt,shellcheck,taplo,taplo-schema,taplo-format,taplo-format-schema,pkl,pkl-format,prettier,deno-fmt,engine-pin,rego,actionlint,cargo-fmt,cargo-clippy,signing-posture-record,batten-check,policy-test,memories-check" }
+env = { HK_SKIP_STEPS = "hk-version,mcp-timeout-budget,no-docs-tree,no-armed-ripcord,hook-profile-check,hk-contract-check,mutant-census,rules-drift,hooks-wiring-check,token-bench-check,config-lint,renovate-config-validator,sbom-check,install-check,release-tracking-check,lock-complete,policy-budget,macos-link-check,ntia-check,shfmt,shellcheck,taplo,taplo-schema,taplo-format,taplo-format-schema,pkl,pkl-format,prettier,deno-fmt,engine-pin,rego,actionlint,cargo-fmt,cargo-clippy,signing-posture-record,batten-check,policy-test,memories-check,mutant:changed" }
 run = "{{vars.batten}} step run ci-suite -- mise run ci"
+
+# THE MUTANT TIER RUNS BESIDE THE SUITE'S TRACE, NEVER INSIDE IT (CLOUD-2789),
+# as CI's `mutants` job runs it beside the `ci` job. Inside `ci-suite` the whole
+# sweep ran under that step's `strace -f`: ptrace on every syscall of its
+# builds and judging, a trace of 5.7 GB and growing written each lap, and the
+# sweep's mirror copying that file while it was still being written; the land's
+# `mutate cargo` was killed at 13.6 GB. Its own row is declared UNTRACED because
+# the engine keys itself (a verdict is journaled and reused while its function
+# and its cases' files are unchanged), so a trace could add nothing a miss does
+# not already re-judge. `verify_chain.rs` holds every traced step clear of it.
+[tasks."verify:mutant-changed"]
+description = "The branch's mutant gate, through its own untraced `mutant-changed` step — invoked through `verify`'s third tier"
+run = "{{vars.batten}} step run mutant-changed -- mise run mutant:changed"
 
 [tasks."verify:ci-slow-needed"]
 description = "CI's slow-tier question, asked as the `ci` job asks it — invoked through `verify`'s third tier"
