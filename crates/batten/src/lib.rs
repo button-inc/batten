@@ -15354,14 +15354,18 @@ fn run_step_watched(
         .as_deref()
         .and_then(|root| resolve::resolve(root, &Overrides::default()).ok())
         .and_then(|resolved| resolved.prune);
-    // A STEP INSIDE A WATCHED ONE ARMS NO WATCHER OF ITS OWN (CLOUD-2925): it
-    // runs in the outer step's traced command, so its collections would be
-    // reads charged to that step, and the outer watcher already watches.
+    // A STEP INSIDE A STEP WATCHING THE SAME WORKTREE ARMS NO WATCHER OF ITS
+    // OWN (CLOUD-2925): it runs in the outer step's traced command, so its
+    // collections would be reads charged to that step, and the outer watcher
+    // already watches. A step over ANOTHER worktree arms its own.
+    let covered = root
+        .as_deref()
+        .is_some_and(crate::step::watched_by_an_outer_step);
     let watch = root
         .as_deref()
-        .filter(|_| std::env::var_os(crate::step::DISK_WATCHED).is_none())
+        .filter(|_| !covered)
         .and_then(|root| disk_watcher(root, prune_rules.as_ref()));
-    let watched = watch.is_some() || std::env::var_os(crate::step::DISK_WATCHED).is_some();
+    let watched = root.as_deref().filter(|_| watch.is_some() || covered);
     let (ran, lines) = disk_watch::around(watch, || {
         crate::step::run_step(step, args, command, watched, &mut *err)
     });
@@ -15453,12 +15457,6 @@ pub fn rustc_wrapped(
 /// A declared `min_free_mb` above the default floor is honoured by the hook
 /// and the watchers, not here: reading it would cost every compile the config.
 fn guard_compile(rustc_args: &[std::ffi::OsString]) {
-    // A COMPILE A STEP'S WATCHER COVERS COLLECTS NOTHING HERE (CLOUD-2925): it
-    // runs inside the step's traced command, where the pass's reads — the
-    // config, the repository, its `.gitignore` — were charged to the step.
-    if std::env::var_os(crate::step::DISK_WATCHED).is_some() {
-        return;
-    }
     let Some(out_dir) = rustc_args
         .iter()
         .position(|arg| arg == "--out-dir")
@@ -15474,6 +15472,15 @@ fn guard_compile(rustc_args: &[std::ffi::OsString]) {
     // resolving the config there cost every compile 26.6 ms (measured at 8 GB
     // free against an 8192 MB cutoff).
     if free().is_ok_and(|mb| mb >= prune::DEFAULT_FREE_BAND.0) {
+        return;
+    }
+    // A COMPILE A STEP'S WATCHER COVERS COLLECTS NOTHING HERE (CLOUD-2925): it
+    // runs inside the step's traced command, where the pass's reads — the
+    // config, the repository, its `.gitignore` — were charged to the step.
+    // Only for the worktree that watcher watches: a compile in another
+    // repository is its own to collect for. Below the floor alone, so a
+    // compile above it pays nothing for the read.
+    if git::worktree_root(&out_dir).is_ok_and(|root| crate::step::watched_by_an_outer_step(&root)) {
         return;
     }
     let Ok(repo) = git::repo_root(&out_dir) else {
