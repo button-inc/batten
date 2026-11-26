@@ -135,6 +135,11 @@ journal = "nextest"
 id = "untraced"
 inputs = ["input.txt"]
 tools = [["toolv"], ["batten", "step", "untraced"]]
+
+[[step]]
+id = "recorded"
+inputs = ["input.txt"]
+tools = [["toolv"], ["batten", "step", "untraced"], ["batten", "step", "record", "--", "probe-fam"]]
 "#;
 
 /// Where the keyed family keeps its records.
@@ -1197,6 +1202,53 @@ fn a_row_declared_untraced_runs_bare_hits_unchanged_and_misses_on_its_inputs() {
         common::stderr(&moved).starts_with("miss"),
         "a declared input moving misses: {}",
         common::stderr(&moved)
+    );
+}
+
+/// A ROW KEYED ON A RECORD'S ADDRESS (CLOUD-2789): `batten step record -- <family>`
+/// keys the file this branch and its claim keep the family's record in, and
+/// whether it is there. An unchanged address hits; a record appearing, and a
+/// claim that moves the address to a file not yet written, each miss, so a
+/// step that writes a claim-partitioned record re-runs where the reader moved.
+#[test]
+fn a_row_keyed_on_a_record_misses_when_the_record_or_its_claim_moves() {
+    let repo = Repo::new("record-row");
+    repo.script("count", "#!/bin/sh\necho ran >>bin/ran.log\n");
+    let said = |step: &Output| common::stderr(step);
+    let first = repo.run_step(&["recorded"], &["count"], &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", said(&first));
+    let unchanged = repo.run_step(&["recorded"], &["count"], &[]);
+    assert!(said(&unchanged).starts_with("hit"), "{}", said(&unchanged));
+    let branch = common::git_in(&repo.dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let branch = branch.trim().replace('/', "-");
+    common::write(
+        &repo.dir,
+        &format!(".git/batten-receipts/probe-fam.{branch}"),
+        "probe failed\n",
+    );
+    let written = repo.run_step(&["recorded"], &["count"], &[]);
+    assert!(
+        said(&written).starts_with("miss"),
+        "a record appearing misses: {}",
+        said(&written)
+    );
+    let settled = repo.run_step(&["recorded"], &["count"], &[]);
+    assert!(said(&settled).starts_with("hit"), "{}", said(&settled));
+    common::write(
+        &repo.dir,
+        &format!(".git/batten-receipts/claim.{branch}"),
+        "CLOUD-1\n",
+    );
+    let claimed = repo.run_step(&["recorded"], &["count"], &[]);
+    assert!(
+        said(&claimed).starts_with("miss"),
+        "a claim moving the record's address misses: {}",
+        said(&claimed)
+    );
+    assert_eq!(
+        read(&repo.path("bin/ran.log")).lines().count(),
+        3,
+        "each miss ran, no hit did"
     );
 }
 

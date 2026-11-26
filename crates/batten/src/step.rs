@@ -415,6 +415,49 @@ pub const EXISTS: [&str; 3] = ["batten", "step", "exists"];
 /// this line, cannot answer it, keys nothing, and runs the step.
 pub const UNTRACED: [&str; 3] = ["batten", "step", "untraced"];
 
+/// The tool line a row keys a RECORD'S ADDRESS with (CLOUD-2789): `batten step
+/// record -- <family>...`, answered in-process as one `record <family> <name>
+/// present|absent` line per family, `<name>` the file this branch and its claim
+/// key the family under. For a step whose command WRITES a claim-partitioned
+/// record a policy reads (`evaluator-io-record`): a re-claim or a lost record
+/// moves the answer, so the step misses and writes the record the new address
+/// reads, where a key on the tree alone would hit and leave the gate reading
+/// an absent record as silence.
+pub const RECORD: [&str; 3] = ["batten", "step", "record"];
+
+/// The families a `step record` line's words after [`RECORD`] name: every word
+/// after the leading `--`, or `None` for any other shape, an empty list or a
+/// name that is not one path component — which keys nothing.
+fn record_ask(words: &[String]) -> Option<&[String]> {
+    let (first, families) = words.split_first()?;
+    (first == "--"
+        && !families.is_empty()
+        && families.iter().all(|family| {
+            !family.is_empty() && !family.starts_with('.') && !family.contains(['/', '\\'])
+        }))
+    .then_some(families)
+}
+
+/// One line per family in `families`: its record's file name under this
+/// branch's claim, and whether that file is there. `None` outside a repository
+/// or where `HEAD` keys no record.
+fn record_said(root: &Path, families: &[String]) -> Option<String> {
+    let git_dir = crate::git::git_dir(root).ok()?;
+    let branch = crate::git::record_key(root).ok()?;
+    let lines: Vec<String> = families
+        .iter()
+        .map(|family| {
+            let path = crate::record::family_path(&git_dir, &branch, family);
+            let name = path
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+            let state = if path.is_file() { "present" } else { "absent" };
+            format!("record {family} {} {state}", quoted(&name))
+        })
+        .collect();
+    Some(lines.join("\n"))
+}
+
 /// Whether `row` declares its misses untraced ([`UNTRACED`]).
 fn untraced(row: &Step) -> bool {
     row.tools()
@@ -524,6 +567,9 @@ fn tool_said(root: &Path, tool: &[String]) -> Option<(i32, String)> {
     }
     if let Some(words) = after(tool, &EXISTS) {
         return answered(exists_ask(words).and_then(|specs| exists_said(root, specs)));
+    }
+    if let Some(words) = after(tool, &RECORD) {
+        return answered(record_ask(words).and_then(|families| record_said(root, families)));
     }
     if let Some(words) = after(tool, &crate::mutate::resume::ENV) {
         return answered(
