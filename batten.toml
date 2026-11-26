@@ -20645,6 +20645,28 @@ tools = [
   ["batten", "step", "base", "--ref", "origin/main", "--ref-env", "BATTEN_SPEC_BASE", "--", "."],
 ]
 
+# THE MUTANT TIER, OUT OF THE SUITE'S TRACE (CLOUD-2789). Inside `ci-suite` the
+# sweep ran under that step's `strace -f`: a 5.7 GB trace and growing, ptrace on
+# every syscall of its builds, and its mirror copying the trace while it was
+# written. UNTRACED because the engine keys itself: a verdict is journaled and
+# reused while its function and its cases' files are unchanged, so a miss here
+# re-judges only what moved, and the trace lint has nothing to add. Its inputs
+# are therefore this declaration: the whole tree, the base the changed set is
+# taken against (`MUTANT_CHANGED_SINCE`, the same override the task reads), the
+# environment that widens or shards it, and the toolchain that builds and judges.
+[[step]]
+id = "mutant-changed"
+inputs = ["."]
+tools = [
+  ["batten", "step", "untraced"],
+  ["batten", "step", "env", "--", "MUTANT_CHANGED_SINCE", "MUTANT_WHOLE_TREE", "MUTANT_SHARD"],
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["cargo", "nextest", "--version"],
+  ["cargo", "mutants", "--version"],
+  ["batten", "step", "base", "--ref", "origin/main", "--ref-env", "MUTANT_CHANGED_SINCE", "--", "."],
+]
+
 # EVERY FILESYSTEM READ GOES THROUGH `crate::fsio` (CLOUD-2692, CLOUD-2384). The
 # fsio codemod moved 374 direct `std::fs` reads in `crates/batten/src` onto the
 # `batten-fsio` crate, so a read can batch on a completion queue where the

@@ -376,8 +376,13 @@ fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
     // and the mutants.
     assert_eq!(
         members(&gated[suite]),
-        ["test:traced", "verify:ci-suite", "verify:ci-slow-needed"],
-        "the suite is its own tier: {gated:?}"
+        [
+            "test:traced",
+            "verify:ci-suite",
+            "verify:mutant-changed",
+            "verify:ci-slow-needed"
+        ],
+        "the suite is its own tier, the mutant gate beside it and untraced: {gated:?}"
     );
     assert!(
         common::task_body("verify:ci-suite").contains("step run ci-suite -- mise run ci"),
@@ -505,19 +510,134 @@ fn each_hk_step_runs_in_exactly_one_place_per_lap() {
                 .is_some_and(|task| elsewhere.iter().any(|member| member == task))
                 || check
                     .strip_prefix(engine)
-                    .is_some_and(|words| gated.iter().any(|step| step.contains(words)));
+                    .is_some_and(|words| gated.iter().any(|step| step.contains(words)))
+                // A tier entry whose task wraps the check in its own keyed step:
+                // `verify:mutant-changed` is `step run mutant-changed -- mise run
+                // mutant:changed`.
+                || elsewhere.iter().any(|member| {
+                    common::task_body(member)
+                        .lines()
+                        .any(|line| line.contains(" step run ") && line.ends_with(&format!(" -- {check}")))
+                });
             assert!(
                 run_by_an_entry || (narrow_lane(check) && suite_runs_whole),
                 "`{name}` (`{check}`) runs in no tier and nowhere else in the lap"
             );
         }
     }
-    for tier_three in ["test", "mutant:changed"] {
-        assert!(
-            !suite_skips.iter().any(|skipped| skipped == tier_three),
-            "tier 3 runs `{tier_three}`"
-        );
+    assert!(
+        !suite_skips.iter().any(|skipped| skipped == "test"),
+        "tier 3's suite runs `test`"
+    );
+    assert!(
+        suite_skips
+            .iter()
+            .any(|skipped| skipped == "mutant:changed")
+            && elsewhere
+                .iter()
+                .any(|member| member == "verify:mutant-changed"),
+        "tier 3 runs `mutant:changed` beside the traced suite, as its own entry"
+    );
+}
+
+/// NO TRACED STEP REACHES A MUTANT SWEEP (CLOUD-2789). `ci-suite` traces its
+/// command with `strace -f`, and its command was `mise run ci`, whose `hk check`
+/// ran `mutant:changed`: the whole sweep ran under the trace, which grew past
+/// 5.7 GB a lap while the sweep's mirror copied it, and the land's `mutate cargo`
+/// was killed at 13.6 GB. The sweep keys itself, so it runs as its own step
+/// declared `batten step untraced`, and every other step must stay clear of it.
+///
+/// Fails by: a traced row whose command names a mutant task; a traced row whose
+/// command runs `hk check` (through `ci` or `hooks`) without carving every `hk`
+/// step that runs a mutant task out with its task's `HK_SKIP_STEPS`; or the
+/// mutant row losing its `untraced` declaration.
+#[test]
+fn no_traced_step_reaches_a_mutant_sweep() {
+    let table: toml::Value = toml::from_str(
+        &std::fs::read_to_string(common::at_root("batten.toml")).expect("the committed authority"),
+    )
+    .expect("the committed authority parses");
+    let untraced = |row: &toml::Value| {
+        row.get("tools")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|tools| {
+                tools.iter().any(|tool| {
+                    tool.as_array().is_some_and(|words| {
+                        words
+                            .iter()
+                            .filter_map(toml::Value::as_str)
+                            .eq(["batten", "step", "untraced"])
+                    })
+                })
+            })
+    };
+    let rows: std::collections::BTreeMap<&str, bool> = table["step"]
+        .as_array()
+        .expect("a step table")
+        .iter()
+        .filter_map(|row| Some((row.get("id")?.as_str()?, untraced(row))))
+        .collect();
+    assert_eq!(
+        rows.get("mutant-changed"),
+        Some(&true),
+        "the mutant tier's own row is declared untraced"
+    );
+    let manifest: toml::Value = toml::from_str(
+        &std::fs::read_to_string(common::at_root("mise.toml")).expect("the task manifest"),
+    )
+    .expect("mise.toml parses as TOML");
+    let mutant_steps: Vec<String> = hk_check_steps()
+        .into_iter()
+        .filter(|(_, (_, check))| check.contains("mutant:"))
+        .map(|(name, _)| name)
+        .collect();
+    assert!(
+        mutant_steps.iter().any(|name| name == "mutant:changed"),
+        "the case reads the committed `check` hook: {mutant_steps:?}"
+    );
+    let mut traced_wrappers = 0;
+    for (name, task) in manifest["tasks"].as_table().expect("a task table") {
+        // A task of `depends` alone has no body to wrap a step in.
+        if task.get("run").is_none() {
+            continue;
+        }
+        for line in common::task_body(name).lines() {
+            // From `step run` on: the rendered engine is itself `cargo run ... --`.
+            let Some((id, command)) = line
+                .split_once(" step run ")
+                .and_then(|(_, rest)| rest.split_once(" -- "))
+                .and_then(|(head, command)| Some((head.split_whitespace().next()?, command)))
+            else {
+                continue;
+            };
+            if rows.get(id) != Some(&false) {
+                continue;
+            }
+            traced_wrappers += 1;
+            assert!(
+                !command.contains("mutant"),
+                "`{name}` traces `{command}` through row `{id}`, which runs a mutant sweep"
+            );
+            let runs_hk = ["mise run ci", "mise run hooks", "hk check"]
+                .iter()
+                .any(|spelling| {
+                    command.trim() == *spelling || command.contains(&format!("{spelling} "))
+                });
+            if runs_hk {
+                let skips = env_of(name, "HK_SKIP_STEPS");
+                for step in &mutant_steps {
+                    assert!(
+                        skips.split(',').any(|skipped| skipped.trim() == step),
+                        "`{name}` traces `{command}` through row `{id}` and its `hk check` runs `{step}`: carve it out with `HK_SKIP_STEPS`"
+                    );
+                }
+            }
+        }
     }
+    assert!(
+        traced_wrappers > 0,
+        "the case found the traced steps at all"
+    );
 }
 
 /// THE RETIRED BODY'S ORDER, which the old suite pinned by behaviour and by text:
