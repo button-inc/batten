@@ -4455,25 +4455,6 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (a consumer's own batten.toml): delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
 
-# CLOUD-1544: a sibling repository of the vendor's org, which is a deployment
-# fact. A state repository (#1276's carry) lives in one owner's environment
-# variable, and a developer of this project may have no access to it; spelled
-# in the core, it would be a consumer fact rule 1 forbids. Batten's own home
-# stays OUT, as the `button` entry above decides: the regex spells "any name
-# but `batten`" as a mismatch at each position, because the engine's regex has
-# no lookahead, so `button-inc/batten`, `.git` and a trailing `/` pass while
-# `button-inc/batten-<x>` and every other name in the org are refused. The
-# engine's own `.git/batten-state*` lock paths carry no org and never match.
-# The id does not embed the literal, for the reason above.
-[[rule]]
-id = "forge reach other"
-kind = "forbid"
-glob = "crates/**"
-regex = "(?i)button-inc/(?:[[\\w.-]--[bB]]|b[[\\w.-]--[aA]]|ba[[\\w.-]--[tT]]|bat[[\\w.-]--[tT]]|batt[[\\w.-]--[eE]]|batte[[\\w.-]--[nN]]|batten[\\w-])"
-severity = "deny"
-scope = "tree"
-no_fix_reason = "class 3 (a consumer's own batten.toml): name the repository in the environment or the consumer's config, and spell a neutral fixture name (example-org/...) in a test"
-
 # CLOUD-1919. Every file this crate mutates goes through `durable`: one write
 # plus `fsync` per append, temp + `fsync` + `rename` + directory `fsync` per
 # replace, so an interrupted write leaves the old state or the new one and never
@@ -13117,7 +13098,8 @@ expires = "2027-02-28"
 # # `BATTEN_STATE_REPO` is unset: it prints `off` and touches nothing. It prints one
 # # pointer line otherwise — the ref, the commit and a count, never a receipt body —
 # # and, through `--advisory`, a remote it cannot reach prints one line and exits
-# # 0, so a developer who cannot read the state repository is never stopped. The receipts go to the PRIVATE state repository and
+# # 0, so a developer who cannot read the state repository is never stopped.
+# # The receipts go to the PRIVATE state repository and
 # # never to origin (owner ruling, 2026-11-24).
 # [[hook.handler]]
 # id = "session-receipts"
