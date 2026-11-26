@@ -6753,9 +6753,11 @@ pub fn case_digests<'c>(
     let mut walk = Walk::default();
     let everything = everything_digest(depends.resources);
     let twins = ids_by_value(depends.probes.iter().enumerate());
+    let mut keys = depends
+        .derived
+        .map(|_| CaseKeys::new((root, package_dirs), depends, &everything));
     for case in cases {
         let binary = &case.1;
-        let mut hasher = blake3::Hasher::new();
         // EVERY PROBE SHARING A DIGEST IT RAN, NEVER THE ONES IT HIT
         // (CLOUD-2904): a record names what it ran by digest, so a carry
         // reads back every twin, and a key taken over the twins one run hit
@@ -6765,89 +6767,268 @@ pub fn case_digests<'c>(
             .get(case)
             .map(|ids| fan_out(ids, depends.probes, &twins));
         let ran = fanned.as_ref();
-        // THE SET OF WHAT IT RAN, NEVER THE PROBE-ID SEQUENCE (CLOUD-2904): a
-        // probe id is a function's position in the tree, so a function moved
-        // whole re-keyed every case that ran it with nothing it runs changed.
-        let ran_digests: BTreeSet<&str> = ran
-            .into_iter()
-            .flatten()
-            .map(|probe| depends.probes.get(*probe).map_or("", String::as_str))
-            .collect();
-        for digest in ran_digests {
-            hasher.update(b"\x1c");
-            hasher.update(digest.as_bytes());
-        }
-        // The test's own text and its module's helpers, from the first source
-        // that holds it: what a shared module is reached FROM.
-        let (own, unfound) = own_texts(
-            &mut hasher,
-            (root, package_dirs),
-            (case, depends.derived),
-            &mut parsed,
-        );
-        let reached = crate_part(
-            &mut hasher,
-            (root, package_dirs),
-            case,
-            own.as_ref(),
-            (&mut shared, depends, &everything),
-        );
-        // ONCE PER DISTINCT PROBE SET AND OWN-TEXT NAMES, OVER A GRAPH INDEXED
-        // ONCE PER SWEEP (#1276). Measured: the union of every reached name's
-        // items, built and sorted per case, held one core for 20 minutes over
-        // 6236 cases before a single mutant was judged. The walk is over
-        // integer ids with one reused visited map, ids are ranked in name order
-        // so the walk's order is the names', and each name's items are hashed
-        // once. A case's own text starts the walk too (CLOUD-2904): a `const`
-        // a test names directly is in no probe's names.
-        let mut outside: BTreeSet<String> = own
-            .iter()
-            .flatten()
-            .flat_map(|own| own.mentions.iter().cloned())
-            .collect();
-        // A CASE NO SOURCE NAMES STARTS THE WALK FROM ALL ITS FILES SAY
-        // (CLOUD-2904): an `rstest` case, a macro's test or a `mod.rs` module
-        // has no own text, and a `const` its file names was in no key.
-        if own.is_none() {
-            outside.extend(unfound_mentions(
-                root,
-                &unfound,
-                (&mut file_mentions, depends.derived),
-            ));
-        }
-        if let Some(reached) = &reached {
-            outside.extend(reached.outside.iter().cloned());
-        }
-        let (named, defined) = named_parts.part(ran, &outside, || {
-            named_part(&graph, &mut walk, depends, ran, &outside)
-        });
-        hasher.update(b"\x1b");
-        hasher.update(named.as_bytes());
-        // AND WHERE ITS OWN UNPROBED TEXT CALLS AN OBSERVER FROM (CLOUD-2904):
-        // a test's files are keyed by their text, which a line above the call
-        // leaves alone while the location the observer reports moves.
-        let observed = compiled_part(
-            &mut hasher,
-            (depends, &everything, root),
-            &graph,
-            ran,
-            &defined,
-        );
-        if observed || reached.as_ref().is_some_and(|reached| reached.observes) {
-            key_callers(&mut hasher, (root, package_dirs), case, shared.get(binary));
-        }
-        if let Some(paths) = depends.read.get(case) {
-            for path in paths {
-                hasher.update(format!("\x1a{path}\x1f").as_bytes());
-                hasher.update(resource_id(depends.resources, path).as_bytes());
+        // TAKEN BY WHAT IT READS, NEVER DERIVED TWICE OVER THE SAME READS
+        // (CLOUD-2904): a carried case's digest was derived afresh on every
+        // sweep, ~50 ms a case with every file's parse kept, so a null re-run
+        // spent 1,550 s re-deriving 11,659 digests it already held.
+        let key = keys
+            .as_mut()
+            .map(|keys| keys.key(case, ran, depends, &mut shared));
+        let mut derive = || {
+            CASE_DERIVATIONS.with(|count| count.set(count.get() + 1));
+            let mut hasher = blake3::Hasher::new();
+            // THE SET OF WHAT IT RAN, NEVER THE PROBE-ID SEQUENCE (CLOUD-2904): a
+            // probe id is a function's position in the tree, so a function moved
+            // whole re-keyed every case that ran it with nothing it runs changed.
+            let ran_digests: BTreeSet<&str> = ran
+                .into_iter()
+                .flatten()
+                .map(|probe| depends.probes.get(*probe).map_or("", String::as_str))
+                .collect();
+            for digest in ran_digests {
+                hasher.update(b"\x1c");
+                hasher.update(digest.as_bytes());
             }
-        } else {
-            hasher.update(b"\x19");
-            hasher.update(depends.untraced.as_bytes());
-        }
-        digests.insert(case.clone(), hasher.finalize().to_hex().to_string());
+            // The test's own text and its module's helpers, from the first source
+            // that holds it: what a shared module is reached FROM.
+            let (own, unfound) = own_texts(
+                &mut hasher,
+                (root, package_dirs),
+                (case, depends.derived),
+                &mut parsed,
+            );
+            let reached = crate_part(
+                &mut hasher,
+                (root, package_dirs),
+                case,
+                own.as_ref(),
+                (&mut shared, depends, &everything),
+            );
+            // ONCE PER DISTINCT PROBE SET AND OWN-TEXT NAMES, OVER A GRAPH INDEXED
+            // ONCE PER SWEEP (#1276). Measured: the union of every reached name's
+            // items, built and sorted per case, held one core for 20 minutes over
+            // 6236 cases before a single mutant was judged. The walk is over
+            // integer ids with one reused visited map, ids are ranked in name order
+            // so the walk's order is the names', and each name's items are hashed
+            // once. A case's own text starts the walk too (CLOUD-2904): a `const`
+            // a test names directly is in no probe's names.
+            let mut outside: BTreeSet<String> = own
+                .iter()
+                .flatten()
+                .flat_map(|own| own.mentions.iter().cloned())
+                .collect();
+            // A CASE NO SOURCE NAMES STARTS THE WALK FROM ALL ITS FILES SAY
+            // (CLOUD-2904): an `rstest` case, a macro's test or a `mod.rs` module
+            // has no own text, and a `const` its file names was in no key.
+            if own.is_none() {
+                outside.extend(unfound_mentions(
+                    root,
+                    &unfound,
+                    (&mut file_mentions, depends.derived),
+                ));
+            }
+            if let Some(reached) = &reached {
+                outside.extend(reached.outside.iter().cloned());
+            }
+            let (named, defined) = named_parts.part(ran, &outside, || {
+                named_part(&graph, &mut walk, depends, ran, &outside)
+            });
+            hasher.update(b"\x1b");
+            hasher.update(named.as_bytes());
+            // AND WHERE ITS OWN UNPROBED TEXT CALLS AN OBSERVER FROM (CLOUD-2904):
+            // a test's files are keyed by their text, which a line above the call
+            // leaves alone while the location the observer reports moves.
+            let observed = compiled_part(
+                &mut hasher,
+                (depends, &everything, root),
+                &graph,
+                ran,
+                &defined,
+            );
+            if observed || reached.as_ref().is_some_and(|reached| reached.observes) {
+                key_callers(&mut hasher, (root, package_dirs), case, shared.get(binary));
+            }
+            if let Some(paths) = depends.read.get(case) {
+                for path in paths {
+                    hasher.update(format!("\x1a{path}\x1f").as_bytes());
+                    hasher.update(resource_id(depends.resources, path).as_bytes());
+                }
+            } else {
+                hasher.update(b"\x19");
+                hasher.update(depends.untraced.as_bytes());
+            }
+            hasher.finalize().to_hex().to_string()
+        };
+        let digest = match depends.derived.zip(key) {
+            Some((store, key)) => store.derive("case", key.as_bytes(), derive),
+            None => derive(),
+        };
+        digests.insert(case.clone(), digest);
     }
     digests
+}
+
+thread_local! {
+    /// How many case digests this thread derived ([`case_digests`]), rather
+    /// than took from a store: what a memo's test counts, never times.
+    static CASE_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many case digests this thread has derived ([`CASE_DERIVATIONS`]).
+#[cfg(test)]
+fn case_derivations() -> usize {
+    CASE_DERIVATIONS.with(std::cell::Cell::get)
+}
+
+/// What a case's digest is a function of, taken without deriving it
+/// ([`case_digests`]): the key its digest is kept under in a [`Derived`]
+/// store.
+///
+/// EVERY INPUT THE DERIVATION READS, BY VALUE: the case and the package map;
+/// per probe it ran (every twin), that probe's digest, names, include targets,
+/// position and whether it observes its caller; its own sources by content;
+/// its test crate's raw sources and every value an item of it includes; the
+/// sweep's skeleton items and mentions, their includes and observers, and the
+/// value of every include target a probe or item names (`everything` among
+/// them where one is unnamed); and the paths it read by content id, or the
+/// untraced fold. Each is wider than what one case's walk consults, so a key
+/// moves on more than its digest can, never on less.
+struct CaseKeys<'k> {
+    root: &'k std::path::Path,
+    package_dirs: &'k std::collections::BTreeMap<String, String>,
+    everything: &'k str,
+    /// The sweep-wide part, taken once.
+    sweep: blake3::Hash,
+    /// Each source's content, by path; `None` where it cannot be read.
+    files: std::collections::HashMap<String, Option<blake3::Hash>>,
+    /// Each test crate's part, by binary; `None` for a unit case's.
+    crates: std::collections::HashMap<String, Option<blake3::Hash>>,
+}
+
+impl<'k> CaseKeys<'k> {
+    fn new(
+        (root, package_dirs): (
+            &'k std::path::Path,
+            &'k std::collections::BTreeMap<String, String>,
+        ),
+        depends: &Depends<'_>,
+        everything: &'k str,
+    ) -> Self {
+        let compiled = depends.compiled;
+        let mut sweep = blake3::Hasher::new();
+        for part in [
+            serde_json::to_vec(package_dirs),
+            serde_json::to_vec(depends.items),
+            serde_json::to_vec(depends.mentions),
+            serde_json::to_vec(&compiled.item_includes),
+            serde_json::to_vec(&compiled.observing),
+            serde_json::to_vec(&compiled.observer_names),
+        ] {
+            let part = part.unwrap_or_default();
+            sweep.update(&part.len().to_le_bytes());
+            sweep.update(&part);
+        }
+        let targets: BTreeSet<&String> = compiled
+            .probe_includes
+            .values()
+            .chain(compiled.item_includes.values())
+            .flatten()
+            .collect();
+        for target in targets {
+            include_key(&mut sweep, target, (depends.resources, everything), root);
+        }
+        Self {
+            root,
+            package_dirs,
+            everything,
+            sweep: sweep.finalize(),
+            files: std::collections::HashMap::new(),
+            crates: std::collections::HashMap::new(),
+        }
+    }
+
+    /// The key of `case`, which ran `ran` ([`fan_out`]).
+    fn key(
+        &mut self,
+        case: &Case,
+        ran: Option<&BTreeSet<usize>>,
+        depends: &Depends<'_>,
+        shared: &mut std::collections::HashMap<String, TestCrate>,
+    ) -> String {
+        let (name, binary) = case;
+        let compiled = depends.compiled;
+        let mut key = blake3::Hasher::new();
+        key.update(self.sweep.as_bytes());
+        key.update(format!("\x1d{name}\x1f{binary}\x1f").as_bytes());
+        match ran {
+            Some(ids) => {
+                let each: BTreeSet<[u8; 32]> = ids
+                    .iter()
+                    .map(|id| {
+                        let probe = serde_json::to_vec(&(
+                            depends.probes.get(*id),
+                            depends.names.get(*id),
+                            compiled.probe_includes.get(id),
+                            compiled.positions.get(id),
+                            compiled.observers.contains(id),
+                        ))
+                        .unwrap_or_default();
+                        *blake3::hash(&probe).as_bytes()
+                    })
+                    .collect();
+                key.update(&each.len().to_le_bytes());
+                for probe in each {
+                    key.update(&probe);
+                }
+            }
+            None => {
+                key.update(b"\x00");
+            }
+        }
+        for file in case_sources(self.package_dirs, name, binary) {
+            let root = self.root;
+            let content = self.files.entry(file.clone()).or_insert_with(|| {
+                crate::fsio::read(root.join(&file))
+                    .ok()
+                    .map(|bytes| blake3::hash(&bytes))
+            });
+            key.update(format!("\x1d{file}\x1f").as_bytes());
+            match content {
+                Some(hash) => key.update(hash.as_bytes()),
+                None => key.update(b"-"),
+            };
+        }
+        let (root, package_dirs, everything) = (self.root, self.package_dirs, self.everything);
+        let test_crate = self.crates.entry(binary.clone()).or_insert_with(|| {
+            let files = crate_sources(root, package_dirs, binary, depends.derived)?;
+            let held = shared
+                .entry(binary.clone())
+                .or_insert_with(|| TestCrate::read(root, &files, depends.derived));
+            let mut part = blake3::Hasher::new();
+            part.update(held.raw.as_bytes());
+            let targets: BTreeSet<&String> =
+                held.items.iter().flat_map(|item| &item.includes).collect();
+            for target in targets {
+                include_key(&mut part, target, (depends.resources, everything), root);
+            }
+            Some(part.finalize())
+        });
+        key.update(b"\x17");
+        match test_crate {
+            Some(hash) => key.update(hash.as_bytes()),
+            None => key.update(b"-"),
+        };
+        if let Some(paths) = depends.read.get(case) {
+            for path in paths {
+                key.update(format!("\x1a{path}\x1f").as_bytes());
+                key.update(resource_id(depends.resources, path).as_bytes());
+            }
+        } else {
+            key.update(b"\x19");
+            key.update(depends.untraced.as_bytes());
+        }
+        key.finalize().to_hex().to_string()
+    }
 }
 
 /// `ids` widened to every probe id whose digest one of them has: the form a
@@ -16453,6 +16634,83 @@ mod tests {
             other_build, parsed,
             "another build derives every file afresh"
         );
+    }
+
+    /// A warm sweep derives no case's digest; one over a probe whose digest
+    /// moved derives the cases that ran it alone; one over an edited test file
+    /// derives the cases whose reads include it alone. Derivations are counted,
+    /// never timed, and a digest taken from the store is the one derived.
+    ///
+    /// Fails by: every case derived afresh on every sweep (~50 ms a case, and
+    /// 1,550 s of a null re-run's carry on #1276), or a case taken from the
+    /// store over an input that moved.
+    #[test]
+    fn a_warm_sweep_derives_no_case_and_an_edit_only_its_readers() {
+        let root = crate::scratch::scratch("schema-case-memo");
+        let state = crate::scratch::scratch("schema-case-memo-state");
+        let write = |path: &str, text: &str| {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        };
+        write("src/lib.rs", "pub fn f() {}\npub fn g() {}\n");
+        write("tests/it/main.rs", "mod a;\n");
+        write(
+            "tests/it/a.rs",
+            "#[test]\nfn t() { fix::f(); }\n#[test]\nfn u() { fix::g(); }\n",
+        );
+        write("tests/other.rs", "#[test]\nfn w() { fix::f(); }\n");
+        let case = |name: &str, binary: &str| (name.to_owned(), binary.to_owned());
+        let (t, u, w) = (
+            case("a::t", "fix::it"),
+            case("a::u", "fix::it"),
+            case("w", "fix::other"),
+        );
+        let cases: BTreeSet<Case> = [t.clone(), u.clone(), w.clone()].into();
+        let executed = [
+            (t.clone(), [0].into()),
+            (u.clone(), [1].into()),
+            (w.clone(), BTreeSet::new()),
+        ]
+        .into();
+        let dirs = [(String::from("fix"), String::new())].into();
+        let sweep = |probes: &[String], store: Option<&Derived>| {
+            let before = case_derivations();
+            let digests = case_digests(
+                &root,
+                &cases,
+                &dirs,
+                &executed,
+                &Depends {
+                    derived: store,
+                    ..depends(probes)
+                },
+            );
+            (digests, case_derivations() - before)
+        };
+        let held = [String::from("f"), String::from("g")];
+        let (first, derived_first) = sweep(&held, Some(&Derived::at(&state, "build")));
+        assert_eq!(derived_first, 3, "a cold sweep derives every case");
+        let (warm, derived_warm) = sweep(&held, Some(&Derived::at(&state, "build")));
+        assert_eq!(derived_warm, 0, "a warm sweep derives no case");
+        assert_eq!(warm, first, "the stored digests are the derived ones");
+        assert_eq!(sweep(&held, None).0, first, "and the ones no store takes");
+        let moved = [String::from("f"), String::from("g2")];
+        let (probed, derived_probed) = sweep(&moved, Some(&Derived::at(&state, "build")));
+        assert_eq!(derived_probed, 1, "the case that ran the moved probe alone");
+        assert_ne!(probed[&u], first[&u]);
+        assert_eq!((&probed[&t], &probed[&w]), (&first[&t], &first[&w]));
+        write(
+            "tests/other.rs",
+            "#[test]\nfn w() { fix::f(); fix::f(); }\n",
+        );
+        let (edited, derived_edited) = sweep(&held, Some(&Derived::at(&state, "build")));
+        assert_eq!(
+            derived_edited, 1,
+            "the case whose reads include the file alone"
+        );
+        assert_ne!(edited[&w], first[&w]);
+        assert_eq!((&edited[&t], &edited[&u]), (&first[&t], &first[&u]));
     }
 
     /// S1 (CLOUD-2904, round 3): a file an `include_str!` reads at compile
