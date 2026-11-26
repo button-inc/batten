@@ -6396,7 +6396,14 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[],
+        // `--advisory` (CLOUD-1544): the session-start route. A developer whose
+        // environment names a state repository they cannot read is never
+        // stopped by it: one line, exit `0`.
+        flags: &[FlagDecl::switch(
+            "advisory",
+            "advisory",
+            "Say one line and exit 0 whatever the state repository answered (the session-start route)",
+        )],
     },
     // The noun only dispatches; its subtree carries a write verb, so the parent
     // stays unclassified rather than advertising a write-bearing `read` prefix

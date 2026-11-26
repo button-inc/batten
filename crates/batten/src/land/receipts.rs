@@ -882,6 +882,7 @@ fn publish_with(
     ),
     seconds: i64,
 ) -> Result<Moved> {
+    let mut last = String::new();
     for _ in 0..CAS_TRIES {
         let theirs = read()?;
         let local = additions(&theirs.set)?;
@@ -919,9 +920,14 @@ fn publish_with(
         }
         let commit = commit_over(&root, count, &theirs.head, seconds)?;
         let new = commit.id.clone();
+        // ONE COPY OF EACH OBJECT. Every producer entry is the same line, so
+        // a set of N receipts names one producer blob N times, and a pack
+        // carrying it N times is refused by a forge (`ng <ref> failed`) where a
+        // local `receive-pack` accepts it. And none the ref already reaches.
+        let mut seen = theirs.known.clone();
         let mut objects: Vec<Object> = objects
             .into_iter()
-            .filter(|object| !theirs.known.contains(&object.id))
+            .filter(|object| seen.insert(object.id.clone()))
             .collect();
         objects.push(commit);
         let pack = lease::pack_of(&objects)?;
@@ -943,11 +949,14 @@ fn publish_with(
                     count,
                 });
             }
-            Outcome::Rejected { .. } => {}
+            Outcome::Rejected { reason } => last = reason,
         }
     }
+    // THE SERVER'S LAST WORD, carried: a remote that refuses every swap for
+    // a reason of its own (a rule, a hook) is not a race, and "run it again"
+    // alone would send the reader round the same loop.
     Err(anyhow::anyhow!(
-        "receipt publish: {name} moved under each of {CAS_TRIES} swaps; run it again"
+        "receipt publish: {name} refused each of {CAS_TRIES} swaps (last: {last}); run it again"
     ))
 }
 
@@ -1467,20 +1476,20 @@ mod tests {
     /// (the privacy rule's one escape), one assertion per spelling.
     #[test]
     fn a_state_repo_naming_origin_is_refused_in_every_spelling() {
-        let origin = "https://github.com/button-inc/batten";
+        let origin = "https://github.com/example-org/project";
         for value in [
-            "button-inc/batten",
+            "example-org/project",
             "Button-Inc/Batten",
-            "button-inc/batten.git",
+            "example-org/project.git",
             "BUTTON-INC/BATTEN.GIT",
-            "/button-inc/batten/",
-            "button-inc/batten.git/",
-            "https://github.com/button-inc/batten",
-            "https://github.com/button-inc/batten.git",
+            "/example-org/project/",
+            "example-org/project.git/",
+            "https://github.com/example-org/project",
+            "https://github.com/example-org/project.git",
             "https://user@GitHub.com/Button-Inc/Batten.git",
-            "git@github.com:button-inc/batten.git",
-            "github.com/button-inc/batten",
-            "GitHub.com/button-inc/batten.git",
+            "git@github.com:example-org/project.git",
+            "github.com/example-org/project",
+            "GitHub.com/example-org/project.git",
         ] {
             assert_eq!(
                 state_remote(Some(value), Some(origin)),
@@ -1490,19 +1499,19 @@ mod tests {
         }
         // Origin's own spelling varies too: `.git`, case, userinfo.
         for origin in [
-            "https://github.com/button-inc/batten.git",
+            "https://github.com/example-org/project.git",
             "https://x-access-token:t@GitHub.com/Button-Inc/Batten.git/",
         ] {
             assert_eq!(
-                state_remote(Some("button-inc/batten"), Some(origin)),
+                state_remote(Some("example-org/project"), Some(origin)),
                 Remote::IsOrigin,
                 "{origin}"
             );
         }
         // The control: the private state repository on the same host resolves.
         assert_eq!(
-            state_remote(Some("button-inc/batten-state"), Some(origin)),
-            Remote::At("https://github.com/button-inc/batten-state".to_owned())
+            state_remote(Some("example-org/project-state"), Some(origin)),
+            Remote::At("https://github.com/example-org/project-state".to_owned())
         );
     }
 

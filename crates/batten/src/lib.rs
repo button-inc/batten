@@ -7073,7 +7073,15 @@ fn run_receipt(
         }
         ReceiptCommand::Verified => receipt::run_verified(out),
         ReceiptCommand::Publish => run_receipt_transfer(true, overrides, out),
-        ReceiptCommand::Pull => run_receipt_transfer(false, overrides, out),
+        // THE SESSION-START ROUTE NEVER STOPS A SESSION (CLOUD-1544): a
+        // developer whose environment names a state repository they cannot
+        // reach gets the line the land lap gets, and exit `0`. The plain verb
+        // keeps its exit `3` for a caller asking on purpose.
+        ReceiptCommand::Pull { advisory: true } => {
+            carry_quietly(false, out);
+            Ok(ExitCode::Success)
+        }
+        ReceiptCommand::Pull { advisory: false } => run_receipt_transfer(false, overrides, out),
     }
 }
 
