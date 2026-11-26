@@ -13081,7 +13081,10 @@ expires = "2027-02-28"
 # The land lap pulls through `BATTEN_BIN`, the tree's build, so the carry is
 # unaffected. The commit that bumps the pin to a release carrying the verb
 # restores both verbatim — the row here, the task in `mise.toml` beside
-# `session:wiring-register`:
+# `session:wiring-register` — and deletes the two `// unreached:` lines above
+# `receipt publish` and `receipt pull` in `crates/batten/src/surface_table.rs`,
+# which stand in for this row's reach while it is out (`land lap` carries in
+# process, through `carry_quietly`, and spawns neither verb):
 #
 # # CLOUD-1544: bring this branch's published receipts back into a fresh container,
 # # so a session does not re-run every gate a sibling already proved. AFTER
