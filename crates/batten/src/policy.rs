@@ -1676,6 +1676,67 @@ pub const LIBRARY: &[(&str, &str)] = &[(
     include_str!("policy/library/read-only.rego"),
 )];
 
+/// [`LIBRARY`] as this build compiles it: the embedded text, or under the
+/// `preset-overlay` feature a mutated copy a sweep wrote to
+/// `$BATTEN_PRESET_OVERLAY/<path>` ([`library_text`]). Read once per process.
+fn library() -> &'static [(&'static str, std::borrow::Cow<'static, str>)] {
+    static LOADED: std::sync::OnceLock<Vec<(&'static str, std::borrow::Cow<'static, str>)>> =
+        std::sync::OnceLock::new();
+    LOADED.get_or_init(|| {
+        #[cfg(feature = "preset-overlay")]
+        let overlay = std::env::var_os("BATTEN_PRESET_OVERLAY").map(std::path::PathBuf::from);
+        #[cfg(not(feature = "preset-overlay"))]
+        let overlay: Option<std::path::PathBuf> = None;
+        LIBRARY
+            .iter()
+            .map(|(path, embedded)| (*path, library_text(overlay.as_deref(), path, embedded)))
+            .collect()
+    })
+}
+
+/// The text of the library module at `path` (CLOUD-2253): `embedded`, or under
+/// the `preset-overlay` feature the mutated copy at `<overlay>/<path>` where one
+/// is there ([`crate::preset::read_overlay`]), so a sweep judges a library row
+/// on binaries built once rather than recompiling the crate twice per row.
+///
+/// A BUILD FEATURE, NEVER A RUNTIME SWITCH ALONE, for `PresetModule::text`'s
+/// reason: a shipped build ignores `overlay` whatever it names, so no caller
+/// under judgement can swap the library it is judged by for a file. The copy
+/// the overlay names as its target and that will not read exits 3 rather than
+/// judging the embedded text (CLOUD-2839).
+#[must_use]
+pub fn library_text(
+    overlay: Option<&Path>,
+    path: &str,
+    embedded: &'static str,
+) -> std::borrow::Cow<'static, str> {
+    #[cfg(feature = "preset-overlay")]
+    match crate::preset::read_overlay(overlay, path) {
+        crate::preset::Overlaid::Mutated(text) => return std::borrow::Cow::Owned(text),
+        crate::preset::Overlaid::Unreadable(copy) => {
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
+                "batten: library overlay: {} will not read; could-not-look",
+                copy.display()
+            );
+            std::process::exit(3);
+        }
+        crate::preset::Overlaid::Embedded => {}
+    }
+    #[cfg(not(feature = "preset-overlay"))]
+    let _ = (overlay, path);
+    std::borrow::Cow::Borrowed(embedded)
+}
+
+/// Whether a bundle of `sources` composes the library: any module naming it,
+/// as `import data.batten.library` or a direct `data.batten.library.` call.
+fn asks_library(sources: &[(String, String)]) -> bool {
+    sources
+        .iter()
+        .any(|(_, source)| source.contains("data.batten.library"))
+}
+
 /// Compose `sources` into **one** bundle: one engine, one compile, one smoke
 /// query (CLOUD-837).
 ///
@@ -1729,16 +1790,13 @@ pub fn compile(
     // THE LIBRARY FIRST, and outside `modules`/`packages`: it declares no
     // `rules` and raises no `violation`, so it is reachable from every module
     // that calls it and decides nothing itself.
-    let asks = sources
-        .iter()
-        // `import data.batten.library` then `library.read_only(…)` asks too.
-        .any(|(_, source)| source.contains("data.batten.library"));
-    for (path, source) in LIBRARY {
+    let asks = asks_library(sources);
+    for (path, source) in library() {
         if !asks || sources.iter().any(|(given, _)| given == path) {
             continue;
         }
         engine
-            .add_policy((*path).to_owned(), (*source).to_owned())
+            .add_policy((*path).to_owned(), source.clone().into_owned())
             .map_err(|err| UsageError::raise(format!("`{path}` does not compile: {err}")))?;
     }
     let mut modules = Vec::new();
@@ -3214,11 +3272,31 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
 /// table enters by its digest, taken once per load, which names its content
 /// exactly as its text would.
 fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32]) -> String {
+    cache_key_over(id, sources, data, library())
+}
+
+/// [`cache_key`] over the library texts `library`, apart so a case can vary them.
+fn cache_key_over(
+    id: &str,
+    sources: &[(String, String)],
+    data: &[u8; 32],
+    library: &[(&str, std::borrow::Cow<'_, str>)],
+) -> String {
     let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
     fields.push(id.as_bytes());
     for (path, source) in sources {
         fields.push(path.as_bytes());
         fields.push(source.as_bytes());
+    }
+    // THE LIBRARY A BUNDLE COMPOSES IS PART OF ITS PROGRAM (CLOUD-2253). The
+    // binary's identity keyed it while only a rebuild could change it; under a
+    // sweep's overlay one binary compiles many library texts, and an entry
+    // keyed without it answered every mutant with the unmutated program.
+    if asks_library(sources) {
+        for (path, source) in library {
+            fields.push(path.as_bytes());
+            fields.push(source.as_bytes());
+        }
     }
     fields.push(data);
     crate::cache::key(CACHE_FORMAT, &fields)
@@ -7489,6 +7567,71 @@ mod tests {
     const MODULE: &str = "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
 violation contains {\"rule\": \"a\", \"verdict\": \"a\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
 test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n";
+
+    /// A SHIPPED BUILD NEVER READS THE LIBRARY OVERLAY (CLOUD-2253): only the
+    /// sweep's `preset-overlay` build reads a mutated copy, and every other
+    /// build answers the embedded text whatever the overlay holds, so no
+    /// variable redirects the rules a shipped engine enforces.
+    ///
+    /// Fails by: the overlay honoured without the feature (a bypass of the
+    /// shipped library), or ignored with it (every library row judged on the
+    /// unmutated module).
+    #[test]
+    fn only_the_sweep_build_reads_the_library_overlay() {
+        let (path, embedded) = LIBRARY[0];
+        let dir =
+            std::env::temp_dir().join(format!("batten-library-overlay-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let copy = dir.join(path);
+        std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        std::fs::write(&copy, "package batten.library\n").unwrap();
+        let read = library_text(Some(&dir), path, embedded);
+        let receipted = dir
+            .join(format!("{path}{}", crate::preset::OVERLAY_READ))
+            .is_file();
+        let _ = std::fs::remove_dir_all(&dir);
+        if cfg!(feature = "preset-overlay") {
+            assert_eq!(
+                read, "package batten.library\n",
+                "the sweep build reads the copy"
+            );
+            assert!(receipted, "and leaves its receipt");
+        } else {
+            assert_eq!(read, embedded, "a shipped build reads the embedded text");
+            assert!(!receipted, "and never touches the overlay");
+        }
+        assert_eq!(library_text(None, path, embedded), embedded);
+    }
+
+    /// A bundle composing the library keys on the library's text (CLOUD-2253):
+    /// under the sweep's overlay one binary compiles many library texts, so an
+    /// entry keyed without it answers a mutant with the unmutated program. A
+    /// bundle that never asks keys without it.
+    ///
+    /// Fails by: the library left out of a composing bundle's key, or added to
+    /// a bundle's that never asks.
+    #[test]
+    fn a_bundle_composing_the_library_keys_on_its_text() {
+        use std::borrow::Cow;
+        let asks = sources_of(&[("a.rego", "x if data.batten.library.read_only(input)")]);
+        let alone = sources_of(&[("a.rego", MODULE)]);
+        let one = [(
+            "lib.rego",
+            Cow::Borrowed("package batten.library\nx := 1\n"),
+        )];
+        let two = [(
+            "lib.rego",
+            Cow::Borrowed("package batten.library\nx := 2\n"),
+        )];
+        assert_ne!(
+            cache_key_over("r", &asks, &[0; 32], &one),
+            cache_key_over("r", &asks, &[0; 32], &two)
+        );
+        assert_eq!(
+            cache_key_over("r", &alone, &[0; 32], &one),
+            cache_key_over("r", &alone, &[0; 32], &two)
+        );
+    }
 
     fn sources_of(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
