@@ -4868,7 +4868,15 @@ fn finished_cases(base: &std::path::Path) -> BTreeSet<Case> {
 /// where every one is, and `None`, no filter, where at least half must run
 /// or a name holds what a filter cannot spell, so the recorder's own skip
 /// decides.
-fn run_filter(listed: &BTreeSet<Case>, finished: &BTreeSet<Case>) -> Option<String> {
+///
+/// NONE WHEN THE SUITE IS RECORDED `twice` ([`super::stable::twice`]): a
+/// double recording clears every record before its second pass, so it runs
+/// every case, and a record its first pass skipped (one carried in from
+/// another tree) would be witnessed against a record this tree never made.
+fn run_filter(listed: &BTreeSet<Case>, finished: &BTreeSet<Case>, twice: bool) -> Option<String> {
+    if twice {
+        return None;
+    }
     let due: Vec<&Case> = listed.difference(finished).collect();
     if due.is_empty() {
         return Some(String::from("none()"));
@@ -7206,10 +7214,9 @@ pub fn record_reach(
     // records carried, the suite still started every case for the recorder to
     // skip, 1,891 s to re-record 57. The cases no record holds finished are
     // the run's filter. A double recording clears every record, so it runs
-    // them all.
-    if !super::stable::twice()
-        && let Some(filter) = listed_cases(work, state, (&binaries, &metadata))
-            .and_then(|listed| run_filter(&listed, &finished_cases(&base)))
+    // them all ([`run_filter`]).
+    if let Some(filter) = listed_cases(work, state, (&binaries, &metadata))
+        .and_then(|listed| run_filter(&listed, &finished_cases(&base), super::stable::twice()))
     {
         text = text.replacen(
             "[profile.batten-cover]\n",
@@ -17861,22 +17868,61 @@ mod tests {
             .map(case)
             .collect();
         assert_eq!(
-            run_filter(&listed, &finished).as_deref(),
+            run_filter(&listed, &finished, false).as_deref(),
             Some("(binary_id(=batten::it) & test(=c::five))"),
             "the one case no record holds finished"
         );
         assert_eq!(
-            run_filter(&listed, &listed).as_deref(),
+            run_filter(&listed, &listed, false).as_deref(),
             Some("none()"),
             "no case where every one is finished"
         );
         let few: BTreeSet<Case> = ["a::one"].into_iter().map(case).collect();
-        assert_eq!(run_filter(&listed, &few), None, "most must run: no filter");
+        assert_eq!(
+            run_filter(&listed, &few, false),
+            None,
+            "most must run: no filter"
+        );
         let mut odd = listed.clone();
         odd.insert(case("c::six(\"x\")"));
         let mut most = finished.clone();
         most.insert(case("b::seven"));
-        assert_eq!(run_filter(&odd, &most), None, "a name no filter spells");
+        assert_eq!(
+            run_filter(&odd, &most, false),
+            None,
+            "a name no filter spells"
+        );
+    }
+
+    /// A DOUBLE RECORDING RUNS EVERY CASE, whatever records it found: its
+    /// first pass is a witness for the second, which runs over cleared
+    /// records, so a case whose finished record was carried in from another
+    /// tree must run in the first pass too.
+    ///
+    /// Fails by: the lap's filter applied to the first pass, so a record this
+    /// tree never made stood as the witness the second pass is judged against
+    /// (bootstrap shard 5/8 at 34c6e4d1f survived the `!` before `twice()`).
+    #[test]
+    fn a_double_recording_runs_every_case_whatever_records_it_carried() {
+        let case = |name: &str| (name.to_owned(), String::from("batten::it"));
+        let listed: BTreeSet<Case> = ["a::one", "a::two", "b::three", "b::four", "c::five"]
+            .into_iter()
+            .map(case)
+            .collect();
+        let carried: BTreeSet<Case> = ["a::one", "a::two", "b::three", "b::four"]
+            .into_iter()
+            .map(case)
+            .collect();
+        assert_eq!(run_filter(&listed, &carried, true), None, "every case runs");
+        assert_eq!(
+            run_filter(&listed, &listed, true),
+            None,
+            "even with every case carried"
+        );
+        assert!(
+            run_filter(&listed, &carried, false).is_some(),
+            "a lap over the same records filters"
+        );
     }
 
     /// A site's key reads its function as a key reads code (CLOUD-2904): a `//`
