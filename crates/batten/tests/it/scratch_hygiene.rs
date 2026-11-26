@@ -621,3 +621,56 @@ fn the_parent_survives_its_own_collection() {
         parent.display()
     );
 }
+
+/// EVERY FIXTURE UNDER `target/` IS IN ITS RUN'S OWN SCRATCH (CLOUD-2789).
+///
+/// A run's scratch is safe from every other run only because it lives in
+/// `run-<id>` under a lock its live cases hold (`common::target_tmp`). A case
+/// that joined onto `CARGO_TARGET_TMPDIR` itself would write beside every run,
+/// where no lock guards it and a reaper takes it as a stray mid-case: the
+/// flake this design removed, regrown one call site at a time. So the variable
+/// is read in exactly two places: the door, and the case asserting the parent.
+///
+/// Fails by: any other source naming the variable as a string literal, the
+/// spelling `env!`, `var` and `var_os` all need.
+#[test]
+fn only_the_door_reads_the_target_tmpdir() {
+    let allowed = ["tests/it/common/mod.rs", "tests/it/scratch_hygiene.rs"];
+    let readers: Vec<String> = crate::common::rust_sources()
+        .into_iter()
+        .filter(|path| !allowed.iter().any(|door| path.ends_with(door)))
+        .filter(|path| {
+            std::fs::read_to_string(path).is_ok_and(|text| reads_the_target_tmpdir(&text))
+        })
+        .map(|path| path.display().to_string())
+        .collect();
+    assert!(
+        readers.is_empty(),
+        "these read CARGO_TARGET_TMPDIR around `common::target_tmp`, so their \
+         fixtures sit outside any run's lock: {readers:?}"
+    );
+}
+
+/// Whether `source` reads cargo's target tmpdir variable: names it quoted.
+fn reads_the_target_tmpdir(source: &str) -> bool {
+    source.contains(concat!("\"CARGO_TARGET_", "TMPDIR\""))
+}
+
+/// The reader the gate above stands on: a quoted read is caught in each
+/// spelling, and prose naming the variable in backticks is not.
+///
+/// Fails by: the reader matching nothing (every gate above passes vacuously)
+/// or matching prose (every doc mention becomes a finding).
+#[test]
+fn the_tmpdir_reader_tells_a_read_from_a_mention() {
+    for read in [
+        concat!("env!(\"CARGO_TARGET_", "TMPDIR\")"),
+        concat!("std::env::var(\"CARGO_TARGET_", "TMPDIR\")"),
+        concat!("std::env::var_os(\"CARGO_TARGET_", "TMPDIR\")"),
+    ] {
+        assert!(reads_the_target_tmpdir(read), "{read}");
+    }
+    assert!(!reads_the_target_tmpdir(
+        "/// cargo's `CARGO_TARGET_TMPDIR` is integration-only"
+    ));
+}
