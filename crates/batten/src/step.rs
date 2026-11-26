@@ -402,6 +402,26 @@ fn material(
 /// runs the step rather than dropping its row.
 pub const EXISTS: [&str; 3] = ["batten", "step", "exists"];
 
+/// The tool line a row declares UNTRACED with (CLOUD-2789): `batten step
+/// untraced`, answered in-process as one fixed line, so it is key material
+/// like any other, and a miss of the row runs with no tracer attached. For a
+/// step whose command must itself see none: `test:traced`'s cases take their
+/// traced branch only where nothing traces them, and fail under
+/// `BATTEN_TEST_TRACED_REQUIRED` where something does. Its inputs are the
+/// row's declaration alone, since no trace lints them.
+///
+/// A TOOL LINE, NOT A FIELD, for [`EXISTS`]'s reason: the released engine
+/// refuses a row field it does not know (`deny_unknown_fields`), while it loads
+/// this line, cannot answer it, keys nothing, and runs the step.
+pub const UNTRACED: [&str; 3] = ["batten", "step", "untraced"];
+
+/// Whether `row` declares its misses untraced ([`UNTRACED`]).
+fn untraced(row: &Step) -> bool {
+    row.tools()
+        .iter()
+        .any(|tool| tool.iter().map(String::as_str).eq(UNTRACED))
+}
+
 /// The pathspecs a `step exists` line's words after [`EXISTS`] declare: every
 /// word after the leading `--`, or `None` for any other shape, an empty list
 /// or a pathspec this build does not read — which keys nothing.
@@ -494,6 +514,9 @@ fn tool_said(root: &Path, tool: &[String]) -> Option<(i32, String)> {
         |said: Option<String>| Some(said.map_or_else(|| (1, String::new()), |said| (0, said)));
     if tool.iter().map(String::as_str).eq(INPUTS_DIGEST) {
         return answered(tree_inputs_digest_in(root).ok());
+    }
+    if tool.iter().map(String::as_str).eq(UNTRACED) {
+        return answered(Some(String::from("untraced")));
     }
     if let Some(words) = after(tool, &BASE) {
         let var = |name: &str| std::env::var(name).ok();
@@ -1021,12 +1044,14 @@ pub fn run_step(
         .map_or(command, |(argv, _)| argv.as_slice());
     // A MISS ON LINUX IS TRACED (CLOUD-2784), so a read outside the row's
     // declared inputs is seen before a receipt is minted over it. Where no
-    // tracer answers the step runs untraced and records as before.
+    // tracer answers the step runs untraced and records as before, and so does
+    // a row that declares itself [`UNTRACED`] (CLOUD-2789).
     let traced = answer
         .recording()
         .is_some()
         .then(|| crate::mutate::trace::Host::here().tracer())
         .flatten()
+        .filter(|_| !declared(step).is_some_and(|row| untraced(&row)))
         .and_then(|strace| Some((strace, trace_file(step)?)));
     let spawned: Vec<String> = match (&traced, running.split_first()) {
         (Some((strace, file)), Some((program, rest))) => std::iter::once(strace.clone())

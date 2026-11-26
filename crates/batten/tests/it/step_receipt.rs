@@ -130,6 +130,11 @@ id = "journaled"
 inputs = ["input.txt"]
 tools = [["toolv"]]
 journal = "nextest"
+
+[[step]]
+id = "untraced"
+inputs = ["input.txt"]
+tools = [["toolv"], ["batten", "step", "untraced"]]
 "#;
 
 /// Where the keyed family keeps its records.
@@ -1145,6 +1150,54 @@ fn an_undeclared_read_fails_a_traced_miss() {
         assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
         assert_eq!(after, "hit", "untraced, the step records as before");
     }
+}
+
+/// A ROW DECLARED UNTRACED RUNS ITS MISS BARE AND STILL KEYS (CLOUD-2789).
+/// `test:traced` runs cases that must see no tracer attached, so a `step run`
+/// miss tracing it would fail every one of them under
+/// `BATTEN_TEST_TRACED_REQUIRED`. The row says so with a `batten step untraced`
+/// tool line, which this engine answers in-process and an older one cannot run,
+/// so it keys nothing there and the step runs rather than being misread.
+///
+/// Fails by: the miss traced anyway (`TracerPid` non-zero on a host with
+/// `strace`), the line keying nothing (no hit on the unchanged rerun), or the
+/// declared input no longer moving the key.
+#[test]
+fn a_row_declared_untraced_runs_bare_hits_unchanged_and_misses_on_its_inputs() {
+    let repo = Repo::new("untraced-row");
+    repo.script(
+        "tracerpid",
+        "#!/bin/sh\ngrep TracerPid /proc/self/status >>bin/tracer.log 2>/dev/null || echo none >>bin/tracer.log\n",
+    );
+    let out = repo.run_step(&["untraced"], &["tracerpid"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    let seen = read(&repo.path("bin/tracer.log"));
+    assert_eq!(seen.lines().count(), 1, "the miss ran the command: {seen}");
+    if cfg!(target_os = "linux") {
+        assert_eq!(
+            seen.split_whitespace().nth(1),
+            Some("0"),
+            "the declared-untraced miss ran with no tracer attached: {seen}"
+        );
+    }
+    let again = repo.run_step(&["untraced"], &["tracerpid"], &[]);
+    assert!(
+        common::stderr(&again).starts_with("hit"),
+        "an unchanged tree hits: {}",
+        common::stderr(&again)
+    );
+    assert_eq!(
+        read(&repo.path("bin/tracer.log")).lines().count(),
+        1,
+        "a hit does not run the command"
+    );
+    repo.stage("two\n");
+    let moved = repo.run_step(&["untraced"], &["tracerpid"], &[]);
+    assert!(
+        common::stderr(&moved).starts_with("miss"),
+        "a declared input moving misses: {}",
+        common::stderr(&moved)
+    );
 }
 
 /// A STEP RUN ALREADY UNDER A TRACER RUNS UNTRACED (CLOUD-2784): ptrace takes
