@@ -13088,8 +13088,11 @@ on = "session-start"
 # installed engine predates `receipt pull` until a release ships it, and a bare
 # call there exits non-zero at every session start (`session:receipts`).
 run = ["mise", "run", "session:receipts"]
-# One advertisement and one fetch of a small tree.
-timeout_ms = 30000
+# Two refs: the receipt set (one advertisement, a small tree) and the mutate
+# carry, whose first fetch in a fresh container brings the sealed reach record
+# — #1276's was 815 MB on disk. After that first fetch each ref is a delta, or
+# no fetch at all when it has not moved (`land::receipts::cache_ref`).
+timeout_ms = 600000
 owner = "CLOUD-1544"
 expires = "2027-05-31"
 [[hook.handler]]
