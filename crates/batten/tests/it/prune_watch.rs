@@ -1446,6 +1446,86 @@ fn a_forced_collection_exits_from_a_worktree_and_waits_out_a_held_tree() {
     );
 }
 
+/// A COLLECTION IS NEVER CHARGED TO THE STEP IT RUNS BENEATH (CLOUD-2925).
+/// Below the floor, a watched step's command is a compile through the rustc
+/// wrapper, itself under `strace`, which records every path the command's
+/// process tree opens: the trace a step's undeclared-read gate reads. The
+/// wrapper collected there, and its walk of the build tree was charged to the
+/// step; the step's own watcher collects from outside the command instead.
+///
+/// Fails by: a compile under a watched step collecting inside the command.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: `which` finds the tracer the case needs, and skips it where there is none"
+)]
+fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
+    if !cfg!(target_os = "linux")
+        || !std::process::Command::new("strace")
+            .arg("-V")
+            .output()
+            .is_ok_and(|ran| ran.status.success())
+    {
+        return;
+    }
+    let dir = hooked("step-run-uncharged", true);
+    let bin = dir.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let rustc = bin.join("rustc");
+    std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let trace = own_temp(&dir).join("command.strace");
+    let engine = common::batten().get_program().to_owned();
+    let mut step = common::batten();
+    step.current_dir(&dir)
+        .env("TMPDIR", own_temp(&dir))
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .args([
+            "step",
+            "run",
+            "probe",
+            "--",
+            "strace",
+            "-f",
+            "-e",
+            "trace=open,openat",
+            "-o",
+        ])
+        .arg(&trace)
+        .arg(&engine)
+        .arg(&rustc)
+        .args(["--crate-name", "probe", "--out-dir"])
+        .arg(dir.join("target/debug/deps"));
+    let ran = step
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    let said = common::stderr(&ran);
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    let opened = std::fs::read_to_string(&trace).expect("the command was traced");
+    assert!(
+        opened.contains(&rustc.display().to_string()),
+        "THE PREMISE: the trace saw the command's compile: {opened}"
+    );
+    assert!(
+        !opened.contains(".fingerprint"),
+        "the command's process tree walked the build tree: {}",
+        opened
+            .lines()
+            .filter(|line| line.contains(".fingerprint"))
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
 /// `BATTEN_DISK_TRACE=1` writes each sample the watcher takes to stderr, the
 /// one record of how often the volume was read.
 ///
