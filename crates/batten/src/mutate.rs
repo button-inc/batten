@@ -4364,7 +4364,7 @@ fn judge_row(
         *held
     } else {
         let ran = run_suite(staged, root, suite, row, prebuilt);
-        if ran.reach == Reach::Reported {
+        if kept(&ran) {
             staged.controls.insert(control, ran);
         }
         ran
@@ -4454,6 +4454,12 @@ fn judge_row(
         });
     }
     Ok(Verdict::Caught)
+}
+
+/// Whether a control run is kept for the next row naming its case: only one
+/// that reported cases. A could-not-look is the next row's to retry.
+fn kept(run: &Selection) -> bool {
+    run.reach == Reach::Reported
 }
 
 /// The key of a row's unmutated control run (CLOUD-2253): its suite and case,
@@ -8436,6 +8442,63 @@ mod tests {
     /// Fails by: the build owed by a row the registered runner owns, or by a
     /// row already recorded caught. The staged directory is outside any cargo
     /// workspace, so the owed build fails at once rather than building one.
+    /// A CONTROL IS KEYED BY ITS CASE AND THE UNMUTATED TREE, NEVER ITS ROW
+    /// (CLOUD-2253): two rows naming one case over one tree share a control,
+    /// and a different case, suite, tree or subject runs its own. Only a run
+    /// that reported is kept.
+    ///
+    /// Fails by: every control sharing one key (a case judged on another's
+    /// control), a row's own mutation in the key (the control re-run per row),
+    /// or a could-not-look kept for the next row.
+    #[test]
+    fn a_control_is_keyed_by_its_case_and_tree_never_its_row() {
+        let root = fixture("control-key");
+        put(&root, "lib/r.rego", "limit := 10\n");
+        put(&root, "lib/s.rego", "limit := 11\n");
+        let staged = |tree: &str| Staged {
+            dir: fixture("control-key-staged"),
+            dirty: None,
+            tree: tree.to_owned(),
+            controls: std::collections::HashMap::new(),
+        };
+        let suite = Suite::Cargo {
+            path: String::from("tests/it/a.rs"),
+        };
+        let row = |slug: &str, want: &str, source: &str| Row {
+            slug: slug.to_owned(),
+            script: format!("s/10/{slug}/"),
+            want: want.to_owned(),
+            source: source.to_owned(),
+            suite: None,
+            resolved: None,
+        };
+        let one = staged("tree-1");
+        let key =
+            |staged: &Staged, suite: &Suite, row: &Row| control_key(&root, staged, suite, row);
+        let base = key(&one, &suite, &row("a", "case_a", "lib/r.rego"));
+        assert_eq!(base, key(&one, &suite, &row("b", "case_a", "lib/r.rego")));
+        assert_ne!(base, key(&one, &suite, &row("a", "case_b", "lib/r.rego")));
+        assert_ne!(base, key(&one, &suite, &row("a", "case_a", "lib/s.rego")));
+        assert_ne!(
+            base,
+            key(&staged("tree-2"), &suite, &row("a", "case_a", "lib/r.rego"))
+        );
+        let other = Suite::Cargo {
+            path: String::from("tests/it/b.rs"),
+        };
+        assert_ne!(base, key(&one, &other, &row("a", "case_a", "lib/r.rego")));
+
+        let reported = Selection {
+            selected: 1,
+            ok: true,
+            reach: Reach::Reported,
+        };
+        assert!(kept(&reported));
+        for reach in [Reach::TimedOut, Reach::Errored, Reach::Silent] {
+            assert!(!kept(&Selection { reach, ..reported }), "{reach:?}");
+        }
+    }
+
     #[test]
     fn the_build_is_owed_only_by_a_declared_uncaught_cargo_row() {
         let root = fixture("build-owed");
