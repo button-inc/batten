@@ -17704,6 +17704,58 @@ mod tests {
         assert_eq!((&added[&t], &added[&u]), (&body[&t], &body[&u]));
     }
 
+    /// A kept case entry holds only while what it read of its test crate
+    /// holds: an edit to a sibling module the case calls, which leaves the
+    /// case's own sources and so its key unmoved, moves its digest through the
+    /// store as it does with none.
+    ///
+    /// Fails by: the test crate never indexed (`CaseKeys::index` answering
+    /// `None`), so every kept entry reads the crate as absent, holds, and a
+    /// sibling module's edit reuses a stale digest (a mutant this suite
+    /// missed at fe80fb54b).
+    #[test]
+    fn a_kept_case_entry_holds_only_while_its_crate_reads_hold() {
+        let root = crate::scratch::scratch("schema-case-memo-sibling");
+        let state = crate::scratch::scratch("schema-case-memo-sibling-state");
+        let write = |path: &str, text: &str| {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        };
+        write("src/lib.rs", "pub fn f() {}\n");
+        write("tests/it/main.rs", "mod a;\nmod helper;\n");
+        write("tests/it/a.rs", "#[test]\nfn t() { crate::helper::h(); }\n");
+        write("tests/it/helper.rs", "pub fn h() { fix::f(); }\n");
+        let t = (String::from("a::t"), String::from("fix::it"));
+        let cases: BTreeSet<Case> = [t.clone()].into();
+        let executed = [(t.clone(), [0].into())].into();
+        let dirs = [(String::from("fix"), String::new())].into();
+        let probes = [String::from("f")];
+        let sweep = |store: Option<&Derived>| {
+            let before = case_derivations();
+            let digests = case_digests(
+                &root,
+                &cases,
+                &dirs,
+                &executed,
+                &Depends {
+                    derived: store,
+                    ..depends(&probes)
+                },
+            );
+            (digests, case_derivations() - before)
+        };
+        let (first, _) = sweep(Some(&Derived::at(&state, "build")));
+        write("tests/it/helper.rs", "pub fn h() { fix::f(); fix::f(); }\n");
+        let (edited, derived) = sweep(Some(&Derived::at(&state, "build")));
+        assert_ne!(
+            edited[&t], first[&t],
+            "the sibling module the case calls moved"
+        );
+        assert_eq!(edited, sweep(None).0, "the store keys as no store does");
+        assert_eq!(derived, 1, "the kept entry no longer holds");
+    }
+
     /// S1 (CLOUD-2904, round 3): a file an `include_str!` reads at compile
     /// time is keyed by content, for the function holding the include and for
     /// the item holding it a case reaches.
