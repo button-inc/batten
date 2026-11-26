@@ -20679,6 +20679,207 @@ mod tests {
         );
     }
 
+    /// A use binding imports by the one mention written where it is, in its
+    /// own package and module, with a path: never one made in another
+    /// package, and never one written with no path, though either names the
+    /// same base and sorts first.
+    ///
+    /// Fails by: a mention matched on its package alone, or on its module and
+    /// path alone (bootstrap shard 5/8 at 34c6e4d1f found `&& -> ||` here
+    /// survived every fixture, whose use bindings held one mention each).
+    #[test]
+    fn a_use_imports_by_its_own_written_path_alone() {
+        let binding = format!("zed{HOMED}fix{HOMED}src::a{USE_BOUND}");
+        let own = format!("zed{MENTIONED_IN}fix{MENTIONED_IN}src::a{WRITTEN}super::b");
+        let mentions = std::collections::BTreeMap::from([(
+            binding.clone(),
+            BTreeSet::from([
+                own.clone(),
+                format!("zed{MENTIONED_IN}fix{MENTIONED_IN}src::a"),
+                format!("zed{MENTIONED_IN}aaa{MENTIONED_IN}src::a{WRITTEN}super::d"),
+            ]),
+        )]);
+        let items = std::collections::BTreeMap::from([(
+            binding.clone(),
+            BTreeSet::from([String::from("u")]),
+        )]);
+        let definitions = vec![binding.as_str()];
+        let by_base = std::collections::HashMap::from([("zed", vec![0])]);
+        let (globs, crates, macros) = (
+            Globs::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        );
+        let index = Resolver::new(
+            &by_base,
+            &definitions,
+            &items,
+            &mentions,
+            (&globs, &crates, &macros),
+        );
+        assert_eq!(index.use_target(0, "zed"), Some(own.as_str()));
+    }
+
+    /// A chain of `use super::zed` bindings is followed through
+    /// [`RESOLVE_DEPTH`] + 1 bindings to the definition at its end, and one
+    /// binding longer is unknown.
+    ///
+    /// Fails by: the bound one short (`>=`, which bootstrap shard 5/8 at
+    /// 34c6e4d1f found survived: its `pub use` chains resolved through
+    /// modules, so no fixture reached the bound) or one long.
+    #[test]
+    fn a_use_chain_is_followed_to_its_bound_and_no_further() {
+        let module = |depth: usize| format!("src{}", "::x".repeat(depth));
+        let chain = |uses: usize| {
+            let mut definitions_owned = vec![format!("zed{HOMED}fix{HOMED}{}", module(1))];
+            let mut mentions = std::collections::BTreeMap::new();
+            for depth in 2..=uses + 1 {
+                let binding = format!("zed{HOMED}fix{HOMED}{}{USE_BOUND}", module(depth));
+                mentions.insert(
+                    binding.clone(),
+                    BTreeSet::from([format!(
+                        "zed{MENTIONED_IN}fix{MENTIONED_IN}{}{WRITTEN}super",
+                        module(depth)
+                    )]),
+                );
+                definitions_owned.push(binding);
+            }
+            let items: std::collections::BTreeMap<String, BTreeSet<String>> = definitions_owned
+                .iter()
+                .map(|definition| (definition.clone(), BTreeSet::from([String::from("i")])))
+                .collect();
+            let definitions: Vec<&str> = definitions_owned.iter().map(String::as_str).collect();
+            let by_base =
+                std::collections::HashMap::from([("zed", (0..definitions.len()).collect())]);
+            let (globs, crates, macros) = (
+                Globs::new(),
+                std::collections::HashMap::new(),
+                std::collections::HashMap::new(),
+            );
+            let index = Resolver::new(
+                &by_base,
+                &definitions,
+                &items,
+                &mentions,
+                (&globs, &crates, &macros),
+            );
+            index.through_uses(Found::One(uses), "zed", 0)
+        };
+        assert_eq!(chain(1), Found::One(0), "one binding is followed");
+        assert_eq!(
+            chain(RESOLVE_DEPTH + 1),
+            Found::One(0),
+            "a chain the bound holds is followed to its end"
+        );
+        assert_eq!(
+            chain(RESOLVE_DEPTH + 2),
+            Found::Unknown,
+            "one binding longer is unknown"
+        );
+    }
+
+    /// A name found only through globs whose own paths are found through
+    /// further globs costs two depths a level (a path, then the lookup it
+    /// makes), so `src`'s globs `g1` .. `g8`, `g8` its one module, find `zed`
+    /// in `src::g8`, and with a ninth the walk reaches [`RESOLVE_DEPTH`] and
+    /// is unknown.
+    ///
+    /// Fails by: a path's lookup made at the path's own depth (`depth * 1`,
+    /// which bootstrap shard 3/8 at 34c6e4d1f found survived: no fixture
+    /// nested globs deep enough to reach the bound), so nine levels resolve.
+    #[test]
+    fn globs_found_through_globs_reach_the_depth_bound_two_a_level() {
+        let lookup = |globs: usize| {
+            let last = format!("g{globs}");
+            let definitions_owned = [
+                format!("{last}{HOMED}fix{HOMED}src{MODULE_ITEM}"),
+                format!("zed{HOMED}fix{HOMED}src::{last}"),
+            ];
+            let items: std::collections::BTreeMap<String, BTreeSet<String>> = definitions_owned
+                .iter()
+                .map(|definition| (definition.clone(), BTreeSet::from([String::from("i")])))
+                .collect();
+            let mentions = std::collections::BTreeMap::new();
+            let definitions: Vec<&str> = definitions_owned.iter().map(String::as_str).collect();
+            let by_base =
+                std::collections::HashMap::from([(last.as_str(), vec![0]), ("zed", vec![1])]);
+            let raws: Vec<String> = (1..=globs).map(|level| format!("g{level}")).collect();
+            let globs: Globs<'_> = std::collections::HashMap::from([(
+                ("fix", "src"),
+                raws.iter().map(String::as_str).collect(),
+            )]);
+            let (crates, macros) = (
+                std::collections::HashMap::new(),
+                std::collections::HashMap::new(),
+            );
+            let index = Resolver::new(
+                &by_base,
+                &definitions,
+                &items,
+                &mentions,
+                (&globs, &crates, &macros),
+            );
+            let scope = format!("zed{MENTIONED_IN}fix{MENTIONED_IN}src");
+            index.lookup(&scope, "zed", "fix", String::from("src"), 0)
+        };
+        assert_eq!(lookup(1), Found::One(1), "one glob is followed");
+        assert_eq!(
+            lookup(RESOLVE_DEPTH / 2),
+            Found::One(1),
+            "the deepest nesting the bound holds is followed"
+        );
+        assert_eq!(
+            lookup(RESOLVE_DEPTH / 2 + 1),
+            Found::Unknown,
+            "one level deeper is unknown"
+        );
+    }
+
+    /// A workspace crate's name is its crate only as a path's first segment
+    /// and only where nothing before it is `self`, `super` or `crate`: `m::dep`
+    /// and `super::dep` name nothing of the workspace though `dep` is a
+    /// workspace crate, and `dep` alone is that crate's root.
+    ///
+    /// Fails by: a crate taken at any segment, or after `super` (`&& -> ||`,
+    /// which bootstrap shard 3/8 at 34c6e4d1f found survived: its digest
+    /// fixture held no workspace crate map).
+    #[test]
+    fn a_crate_name_is_its_crate_only_as_a_relative_paths_first_segment() {
+        let definitions_owned = [format!("m{HOMED}fix{HOMED}src{MODULE_ITEM}")];
+        let items: std::collections::BTreeMap<String, BTreeSet<String>> = definitions_owned
+            .iter()
+            .map(|definition| (definition.clone(), BTreeSet::from([String::from("i")])))
+            .collect();
+        let mentions = std::collections::BTreeMap::new();
+        let definitions: Vec<&str> = definitions_owned.iter().map(String::as_str).collect();
+        let by_base = std::collections::HashMap::from([("m", vec![0])]);
+        let globs = Globs::new();
+        let crates = std::collections::HashMap::from([("dep", Some("crates/dep"))]);
+        let macros = std::collections::HashMap::new();
+        let index = Resolver::new(
+            &by_base,
+            &definitions,
+            &items,
+            &mentions,
+            (&globs, &crates, &macros),
+        );
+        assert_eq!(
+            index.path("fix", "src", &["dep"], 0),
+            Place::Module("crates/dep", String::from("src")),
+            "a first segment naming a workspace crate is its root"
+        );
+        assert_eq!(
+            index.path("fix", "src", &["m", "dep"], 0),
+            Place::Nothing,
+            "a later segment is looked up where the path has reached"
+        );
+        assert_eq!(
+            index.path("fix", "src::m", &["super", "dep"], 0),
+            Place::Nothing,
+            "after `super` it is looked up in the parent"
+        );
+    }
+
     /// The derived store keeps what the current build reads and nothing else:
     /// once a run has derived over the whole tree, another version's directory
     /// and the artifact of a file's former bytes are gone, and a later run over
