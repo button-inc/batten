@@ -2798,6 +2798,27 @@ fn rendered_files(work: &std::path::Path, mutants: &[Listed], schema: &Schema) -
     files
 }
 
+/// The originals of every file the schema rendered, shown over the copy at
+/// `work` for the judging runs, where they run `reuse`'s binaries; nothing
+/// shown where they do not.
+///
+/// THE ORIGINALS ONLY OVER REUSED BINARIES (CLOUD-2911): a judging run cargo
+/// builds would compile them beside the rendering, as the reach suite did.
+///
+/// # Errors
+///
+/// An original cannot be shown.
+fn shown_over(
+    reuse: Option<&Reuse>,
+    (root, work): (&std::path::Path, &std::path::Path),
+    mutants: &[Listed],
+    schema: &Schema,
+) -> anyhow::Result<Option<Shown>> {
+    reuse
+        .map(|_| Shown::originals(root, work, &rendered_files(work, mutants, schema)))
+        .transpose()
+}
+
 /// The crate roots of the packages `mutants` live in: each package's
 /// `src/lib.rs` and `src/main.rs` that exist.
 fn crate_roots(work: &std::path::Path, mutants: &[Listed]) -> BTreeSet<String> {
@@ -3925,6 +3946,101 @@ fn prebuilt(
 /// declare, nextest refused, and the reuse record was never written (CLOUD-2897).
 const RECORD_SCRUB: super::Scrub = super::suite_scrubbed;
 
+/// The one JSON document cargo run in `work` with `args` prints, written to
+/// `into`; `None` where cargo failed or printed none.
+fn cargo_document(
+    work: &std::path::Path,
+    args: &[String],
+    into: &std::path::Path,
+) -> Option<String> {
+    let ran = super::spawn_scrubbed(
+        work,
+        super::Program::Cargo,
+        args,
+        &[],
+        super::runner_bound(),
+        super::Said::Captured,
+        RECORD_SCRUB,
+    )
+    .ok()?;
+    let line = ran.stdout.lines().find(|line| line.starts_with('{'))?;
+    (ran.passed() && crate::durable::replace(into, line).is_ok()).then(|| line.to_owned())
+}
+
+/// The reach suite's binaries as the rendering built them, listed under
+/// `state` before any original is shown: nextest's `binaries-only` list of
+/// `packages` and `cargo metadata`'s answer.
+///
+/// # Errors
+///
+/// The list or the metadata could not be taken: the build did not finish.
+fn suite_binaries(
+    (work, target, state): (&std::path::Path, &std::path::Path, &std::path::Path),
+    packages: &BTreeSet<&str>,
+) -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let mut list: Vec<String> = [
+        "nextest",
+        "list",
+        "--cargo-profile",
+        "test",
+        "--list-type",
+        "binaries-only",
+        "--message-format",
+        "json",
+    ]
+    .map(String::from)
+    .to_vec();
+    for package in packages {
+        list.extend([String::from("-p"), (*package).to_owned()]);
+    }
+    list.extend(cargo_dirs(target));
+    let binaries = state.join("reach-binaries.json");
+    let metadata = state.join("reach-cargo-metadata.json");
+    let listed = cargo_document(work, &list, &binaries).is_some()
+        && cargo_document(
+            work,
+            &["metadata", "--format-version", "1", "--no-deps"].map(String::from),
+            &metadata,
+        )
+        .is_some();
+    anyhow::ensure!(
+        listed,
+        "the reach suite's binaries could not be listed, so the build did not finish"
+    );
+    Ok((binaries, metadata))
+}
+
+/// The argv the reach suite runs: under the recorder's `config`, on the
+/// binaries `listed` names ([`suite_binaries`]), never built here.
+///
+/// NO CARGO WHILE THE ORIGINALS ARE SHOWN (CLOUD-2911): nextest built the
+/// suite itself, so cargo checked a tree holding the originals beside the
+/// rendering, rebuilt `batten` from the mix and failed (E0015 at a const
+/// call into a rendered function): no case ran, no site was reached, and a
+/// whole shard was read as uncovered on #1276.
+fn reach_args(
+    config: &std::path::Path,
+    (binaries, metadata): (&std::path::Path, &std::path::Path),
+) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "nextest",
+        "run",
+        "--profile",
+        "batten-cover",
+        "--no-fail-fast",
+    ]
+    .map(String::from)
+    .to_vec();
+    for (flag, path) in [
+        ("--config-file", config),
+        ("--binaries-metadata", binaries),
+        ("--cargo-metadata", metadata),
+    ] {
+        args.extend([flag.to_owned(), path.to_string_lossy().into_owned()]);
+    }
+    args
+}
+
 /// Record the clean schema build's binaries under `state` for every judging
 /// run to reuse. Best effort: `None` leaves each run to build as it always did,
 /// which is slower and never wrong.
@@ -3937,20 +4053,7 @@ fn record_reuse(
     // A record from an earlier sweep names binaries this build may not have.
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).ok()?;
-    let document = |args: &[String], into: &std::path::Path| -> Option<String> {
-        let ran = super::spawn_scrubbed(
-            work,
-            super::Program::Cargo,
-            args,
-            &[],
-            super::runner_bound(),
-            super::Said::Captured,
-            RECORD_SCRUB,
-        )
-        .ok()?;
-        let line = ran.stdout.lines().find(|line| line.starts_with('{'))?;
-        (ran.passed() && crate::durable::replace(into, line).is_ok()).then(|| line.to_owned())
-    };
+    let document = |args: &[String], into: &std::path::Path| cargo_document(work, args, into);
     // THE BUILD'S OWN SELECTION AND DIRECTORIES, so cargo finds it fresh and
     // the list names exactly the binaries the build wrote.
     let mut list: Vec<String> = [
@@ -5955,23 +6058,8 @@ pub fn record_reach(
         &config,
         super::cover::wrapped_config(work, &recorder, RECORD_ARG, &state.join("nextest"))?,
     )?;
-    let mut args: Vec<String> = [
-        "nextest",
-        "run",
-        "--cargo-profile",
-        "test",
-        "--profile",
-        "batten-cover",
-        "--no-fail-fast",
-        "--config-file",
-    ]
-    .map(String::from)
-    .to_vec();
-    args.push(config.to_string_lossy().into_owned());
-    for package in packages {
-        args.extend([String::from("-p"), (*package).to_owned()]);
-    }
-    args.extend(cargo_dirs(target));
+    let (binaries, metadata) = suite_binaries((work, target, state), packages)?;
+    let args = reach_args(&config, (&binaries, &metadata));
     let mut env: Vec<(String, String)> = Vec::new();
     env.extend([
         (String::from(REACH), base.to_string_lossy().into_owned()),
@@ -6004,7 +6092,7 @@ pub fn record_reach(
     if passed && super::stable::twice() {
         let first = collect_reach(&base, identity)?;
         let red = failed_records(&base);
-        for (case, functions) in super::stable::by_digest(&first.executed, &identity.probes) {
+        for (case, functions) in super::stable::by_digest(&first.executed, identity.probes) {
             if !red.contains(&case) {
                 super::stable::keep(&base, &case, &functions)?;
             }
@@ -6024,7 +6112,7 @@ pub fn record_reach(
     // EVERY CASE RECORDED TWICE OVER IDENTICAL INPUTS RAN THE SAME FUNCTIONS,
     // or the sweep refuses ([`super::stable`]). A red case has its own verdict.
     let red = failed_records(&base);
-    let mut after = super::stable::by_digest(&reach.executed, &identity.probes);
+    let mut after = super::stable::by_digest(&reach.executed, identity.probes);
     after.retain(|case, _| !red.contains(case));
     let compared = super::stable::judge(&base, &after)?;
     if compared > 0 {
@@ -9361,8 +9449,7 @@ pub fn sweep(
         control: &Control::new(),
         reuse: reuse.as_ref(),
     };
-    // EVERY JUDGING RUN READS THE ORIGINALS (CLOUD-2911), as the reach run's do.
-    let shown = Shown::originals(&root, &work, &rendered_files(&work, mutants, &schema))?;
+    let shown = shown_over(reuse.as_ref(), (&root, &work), mutants, &schema)?;
     let (red, control) = control_red(&judging, out)?;
     let judging = judging.with_red(&red).with_control(&control);
     let mut verdicts = judge_all(&judging, &todo, jobs, out);
@@ -10848,7 +10935,8 @@ mod tests {
     ///
     /// COMPILED EVERYWHERE, MEASURED WHERE A RESIDENT SIZE CAN BE READ
     /// (`policy/cfg-gated-test.rego`): off Linux no `/proc/self/status` exists,
-    /// so the case states that and ends; on Linux an unreadable one fails it.
+    /// so the case asserts that it is not on Linux; on Linux an unreadable one
+    /// fails it. Every path asserts (`silent_skip`).
     #[test]
     fn the_named_part_memo_holds_no_cases_names() {
         let resident = || -> Option<usize> {
@@ -10858,13 +10946,7 @@ mod tests {
                 .find_map(|line| line.strip_prefix("VmRSS:"))
                 .and_then(|kb| kb.trim().trim_end_matches(" kB").trim().parse().ok())
         };
-        let Some(before) = resident() else {
-            assert!(
-                std::env::consts::OS != "linux",
-                "Linux reports a resident size in /proc/self/status"
-            );
-            return;
-        };
+        let before = resident();
         let mut parts = NamedParts::default();
         for case in 0..2_000_usize {
             let ran: BTreeSet<usize> = (case..case + 200).collect();
@@ -10876,11 +10958,19 @@ mod tests {
             });
             assert_eq!(defined.len(), 100);
         }
-        let grown = resident().unwrap().saturating_sub(before);
-        assert!(
-            grown < 64 * 1024,
-            "the memo grew {grown} kB over 2,000 cases of 2,000 names"
-        );
+        match before.zip(resident()) {
+            Some((before, after)) => {
+                let grown = after.saturating_sub(before);
+                assert!(
+                    grown < 64 * 1024,
+                    "the memo grew {grown} kB over 2,000 cases of 2,000 names"
+                );
+            }
+            None => assert!(
+                std::env::consts::OS != "linux",
+                "Linux reports a resident size in /proc/self/status"
+            ),
+        }
     }
 
     /// Fails by: a memo hit answering another key's part, or a miss for the
@@ -11122,6 +11212,41 @@ mod tests {
             "the premise: a lone run takes the shared temp root"
         );
         assert!(kept.is_file(), "the judge's config is left");
+    }
+
+    /// The reach suite runs the binaries the rendering built and never asks
+    /// cargo to build, so no build sees the originals shown beside it.
+    ///
+    /// Fails by: the suite run built by nextest (`--cargo-profile`, `-p`,
+    /// `--target-dir`), which rebuilt `batten` from originals and renderings
+    /// mixed and left a shard with no reach at all (CLOUD-2911).
+    #[test]
+    fn the_reach_suite_runs_the_built_binaries_and_builds_nothing() {
+        let args = reach_args(
+            std::path::Path::new("/s/nextest.toml"),
+            (
+                std::path::Path::new("/s/reach-binaries.json"),
+                std::path::Path::new("/s/reach-cargo-metadata.json"),
+            ),
+        );
+        for (flag, value) in [
+            ("--config-file", "/s/nextest.toml"),
+            ("--binaries-metadata", "/s/reach-binaries.json"),
+            ("--cargo-metadata", "/s/reach-cargo-metadata.json"),
+            ("--profile", "batten-cover"),
+        ] {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair[0] == flag && pair[1] == value),
+                "{flag} {value} in {args:?}"
+            );
+        }
+        for building in ["--cargo-profile", "-p", "--target-dir", "--config"] {
+            assert!(
+                !args.iter().any(|arg| arg == building),
+                "{building} in {args:?}"
+            );
+        }
     }
 
     #[test]
@@ -11698,7 +11823,7 @@ mod tests {
                     .map(|(case, ids)| {
                         // `fresh` is read too: cleared for its new mutant, it
                         // is a witness when its digest holds (CLOUD-2936).
-                        let id = if case.0 == "fresh" { 0 } else { 1 };
+                        let id = usize::from(case.0 != "fresh");
                         assert_eq!(ids, &BTreeSet::from([id]), "carried to the new probe id");
                         (case.clone(), String::from("same"))
                     })
