@@ -898,6 +898,12 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
         // sees it collects nothing. Both `a_wrapped_compile_*` cases failed in
         // every lap and passed bare. A case about a watched step sets it.
         batten::step::DISK_WATCHED,
+        // NOR AN AMBIENT SWITCH (CLOUD-2718, carried from 03d50c20 for
+        // CLOUD-1544): the state repository is named by the environment and is
+        // deliberately not a surface flag, so the derivation cannot see it. A
+        // cloud environment sets it for every session, and a case that inherited
+        // it would publish a fixture's receipts to a real remote.
+        batten::session::STATE_REPO_ENV,
         // NOR THE SCHEMA SWEEP'S RECORDER (#1276): the reach baseline runs this
         // suite with both exported, so every `batten` a case started recorded
         // into the OUTER sweep's reach and read its tree. The cases driving a

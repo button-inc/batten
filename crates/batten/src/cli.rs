@@ -2241,6 +2241,11 @@ pub enum ReceiptCommand {
     /// `tail` exits with the pipe's status, so a branch `linear-check` had
     /// rejected reported success and the zero was acted on.
     Verified,
+    /// Publish this checkout's receipts to the private state repository
+    /// (CLOUD-1544).
+    Publish,
+    /// Pull this branch's published receipts into this checkout (CLOUD-1544).
+    Pull,
 }
 
 /// Subcommands of `config`.
@@ -3303,6 +3308,8 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
             json: flag(matches, "json"),
         }),
         "verified" => Some(ReceiptCommand::Verified),
+        "publish" => Some(ReceiptCommand::Publish),
+        "pull" => Some(ReceiptCommand::Pull),
         _ => None,
     }
 }

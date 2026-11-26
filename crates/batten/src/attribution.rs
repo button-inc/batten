@@ -461,6 +461,23 @@ pub fn set_identity(
     Ok(Outcome::Written { identity, was })
 }
 
+/// The accountable identity an artifact this clone publishes names as its
+/// producer (CLOUD-1544 §5): the committer git would stamp, when
+/// `identity_deny` matches neither half of the stamped pair. `None` where
+/// either half is unresolved or denied — a vendor identity is never a
+/// producer, the same rule [`set_identity`] keeps for a commit.
+///
+/// # Errors
+///
+/// Returns an error when the deny list does not compile.
+pub fn producer(dir: &Path, attribution: &Attribution) -> Result<Option<String>> {
+    let deny = Matchers::compile("identity_deny", &attribution.identity_deny)?;
+    let Ok((author, committer)) = stamped_pair(dir) else {
+        return Ok(None);
+    };
+    Ok((!deny.matches(&author) && !deny.matches(&committer)).then_some(committer))
+}
+
 /// The first candidate `identity_deny` does not match.
 fn first_accountable(candidates: Vec<Identity>, deny: &Matchers) -> Option<Identity> {
     candidates
