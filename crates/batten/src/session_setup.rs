@@ -153,6 +153,13 @@ pub fn payload_path(git_dir: &Path) -> PathBuf {
 /// Whether `command` is the dispatch itself: [`DISPATCH`], its program reached
 /// by any path, and nothing else on the line. The install gate admits it in
 /// every phase, so the one call that ends the hold is never held.
+///
+/// THE PROGRAM WORD IS A PATH AND NOTHING ELSE (CLOUD-2840 review of r3): its
+/// last `/`-separated part was the whole test, so a shell prefix glued to it,
+/// `{touch,PWN};/usr/bin/batten startup --session`, read as the dispatch and
+/// ran `touch PWN` past the gate. A word made only of path characters cannot
+/// carry a separator, an expansion or a quote, so what the shell runs is the
+/// one program this names.
 #[must_use]
 pub fn is_dispatch(command: &str) -> bool {
     let mut words = command.split_whitespace();
@@ -160,7 +167,12 @@ pub fn is_dispatch(command: &str) -> bool {
     words
         .next()
         .zip(wanted.next())
-        .is_some_and(|(program, name)| program.rsplit('/').next() == Some(name))
+        .is_some_and(|(program, name)| {
+            program
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+'))
+                && program.rsplit('/').next() == Some(name)
+        })
         && words.eq(wanted)
 }
 
@@ -733,6 +745,18 @@ mod tests {
     fn the_dispatch_is_exactly_the_one_command() {
         assert!(is_dispatch("batten startup --session"));
         assert!(is_dispatch("  /root/.local/bin/batten  startup --session "));
+        // A SHELL PREFIX GLUED TO THE PROGRAM WORD is no path: the shell runs
+        // the prefix first (CLOUD-2840 review of r3).
+        for glued in [
+            "{touch,PWN};/usr/bin/batten startup --session",
+            "x;batten startup --session",
+            "$(touch PWN)/batten startup --session",
+            "`touch PWN`/batten startup --session",
+            "'batten' startup --session",
+            "a&&/usr/bin/batten startup --session",
+        ] {
+            assert!(!is_dispatch(glued), "{glued}");
+        }
         assert!(!is_dispatch("batten startup"));
         assert!(!is_dispatch("batten startup --session && cargo build"));
         assert!(!is_dispatch("mise exec -- batten startup --session"));
