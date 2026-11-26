@@ -10124,6 +10124,10 @@ mod tests {
     /// key the read does not use, or the read returning another shape.
     #[test]
     fn a_unit_list_is_read_back_from_its_memo() {
+        // ITS OWN STATE ROOT (CLOUD-2936): against the developer's store, the
+        // entry one recording wrote was the one the next read, and ran nothing
+        // that writes it.
+        crate::testing::contain_state(&crate::scratch::scratch("rules-units-memo").join("state"));
         let text = "pub fn memo_probe(x: u8) -> u8 { x.saturating_add(1) }\n";
         let first = super::unit_nodes("memo_probe.rs", text).expect("a parsed file");
         // FAILS rather than skips without a state root: a suite host always has

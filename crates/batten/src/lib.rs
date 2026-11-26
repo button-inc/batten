@@ -34205,6 +34205,10 @@ mod tests {
     /// never read where the suite runs inside one.
     #[test]
     fn a_checkout_has_its_at_risk_half_read() {
+        // ITS OWN STATE ROOT (CLOUD-2936): the read writes its cache, and
+        // against the developer's store one recording wrote it and the next
+        // read it.
+        crate::testing::contain_state(&crate::scratch::scratch("at-risk-read").join("state"));
         let facts = super::stop_facts(&crate::Overrides::default()).expect("the stop facts read");
         assert!(facts.at_risk.is_some());
     }
