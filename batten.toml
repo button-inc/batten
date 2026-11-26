@@ -7755,6 +7755,8 @@ line_sources = [
   # `#MUTANT-SUITE` rows as surely, and a one-crate glob left it unbindable.
   "crates/*/{tests,examples}/**/*.rs",
   "crates/batten/src/policy/presets/**/*.rego",
+  # The engine-default library (CLOUD-2840) declares rows as a preset does.
+  "crates/batten/src/policy/library/*.rego",
   "policy/*.rego",
   "tests/**/*.bats",
   "mise-tasks/**",
@@ -7805,6 +7807,8 @@ scope = "tree"
 line_sources = [
   "crates/*/{tests,examples}/**/*.rs",
   "crates/batten/src/policy/presets/**/*.rego",
+  # The engine-default library (CLOUD-2840) declares rows as a preset does.
+  "crates/batten/src/policy/library/*.rego",
   "policy/*.rego",
   "tests/**/*.bats",
   "mise-tasks/**",
@@ -8129,15 +8133,15 @@ module = "policy/lap-tree-held.rego"
 severity = "deny"
 
 # A SESSION WHOSE SETUP IS NOT DISPATCHED, OR STILL INSTALLING (CLOUD-2840). The
-# hook spawns nothing: it tells the agent to dispatch one background install
-# task. Until it does, every call but a read and the dispatch is held, naming the
-# dispatch; while it runs, a call naming a program that resolves to nothing, to a
+# hook spawns nothing: it tells the agent to dispatch one install task, in the
+# background where the host can, inline where it cannot. Until it does, every
+# call but a read and the dispatch is held, naming the dispatch; while it runs, a call naming a program that resolves to nothing, to a
 # shim under the environment manager's install root, or to the manager itself is
 # held (could-not-look, pointing at the task) until the task says `ok`, and
 # refused naming the failure after `failed` or a crash.
 [[rule]]
 id = "tool install pending"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call held before it runs, so nothing persists for a command to repair; the refusal's route names the task to watch"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call held before it runs, so nothing persists for a command to repair; the refusal's route names the dispatch, and its class the wait while the task runs"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/install-gate.rego"
@@ -10327,7 +10331,7 @@ glob = ".regal/config.yaml"
 # was under. The other bundles under `crates/batten/src/policy/presets/` do not
 # pass `opa check` together today (a package annotation redeclared per bundle),
 # so the reach is widened one bundle at a time rather than all at once.
-check = "mise exec -- regal lint policy/ crates/batten/src/policy/presets/shell-hygiene/"
+check = "mise exec -- regal lint policy/ crates/batten/src/policy/presets/shell-hygiene/ crates/batten/src/policy/library/"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "class 2 (a Rego CST): add a `# METADATA schemas:` block binding `input` to the schema for the module's surface — `schema[\"policy-input.schema\"]` for a tree-scoped module, `schema[\"policy-call.schema\"]` for a mediated_call one. One block per PACKAGE; OPA refuses a redeclaration"
@@ -10354,7 +10358,7 @@ kind = "command"
 # fixtures that copy the committed modules, and `mise exec` cannot resolve there.
 glob = "schema/policy-input.schema.json"
 # `shell-hygiene` is named for the reason on `module bind missing` above.
-check = "mise exec -- opa check -s schema/ policy/ crates/batten/src/policy/presets/shell-hygiene/"
+check = "mise exec -- opa check -s schema/ policy/ crates/batten/src/policy/presets/shell-hygiene/ crates/batten/src/policy/library/"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (review disposition): the module names an input path the engine does not emit; fix the path or add the fact, and read the `want (one of)` list in the error for what this surface actually carries"
@@ -12107,6 +12111,7 @@ gates = [
   "script-spawn-opaque",
   "lap-tree-held",
   "install-gate",
+  "crates/batten/src/policy/library/read-only.rego",
   "profile-read-first",
   "profile-stripped",
   "sed-line-address",
@@ -15276,13 +15281,34 @@ target = "rules/toolchain.md"
 id = "tool install pending"
 gloss = "a program this call runs may still be installing, so it was not run"
 class = """
-A session's setup runs as one background task the agent dispatches (`batten startup --session`, CLOUD-2840); the hook only tells it to. Until it is dispatched, every call but a read and the dispatch itself is held: the subjects say `session-setup undispatched` and name the dispatch, which runs as a background task with the harness's own facility, never inline. While it runs, a program the call names that resolves to nothing on PATH, or resolves under the environment manager's install root, may be a shim with nothing behind it yet: run now, it would fail as if the work were wrong. That is could-not-look, not a verdict on the call. Once the task records `ok` the program runs. If it recorded `failed`, or died without a word, the install is what failed, and the last subject names the task, its state and its pid. `git status` is admitted throughout.
+A session's setup runs as one task the agent dispatches (`batten startup --session`, CLOUD-2840); the hook only tells it to. Where the host can run a call in the background, the dispatch runs that way, and run inline it is held in every state (the subject `batten startup --session inline`); where the host cannot, the inline dispatch is the one it can make, and it is admitted.
+
+What to do depends on the state the subjects name. `session-setup undispatched`: every call but a read and the dispatch is held; run the dispatch. A read is a read tool, or a command whose every program only reads and none of which the install may own, with no output redirect; `git` is not one before the dispatch, because its options and `GIT_*` variables can make it run a program. `running`: a program the call names that resolves to nothing on PATH, or under the environment manager's install root, may be a shim with nothing behind it yet, and run now it would fail as if the work were wrong; that is could-not-look, not a verdict on the call. Run nothing to wait: the dispatched task's end is reported by the facility that runs it, and a second dispatch while it runs returns at once. `failed`, or a dead pid: the install is what failed, the last subject names the task, its state and its pid, and the remedy is the dispatch again. `ok`: nothing is held but an inline dispatch, and nothing is owed; drop the call. `git status` is admitted while the task runs.
 """
 
+# THE DISPATCH, OR THE WAIT, BY STATE (review of 076a19082): on a host with no
+# `SessionStart` advisory channel the refusal is the only carrier of the
+# instruction, so it names `session_setup::DISPATCH`; while the subjects say the
+# task runs, a second dispatch is wrong and the remedy is to wait. One route
+# names both, because a route carries no condition and the subjects carry the
+# state. `install_gate.rs` loads this committed row.
+#
+# THE WAIT NAMES NO COMMAND (r4). It named `batten task alive`, which
+# `task run loose` refuses as a weaker spelling of `[tasks.alive]`, naming
+# `mise run alive`, which this gate holds while setup runs (the manager is
+# always pending): a remedy cycle across two rules, measured live. The task's
+# end is reported by the facility that runs it, so nothing has to run to watch
+# it, and the class says so.
+#
+# THE TARGET IS THE ARGV AND NOTHING ELSE (r5): a `command` route's target
+# becomes the refusal's runnable fix, split on whitespace (`rules.rs`,
+# `policy_remediation`), so prose there is an argv nobody can run. The dispatch
+# is right in every state, since a second one while the first runs returns at
+# once; how to run it, and the wait, are the class's.
 [[verdict.route]]
-id = "task watch first"
+id = "tool install first"
 kind = "command"
-target = "batten task alive"
+target = "batten startup --session"
 
 [[verdict]]
 id = "path write held"
