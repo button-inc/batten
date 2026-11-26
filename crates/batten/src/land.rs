@@ -2361,7 +2361,14 @@ const VERIFY_SETTINGS: crate::config_model::ExecConfig = crate::config_model::Ex
     progress: crate::config_model::ExecProgress::Echo,
     ..crate::config_model::ExecConfig::DEFAULT
 };
-const _: () = assert!(VERIFY_SETTINGS.manage_process_group && !VERIFY_SETTINGS.tee);
+const _: () = assert!(
+    VERIFY_SETTINGS.manage_process_group
+        && !VERIFY_SETTINGS.tee
+        && matches!(
+            VERIFY_SETTINGS.progress,
+            crate::config_model::ExecProgress::Echo
+        )
+);
 
 /// What a gate that RAN said about `head`: its exit code first, then the
 /// declared patterns its output matched.
