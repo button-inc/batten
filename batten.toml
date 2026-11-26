@@ -19477,6 +19477,111 @@ tools = [
   ],
 ]
 
+# THE TRACED LANE (CLOUD-2789), UNTRACED BY DECLARATION. Its cases take the
+# traced branch only where nothing traces them, so a miss here runs bare
+# (`batten step untraced`) and its inputs are this declaration alone: the
+# whole tree, as `test:cargo`'s are, the environment its cases read, and the
+# `strace` and nextest they run under. Two rows, one per argv of `test:traced`.
+[[step]]
+id = "test:traced"
+inputs = ["."]
+tools = [
+  ["batten", "step", "untraced"],
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["cargo", "nextest", "--version"],
+  ["strace", "-V"],
+  [
+    "batten",
+    "step",
+    "env",
+    "--exclude",
+    "BATTEN_TASK_PID",
+    "--exclude",
+    "BATTEN_GATE_PID",
+    "--exclude",
+    "BATTEN_LAND_LAP",
+    "--exclude",
+    "BATTEN_LAND_GATE",
+    "--exclude",
+    "BATTEN_BOOT_TIME",
+    "--exclude",
+    "BATTEN_SESSION",
+    "--exclude",
+    "BATTEN_SESSION_PARENT",
+    "--exclude",
+    "BATTEN_SPEC_BASE",
+    "--exclude",
+    "BATTEN_CLAIM_CHECK_BYPASS",
+    "--exclude",
+    "BATTEN_GH_GUARD_BYPASS",
+    "--exclude",
+    "BATTEN_STEP_RECEIPT_BYPASS",
+    "--exclude",
+    "BATTEN_STOP_GUARD_BYPASS",
+    "--exclude",
+    "BATTEN_UNLANDED_CHECK_BYPASS",
+    "--",
+    "BATTEN_*",
+    "RUST*",
+    "CARGO_*",
+    "NEXTEST_*",
+    "CI",
+    "HOME",
+    "PATH",
+  ],
+]
+
+[[step]]
+id = "test:traced:lib"
+inputs = ["."]
+tools = [
+  ["batten", "step", "untraced"],
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["cargo", "nextest", "--version"],
+  ["strace", "-V"],
+  [
+    "batten",
+    "step",
+    "env",
+    "--exclude",
+    "BATTEN_TASK_PID",
+    "--exclude",
+    "BATTEN_GATE_PID",
+    "--exclude",
+    "BATTEN_LAND_LAP",
+    "--exclude",
+    "BATTEN_LAND_GATE",
+    "--exclude",
+    "BATTEN_BOOT_TIME",
+    "--exclude",
+    "BATTEN_SESSION",
+    "--exclude",
+    "BATTEN_SESSION_PARENT",
+    "--exclude",
+    "BATTEN_SPEC_BASE",
+    "--exclude",
+    "BATTEN_CLAIM_CHECK_BYPASS",
+    "--exclude",
+    "BATTEN_GH_GUARD_BYPASS",
+    "--exclude",
+    "BATTEN_STEP_RECEIPT_BYPASS",
+    "--exclude",
+    "BATTEN_STOP_GUARD_BYPASS",
+    "--exclude",
+    "BATTEN_UNLANDED_CHECK_BYPASS",
+    "--",
+    "BATTEN_*",
+    "RUST*",
+    "CARGO_*",
+    "NEXTEST_*",
+    "CI",
+    "HOME",
+    "PATH",
+  ],
+]
+
 # THE TREE HALF OF `batten-check` (step 13a): `enforce --half tree` judges only
 # rows whose verdict is a function of the index, so the key is the index plus
 # what those rows read beside it — the toolchain that builds the engine, the

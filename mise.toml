@@ -1546,8 +1546,12 @@ run = "{{vars.batten}} step run test:cargo -- cargo nextest run --workspace"
 # `the_traced_lane_runs_every_module_that_reaches_a_tracer` derives that set from
 # the source and holds this line to it, so a new such module cannot be missed.
 # Two argvs, the `it` modules and the lib's tracer cases, since a positional
-# filter would match the lib's whole `mutate::` tree too. NOT receipt-routed:
-# a `step run` miss would trace the suite and fail it.
+# filter would match the lib's whole `mutate::` tree too.
+#
+# RECEIPT-ROUTED THROUGH UNTRACED ROWS (CLOUD-2789): a traced `step run` miss
+# would attach `strace` and fail every case under the required-trace guard, so
+# the `test:traced` and `test:traced:lib` rows declare `batten step untraced`,
+# and a miss runs bare while a lap over an unchanged tree hits both.
 #
 # NO `CI` IN THIS LANE'S ENV (CLOUD-2789, measured): `ra_ap_stdx` reads
 # `option_env!("CI")`, and cargo tracks a variable a crate reads that way as a
@@ -1563,8 +1567,8 @@ run = "{{vars.batten}} step run test:cargo -- cargo nextest run --workspace"
 [tasks."test:traced"]
 description = "Gate: every case that takes a traced branch on CI's `ci` job, run here as that job runs it (CLOUD-2789)"
 run = [
-  "cargo nextest run -p batten --no-tests=fail --test it ci_tools:: land:: mutate:: mutate_schema:: prune_watch:: step_cover:: step_journal:: step_receipt::",
-  "cargo nextest run -p batten --no-tests=fail --lib mutate::trace::tests::",
+  "{{vars.batten}} step run test:traced -- cargo nextest run -p batten --no-tests=fail --test it ci_tools:: land:: mutate:: mutate_schema:: prune_watch:: step_cover:: step_journal:: step_receipt::",
+  "{{vars.batten}} step run test:traced:lib -- cargo nextest run -p batten --no-tests=fail --lib mutate::trace::tests::",
 ]
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow", BATTEN_TEST_TRACED_REQUIRED = "1", NEXTEST_PROFILE = "narrow" }
 
