@@ -6771,9 +6771,13 @@ pub fn case_digests<'c>(
         // (CLOUD-2904): a carried case's digest was derived afresh on every
         // sweep, ~50 ms a case with every file's parse kept, so a null re-run
         // spent 1,550 s re-deriving 11,659 digests it already held.
-        let key = keys
-            .as_mut()
-            .map(|keys| keys.key(case, ran, depends, &mut shared));
+        let memo = keys.as_mut().zip(depends.derived).map(|(keys, store)| {
+            keys.lookup(store, (case, ran), depends, (&mut shared, &mut parsed))
+        });
+        if let Some((_, Some(digest))) = memo {
+            digests.insert(case.clone(), digest);
+            continue;
+        }
         let mut derive = || {
             CASE_DERIVATIONS.with(|count| count.set(count.get() + 1));
             let mut hasher = blake3::Hasher::new();
@@ -6812,24 +6816,11 @@ pub fn case_digests<'c>(
             // so the walk's order is the names', and each name's items are hashed
             // once. A case's own text starts the walk too (CLOUD-2904): a `const`
             // a test names directly is in no probe's names.
-            let mut outside: BTreeSet<String> = own
-                .iter()
-                .flatten()
-                .flat_map(|own| own.mentions.iter().cloned())
-                .collect();
-            // A CASE NO SOURCE NAMES STARTS THE WALK FROM ALL ITS FILES SAY
-            // (CLOUD-2904): an `rstest` case, a macro's test or a `mod.rs` module
-            // has no own text, and a `const` its file names was in no key.
-            if own.is_none() {
-                outside.extend(unfound_mentions(
-                    root,
-                    &unfound,
-                    (&mut file_mentions, depends.derived),
-                ));
-            }
-            if let Some(reached) = &reached {
-                outside.extend(reached.outside.iter().cloned());
-            }
+            let outside = case_outside(
+                root,
+                (own.as_deref(), &unfound, reached.as_ref()),
+                (&mut file_mentions, depends.derived),
+            );
             let (named, defined) = named_parts.part(ran, &outside, || {
                 named_part(&graph, &mut walk, depends, ran, &outside)
             });
@@ -6845,7 +6836,8 @@ pub fn case_digests<'c>(
                 ran,
                 &defined,
             );
-            if observed || reached.as_ref().is_some_and(|reached| reached.observes) {
+            let callers = observed || reached.as_ref().is_some_and(|reached| reached.observes);
+            if callers {
                 key_callers(&mut hasher, (root, package_dirs), case, shared.get(binary));
             }
             if let Some(paths) = depends.read.get(case) {
@@ -6857,15 +6849,90 @@ pub fn case_digests<'c>(
                 hasher.update(b"\x19");
                 hasher.update(depends.untraced.as_bytes());
             }
-            hasher.finalize().to_hex().to_string()
+            let read = CaseRead {
+                callers,
+                taken: reached.and_then(|reached| reached.taken),
+                own: own.as_deref().map(own_text_names),
+            };
+            (hasher.finalize().to_hex().to_string(), read)
         };
-        let digest = match depends.derived.zip(key) {
-            Some((store, key)) => store.derive("case", key.as_bytes(), derive),
-            None => derive(),
-        };
+        let (digest, read) = derive();
+        if let Some(((key, _), (keys, store))) = memo.zip(keys.as_mut().zip(depends.derived)) {
+            let entry = keys.entry(digest.clone(), &read, case, depends, &mut shared);
+            store.write("case", key.as_bytes(), &entry);
+        }
         digests.insert(case.clone(), digest);
     }
     digests
+}
+
+/// The names a case's walk starts from outside what it ran ([`case_digests`]):
+/// what its own texts mention, what the crate items it reached mention, and,
+/// for a case no source names, what its files say.
+///
+/// A CASE NO SOURCE NAMES STARTS THE WALK FROM ALL ITS FILES SAY (CLOUD-2904):
+/// an `rstest` case, a macro's test or a `mod.rs` module has no own text, and
+/// a `const` its file names was in no key.
+fn case_outside(
+    root: &std::path::Path,
+    (own, unfound, reached): (Option<&[OwnText]>, &[String], Option<&CrateReach>),
+    cache: (
+        &mut std::collections::HashMap<String, BTreeSet<String>>,
+        Option<&Derived>,
+    ),
+) -> BTreeSet<String> {
+    let mut outside: BTreeSet<String> = own
+        .into_iter()
+        .flatten()
+        .flat_map(|own| own.mentions.iter().cloned())
+        .collect();
+    if own.is_none() {
+        outside.extend(unfound_mentions(root, unfound, cache));
+    }
+    if let Some(reached) = reached {
+        outside.extend(reached.outside.iter().cloned());
+    }
+    outside
+}
+
+/// What one derivation of a case's digest read beyond its key
+/// ([`CaseKeys::key`]), before it is taken down as a [`CaseEntry`].
+struct CaseRead {
+    /// Whether it keyed where its callers sit ([`key_callers`]).
+    callers: bool,
+    /// The positions of the crate items it took ([`CrateReach::taken`]).
+    taken: Option<Vec<usize>>,
+    /// The names its own texts start the crate walk with, where it has any.
+    own: Option<BTreeSet<String>>,
+}
+
+/// A case's digest as kept in a [`Derived`] store, with what it read of its
+/// test crate, item by item, so a later sweep can tell without deriving it
+/// whether any of that moved ([`CaseKeys::holds`]).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CaseEntry {
+    digest: String,
+    read: CrateRead,
+}
+
+/// What a case read of its test crate ([`CaseKeys::entry`]).
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct CrateRead {
+    /// The crate read whole, its keyed text and every include's value, where
+    /// the case had no own text.
+    whole: Option<String>,
+    /// The names and type names the walk ended with: every item answering
+    /// them is what it took.
+    wanted: BTreeSet<String>,
+    types: BTreeSet<String>,
+    /// Each item taken, by its content, in order.
+    taken: Vec<String>,
+    /// The values of what those items include.
+    includes: String,
+    /// Where its callers sit: its own sources' and its crate's raw bytes.
+    callers: Option<String>,
+    /// Whether it had a test crate at all.
+    crate_held: bool,
 }
 
 thread_local! {
@@ -6899,10 +6966,8 @@ struct CaseKeys<'k> {
     everything: &'k str,
     /// The sweep-wide part, taken once.
     sweep: blake3::Hash,
-    /// Each source's content, by path; `None` where it cannot be read.
-    files: std::collections::HashMap<String, Option<blake3::Hash>>,
-    /// Each test crate's part, by binary; `None` for a unit case's.
-    crates: std::collections::HashMap<String, Option<blake3::Hash>>,
+    /// Each test crate's index, by binary; `None` for a unit case's.
+    crates: std::collections::HashMap<String, Option<CrateIndex>>,
 }
 
 impl<'k> CaseKeys<'k> {
@@ -6942,7 +7007,6 @@ impl<'k> CaseKeys<'k> {
             package_dirs,
             everything,
             sweep: sweep.finalize(),
-            files: std::collections::HashMap::new(),
             crates: std::collections::HashMap::new(),
         }
     }
@@ -6953,7 +7017,7 @@ impl<'k> CaseKeys<'k> {
         case: &Case,
         ran: Option<&BTreeSet<usize>>,
         depends: &Depends<'_>,
-        shared: &mut std::collections::HashMap<String, TestCrate>,
+        parsed: &mut std::collections::BTreeMap<String, Parsed>,
     ) -> String {
         let (name, binary) = case;
         let compiled = depends.compiled;
@@ -6985,39 +7049,32 @@ impl<'k> CaseKeys<'k> {
                 key.update(b"\x00");
             }
         }
+        // ITS OWN TEXTS, NOT ITS FILES (CLOUD-2904): a test edited beside it
+        // in the same file moves no key but its own. A file with no text for
+        // it is keyed whole, as its digest is.
+        let test = name.rsplit("::").next().unwrap_or(name);
         for file in case_sources(self.package_dirs, name, binary) {
-            let root = self.root;
-            let content = self.files.entry(file.clone()).or_insert_with(|| {
-                crate::fsio::read(root.join(&file))
-                    .ok()
-                    .map(|bytes| blake3::hash(&bytes))
-            });
-            key.update(format!("\x1d{file}\x1f").as_bytes());
-            match content {
-                Some(hash) => key.update(hash.as_bytes()),
-                None => key.update(b"-"),
-            };
-        }
-        let (root, package_dirs, everything) = (self.root, self.package_dirs, self.everything);
-        let test_crate = self.crates.entry(binary.clone()).or_insert_with(|| {
-            let files = crate_sources(root, package_dirs, binary, depends.derived)?;
-            let held = shared
-                .entry(binary.clone())
-                .or_insert_with(|| TestCrate::read(root, &files, depends.derived));
-            let mut part = blake3::Hasher::new();
-            part.update(held.raw.as_bytes());
-            let targets: BTreeSet<&String> =
-                held.items.iter().flat_map(|item| &item.includes).collect();
-            for target in targets {
-                include_key(&mut part, target, (depends.resources, everything), root);
+            if file.ends_with("common/mod.rs") {
+                continue;
             }
-            Some(part.finalize())
-        });
-        key.update(b"\x17");
-        match test_crate {
-            Some(hash) => key.update(hash.as_bytes()),
-            None => key.update(b"-"),
-        };
+            key.update(format!("\x1d{file}\x1f").as_bytes());
+            match parsed_file(parsed, self.root, &file, depends.derived) {
+                Some((bytes, tests)) => match tests.get(test) {
+                    Some(bodies) => {
+                        for own in bodies {
+                            key.update(own.text.as_bytes());
+                            key.update(b"\x1e");
+                        }
+                    }
+                    None => {
+                        key.update(blake3::hash(bytes).as_bytes());
+                    }
+                },
+                None => {
+                    key.update(b"-");
+                }
+            }
+        }
         if let Some(paths) = depends.read.get(case) {
             for path in paths {
                 key.update(format!("\x1a{path}\x1f").as_bytes());
@@ -7029,6 +7086,284 @@ impl<'k> CaseKeys<'k> {
         }
         key.finalize().to_hex().to_string()
     }
+
+    /// `case`'s key, which ran `ran`, and the digest `store` keeps under it
+    /// where what that derivation read of its crate still holds.
+    fn lookup(
+        &mut self,
+        store: &Derived,
+        (case, ran): (&Case, Option<&BTreeSet<usize>>),
+        depends: &Depends<'_>,
+        (shared, parsed): (
+            &mut std::collections::HashMap<String, TestCrate>,
+            &mut std::collections::BTreeMap<String, Parsed>,
+        ),
+    ) -> (String, Option<String>) {
+        let key = self.key(case, ran, depends, parsed);
+        let held = store
+            .read::<CaseEntry>("case", key.as_bytes())
+            .filter(|held| self.holds(&held.read, case, depends, shared))
+            .map(|held| held.digest);
+        (key, held)
+    }
+
+    /// `binary`'s test crate indexed for [`CaseKeys::holds`], read once.
+    fn index(
+        &mut self,
+        binary: &str,
+        depends: &Depends<'_>,
+        shared: &mut std::collections::HashMap<String, TestCrate>,
+    ) -> Option<&CrateIndex> {
+        let (root, package_dirs, everything) = (self.root, self.package_dirs, self.everything);
+        self.crates
+            .entry(binary.to_owned())
+            .or_insert_with(|| {
+                let files = crate_sources(root, package_dirs, binary, depends.derived)?;
+                let held = shared
+                    .entry(binary.to_owned())
+                    .or_insert_with(|| TestCrate::read(root, &files, depends.derived));
+                Some(CrateIndex::of(held, (depends, everything, root)))
+            })
+            .as_ref()
+    }
+
+    /// The entry a derivation of `case` to `digest` is kept as.
+    fn entry(
+        &mut self,
+        digest: String,
+        read: &CaseRead,
+        case: &Case,
+        depends: &Depends<'_>,
+        shared: &mut std::collections::HashMap<String, TestCrate>,
+    ) -> CaseEntry {
+        let callers = read.callers.then(|| self.callers(case, depends, shared));
+        let (root, everything) = (self.root, self.everything);
+        let crate_read = match self.index(&case.1, depends, shared) {
+            None => CrateRead::absent(callers),
+            Some(index) => match (&read.taken, &read.own) {
+                (Some(taken), Some(own)) => {
+                    index.taken(taken, own, (depends, everything, root), callers)
+                }
+                _ => CrateRead::whole(index, callers),
+            },
+        };
+        CaseEntry {
+            digest,
+            read: crate_read,
+        }
+    }
+
+    /// Whether what a kept entry read of its crate, item by item, reads the
+    /// same over this tree: every item answering the names its walk ended
+    /// with is the one it took, by content; their includes hold their values;
+    /// and where it keyed its callers, they sit where they sat.
+    fn holds(
+        &mut self,
+        read: &CrateRead,
+        case: &Case,
+        depends: &Depends<'_>,
+        shared: &mut std::collections::HashMap<String, TestCrate>,
+    ) -> bool {
+        let callers = read
+            .callers
+            .as_ref()
+            .map(|_| self.callers(case, depends, shared));
+        let (root, everything) = (self.root, self.everything);
+        let now = match self.index(&case.1, depends, shared) {
+            None => CrateRead::absent(callers),
+            Some(index) if read.whole.is_some() => CrateRead::whole(index, callers),
+            Some(index) => {
+                let answering = index.answering(&read.wanted, &read.types);
+                let mut again = index.taken(
+                    &answering,
+                    &BTreeSet::new(),
+                    (depends, everything, root),
+                    callers,
+                );
+                again.wanted.clone_from(&read.wanted);
+                again.types.clone_from(&read.types);
+                again
+            }
+        };
+        now == *read
+    }
+
+    /// Where `case`'s callers sit ([`key_callers`]): its own sources' and its
+    /// test crate's raw bytes, digested.
+    fn callers(
+        &mut self,
+        case: &Case,
+        depends: &Depends<'_>,
+        shared: &mut std::collections::HashMap<String, TestCrate>,
+    ) -> String {
+        let held = self.index(&case.1, depends, shared).is_some();
+        let mut hasher = blake3::Hasher::new();
+        key_callers(
+            &mut hasher,
+            (self.root, self.package_dirs),
+            case,
+            shared.get(&case.1).filter(|_| held),
+        );
+        hasher.finalize().to_hex().to_string()
+    }
+}
+
+/// A test crate indexed for a [`CaseEntry`]'s check ([`CaseKeys::holds`]):
+/// each item by the names that take it, by content, and the crate whole.
+struct CrateIndex {
+    /// Each item's position by every name it answers to.
+    by_name: std::collections::HashMap<String, Vec<usize>>,
+    /// Each module or type item's position by every name a type path takes it by.
+    by_type: std::collections::HashMap<String, Vec<usize>>,
+    /// The items that answer to no name, always taken.
+    always: Vec<usize>,
+    /// Each item's content: everything a walk reads of it.
+    content: Vec<String>,
+    /// Each item's include targets.
+    includes: Vec<BTreeSet<String>>,
+    /// Each item's mentions and type mentions, which grow the walk.
+    grows: Vec<(BTreeSet<String>, BTreeSet<String>)>,
+    /// The crate whole: its keyed text and every include's value.
+    whole: String,
+}
+
+impl CrateIndex {
+    fn of(
+        test_crate: &TestCrate,
+        (depends, everything, root): (&Depends<'_>, &str, &std::path::Path),
+    ) -> Self {
+        let mut index = Self {
+            by_name: std::collections::HashMap::new(),
+            by_type: std::collections::HashMap::new(),
+            always: Vec::new(),
+            content: Vec::new(),
+            includes: Vec::new(),
+            grows: Vec::new(),
+            whole: String::new(),
+        };
+        for (at, item) in test_crate.items.iter().enumerate() {
+            match &item.names {
+                None => index.always.push(at),
+                Some(names) => {
+                    for name in names {
+                        index.by_name.entry(name.clone()).or_default().push(at);
+                        if item.a_type {
+                            index.by_type.entry(name.clone()).or_default().push(at);
+                        }
+                    }
+                }
+            }
+            index.content.push(
+                blake3::hash(&serde_json::to_vec(item).unwrap_or_default())
+                    .to_hex()
+                    .to_string(),
+            );
+            index.includes.push(item.includes.clone());
+            index
+                .grows
+                .push((item.mentions.clone(), item.types.clone()));
+        }
+        let mut whole = blake3::Hasher::new();
+        whole.update(&test_crate.whole);
+        let targets: BTreeSet<&String> = test_crate
+            .items
+            .iter()
+            .flat_map(|item| &item.includes)
+            .collect();
+        for target in targets {
+            include_key(&mut whole, target, (depends.resources, everything), root);
+        }
+        index.whole = whole.finalize().to_hex().to_string();
+        index
+    }
+
+    /// The positions of every item answering `wanted` or, a module or type,
+    /// `types` ([`Shared::answers`]), in order.
+    fn answering(&self, wanted: &BTreeSet<String>, types: &BTreeSet<String>) -> Vec<usize> {
+        let mut found: BTreeSet<usize> = self.always.iter().copied().collect();
+        for name in wanted {
+            found.extend(self.by_name.get(name).into_iter().flatten());
+        }
+        for name in types {
+            found.extend(self.by_type.get(name).into_iter().flatten());
+        }
+        found.into_iter().collect()
+    }
+
+    /// What a walk from `own` that took the items at `taken` read.
+    fn taken(
+        &self,
+        taken: &[usize],
+        own: &BTreeSet<String>,
+        (depends, everything, root): (&Depends<'_>, &str, &std::path::Path),
+        callers: Option<String>,
+    ) -> CrateRead {
+        let mut wanted = own.clone();
+        let mut types = BTreeSet::new();
+        let mut includes = blake3::Hasher::new();
+        let mut targets: BTreeSet<&String> = BTreeSet::new();
+        for at in taken {
+            wanted.extend(self.grows[*at].0.iter().cloned());
+            types.extend(self.grows[*at].1.iter().cloned());
+            targets.extend(&self.includes[*at]);
+        }
+        for target in targets {
+            include_key(&mut includes, target, (depends.resources, everything), root);
+        }
+        CrateRead {
+            whole: None,
+            wanted,
+            types,
+            taken: taken.iter().map(|at| self.content[*at].clone()).collect(),
+            includes: includes.finalize().to_hex().to_string(),
+            callers,
+            crate_held: true,
+        }
+    }
+}
+
+impl CrateRead {
+    /// What a case with no test crate read of one.
+    fn absent(callers: Option<String>) -> Self {
+        Self {
+            whole: None,
+            wanted: BTreeSet::new(),
+            types: BTreeSet::new(),
+            taken: Vec::new(),
+            includes: String::new(),
+            callers,
+            crate_held: false,
+        }
+    }
+
+    /// What a case that read `index`'s crate whole read.
+    fn whole(index: &CrateIndex, callers: Option<String>) -> Self {
+        Self {
+            whole: Some(index.whole.clone()),
+            crate_held: true,
+            ..Self::absent(callers)
+        }
+    }
+}
+
+/// `file` read and its tests' own texts derived, once into `parsed`
+/// ([`own_texts`]); `None` where it cannot be read.
+fn parsed_file<'p>(
+    parsed: &'p mut std::collections::BTreeMap<String, Parsed>,
+    root: &std::path::Path,
+    file: &str,
+    store: Option<&Derived>,
+) -> Option<&'p ParsedFile> {
+    parsed
+        .entry(file.to_owned())
+        .or_insert_with(|| {
+            let bytes = crate::fsio::read(root.join(file)).ok()?;
+            let tests = derived(store, "own", &bytes, || {
+                own_file(&String::from_utf8_lossy(&bytes))
+            });
+            Some((bytes, tests))
+        })
+        .as_ref()
 }
 
 /// `ids` widened to every probe id whose digest one of them has: the form a
@@ -7050,7 +7385,10 @@ fn fan_out(
 
 /// A source file read for a case's own text ([`own_texts`]): its bytes and
 /// its tests' texts ([`test_texts`]); `None` where it cannot be read.
-type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<OwnText>>)>;
+type Parsed = Option<ParsedFile>;
+
+/// A source's bytes and its tests' own texts ([`own_file`]).
+type ParsedFile = (Vec<u8>, std::collections::BTreeMap<String, Vec<OwnText>>);
 
 /// One of a test's own texts ([`test_texts`]), with what it names and what
 /// it mentions: each read off one parse of the text, when its file is derived.
@@ -7129,22 +7467,35 @@ impl Derived {
         bytes: &[u8],
         make: impl FnOnce() -> T,
     ) -> T {
-        let path = self
-            .dir
-            .join(format!("{kind}-{}", blake3::hash(bytes).to_hex()));
-        if let Some(held) = crate::fsio::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-        {
+        if let Some(held) = self.read(kind, bytes) {
             return held;
         }
         let artifact = make();
-        if let Ok(text) = serde_json::to_string(&artifact)
+        self.write(kind, bytes, &artifact);
+        artifact
+    }
+
+    /// Where the artifact of `kind` for `bytes` is kept.
+    fn path(&self, kind: &str, bytes: &[u8]) -> std::path::PathBuf {
+        self.dir
+            .join(format!("{kind}-{}", blake3::hash(bytes).to_hex()))
+    }
+
+    /// The artifact of `kind` kept for `bytes`, if one is and it reads back.
+    fn read<T: serde::de::DeserializeOwned>(&self, kind: &str, bytes: &[u8]) -> Option<T> {
+        crate::fsio::read_to_string(self.path(kind, bytes))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+    }
+
+    /// Keep `artifact` as the one of `kind` for `bytes`. Best effort: one not
+    /// kept is derived again by the next sweep, never read wrong.
+    fn write<T: serde::Serialize>(&self, kind: &str, bytes: &[u8], artifact: &T) {
+        if let Ok(text) = serde_json::to_string(artifact)
             && std::fs::create_dir_all(&self.dir).is_ok()
         {
-            let _ = crate::durable::replace(&path, text);
+            let _ = crate::durable::replace(self.path(kind, bytes), text);
         }
-        artifact
     }
 }
 
@@ -7182,13 +7533,7 @@ fn own_texts(
         if file.ends_with("common/mod.rs") {
             continue;
         }
-        let held = parsed.entry(file.clone()).or_insert_with(|| {
-            let bytes = crate::fsio::read(root.join(&file)).ok()?;
-            let tests = derived(store, "own", &bytes, || {
-                own_file(&String::from_utf8_lossy(&bytes))
-            });
-            Some((bytes, tests))
-        });
+        let held = parsed_file(parsed, root, &file, store);
         hasher.update(format!("\x1d{file}\x1f").as_bytes());
         let Some((bytes, tests)) = held else {
             continue;
@@ -7446,6 +7791,9 @@ fn everything_digest(resources: &std::collections::BTreeMap<String, String>) -> 
 struct CrateReach {
     outside: BTreeSet<String>,
     observes: bool,
+    /// The positions of the items taken, or `None` where the case had no own
+    /// text and took the whole crate.
+    taken: Option<Vec<usize>>,
 }
 
 /// The shared crate part of a case's digest ([`case_digests`]): every file
@@ -7485,12 +7833,9 @@ fn crate_part(
     // THE INCLUDES OF WHAT THE CASE REACHES, NEVER THE CRATE'S UNION (round 4b
     // #5): one edit to any file a test anywhere in `tests/it` includes re-keyed
     // all ~6,524 of its cases.
-    let taken: Vec<&Shared> = if let Some(texts) = own {
-        let wanted: BTreeSet<String> = texts
-            .iter()
-            .flat_map(|own| own.names.iter().cloned())
-            .collect();
-        let taken = reached_items(&test_crate.items, wanted);
+    let positions = own.map(|texts| reached_indices(&test_crate.items, own_text_names(texts)));
+    let taken: Vec<&Shared> = if let Some(positions) = &positions {
+        let taken: Vec<&Shared> = positions.iter().map(|at| &test_crate.items[*at]).collect();
         hasher.update(texts_digest(&taken).as_bytes());
         taken
     } else {
@@ -7509,7 +7854,16 @@ fn crate_part(
             .flat_map(|item| item.outside.iter().cloned())
             .collect(),
         observes: taken.iter().any(|item| item.observes),
+        taken: positions,
     })
+}
+
+/// The names a case's own texts start its crate walk with ([`crate_part`]).
+fn own_text_names(texts: &[OwnText]) -> BTreeSet<String> {
+    texts
+        .iter()
+        .flat_map(|own| own.names.iter().cloned())
+        .collect()
 }
 
 /// [`named_part`] once per distinct probe set and own-text names
@@ -7961,7 +8315,16 @@ fn reached_texts(items: &[Shared], wanted: BTreeSet<String>) -> Vec<&str> {
 }
 
 /// The items of `items` taken from `wanted`, transitively, in order.
-fn reached_items(items: &[Shared], mut wanted: BTreeSet<String>) -> Vec<&Shared> {
+fn reached_items(items: &[Shared], wanted: BTreeSet<String>) -> Vec<&Shared> {
+    reached_indices(items, wanted)
+        .into_iter()
+        .map(|at| &items[at])
+        .collect()
+}
+
+/// The positions in `items` of those taken from `wanted`, transitively, in
+/// order ([`reached_items`]).
+fn reached_indices(items: &[Shared], mut wanted: BTreeSet<String>) -> Vec<usize> {
     let mut wanted_types: BTreeSet<String> = BTreeSet::new();
     let mut taken = vec![false; items.len()];
     // BOUNDED BY THE ITEM COUNT (CLOUD-2789): a pass that grows takes at least
@@ -7983,11 +8346,11 @@ fn reached_items(items: &[Shared], mut wanted: BTreeSet<String>) -> Vec<&Shared>
             break;
         }
     }
-    items
+    taken
         .iter()
-        .zip(&taken)
+        .enumerate()
         .filter(|(_, taken)| **taken)
-        .map(|(item, _)| item)
+        .map(|(at, _)| at)
         .collect()
 }
 
@@ -16711,6 +17074,24 @@ mod tests {
         );
         assert_ne!(edited[&w], first[&w]);
         assert_eq!((&edited[&t], &edited[&u]), (&first[&t], &first[&u]));
+        // ITEM BY ITEM WITHIN ONE CRATE: one test's body moves that test
+        // alone, and a test added beside it moves none.
+        write(
+            "tests/it/a.rs",
+            "#[test]\nfn t() { fix::f(); fix::f(); }\n#[test]\nfn u() { fix::g(); }\n",
+        );
+        let (body, derived_body) = sweep(&held, Some(&Derived::at(&state, "build")));
+        assert_eq!(derived_body, 1, "the edited test alone");
+        assert_ne!(body[&t], first[&t]);
+        assert_eq!(body[&u], first[&u]);
+        write(
+            "tests/it/a.rs",
+            "#[test]\nfn t() { fix::f(); fix::f(); }\n#[test]\nfn u() { fix::g(); }\n\
+             #[test]\nfn x() { fix::g(); }\n",
+        );
+        let (added, derived_added) = sweep(&held, Some(&Derived::at(&state, "build")));
+        assert_eq!(derived_added, 0, "a test added beside them moves no case");
+        assert_eq!((&added[&t], &added[&u]), (&body[&t], &body[&u]));
     }
 
     /// S1 (CLOUD-2904, round 3): a file an `include_str!` reads at compile
