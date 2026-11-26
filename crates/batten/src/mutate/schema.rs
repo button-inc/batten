@@ -6573,15 +6573,12 @@ pub fn case_digests<'c>(
     executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
     depends: &Depends<'_>,
 ) -> std::collections::BTreeMap<Case, String> {
-    /// What a case ran and its own text names, to the named part it keys.
-    type Named =
-        std::collections::HashMap<(Vec<usize>, BTreeSet<String>), (blake3::Hash, Vec<usize>)>;
     let mut parsed: std::collections::BTreeMap<String, Parsed> = std::collections::BTreeMap::new();
     let mut shared: std::collections::HashMap<String, TestCrate> = std::collections::HashMap::new();
     let mut file_mentions: std::collections::HashMap<String, BTreeSet<String>> =
         std::collections::HashMap::new();
     let mut digests = std::collections::BTreeMap::new();
-    let mut named_parts: Named = std::collections::HashMap::new();
+    let mut named_parts = NamedParts::default();
     let graph = Graph::new(depends);
     let mut walk = Walk::default();
     let everything = everything_digest(depends.resources);
@@ -6639,11 +6636,9 @@ pub fn case_digests<'c>(
         if let Some(reached) = &reached {
             outside.extend(reached.outside.iter().cloned());
         }
-        let key: Vec<usize> = ran.into_iter().flatten().copied().collect();
-        let (named, defined) = named_parts
-            .entry((key, outside.clone()))
-            .or_insert_with(|| named_part(&graph, &mut walk, depends, ran, &outside))
-            .clone();
+        let (named, defined) = named_parts.part(ran, &outside, || {
+            named_part(&graph, &mut walk, depends, ran, &outside)
+        });
         hasher.update(b"\x1b");
         hasher.update(named.as_bytes());
         // AND WHERE ITS OWN UNPROBED TEXT CALLS AN OBSERVER FROM (CLOUD-2904):
@@ -7011,6 +7006,49 @@ fn crate_part(
             .collect(),
         observes: taken.iter().any(|item| item.observes),
     })
+}
+
+/// [`named_part`] once per distinct probe set and own-text names
+/// ([`case_digests`]): what a case ran and its own text names, to the named
+/// part it keys and the items it defines, shared rather than copied.
+///
+/// **KEYED BY A DIGEST OF THE IDS AND NAMES, NEVER BY THE SETS.** A case's
+/// own-text names number in the thousands and no two cases share a set, so a
+/// memo keyed on the sets held every case's whole set: measured, 546 sealed
+/// cases held 131 MB of keys, and a reach of 10,954 cases some 3 GB of the
+/// 3.8 GB peak behind a 13.6 GB OOM. Each part is the same whichever key
+/// holds it, so no case digest moves.
+#[derive(Default)]
+struct NamedParts(std::collections::HashMap<blake3::Hash, (blake3::Hash, std::rc::Rc<[usize]>)>);
+
+impl NamedParts {
+    /// The named part for `ran` and `outside`, from `compute` on a miss.
+    fn part(
+        &mut self,
+        ran: Option<&BTreeSet<usize>>,
+        outside: &BTreeSet<String>,
+        compute: impl FnOnce() -> (blake3::Hash, Vec<usize>),
+    ) -> (blake3::Hash, std::rc::Rc<[usize]>) {
+        // Counted, each id fixed-width, each name terminated: no boundary can
+        // move between the ids and the names, or between two names.
+        let mut key = blake3::Hasher::new();
+        let ids: Vec<usize> = ran.into_iter().flatten().copied().collect();
+        key.update(&ids.len().to_le_bytes());
+        for id in &ids {
+            key.update(&id.to_le_bytes());
+        }
+        for name in outside {
+            key.update(&name.len().to_le_bytes());
+            key.update(name.as_bytes());
+        }
+        self.0
+            .entry(key.finalize())
+            .or_insert_with(|| {
+                let (named, defined) = compute();
+                (named, defined.into())
+            })
+            .clone()
+    }
 }
 
 /// The named part of a case's digest ([`case_digests`]): the `""` item every
@@ -9580,10 +9618,7 @@ fn reached(
     for case in reach.sites.values().flatten() {
         recorded.entry(case.clone()).or_default();
     }
-    let digests = under_build(
-        digests_with(root, &dirs, schema, ids, &recorded, &reach.read),
-        (&build, &unprobed),
-    );
+    let digests = recompute(&recorded, &reach.read);
     let seconds = measured_seconds(case_seconds(state)?, &reach);
     seal_reach(
         &state.join("reach"),
@@ -10457,6 +10492,77 @@ pub fn seal_tested(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// THE NAMED-PART MEMO HOLDS NO CASE'S NAMES (the `mutate cargo` OOM: 13.6
+    /// GB anonymous on a 46-mutant run in a 16 GB container). A case's
+    /// own-text names number in the thousands and no two cases share a set, so
+    /// a memo keyed on the sets kept every case's whole set: measured, 546
+    /// sealed cases held 131 MB of keys, and a whole reach of 10,954 cases
+    /// some 3 GB of a 3.8 GB peak.
+    ///
+    /// Fails by: the memo keeping its key's names, or a copy of a part per
+    /// case: 2,000 cases of 2,000 names each hold some 300 MB that way, against
+    /// a ceiling of 64 MB. Resident size, read where the case ends.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_named_part_memo_holds_no_cases_names() {
+        let resident = || -> usize {
+            crate::fsio::read_to_string("/proc/self/status")
+                .unwrap()
+                .lines()
+                .find_map(|line| line.strip_prefix("VmRSS:"))
+                .and_then(|kb| kb.trim().trim_end_matches(" kB").trim().parse().ok())
+                .unwrap()
+        };
+        let mut parts = NamedParts::default();
+        let before = resident();
+        for case in 0..2_000_usize {
+            let ran: BTreeSet<usize> = (case..case + 200).collect();
+            let outside: BTreeSet<String> = (0..2_000)
+                .map(|name| format!("crate::module::item_{case}_{name}"))
+                .collect();
+            let (_, defined) = parts.part(Some(&ran), &outside, || {
+                (blake3::hash(&case.to_le_bytes()), (0..100).collect())
+            });
+            assert_eq!(defined.len(), 100);
+        }
+        let grown = resident().saturating_sub(before);
+        assert!(
+            grown < 64 * 1024,
+            "the memo grew {grown} kB over 2,000 cases of 2,000 names"
+        );
+    }
+
+    /// Fails by: a memo hit answering another key's part, or a miss for the
+    /// same ids and names, so a case is keyed on a part it never named.
+    #[test]
+    fn the_named_part_memo_answers_by_its_ids_and_names() {
+        let mut parts = NamedParts::default();
+        let names = |list: &[&str]| -> BTreeSet<String> {
+            list.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let ran: BTreeSet<usize> = [1, 2].into_iter().collect();
+        let first = parts.part(Some(&ran), &names(&["a"]), || (blake3::hash(b"1"), vec![1]));
+        let again = parts.part(Some(&ran), &names(&["a"]), || (blake3::hash(b"x"), vec![9]));
+        assert_eq!(first, again, "the same ids and names hit");
+        let other = parts.part(Some(&ran), &names(&["b"]), || (blake3::hash(b"2"), vec![2]));
+        assert_eq!(other.0, blake3::hash(b"2"), "other names miss");
+        let fewer: BTreeSet<usize> = [1].into_iter().collect();
+        let less = parts.part(Some(&fewer), &names(&["a"]), || {
+            (blake3::hash(b"3"), vec![3])
+        });
+        assert_eq!(less.0, blake3::hash(b"3"), "other ids miss");
+        let none = parts.part(None, &names(&["a"]), || (blake3::hash(b"4"), vec![4]));
+        assert_eq!(none.0, blake3::hash(b"4"), "no ids is its own key");
+        // A boundary that moves between the ids and the names is another key.
+        let split = parts.part(Some(&ran), &names(&["ab"]), || {
+            (blake3::hash(b"5"), vec![5])
+        });
+        let joined = parts.part(Some(&ran), &names(&["a", "b"]), || {
+            (blake3::hash(b"6"), vec![6])
+        });
+        assert_ne!(split.0, joined.0, "names are kept apart");
+    }
 
     /// The keep-going build is the schema build's own units: the same
     /// profile, packages and directories, as `build --tests --keep-going`.
