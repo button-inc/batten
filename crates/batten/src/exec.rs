@@ -4644,67 +4644,52 @@ mod tests {
 
     /// CLOUD-2789: a capture pipe is held by the group only where a member
     /// of it holds the pipe. This process holds the read end of every capture
-    /// pipe and is never in its child's group.
+    /// pipe and is never in its child's group, and here a process outside the
+    /// group holds the write end too, so the drain is still open when the
+    /// clean run asks: only the group's own members may answer it.
     ///
-    /// Fails by: the group test inverted (a mutant missed at 34c6e4d1f), so
-    /// this process reads as the holder and every clean managed run ends the
-    /// group its child meant to leave running.
+    /// Fails by: the group test inverted (`==` for `!=`, a mutant missed at
+    /// 34c6e4d1f), so this process reads as the holder and the clean run ends
+    /// the group its child meant to leave running: the job never says it
+    /// outlived the run, and the case hangs into the judge's cut.
     ///
+    /// Through the managed run itself (`owned_run`), so no spawn of its own.
     /// `/proc` is how a group is read, so off Linux the case returns at once;
     /// `cfg!` rather than `#[cfg]` keeps it compiled, and counted, everywhere.
+    /// The holder outlives the run until this case lets it go, so the drain
+    /// waits out its budget ([`PIPE_DRAIN_TIMEOUT`]) on it: the price of no
+    /// clock deciding whether the holder was still there when the run asked.
     #[test]
     fn only_a_member_of_the_group_holds_its_pipe() {
         if !cfg!(target_os = "linux") {
             return;
         }
-        let (reader, writer) = std::io::pipe().expect("a pipe");
-        let pipes = [pipe_identity(&reader)];
-        #[expect(
-            clippy::disallowed_types,
-            reason = "test-only: two real `cat`s, one in a group of its own holding the pipe, are what `/proc` is read against"
-        )]
-        let spawn = |stdout: std::process::Stdio| {
-            let mut cat = std::process::Command::new("cat");
-            in_own_group(&mut cat);
-            cat.stdin(std::process::Stdio::piped())
-                .stdout(stdout)
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .expect("cat starts")
-        };
-        let mut apart = spawn(std::process::Stdio::null());
-        let mut holder = spawn(writer.into());
-        let (apart_holds, holder_holds) = (
-            group_holds(apart.id(), &pipes),
-            group_holds(holder.id(), &pipes),
+        let root = contained("exec-member-holds");
+        let left = Fifo::at(root.join("left"));
+        let hold = Fifo::at(root.join("hold"));
+        let go = Fifo::at(root.join("go"));
+        let alive = Fifo::at(root.join("alive"));
+        // The holder leaves the group (`setsid`) still holding the capture
+        // pipes, and says so before the child exits, so no member holds them
+        // when the run asks. The job stays in the group holding neither.
+        let script = format!(
+            "setsid sh -c \"{left_write}; read _ < '{hold}'\" &\n\
+             read _ < '{left}'\n\
+             (read _ < '{go}'; {alive_write}) >/dev/null 2>&1 &",
+            left_write = left.write("out"),
+            hold = hold.path.display(),
+            left = left.path.display(),
+            go = go.path.display(),
+            alive_write = alive.write("yes"),
         );
-        for child in [&mut apart, &mut holder] {
-            drop(child.stdin.take());
-            child.wait().expect("cat ends on its stdin closing");
-        }
-        assert!(
-            !apart_holds,
-            "only this process holds it, outside the group"
+        let outcomes = owned_run(&root, &script).expect("the child exits clean");
+        hold.say("go");
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].exit, 0);
+        go.say("go");
+        assert_eq!(
+            alive.first("the group's job outliving a run only an outsider held"),
+            "yes"
         );
-        assert!(holder_holds, "the member writing to it holds it");
     }
-
-    /// Start `command` as the leader of a process group of its own.
-    #[cfg(unix)]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "test-only: sets the group of the case's own spawn above, which owns the inventory verdict"
-    )]
-    fn in_own_group(command: &mut std::process::Command) {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
-    }
-
-    /// No process groups to lead off unix; the one caller returns first there.
-    #[cfg(not(unix))]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "test-only: the off-unix arm of the case's own spawn above"
-    )]
-    fn in_own_group(_: &mut std::process::Command) {}
 }
