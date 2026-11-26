@@ -9416,6 +9416,26 @@ fn sweep_build(
     hasher.finalize().to_hex().to_string()
 }
 
+/// What every case's key is taken under ([`under_build`]): the sweep's build
+/// key and each package's unprobed fold.
+///
+/// # Errors
+///
+/// The compiler cannot be asked for its version.
+fn build_keys(
+    root: &std::path::Path,
+    resources: &std::collections::BTreeMap<String, String>,
+    format: &Format,
+) -> anyhow::Result<(String, std::collections::BTreeMap<String, String>)> {
+    let compiler = super::resume::compiler_version(root).ok_or_else(|| {
+        anyhow::anyhow!("the compiler cannot be asked, so no case's build can be keyed")
+    })?;
+    Ok((
+        sweep_build(root, resources, format, &compiler),
+        super::resume::unprobed_folds(root, resources, format),
+    ))
+}
+
 /// Each case digest of `digests` taken under `build` ([`sweep_build`]) and
 /// its package's unprobed fold ([`super::resume::unprobed_folds`]): a case of
 /// a package no fold names takes every unprobed package.
@@ -9480,11 +9500,7 @@ fn reached(
         classic,
     };
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
-    let compiler = super::resume::compiler_version(root).ok_or_else(|| {
-        anyhow::anyhow!("the compiler cannot be asked, so no case's build can be keyed")
-    })?;
-    let build = sweep_build(root, ids.0, format, &compiler);
-    let unprobed = super::resume::unprobed_folds(root, ids.0, format);
+    let (build, unprobed) = build_keys(root, ids.0, format)?;
     let recompute =
         |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
          read: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
@@ -16468,6 +16484,24 @@ mod tests {
             "{files:?}"
         );
         assert!(!files.contains(&String::from("target/b.rs")), "{files:?}");
+    }
+
+    /// Fails by: a type's one impl left unfollowed, or a method name's impl
+    /// followed for a declaration the name also has (CLOUD-2904).
+    #[test]
+    fn an_impl_is_followed_under_its_types_name_alone() {
+        let follow = |names: [&str; 2]| -> Vec<usize> {
+            let definitions: Vec<&str> = names.to_vec();
+            let items: std::collections::BTreeMap<String, BTreeSet<String>> =
+                [(names[0].to_owned(), [String::from("d")].into())].into();
+            followed(&[0, 1], &definitions, &items).collect()
+        };
+        let impl_of = |name: &str| format!("{name}{IMPL_DEFINED}");
+        let typed = impl_of("A");
+        assert_eq!(follow(["A", &typed]), [0, 1], "a type and its impl");
+        let method = format!("{ASSOCIATED}m");
+        let method_impl = impl_of(&method);
+        assert_eq!(follow([&method, &method_impl]), [0], "a method and an impl");
     }
 
     /// One integration case's digest over `files`, with `src/lib.rs` the
