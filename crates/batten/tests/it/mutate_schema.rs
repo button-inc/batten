@@ -129,8 +129,8 @@ const COUNTS: &str = "{\"caught\": 3, \"missed\": 1, \"uncovered\": 1}, 1 unviab
 /// Fails by: an unviable mutant judged (it would survive), a hang read as a
 /// kill, a site no case reaches judged by a run, a failed case read as a
 /// survivor, the exit not saying a mutant survived, a second sweep that
-/// rebuilds what the first proved unviable, a new helper or const moving every
-/// key, a traced case keyed on a non-Rust file it never read, or
+/// rebuilds what the first proved unviable, a control run over cases no
+/// judging run executes (C3), a new helper or const moving every key, a traced case keyed on a non-Rust file it never read, or
 /// an executed function's non-body change moving none.
 #[test]
 fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
@@ -181,6 +181,9 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
         // be judged again on every sweep (W1).
         "reused 5 of 5 verdict(s)",
         COUNTS,
+        // NO CONTROL FOR WHAT NO RUN EXECUTES (CLOUD-2253, C3): every
+        // mutant is decided by its journal, so no case is controlled.
+        "control ran 0 of the 0 case(s) still to judge",
     ] {
         assert!(again.contains(line), "{line:?} in {again}\n{err}");
     }
@@ -193,6 +196,12 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     let (code, third, err) = sweep();
     assert_eq!(code, Some(2), "{third}\n{err}");
     assert!(third.contains("reused 3 of 5 verdict(s)"), "{third}\n{err}");
+    // ONLY `adds`, whose digest moved, is controlled again: the cases of the
+    // three reused verdicts are run by nothing.
+    assert!(
+        third.contains("control ran 1 of the 1 case(s) still to judge"),
+        "{third}\n{err}"
+    );
     assert!(
         third.contains("reach carried 2 case(s) across the change"),
         "only adds, which runs five, is recorded again: {third}"
