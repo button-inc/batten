@@ -1164,9 +1164,15 @@ fn an_undeclared_read_fails_a_traced_miss() {
 /// tool line, which this engine answers in-process and an older one cannot run,
 /// so it keys nothing there and the step runs rather than being misread.
 ///
-/// Fails by: the miss traced anyway (`TracerPid` non-zero on a host with
-/// `strace`), the line keying nothing (no hit on the unchanged rerun), or the
-/// declared input no longer moving the key.
+/// Fails by: the miss traced anyway (the command's `TracerPid` differs from
+/// this test's own on a host with `strace`), the line keying nothing (no hit on
+/// the unchanged rerun), or the declared input no longer moving the key.
+///
+/// THE TEST'S OWN TRACER IS THE BASELINE, NEVER `0` (CLOUD-2789): the suite
+/// itself runs under `test:cargo`'s traced step in a lap, and `strace -f` hands
+/// its tracer to every descendant, this case's command among them. What the row
+/// promises is that `step run` attaches none of its own, so the command sees
+/// exactly the tracer this process sees: `0` alone, `strace`'s pid in a lap.
 #[test]
 fn a_row_declared_untraced_runs_bare_hits_unchanged_and_misses_on_its_inputs() {
     let repo = Repo::new("untraced-row");
@@ -1179,10 +1185,15 @@ fn a_row_declared_untraced_runs_bare_hits_unchanged_and_misses_on_its_inputs() {
     let seen = read(&repo.path("bin/tracer.log"));
     assert_eq!(seen.lines().count(), 1, "the miss ran the command: {seen}");
     if cfg!(target_os = "linux") {
+        let own = read(Path::new("/proc/self/status"));
+        let own = own
+            .lines()
+            .find(|line| line.starts_with("TracerPid"))
+            .and_then(|line| line.split_whitespace().nth(1));
         assert_eq!(
             seen.split_whitespace().nth(1),
-            Some("0"),
-            "the declared-untraced miss ran with no tracer attached: {seen}"
+            own,
+            "the declared-untraced miss ran under no tracer of its own: {seen}"
         );
     }
     let again = repo.run_step(&["untraced"], &["tracerpid"], &[]);
