@@ -1237,3 +1237,52 @@ fn no_publish_of_any_ref_reaches_origin() {
         host.requests()
     );
 }
+
+/// Fails by: a pack carrying one object twice. Every producer entry is the
+/// same line, so a set of several receipts names one producer blob several
+/// times; GitHub refuses that pack with a bare `ng <ref> failed` while a local
+/// `receive-pack` accepts it, which is how it reached a real state repository
+/// unseen (every publish from #1276's lap lost all four swaps). The stand-in
+/// reads each pushed pack and counts its ids.
+#[test]
+fn a_published_pack_carries_each_object_once() {
+    let case = "receipt-publish-unique-objects";
+    let bare = state_repo(case);
+    let packs = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Vec<String>>::new()));
+    let seen = std::rc::Rc::clone(&packs);
+    stand_up(bare.clone(), move |call| {
+        if call.url.ends_with("/git-receive-pack") {
+            let body = call.body.unwrap_or_default();
+            let at = body
+                .windows(4)
+                .position(|window| window == b"PACK")
+                .expect("a pack after the commands");
+            let ids = batten::lease::objects_in(&body[at..])
+                .expect("the pack reads")
+                .into_iter()
+                .map(|object| object.id)
+                .collect();
+            seen.borrow_mut().push(ids);
+        }
+    });
+    let one = first_clone(case);
+    let state = scratch(&format!("{case}-state")).join("state");
+    let compat = one.join(".git").join("batten-receipts");
+    std::fs::create_dir_all(&compat).unwrap();
+    for n in 0..3 {
+        std::fs::write(
+            compat.join(format!("step.carried-{n}.{}", "0".repeat(8))),
+            format!("pass {n}\n"),
+        )
+        .unwrap();
+    }
+    let name = receipts::reference(BRANCH).unwrap();
+    let published = publish(&one, &state, &name, 1_700_000_000);
+    assert_eq!(published.count, 3, "{published:?}");
+    let packs = packs.borrow();
+    assert!(!packs.is_empty(), "a pack was pushed");
+    for ids in packs.iter() {
+        let unique: std::collections::BTreeSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "each object once: {ids:?}");
+    }
+}

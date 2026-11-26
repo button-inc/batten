@@ -2248,7 +2248,13 @@ pub enum ReceiptCommand {
     /// (CLOUD-1544).
     Publish,
     /// Pull this branch's published receipts into this checkout (CLOUD-1544).
-    Pull,
+    Pull {
+        /// Advisory (`--advisory`): say one line and exit `0` whatever the
+        /// state repository answered — the session-start route, which must
+        /// never stop a session whose environment names a repository it
+        /// cannot reach.
+        advisory: bool,
+    },
 }
 
 /// Subcommands of `config`.
@@ -3312,7 +3318,9 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
         }),
         "verified" => Some(ReceiptCommand::Verified),
         "publish" => Some(ReceiptCommand::Publish),
-        "pull" => Some(ReceiptCommand::Pull),
+        "pull" => Some(ReceiptCommand::Pull {
+            advisory: flag(matches, "advisory"),
+        }),
         _ => None,
     }
 }
