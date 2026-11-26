@@ -20439,6 +20439,41 @@ tools = [
   ],
 ]
 
+# THE STRUCTURAL HALF OF THE REPLAY (CLOUD-2789): no build, the two trees alone,
+# 30 s on every lap of an unchanged head. Keyed as `test-replay` is, on both
+# revisions it compares: HEAD's Rust and `asked` ledger, the engine's source
+# among them, the `batten.toml` the engine loads (the trace's one read past
+# those), the toolchain that built it, and the same `step base` line for the
+# merge base's.
+[[step]]
+id = "test-replay-structural"
+inputs = ["crates", "fuzz", ".batten/asked.jsonl", "batten.toml"]
+tools = [
+  ["rustc", "--version"],
+  [
+    "batten",
+    "step",
+    "base",
+    "--ref",
+    "origin/main",
+    "--ref-env",
+    "BATTEN_SPEC_BASE",
+    "--",
+    "crates",
+    "fuzz",
+    ".batten/asked.jsonl",
+  ],
+]
+
+# THE MODULE RATCHET (CLOUD-2789): 31 s on every lap of an unchanged head. It
+# scores each crate source root against `modules.lock` and writes nothing, so
+# its key is the crates, the engine's source among them, the record, and the
+# `batten.toml` the engine loads (the trace's one read past those).
+[[step]]
+id = "modules-ratchet"
+inputs = ["crates", "modules.lock", "batten.toml"]
+tools = [["rustc", "--version"]]
+
 # THE THREE NARROW `it` TIERS hk reaches by name (CLOUD-1164). Each runs a filter
 # of the one test binary `test:cargo` runs whole, so each is keyed exactly as
 # `test:cargo` is: the toolchain and the task's own declaration. NARROWED FROM
