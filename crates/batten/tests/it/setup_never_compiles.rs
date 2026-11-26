@@ -3,7 +3,7 @@
 //! The engine a session runs is the pinned release, downloaded and installed by
 //! `batten engine install`, and that is all setup does with it. A compile on the
 //! setup path cost 224.87 s on every cold container, and 714 s of a `verify`
-//! when a compaction's SessionStart fired it mid-lap. Two rows naming the
+//! when a compaction's `SessionStart` fired it mid-lap. Two rows naming the
 //! release (`install_local.rs`) did not stop a THIRD route back: any setup
 //! command reaching a build through the task graph — a `depends`, a nested
 //! `mise run`, or a body spelling `{{vars.batten}}`, whose default is
@@ -126,9 +126,9 @@ fn reaches_a_build(manifest: &toml::Table, seed: &str) -> Vec<String> {
         found.push(format!("the command spells {spelling}"));
     }
     let mut pending = mise_runs(seed);
-    let mut seen = BTreeSet::new();
+    let mut visited = BTreeSet::new();
     while let Some(name) = pending.pop() {
-        if !seen.insert(name.clone()) {
+        if !visited.insert(name.clone()) {
             continue;
         }
         if build_tasks().contains(&name) {

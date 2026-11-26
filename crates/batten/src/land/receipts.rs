@@ -1103,7 +1103,10 @@ fn verdict_chunk(name: &str, bytes: &[u8]) -> bool {
 
 /// A reach entry's `(sealed, archive, part)`, where `part` is `Some((i, n))`
 /// for a part and `None` for the `.at` stamp.
-fn reach_name(name: &str) -> Option<(&str, &str, Option<(usize, usize)>)> {
+type ReachName<'n> = (&'n str, &'n str, Option<(usize, usize)>);
+
+/// The [`ReachName`] of a reach entry's file `name`, or `None` where it names none.
+fn reach_name(name: &str) -> Option<ReachName<'_>> {
     let mut halves = name.splitn(3, '.');
     let (sealed, archive, rest) = (halves.next()?, halves.next()?, halves.next()?);
     if !is_hex(sealed, 64) || !is_hex(archive, 32) {
@@ -1580,7 +1583,9 @@ mod tests {
         let mut union = BTreeMap::new();
         for n in 0..=KEPT_CHUNKS {
             let (path, bytes) = chunk(format!("k{n}\tcaught\tm{n}\n"));
-            union.extend(produced_by(&BTreeMap::from([(path, bytes)]), PRODUCER).unwrap());
+            let produced = produced_by(&BTreeMap::from([(path, bytes)]), PRODUCER);
+            assert!(produced.is_ok(), "a chunk under the producer is admitted");
+            union.extend(produced.unwrap_or_default());
         }
         for (at, sealed) in [(1, "a"), (2, "b"), (3, "c")] {
             let (sealed, id) = (sealed.repeat(64), "d".repeat(32));
