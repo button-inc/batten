@@ -19154,19 +19154,11 @@ gloss = "pkl trusts the bundle SSL_CERT_FILE names, so hk.pkl evaluates behind a
 check = ["env", "-S", "test ${SSL_CERT_FILE}x = x -o -s ${HOME}/.pkl/cacerts/egress.pem"]
 repair = ["env", "-S", "install -D -m 0644 ${SSL_CERT_FILE} ${HOME}/.pkl/cacerts/egress.pem"]
 
-# WITHHELD UNTIL STEP 14 (CLOUD-2840). The row is the block below, uncommented
-# by the commit that bumps the pin. The pinned v0.0.221 asks every tree carrying
-# `crates/batten` for its `target/release` build, so in a cold container it
-# answered `mediator-unbuilt` and its repair (the pinned release, never a build)
-# could not change that: the one setup command exited 1. This tree's engine asks
-# only under a source pin (`diagnose_mediator`), and the pin is a release, so
-# withholding it drops no verdict the tree's engine would give.
-#
-# [[startup]]
-# id = "mediator-matches-the-tree"
-# gloss = "the engine adjudicating this tree was built from it, so a declared gate is not silently dropped"
-# check = ["batten", "doctor", "mediator"]
-# repair = ["batten", "engine", "install"]
+[[startup]]
+id = "mediator-matches-the-tree"
+gloss = "the engine adjudicating this tree was built from it, so a declared gate is not silently dropped"
+check = ["batten", "doctor", "mediator"]
+repair = ["batten", "engine", "install"]
 
 # AND THE ENGINE ON `PATH` MUST RESOLVE EVERY ROW OF THIS CONFIG.
 #

@@ -398,8 +398,7 @@ fn the_engine_rows_repair_with_the_pinned_release() {
             .map(|word| word.as_str().unwrap_or_default().to_owned())
             .collect()
     };
-    // `mediator-matches-the-tree` is withheld until step 14 (`batten.toml`).
-    for id in ["engine-resolves-every-row"] {
+    for id in ["mediator-matches-the-tree", "engine-resolves-every-row"] {
         assert_eq!(repair_of(id), ["batten", "engine", "install"], "{id}");
     }
     let compiling: Vec<&str> = rows
