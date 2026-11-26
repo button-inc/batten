@@ -9714,6 +9714,7 @@ verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '--check[Exit 1 when the pin would change, and write nothing]' \
+'--require-source[Exit 2 under a release pin, naming \`batten engine install\`, and write nothing; exit 0 under a source pin or none]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
