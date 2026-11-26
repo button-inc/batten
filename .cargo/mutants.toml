@@ -203,4 +203,12 @@ exclude_re = [
   # terms are judged apart. `hook::tests::entry_timeout_is_excluded_only_while_unbounded`
   # fails the day a bound ships with this line still here (CLOUD-2789).
   'hook\.rs:\d+:\d+: replace entry_timeout -> Option<u64> with None$',
+  # `listed_cases` feeds only the reach run's `default-filter`, which leaves
+  # out the cases whose record finished passing (`finished_cases`). With no
+  # list there is no filter and the run starts every case, but the recorder
+  # skips each one whose record finished passing (`record_into`), marking it
+  # `SKIPPED` so its sealed seconds stay the recorded ones. The same records
+  # are written; only the wall time changes, and `run_filter`
+  # already answers no filter when half the cases or more are due (CLOUD-2789).
+  'schema\.rs:\d+:\d+: replace listed_cases -> Option<BTreeSet<Case>> with None$',
 ]
