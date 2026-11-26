@@ -3999,6 +3999,16 @@ mod tests {
         let bare = crate::scratch::scratch("perf-clean-args-bare");
         let args = clean_args(PAIR_PROFILE, &bare);
         assert_eq!(&args[..3], ["clean", "-p", "batten"]);
+        // A LOCK THAT READS BUT NAMES NO `batten` still cleans it, after the
+        // members it does name: the one input where "some member is `batten`"
+        // and "some member is not" part ways (CLOUD-2789).
+        let other = crate::scratch::scratch("perf-clean-args-other");
+        std::fs::write(
+            other.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"facts\"\nversion = \"0.0.0\"\n",
+        )?;
+        let args = clean_args(PAIR_PROFILE, &other);
+        assert_eq!(&args[..5], ["clean", "-p", "facts", "-p", "batten"]);
         Ok(())
     }
 
