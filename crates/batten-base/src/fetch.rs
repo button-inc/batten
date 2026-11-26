@@ -1208,7 +1208,9 @@ mod tests {
                 || at
                     .downcast_ref::<std::io::Error>()
                     .and_then(std::io::Error::get_ref)
-                    .is_some_and(|inner| inner.is::<tokio::time::error::Elapsed>());
+                    .is_some_and(
+                        <dyn std::error::Error + Send + Sync>::is::<tokio::time::error::Elapsed>,
+                    );
             cause = at.source();
         }
         assert!(expired, "the bound's expiry is the cause: {err:?}");
