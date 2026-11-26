@@ -1155,6 +1155,159 @@ struct Waiting<'a> {
     primed: Option<crate::rest::Answer>,
 }
 
+/// Where [`checks_arm`] reports: the race's channel and flag, the slot a red
+/// verdict's reading rides in, and whether its last reading still had a run in
+/// flight (CLOUD-2253 A2).
+struct Report<'a> {
+    /// The race's one channel; the first message is the verdict.
+    send: std::sync::mpsc::Sender<Waited>,
+    /// Raised by whichever arm answers, read by both before every ask.
+    stop: &'a std::sync::atomic::AtomicBool,
+    /// The reading a red verdict was taken over (CLOUD-2270).
+    red: &'a std::sync::Mutex<RedReading>,
+    /// Whether the last reading had a run not yet concluded.
+    in_flight: &'a std::sync::atomic::AtomicBool,
+}
+
+/// The green arm of [`raced`]: the checks, on the forge's interval, until a
+/// terminal answer, the other arm's, or the last ask.
+///
+/// Lifted out of [`raced`] for `clippy::too_many_lines`, the remedy
+/// [`watch_arm`] took for the same lint: one nameable arm of the race.
+fn checks_arm(
+    (config, roster): (&crate::pr_watch::Config, &crate::checks_green::Roster),
+    (asks, fresh_ready): (u32, bool),
+    heartbeat: &(dyn Fn(u64) + Sync),
+    waiting: &Waiting<'_>,
+    report: &Report<'_>,
+) {
+    let (green, stop, red_slot, running) =
+        (&report.send, report.stop, report.red, report.in_flight);
+    let mut poll = crate::pr_watch::Poll::default();
+    // The runs already on the head when a fresh ready's wait first read
+    // it; see `registered_since`. `None` until that first reading.
+    let mut before_ready: Option<std::collections::BTreeSet<u64>> = None;
+    for ask in 1..=asks {
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        // The conditional read is `pr_watch`'s, so the argv, the client
+        // and the empty-string-on-failure posture stay its business and
+        // this arm only decides when to ask.
+        // THE FIRST ASK IS ANSWERED BY READY'S READING WHERE THERE IS
+        // ONE (CLOUD-2253 A7): the same head, read moments ago, and its
+        // validator makes the second ask a conditional one.
+        let raw = match (ask, &waiting.primed) {
+            (1, Some(primed)) => Some(primed.clone()),
+            _ => (waiting.checks)(poll.etag()),
+        };
+        let interval = poll.absorb(raw.as_ref(), config.interval);
+        // THE HOLDER'S HEARTBEAT, AND THIS LOOP IS THE ONLY PLACE THAT
+        // SPENDS REAL TIME (review of #848). A lap acquires its lease
+        // once and then waits out a whole matrix here, so without a beat
+        // the TTL lapses mid-wait and a rival takes a lease this process
+        // still believes it holds. The predecessor backgrounded a
+        // heartbeat process; this is that obligation, in the one loop
+        // whose iterations are seconds rather than microseconds.
+        //
+        // A CALLBACK RATHER THAN A `lease` CALL, because `land` must not
+        // depend on `lease` — `module-layering` refuses the edge, and
+        // the caller is where the terms and this clone's identity
+        // already live. It decides its own cadence; this only says WHEN
+        // there is time to spend.
+        //
+        // IT CARRIES THE READING'S SIGNATURE, WHICH IS WHAT KEEPS A
+        // HEALTHY WAIT FROM READING AS A STALL (CLOUD-1703). The lease's
+        // progress token is a `phase_since`/`sig_at` pair, and neither
+        // moves inside this loop — the phase was pushed once on entry, so
+        // a wait longer than the stall bound published an unchanging
+        // token and a rival could take the lease from a lap that was
+        // healthily watching CI. The signature moves when the CHECK RUNS
+        // move, which is the thing whose gaps that bound was measured
+        // against. Still a number and not a lease call: what the caller
+        // does with it stays the caller's.
+        heartbeat(poll.signature());
+        if fresh_ready && before_ready.is_none() && !poll.runs().is_empty() {
+            before_ready = Some(poll.runs().iter().map(|run| run.id).collect());
+        }
+        // AND THE SAME NEVER-ANSWERED BOUND `pr_watch::watch` TAKES
+        // (review of #848). A credential the forge refuses answers a
+        // could-not-look to every request, so this arm would spend its
+        // whole ask count — 3600 by default — learning nothing, while
+        // the lap holds the lease and the operator sees one line. Left
+        // to the `Unanswered` verdict, which is what the lap already
+        // laps on, so the shape of the refusal is unchanged.
+        // NOT `Unanswered` (CLOUD-1215): no request was answered, so no
+        // reading was taken, and `Unanswered` read as `Pending` re-drafted
+        // the head and cancelled its runs on a forge it could not read.
+        if poll.unanswered_from_the_start() >= crate::pr_watch::UNANSWERED_BEFORE_REFUSING {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            drop(green.send(Waited::Unread));
+            return;
+        }
+        // BOTH TERMINAL ANSWERS END THE WAIT, not only the one the lap
+        // hopes for. Breaking on `Green` alone made a red head
+        // byte-identical to a pending one for the whole ask count.
+        match crate::checks_green::decide(poll.runs(), roster) {
+            Ok(crate::checks_green::Verdict::Green) => {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                drop(green.send(Waited::Green {
+                    verdict: String::from("green"),
+                }));
+                return;
+            }
+            Ok(crate::checks_green::Verdict::Red(findings)) => {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                let reading = red_runs(poll.runs(), roster, &findings);
+                if let Ok(mut slot) = red_slot.lock() {
+                    *slot = reading;
+                }
+                drop(green.send(Waited::Red { findings }));
+                return;
+            }
+            // AND THE THIRD TERMINAL ANSWER (CLOUD-497): a closed required
+            // set with a masked name. It ends the wait for the same reason
+            // the two above do — nothing further is coming — and it must
+            // end it HERE rather than by running out of asks, because
+            // running out spells `Unanswered`, which laps.
+            Ok(crate::checks_green::Verdict::DeadEnd(findings))
+                if registered_since(before_ready.as_ref(), poll.runs(), &findings) =>
+            {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                drop(green.send(Waited::DeadEnd { findings }));
+                return;
+            }
+            // Pending is the state this loop exists to sit in, and a
+            // roster that cannot decide was refused before the loop.
+            Ok(
+                crate::checks_green::Verdict::Pending(_) | crate::checks_green::Verdict::DeadEnd(_),
+            )
+            | Err(_) => {}
+        }
+        // INTERRUPTIBLE, because the OTHER arm may answer during this
+        // wait and `thread::scope` joins this one before the verdict can
+        // be acted on. Checking the flag only at the loop head held a
+        // finished landing for a whole interval — survivable at the
+        // poll's one second, and not once `wait_for` began honouring a
+        // rate-limit backoff measured in minutes (review of #848).
+        // NO PAUSE AFTER THE LAST ASK: there is nothing left to wait
+        // for, and a rate-limit backoff measured in minutes would hold
+        // an unanswered race that long (CLOUD-2113's test hang).
+        if ask < asks {
+            (waiting.pause)(interval, stop);
+        }
+    }
+    // WHETHER THE LAST READING STILL HAD A RUN IN FLIGHT, read once both
+    // arms are out of asks (CLOUD-2253 A2): see the verdict below.
+    let in_flight = poll.runs().iter().any(|run| {
+        !matches!(
+            crate::forge::RunState::of(Some(&run.status), Some(&run.conclusion)),
+            crate::forge::RunState::Completed(_)
+        )
+    });
+    running.store(in_flight, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// [`wait_reading`] over the reads and pause `waiting` names.
 fn raced(
     (config, roster, trunk): (
@@ -1186,138 +1339,24 @@ fn raced(
     let red = std::sync::Mutex::new(RedReading::default());
 
     let waited = std::thread::scope(|scope| {
-        let green = tx.clone();
-        let stop = &decided;
-        let red_slot = &red;
-        let running = &in_flight;
+        let report = Report {
+            send: tx.clone(),
+            stop: &decided,
+            red: &red,
+            in_flight: &in_flight,
+        };
         drop(scope.spawn(move || {
-            let mut poll = crate::pr_watch::Poll::default();
-            // The runs already on the head when a fresh ready's wait first read
-            // it; see `registered_since`. `None` until that first reading.
-            let mut before_ready: Option<std::collections::BTreeSet<u64>> = None;
-            for ask in 1..=asks {
-                if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    return;
-                }
-                // The conditional read is `pr_watch`'s, so the argv, the client
-                // and the empty-string-on-failure posture stay its business and
-                // this arm only decides when to ask.
-                // THE FIRST ASK IS ANSWERED BY READY'S READING WHERE THERE IS
-                // ONE (CLOUD-2253 A7): the same head, read moments ago, and its
-                // validator makes the second ask a conditional one.
-                let raw = match (ask, &waiting.primed) {
-                    (1, Some(primed)) => Some(primed.clone()),
-                    _ => (waiting.checks)(poll.etag()),
-                };
-                let interval = poll.absorb(raw.as_ref(), config.interval);
-                // THE HOLDER'S HEARTBEAT, AND THIS LOOP IS THE ONLY PLACE THAT
-                // SPENDS REAL TIME (review of #848). A lap acquires its lease
-                // once and then waits out a whole matrix here, so without a beat
-                // the TTL lapses mid-wait and a rival takes a lease this process
-                // still believes it holds. The predecessor backgrounded a
-                // heartbeat process; this is that obligation, in the one loop
-                // whose iterations are seconds rather than microseconds.
-                //
-                // A CALLBACK RATHER THAN A `lease` CALL, because `land` must not
-                // depend on `lease` — `module-layering` refuses the edge, and
-                // the caller is where the terms and this clone's identity
-                // already live. It decides its own cadence; this only says WHEN
-                // there is time to spend.
-                //
-                // IT CARRIES THE READING'S SIGNATURE, WHICH IS WHAT KEEPS A
-                // HEALTHY WAIT FROM READING AS A STALL (CLOUD-1703). The lease's
-                // progress token is a `phase_since`/`sig_at` pair, and neither
-                // moves inside this loop — the phase was pushed once on entry, so
-                // a wait longer than the stall bound published an unchanging
-                // token and a rival could take the lease from a lap that was
-                // healthily watching CI. The signature moves when the CHECK RUNS
-                // move, which is the thing whose gaps that bound was measured
-                // against. Still a number and not a lease call: what the caller
-                // does with it stays the caller's.
-                heartbeat(poll.signature());
-                if fresh_ready && before_ready.is_none() && !poll.runs().is_empty() {
-                    before_ready = Some(poll.runs().iter().map(|run| run.id).collect());
-                }
-                // AND THE SAME NEVER-ANSWERED BOUND `pr_watch::watch` TAKES
-                // (review of #848). A credential the forge refuses answers a
-                // could-not-look to every request, so this arm would spend its
-                // whole ask count — 3600 by default — learning nothing, while
-                // the lap holds the lease and the operator sees one line. Left
-                // to the `Unanswered` verdict, which is what the lap already
-                // laps on, so the shape of the refusal is unchanged.
-                // NOT `Unanswered` (CLOUD-1215): no request was answered, so no
-                // reading was taken, and `Unanswered` read as `Pending` re-drafted
-                // the head and cancelled its runs on a forge it could not read.
-                if poll.unanswered_from_the_start() >= crate::pr_watch::UNANSWERED_BEFORE_REFUSING {
-                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    drop(green.send(Waited::Unread));
-                    return;
-                }
-                // BOTH TERMINAL ANSWERS END THE WAIT, not only the one the lap
-                // hopes for. Breaking on `Green` alone made a red head
-                // byte-identical to a pending one for the whole ask count.
-                match crate::checks_green::decide(poll.runs(), roster) {
-                    Ok(crate::checks_green::Verdict::Green) => {
-                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                        drop(green.send(Waited::Green {
-                            verdict: String::from("green"),
-                        }));
-                        return;
-                    }
-                    Ok(crate::checks_green::Verdict::Red(findings)) => {
-                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                        let reading = red_runs(poll.runs(), roster, &findings);
-                        if let Ok(mut slot) = red_slot.lock() {
-                            *slot = reading;
-                        }
-                        drop(green.send(Waited::Red { findings }));
-                        return;
-                    }
-                    // AND THE THIRD TERMINAL ANSWER (CLOUD-497): a closed required
-                    // set with a masked name. It ends the wait for the same reason
-                    // the two above do — nothing further is coming — and it must
-                    // end it HERE rather than by running out of asks, because
-                    // running out spells `Unanswered`, which laps.
-                    Ok(crate::checks_green::Verdict::DeadEnd(findings))
-                        if registered_since(before_ready.as_ref(), poll.runs(), &findings) =>
-                    {
-                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                        drop(green.send(Waited::DeadEnd { findings }));
-                        return;
-                    }
-                    // Pending is the state this loop exists to sit in, and a
-                    // roster that cannot decide was refused before the loop.
-                    Ok(
-                        crate::checks_green::Verdict::Pending(_)
-                        | crate::checks_green::Verdict::DeadEnd(_),
-                    )
-                    | Err(_) => {}
-                }
-                // INTERRUPTIBLE, because the OTHER arm may answer during this
-                // wait and `thread::scope` joins this one before the verdict can
-                // be acted on. Checking the flag only at the loop head held a
-                // finished landing for a whole interval — survivable at the
-                // poll's one second, and not once `wait_for` began honouring a
-                // rate-limit backoff measured in minutes (review of #848).
-                // NO PAUSE AFTER THE LAST ASK: there is nothing left to wait
-                // for, and a rate-limit backoff measured in minutes would hold
-                // an unanswered race that long (CLOUD-2113's test hang).
-                if ask < asks {
-                    (waiting.pause)(interval, stop);
-                }
-            }
-            // WHETHER THE LAST READING STILL HAD A RUN IN FLIGHT, read once both
-            // arms are out of asks (CLOUD-2253 A2): see the verdict below.
-            let in_flight = poll.runs().iter().any(|run| {
-                !matches!(
-                    crate::forge::RunState::of(Some(&run.status), Some(&run.conclusion)),
-                    crate::forge::RunState::Completed(_)
-                )
-            });
-            running.store(in_flight, std::sync::atomic::Ordering::Relaxed);
+            checks_arm(
+                (config, roster),
+                (asks, fresh_ready),
+                heartbeat,
+                waiting,
+                &report,
+            );
         }));
 
         let stale = tx.clone();
+        let stop = &decided;
         drop(scope.spawn(move || {
             let mut poll = crate::main_watch::Poll::default();
             for ask in 1..=asks {
