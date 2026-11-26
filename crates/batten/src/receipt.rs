@@ -3436,6 +3436,46 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// Eviction keeps the newest [`KEPT_SLOTS`] slots counting `kept`, drops the
+    /// oldest, and never drops `kept` however old it is (CLOUD-2789).
+    ///
+    /// Fails by: an eviction that removes nothing, or one that skips every slot
+    /// but `kept` and so finds nothing to evict.
+    #[test]
+    fn eviction_keeps_the_newest_slots_and_the_kept_one() {
+        let dir = crate::scratch::scratch("evict-slots");
+        let at = |n: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 + n);
+        let slot = |name: &str, n: u64| {
+            let path = dir.join(name);
+            std::fs::write(&path, "{}\n").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(at(n))
+                .unwrap();
+            path
+        };
+        let kept = slot("kept", 0);
+        let others: Vec<_> = (1..=KEPT_SLOTS as u64 + 2)
+            .map(|n| slot(&format!("slot-{n:03}"), n))
+            .collect();
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            KEPT_SLOTS + 3,
+            "the premise: three slots over the bound"
+        );
+        evict_slots(&dir, &kept);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), KEPT_SLOTS);
+        assert!(kept.exists(), "the kept slot survives though it is oldest");
+        assert!(
+            others[..3].iter().all(|path| !path.exists()),
+            "the three oldest others are dropped"
+        );
+        assert!(others[3..].iter().all(|path| path.exists()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 // The receipt verbs and the hook's receipt verdicts read the checkout they run
