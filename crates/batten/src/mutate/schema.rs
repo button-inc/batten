@@ -6582,10 +6582,19 @@ pub fn case_digests<'c>(
     let graph = Graph::new(depends);
     let mut walk = Walk::default();
     let everything = everything_digest(depends.resources);
+    let twins = ids_by_value(depends.probes.iter().enumerate());
     for case in cases {
         let binary = &case.1;
         let mut hasher = blake3::Hasher::new();
-        let ran = executed.get(case);
+        // EVERY PROBE SHARING A DIGEST IT RAN, NEVER THE ONES IT HIT
+        // (CLOUD-2904): a record names what it ran by digest, so a carry
+        // reads back every twin, and a key taken over the twins one run hit
+        // moved on the next with nothing changed. Measured: 794 of 811 records
+        // re-recorded across a one-function edit none of them reached.
+        let fanned = executed
+            .get(case)
+            .map(|ids| fan_out(ids, depends.probes, &twins));
+        let ran = fanned.as_ref();
         // THE SET OF WHAT IT RAN, NEVER THE PROBE-ID SEQUENCE (CLOUD-2904): a
         // probe id is a function's position in the tree, so a function moved
         // whole re-keyed every case that ran it with nothing it runs changed.
@@ -6666,6 +6675,23 @@ pub fn case_digests<'c>(
         digests.insert(case.clone(), hasher.finalize().to_hex().to_string());
     }
     digests
+}
+
+/// `ids` widened to every probe id whose digest one of them has: the form a
+/// record read back by digest takes ([`carry_forward`]).
+fn fan_out(
+    ids: &BTreeSet<usize>,
+    probes: &[String],
+    twins: &std::collections::BTreeMap<String, Vec<usize>>,
+) -> BTreeSet<usize> {
+    ids.iter()
+        .flat_map(|id| {
+            probes
+                .get(*id)
+                .and_then(|digest| twins.get(digest))
+                .map_or_else(|| vec![*id], Clone::clone)
+        })
+        .collect()
 }
 
 /// A source file read for a case's own text ([`own_texts`]): its bytes and
@@ -9538,6 +9564,61 @@ fn under_build(
         .collect()
 }
 
+/// What one case's digest was taken over within a sweep: the probes it ran
+/// and the paths it read, `None` untraced.
+type DigestInputs = (BTreeSet<usize>, Option<BTreeSet<String>>);
+
+/// Each case's digest within one sweep, taken once per what it ran and read.
+///
+/// THE SEAL TAKES WHAT THE CARRY VERIFIED (CLOUD-2904): within a sweep the
+/// tree, schema and build are fixed, so a case's digest is a function of its
+/// ran ids and read paths alone. The carry computed every candidate's, and
+/// the seal computed all of them again: 820 s of a 2,826 s reach stage on
+/// #1276, for 1,222 cases recorded fresh beside 10,470 carried.
+#[derive(Default)]
+struct DigestMemo {
+    held: std::cell::RefCell<std::collections::BTreeMap<Case, (DigestInputs, String)>>,
+}
+
+impl DigestMemo {
+    /// Each case of `executed` keyed by `compute`, which is asked only for
+    /// the cases whose inputs this memo holds no digest for.
+    fn take(
+        &self,
+        executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+        read: &std::collections::BTreeMap<Case, BTreeSet<String>>,
+        compute: impl FnOnce(
+            &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+        ) -> std::collections::BTreeMap<Case, String>,
+    ) -> std::collections::BTreeMap<Case, String> {
+        let mut held = self.held.borrow_mut();
+        let inputs = |case: &Case, ids: &BTreeSet<usize>| -> DigestInputs {
+            (ids.clone(), read.get(case).cloned())
+        };
+        let due: std::collections::BTreeMap<Case, BTreeSet<usize>> = executed
+            .iter()
+            .filter(|(case, ids)| {
+                held.get(*case)
+                    .is_none_or(|(was, _)| *was != inputs(case, ids))
+            })
+            .map(|(case, ids)| (case.clone(), ids.clone()))
+            .collect();
+        for (case, digest) in compute(&due) {
+            if let Some(ids) = due.get(&case) {
+                let taken = inputs(&case, ids);
+                held.insert(case, (taken, digest));
+            }
+        }
+        executed
+            .keys()
+            .filter_map(|case| {
+                held.get(case)
+                    .map(|(_, digest)| (case.clone(), digest.clone()))
+            })
+            .collect()
+    }
+}
+
 /// What a sweep reads off its reach run: the record, each case's digest,
 /// each case's seconds, and every case that failed unmutated.
 type Reached = (
@@ -9574,13 +9655,16 @@ fn reached(
     };
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
     let (build, unprobed) = build_keys(root, ids.0, format)?;
+    let memo = DigestMemo::default();
     let recompute =
         |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
          read: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
-            under_build(
-                digests_with(root, &dirs, schema, ids, executed, read),
-                (&build, &unprobed),
-            )
+            memo.take(executed, read, |due| {
+                under_build(
+                    digests_with(root, &dirs, schema, ids, due, read),
+                    (&build, &unprobed),
+                )
+            })
         };
     let base = state.join("reach");
     std::fs::create_dir_all(&base)?;
@@ -10503,19 +10587,27 @@ mod tests {
     /// Fails by: the memo keeping its key's names, or a copy of a part per
     /// case: 2,000 cases of 2,000 names each hold some 300 MB that way, against
     /// a ceiling of 64 MB. Resident size, read where the case ends.
-    #[cfg(target_os = "linux")]
+    ///
+    /// COMPILED EVERYWHERE, MEASURED WHERE A RESIDENT SIZE CAN BE READ
+    /// (`policy/cfg-gated-test.rego`): off Linux no `/proc/self/status` exists,
+    /// so the case states that and ends; on Linux an unreadable one fails it.
     #[test]
     fn the_named_part_memo_holds_no_cases_names() {
-        let resident = || -> usize {
+        let resident = || -> Option<usize> {
             crate::fsio::read_to_string("/proc/self/status")
-                .unwrap()
+                .ok()?
                 .lines()
                 .find_map(|line| line.strip_prefix("VmRSS:"))
                 .and_then(|kb| kb.trim().trim_end_matches(" kB").trim().parse().ok())
-                .unwrap()
+        };
+        let Some(before) = resident() else {
+            assert!(
+                std::env::consts::OS != "linux",
+                "Linux reports a resident size in /proc/self/status"
+            );
+            return;
         };
         let mut parts = NamedParts::default();
-        let before = resident();
         for case in 0..2_000_usize {
             let ran: BTreeSet<usize> = (case..case + 200).collect();
             let outside: BTreeSet<String> = (0..2_000)
@@ -10526,7 +10618,7 @@ mod tests {
             });
             assert_eq!(defined.len(), 100);
         }
-        let grown = resident().saturating_sub(before);
+        let grown = resident().unwrap().saturating_sub(before);
         assert!(
             grown < 64 * 1024,
             "the memo grew {grown} kB over 2,000 cases of 2,000 names"
@@ -14308,6 +14400,89 @@ mod tests {
         assert_eq!(moved[&two], held[&two], "not a function it ran");
         let global = digests(&[String::from("a"), String::from("b")], "h");
         assert!(cases.iter().all(|case| global[case] != held[case]));
+    }
+
+    /// A case's digest is one of the digests it ran, never of which of two
+    /// identical functions it hit: a record read back by digest
+    /// ([`carry_forward`]) holds every twin, and keys the same as sealed.
+    ///
+    /// Fails by: the twin's names left out of the sealed key, so the carry's
+    /// recompute differs and the record is re-recorded with nothing changed
+    /// (794 of 811 on #1276 across a one-function edit); or the twin's names
+    /// unkeyed, so an edit to what it names moves no case that ran its body.
+    #[test]
+    fn a_case_keys_every_twin_of_what_it_ran() {
+        let root = crate::scratch::scratch("schema-twin-digests");
+        let dirs = std::collections::BTreeMap::new();
+        let one = case("one");
+        let cases: BTreeSet<Case> = [one.clone()].into();
+        let probes = [String::from("a"), String::from("a")];
+        let names = [BTreeSet::from([String::from("LIMIT")]), BTreeSet::new()];
+        let digests = |ran: &[usize], limit: &str| {
+            let executed: std::collections::BTreeMap<Case, BTreeSet<usize>> =
+                [(one.clone(), ran.iter().copied().collect())].into();
+            let items: std::collections::BTreeMap<String, BTreeSet<String>> =
+                [(String::from("LIMIT"), BTreeSet::from([limit.to_owned()]))].into();
+            case_digests(
+                &root,
+                &cases,
+                &dirs,
+                &executed,
+                &Depends {
+                    names: &names,
+                    items: &items,
+                    ..depends(&probes)
+                },
+            )[&one]
+                .clone()
+        };
+        assert_eq!(
+            digests(&[1], "1"),
+            digests(&[0, 1], "1"),
+            "as sealed, as carried"
+        );
+        assert_ne!(
+            digests(&[1], "1"),
+            digests(&[1], "2"),
+            "its twin names LIMIT"
+        );
+    }
+
+    /// A sweep's digests are taken once per case and inputs: the seal asks
+    /// again for what the carry took, and only a case whose ran ids or read
+    /// paths changed is computed again.
+    ///
+    /// Fails by: every case recomputed at the seal (820 s on #1276), or a
+    /// case whose reads changed answered from what it held.
+    #[test]
+    fn a_sweep_takes_each_cases_digest_once_per_inputs() {
+        let memo = DigestMemo::default();
+        let (one, two) = (case("one"), case("two"));
+        let asked = std::cell::RefCell::new(Vec::new());
+        let take = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+                    read: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+            memo.take(executed, read, |due| {
+                asked.borrow_mut().extend(due.keys().cloned());
+                due.iter()
+                    .map(|(case, ids)| {
+                        let touched = read.get(case).map(BTreeSet::len);
+                        (case.clone(), format!("{ids:?}{touched:?}"))
+                    })
+                    .collect()
+            })
+        };
+        let executed: std::collections::BTreeMap<Case, BTreeSet<usize>> =
+            [(one.clone(), [0].into()), (two.clone(), [1].into())].into();
+        let none = std::collections::BTreeMap::new();
+        let first = take(&executed, &none);
+        assert_eq!(asked.take(), vec![one.clone(), two.clone()]);
+        assert_eq!(take(&executed, &none), first, "the seal reads the carry's");
+        assert!(asked.take().is_empty(), "and computes none of them");
+        let read = [(two.clone(), BTreeSet::from([String::from("f")]))].into();
+        let moved = take(&executed, &read);
+        assert_eq!(asked.take(), vec![two.clone()], "its reads moved");
+        assert_eq!(moved[&one], first[&one]);
+        assert_ne!(moved[&two], first[&two]);
     }
 
     /// No dependencies beyond a case's own text and `probes`: no names, no
