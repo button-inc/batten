@@ -5209,15 +5209,10 @@ fn control_red(
     for batch in batches(&cases) {
         // THE CONTROL IS NEVER CUT (CLOUD-2911): a slow case passing with no
         // mutant active is the baseline, and a cut would file it red.
-        let (ran, xml) = judge_run(judging, NULL_MUTANT, mutant, &batch, true);
-        let ran = ran?;
-        let found = xml.as_deref().and_then(junit_failures).unwrap_or_default();
-        anyhow::ensure!(
-            !found.is_empty() || matches!(ran.outcome, super::Outcome::Passed),
-            "the null-mutant control run failed and its report names no failed case, so no \
-             judging run's verdict would mean anything"
-        );
-        if let Some(xml) = xml.as_deref() {
+        let (found, reports) = control_batch(&batch, &mut |open, fail_fast| {
+            judge_run(judging, NULL_MUTANT, mutant, open, fail_fast)
+        })?;
+        for xml in &reports {
             let times = control_times(xml, &batch, &found);
             lines.push_str(&control_lines(judging, &times));
             control.extend(times);
@@ -5350,6 +5345,88 @@ fn control_scope(
         );
     }
     scope
+}
+
+/// One control batch's red cases, and every report its runs wrote (CLOUD-2936).
+///
+/// THE RUN'S BOUND IS NOT THE CASE'S VERDICT. The first run is fail-fast and
+/// bounded by [`first_bound`]; when the bound ends it, the sweep signals the
+/// run's group and nextest writes every case still running as a `test abort`
+/// failure. Filed red, that made a 0.03 s pure case "red under the judge" on one
+/// control and green on the next over identical code
+/// (`module_graph::tests::a_cycle_shares_one_level_above_what_it_reaches`).
+/// So a case the bound's signal ended ([`bound_ended`]) is undecided, and the
+/// undecided cases run once more without fail-fast, as [`decide`] gives a
+/// judging run's unrun cases their turn. Whatever that run files red is red,
+/// a second abort included: two bounds is the most a control batch costs.
+///
+/// # Errors
+///
+/// A run could not start, or failed and named no failed case.
+fn control_batch(
+    batch: &BTreeSet<Case>,
+    run: &mut dyn FnMut(&BTreeSet<Case>, bool) -> (anyhow::Result<super::Ran>, Option<String>),
+) -> anyhow::Result<(Red, Vec<String>)> {
+    let mut red = Red::new();
+    let mut reports = Vec::new();
+    let mut open = batch.clone();
+    let mut fail_fast = true;
+    loop {
+        let (ran, xml) = run(&open, fail_fast);
+        let ran = ran?;
+        let mut found = xml.as_deref().and_then(junit_failures).unwrap_or_default();
+        let undecided: BTreeSet<Case> = if fail_fast && ran.outcome == super::Outcome::TimedOut {
+            xml.as_deref()
+                .map(bound_ended)
+                .unwrap_or_default()
+                .intersection(&open)
+                .cloned()
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        found.retain(|case, _| !undecided.contains(case));
+        anyhow::ensure!(
+            !found.is_empty() || !undecided.is_empty() || ran.outcome == super::Outcome::Passed,
+            "the null-mutant control run failed and its report names no failed case, so no \
+             judging run's verdict would mean anything"
+        );
+        reports.extend(xml);
+        red.extend(found.into_iter().filter(|(case, _)| open.contains(case)));
+        if undecided.is_empty() {
+            return Ok((red, reports));
+        }
+        open = undecided;
+        fail_fast = false;
+    }
+}
+
+/// Every case a `JUnit` report says a signal ended, as the sweep's bound ends a
+/// run: a `test abort` whose message names `SIGTERM` (the group's end) or
+/// `SIGKILL` (its grace spent). A case aborted by any other signal crashed on
+/// its own, and is red.
+fn bound_ended(xml: &str) -> BTreeSet<Case> {
+    let Ok(doc) = roxmltree::Document::parse(xml) else {
+        return BTreeSet::new();
+    };
+    doc.descendants()
+        .filter(|node| node.has_tag_name("testcase"))
+        .filter(|case| {
+            case.children().any(|child| {
+                matches!(child.tag_name().name(), "failure" | "error")
+                    && child.attribute("type") == Some("test abort")
+                    && child
+                        .attribute("message")
+                        .is_some_and(|said| said.contains("SIGTERM") || said.contains("SIGKILL"))
+            })
+        })
+        .filter_map(|case| {
+            Some((
+                case.attribute("name")?.to_owned(),
+                case.attribute("classname")?.to_owned(),
+            ))
+        })
+        .collect()
 }
 
 /// The control run's report ([`control_red`]): how many cases it found red
@@ -22398,6 +22475,138 @@ pub fn repo() -> u8 {{ scratch() }}
     /// The control run names each case it found red beside the count, by
     /// label and its failure's first line.
     ///
+    /// A control report over `cases`, each passed or failed with `failure`
+    /// (`<type>|<message>`), as nextest writes one.
+    fn control_report(cases: &[(&str, Option<&str>)]) -> String {
+        let mut xml = String::from("<testsuites><testsuite name=\"batten::it\">");
+        for (name, failure) in cases {
+            let _ = write!(
+                xml,
+                "<testcase name=\"{name}\" classname=\"batten::it\" time=\"0.1\">"
+            );
+            if let Some((kind, message)) = failure.and_then(|failure| failure.split_once('|')) {
+                let _ = write!(xml, "<failure type=\"{kind}\" message=\"{message}\"/>");
+            }
+            xml.push_str("</testcase>");
+        }
+        xml.push_str("</testsuite></testsuites>");
+        xml
+    }
+
+    fn control_ran(outcome: super::super::Outcome) -> super::super::Ran {
+        super::super::Ran {
+            outcome,
+            output: String::new(),
+            stdout: String::new(),
+        }
+    }
+
+    const BOUND_ABORT: &str = "test abort|process aborted with signal 15 (SIGTERM)";
+
+    /// One control batch over `batch`, each of its runs answered in turn by
+    /// `runs`, and every (cases, fail-fast) it was asked to run.
+    fn control_over(
+        batch: &[&str],
+        runs: Vec<(super::super::Outcome, String)>,
+    ) -> (Red, Vec<(BTreeSet<Case>, bool)>) {
+        let batch: BTreeSet<Case> = batch.iter().map(|name| case(name)).collect();
+        let mut runs = runs.into_iter();
+        let mut asked = Vec::new();
+        let (red, _) = control_batch(&batch, &mut |open, fail_fast| {
+            asked.push((open.clone(), fail_fast));
+            let (outcome, xml) = runs.next().expect("no run past the ones scripted");
+            (Ok(control_ran(outcome)), Some(xml))
+        })
+        .unwrap();
+        (red, asked)
+    }
+
+    /// THE CONTROL'S BOUND IS NEVER A CASE'S VERDICT (CLOUD-2936): a case the
+    /// bound's signal ended runs again without fail-fast, and its own pass is
+    /// its verdict.
+    ///
+    /// Fails by: a `test abort` from the bound's `SIGTERM` filed control red,
+    /// which reported a 0.03 s pure case red on one control and green on the
+    /// next over identical code.
+    #[test]
+    fn a_case_the_control_bound_ended_runs_again_and_is_not_red() {
+        let (red, asked) = control_over(
+            &["fast", "pure"],
+            vec![
+                (
+                    super::super::Outcome::TimedOut,
+                    control_report(&[("fast", None), ("pure", Some(BOUND_ABORT))]),
+                ),
+                (
+                    super::super::Outcome::Passed,
+                    control_report(&[("pure", None)]),
+                ),
+            ],
+        );
+        assert!(red.is_empty(), "{red:?}");
+        assert_eq!(
+            asked,
+            vec![
+                ([case("fast"), case("pure")].into(), true),
+                ([case("pure")].into(), false),
+            ]
+        );
+    }
+
+    /// Fails by: a case the bound ended twice treated as green, or a third
+    /// run: two bounds is the most a control batch costs.
+    #[test]
+    fn a_case_the_control_bound_ends_twice_is_red() {
+        let (red, asked) = control_over(
+            &["slow"],
+            vec![
+                (
+                    super::super::Outcome::TimedOut,
+                    control_report(&[("slow", Some(BOUND_ABORT))]),
+                ),
+                (
+                    super::super::Outcome::TimedOut,
+                    control_report(&[("slow", Some(BOUND_ABORT))]),
+                ),
+            ],
+        );
+        assert!(red.contains_key(&case("slow")), "{red:?}");
+        assert_eq!(asked.len(), 2);
+    }
+
+    /// ONLY THE BOUND'S SIGNAL, ONLY WHEN THE BOUND FIRED: a panic in a run
+    /// its bound ended, a crash by another signal, and a `SIGTERM` abort in a
+    /// run that ended on its own are each the case's own red, run once.
+    ///
+    /// Fails by: any red the bound did not cause given a second run.
+    #[test]
+    fn a_red_the_bound_did_not_cause_is_red_on_the_first_run() {
+        let (red, asked) = control_over(
+            &["panics", "crashes"],
+            vec![(
+                super::super::Outcome::TimedOut,
+                control_report(&[
+                    ("panics", Some("test failure|thread panicked")),
+                    (
+                        "crashes",
+                        Some("test abort|process aborted with signal 11 (SIGSEGV)"),
+                    ),
+                ]),
+            )],
+        );
+        assert_eq!(red.len(), 2, "{red:?}");
+        assert_eq!(asked.len(), 1);
+        let (red, asked) = control_over(
+            &["own"],
+            vec![(
+                super::super::Outcome::Failed(Some(100)),
+                control_report(&[("own", Some(BOUND_ABORT))]),
+            )],
+        );
+        assert!(red.contains_key(&case("own")), "{red:?}");
+        assert_eq!(asked.len(), 1);
+    }
+
     /// Fails by: a bare count ("1 case(s) red under the judge") naming no
     /// case, or a failure's whole text printed (rule 4).
     #[test]
