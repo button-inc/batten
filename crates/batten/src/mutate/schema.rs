@@ -11017,13 +11017,15 @@ mod tests {
         let root = crate::scratch::scratch("schema-judge-scratch-survives");
         let target = root.join("target");
         let kept = target.join(JUDGE_SCRATCH).join("3").join("nextest.toml");
-        let taken = target.join("tmp").join("sentinel");
+        // THE SHARED TEMP ROOT IS ALL A LONE COLLECTOR TAKES (CLOUD-2789): a
+        // target dir's scratch is its own run's, reaped under that run's lock.
+        let taken = root.join("tmpdir").join("batten-suite").join("sentinel");
         for file in [&kept, &taken] {
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
             std::fs::write(file, "").unwrap();
         }
-        // NO OTHER RUN: a `pgrep` that finds none, so the collector takes
-        // `target/tmp` (the premise asserted below).
+        // NO OTHER RUN: a `pgrep` that finds none, so the collector takes the
+        // shared temp root (the premise asserted below).
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let stub = bin.join("pgrep");
@@ -11067,7 +11069,10 @@ mod tests {
             crate::exec::piped_argv(&root, &argv, "", crate::exec::Diagnostics::Drop, &published)
                 .expect("sh ran");
         assert_eq!(code, 0, "the collector exits 0");
-        assert!(!taken.exists(), "the premise: a lone run takes target/tmp");
+        assert!(
+            !taken.exists(),
+            "the premise: a lone run takes the shared temp root"
+        );
         assert!(kept.is_file(), "the judge's config is left");
     }
 
