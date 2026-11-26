@@ -965,6 +965,7 @@ pub fn run_step(
     step: &str,
     args: &[String],
     command: &[String],
+    watched: bool,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     // ONE RUNNER PER STEP AT A TIME (CLOUD-2783). hk's hooks start the same
@@ -1034,7 +1035,16 @@ pub fn run_step(
         _ => running.to_vec(),
     };
     let mut report = Vec::new();
-    let ran = crate::exec::run_with(&spawned, &[], &settings, &mut report);
+    // A WATCHED STEP TELLS ITS COMMAND SO (CLOUD-2925): the watcher collects
+    // from this process, outside the trace, and a collection run inside the
+    // command — the rustc wrapper's — had its reads charged to the step.
+    let published: Vec<(String, String)> = watched
+        .then(|| (DISK_WATCHED.to_owned(), "1".to_owned()))
+        .into_iter()
+        .collect();
+    let ran = crate::git::repo_root(Path::new(".")).and_then(|root| {
+        crate::exec::run_in_with_env(&root, &spawned, &[], &settings, &published, &mut report)
+    });
     // THE RUN'S DEPENDENCY PASSES OUTLIVE IT only over a tree that stood for
     // the whole of it; an economy either way, so its failure is swallowed.
     if let Some((_, root)) = &journaled {
@@ -1572,6 +1582,11 @@ fn step_lock_at(git_dir: &Path, step: &str) -> Option<batten_facts::lock_wait::H
         Taken::Stopped | Taken::Reentrant => None,
     }
 }
+
+/// Published to a watched step's command (CLOUD-2925): a disk watcher outside
+/// the command collects for it, so nothing inside the command collects. A
+/// collection in a traced command is read the command did not declare.
+pub const DISK_WATCHED: &str = "BATTEN_DISK_WATCHED";
 
 /// The prefix of each step's run lock under the git dir.
 const LOCKS: &str = "batten-step-lock";
