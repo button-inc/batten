@@ -3838,25 +3838,11 @@ description = "Register batten on the session root when a session is rooted abov
 quiet = true
 run = "batten wiring register"
 
-[tasks."session:receipts"]
-description = "Session start: pull this branch's published receipts from the private state repository — inert on an engine that predates the verb (CLOUD-1544)"
-# GUARDED ON THE VERB, NOT THE VERSION, because the row ran ahead of its engine.
-# The session-start row runs the INSTALLED engine (never a compile, CLOUD-1620),
-# and until a release carries `receipt pull` that engine answers clap's
-# `unrecognized subcommand`, exit 2 — every session start failing for a verb that
-# merely has not shipped. Asking the engine whether it parses the verb is the
-# one predicate that is true exactly when the call can run; a version compare
-# would encode a release number this file cannot know in advance. On an engine
-# that has the verb, the verb's own exit stands: `off` with the variable unset,
-# `1` for a misconfigured state repository, `3` for one that cannot be reached.
-# QUIET BY DECLARATION (CLOUD-1991): the pointer line is not session advice.
-quiet = true
-silent = "stdout"
-run = """
-if batten receipt pull --help >/dev/null 2>&1; then
-  exec batten receipt pull
-fi
-"""
+# `session:receipts` IS WITHHELD UNTIL STEP 14 (CLOUD-2821), with its
+# `session-receipts` handler row; `batten.toml` carries both verbatim beside the
+# withheld row. The pinned engine has no `receipt pull`, so the guarded task was
+# a no-op at every session start, and its shell guard was the one triple-quoted
+# `run` body this file's `task write other` ratchet counts (CLOUD-2840).
 
 # CLOUD-2279. Tell the session when the engine pin is behind `main`'s, once a
 # day, and write the `engine-fresh` record on the same lookup — more than three
