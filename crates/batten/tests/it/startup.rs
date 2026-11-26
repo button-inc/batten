@@ -399,9 +399,8 @@ fn the_engine_rows_repair_with_the_pinned_release() {
             .collect()
     };
     // `mediator-matches-the-tree` is withheld until step 14 (`batten.toml`).
-    for id in ["engine-resolves-every-row"] {
-        assert_eq!(repair_of(id), ["batten", "engine", "install"], "{id}");
-    }
+    let id = "engine-resolves-every-row";
+    assert_eq!(repair_of(id), ["batten", "engine", "install"], "{id}");
     let compiling: Vec<&str> = rows
         .iter()
         .filter(|row| {
