@@ -955,9 +955,7 @@ fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
     assert!(
         gated.contains("--continue-on-error verify:commit-lint")
             && gated.contains("--continue-on-error --jobs 2 semver")
-            && gated.lines().any(|line| {
-                line.contains("--continue-on-error --jobs 1 ") && line.contains("verify:ci-suite")
-            }),
+            && gated.contains("--continue-on-error --jobs 1 test:traced ::: verify:ci-suite"),
         "every multi-task tier is a `--continue-on-error` fan: {gated}"
     );
 }
