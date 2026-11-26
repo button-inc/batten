@@ -4899,6 +4899,29 @@ fn run_filter(listed: &BTreeSet<Case>, finished: &BTreeSet<Case>, twice: bool) -
         .map(|terms| terms.join(" | "))
 }
 
+/// The line saying how many of the `listed` cases a reach run under `filter`
+/// starts: none for `none()`, the cases no record holds `finished` for a
+/// filter naming them, and every listed case without one.
+fn reach_starts_line(
+    listed: Option<&BTreeSet<Case>>,
+    filter: Option<&str>,
+    finished: &BTreeSet<Case>,
+) -> String {
+    let Some(listed) = listed else {
+        return String::from("mutate schema: reach runs the whole suite, its cases unlisted");
+    };
+    let starts = match filter {
+        Some("none()") => 0,
+        Some(_) => listed.difference(finished).count(),
+        None => listed.len(),
+    };
+    format!(
+        "mutate schema: reach runs {starts} of {} listed case(s), {} finished before",
+        listed.len(),
+        listed.intersection(finished).count()
+    )
+}
+
 /// The argv the reach suite runs: under the recorder's `config`, on the
 /// binaries `listed` names ([`suite_binaries`]), never built here.
 ///
@@ -5299,21 +5322,15 @@ fn control_red(
     let Some(mutant) = judging.mutants.first() else {
         return Ok((judging.red.clone(), control));
     };
-    let mut lines = String::new();
-    for batch in batches(&cases) {
-        // THE CONTROL IS NEVER CUT (CLOUD-2911): a slow case passing with no
-        // mutant active is the baseline, and a cut would file it red.
-        let (found, reports) = control_batch(&batch, &mut |open, fail_fast| {
-            judge_run(judging, NULL_MUTANT, mutant, open, fail_fast)
-        })?;
-        for xml in &reports {
-            let times = control_times(xml, &batch, &found);
-            lines.push_str(&control_lines(judging, &times));
-            control.extend(times);
-        }
-        red.extend(found.into_iter().filter(|(case, _)| batch.contains(case)));
-    }
-    journal_or_say(judging.store, &lines, out)?;
+    // THE CONTROL IS NEVER CUT (CLOUD-2911): a slow case passing with no
+    // mutant active is the baseline, and a cut would file it red.
+    let (found, times) = control_batches(
+        batches(&cases),
+        &mut |open, fail_fast| judge_run(judging, NULL_MUTANT, mutant, open, fail_fast),
+        &mut |times| journal_or_say(judging.store, &control_lines(judging, times), out),
+    )?;
+    red.extend(found);
+    control.extend(times);
     writeln!(
         out,
         "mutate schema: control ran {} of the {} case(s) still to judge, {} journaled passing",
@@ -5443,6 +5460,37 @@ fn control_scope(
 
 /// One control run over a batch: how it ended, and the junit report it wrote.
 type ControlRun = (anyhow::Result<super::Ran>, Option<String>);
+
+/// Every one of `batches` controlled by `run` ([`control_batch`]): their red
+/// cases and their passing seconds, each batch's seconds handed to `keep` as
+/// that batch ends.
+///
+/// EACH BATCH KEPT AS IT ENDS, NEVER THE RUN AT ITS END (CLOUD-2904): a shard
+/// restarted mid-control relaunched to "control ran 10213 of the 10213
+/// case(s), 0 journaled", every finished batch lost with the one in flight.
+///
+/// # Errors
+///
+/// A batch's run fails as [`control_batch`]'s does, or `keep` fails; every
+/// batch before it is kept.
+fn control_batches(
+    batches: Vec<BTreeSet<Case>>,
+    run: &mut dyn FnMut(&BTreeSet<Case>, bool) -> ControlRun,
+    keep: &mut dyn FnMut(&Control) -> std::io::Result<()>,
+) -> anyhow::Result<(Red, Control)> {
+    let (mut red, mut control) = (Red::new(), Control::new());
+    for batch in batches {
+        let (found, reports) = control_batch(&batch, run)?;
+        let mut times = Control::new();
+        for xml in &reports {
+            times.extend(control_times(xml, &batch, &found));
+        }
+        keep(&times)?;
+        control.extend(times);
+        red.extend(found.into_iter().filter(|(case, _)| batch.contains(case)));
+    }
+    Ok((red, control))
+}
 
 /// One control batch's red cases, and every report its runs wrote (CLOUD-2936).
 ///
@@ -7223,9 +7271,19 @@ pub fn record_reach(
     // skip, 1,891 s to re-record 57. The cases no record holds finished are
     // the run's filter. A double recording clears every record, so it runs
     // them all ([`run_filter`]).
-    if let Some(filter) = listed_cases(work, state, (&binaries, &metadata))
-        .and_then(|listed| run_filter(&listed, &finished_cases(&base), super::stable::twice()))
-    {
+    let listed = listed_cases(work, state, (&binaries, &metadata));
+    let filter = listed
+        .as_ref()
+        .and_then(|listed| run_filter(listed, &finished_cases(&base), super::stable::twice()));
+    // HOW MANY CASES THE RUN STARTS, SAID (CLOUD-2904): a relaunch is checked
+    // by this count, never by its seconds, to re-run no case a stopped run
+    // finished.
+    writeln!(
+        out,
+        "{}",
+        reach_starts_line(listed.as_ref(), filter.as_deref(), &finished_cases(&base))
+    )?;
+    if let Some(filter) = filter {
         text = text.replacen(
             "[profile.batten-cover]\n",
             &format!(
@@ -7953,7 +8011,12 @@ impl<'r> Resolver<'r> {
         let Some((last, before)) = segments.split_last() else {
             return Found::Unknown;
         };
-        if *last == "Self" || last.starts_with('@') || raw.starts_with('!') {
+        // `Self` IS NOT ITS OWN NAME: what it names is the impl's. A `crate`
+        // qualifier (`@...`) or a macro's name (`!...`) needs no arm: no
+        // definition's name begins with either, so the lookup below finds
+        // nothing and the owner is unknown all the same (the sweep at
+        // b878238b4 found `|| -> &&` between them indistinguishable).
+        if *last == "Self" {
             return Found::Unknown;
         }
         let found = if before.is_empty() {
@@ -12310,6 +12373,7 @@ pub fn sweep(
     // records are sealed against the snapshot it ran over, which the copy
     // below replaces.
     keep_leftovers(&state, out)?;
+    let at = stage_took(out, "leftovers", started)?;
     // THE CONTENT IDS ARE OF THE TREE THE SYNC COPIED (CLOUD-2927 item 3):
     // taken before it and checked after, so a non-Rust edit landing between
     // the two refuses the sweep rather than keying new bytes to old verdicts.
@@ -12318,6 +12382,7 @@ pub fn sweep(
     })?;
     let (live, root) = (root, snapshot);
     clear_run_state(&state);
+    let at = stage_took(out, "copy", at)?;
     let cache_path = state.join("verdicts");
     // NOT UNDER CI (CLOUD-2850), for `step`'s "Local only" reason: CI's job is
     // to confirm independently, so a journal a runner came by answers nothing.
@@ -12338,8 +12403,10 @@ pub fn sweep(
         (&site_keys, &mut cache, &cache_path),
         out,
     )?;
+    let at = stage_took(out, "render and build", at)?;
     // WHAT EACH BUILD SCRIPT PRODUCED, BY CONTENT (CLOUD-2927 item 5).
     resource_ids.extend(build_outputs((&work, &target, &state), mutants, &schema)?);
+    stage_took(out, "build outputs", at)?;
     // PACKED FOR A SHARD THAT READS NO JOURNAL (CLOUD-2882).
     let rendered_with = Known::of(&unviable, &handed, &unprobed);
     let classic = schema.classic(handed);
@@ -12410,12 +12477,16 @@ fn judge_todo(
     (state, started): (&std::path::Path, std::time::Instant),
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Swept> {
+    let at = std::time::Instant::now();
     let shown = shown_over(&judging, todo, schema)?;
+    let at = stage_took(out, "originals shown", at)?;
     let handed = (handback.is_some(), classic, schema, reach);
     let (red, control) = control_red(&judging, &control_scope(&judging, todo, handed), out)?;
+    let at = stage_took(out, "control", at)?;
     let judging = judging.with_red(&red).with_control(&control);
     let mut verdicts = judge_all(&judging, todo, workers, out);
     drop(shown);
+    let at = stage_took(out, "judging", at)?;
     let (names, handed_unviable) = settle_handed(
         &judging,
         handback,
@@ -12423,6 +12494,7 @@ fn judge_todo(
         &mut verdicts,
         out,
     )?;
+    stage_took(out, "hand-backs", at)?;
     let code = report(
         out,
         judging.mutants,
@@ -12487,6 +12559,29 @@ fn handback_inputs(handback: &Handback<'_>) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Say how long one stage of a sweep took since `since`, and answer now: the
+/// next stage's start.
+///
+/// EVERY STAGE TIMED, NEVER INFERRED (CLOUD-2904): a restarted shard's
+/// "built in 1127s" covered the leftovers, the copy, the render and the build
+/// scripts' outputs together, and no line said which of them a null lap paid.
+///
+/// # Errors
+///
+/// `out` cannot be written.
+fn stage_took(
+    out: &mut dyn std::io::Write,
+    stage: &str,
+    since: std::time::Instant,
+) -> std::io::Result<std::time::Instant> {
+    writeln!(
+        out,
+        "mutate schema: stage {stage} took {:.1}s",
+        since.elapsed().as_secs_f64()
+    )?;
+    Ok(std::time::Instant::now())
 }
 
 /// The build's line: how many mutants, how many it found unviable and how
@@ -13034,6 +13129,7 @@ fn reached(
             snapshot: Some(tree_digest(root)?),
         })?,
     )?;
+    let at = stage_took(out, "reach context", started)?;
     let (reach, passed) = record_reach(
         work,
         target,
@@ -13047,7 +13143,9 @@ fn reached(
     for case in reach.sites.values().flatten() {
         recorded.entry(case.clone()).or_default();
     }
+    let at = stage_took(out, "reach record", at)?;
     let digests = recompute(&recorded, &reach.read);
+    let at = stage_took(out, "reach digests", at)?;
     let seconds = sweep_seconds(state, &reach)?;
     seal_reach(
         &state.join("reach"),
@@ -13057,6 +13155,7 @@ fn reached(
         &seconds,
         passed,
     )?;
+    let at = stage_took(out, "reach seal", at)?;
     // THE SELECTION DIGEST IS AN ECONOMY: one that cannot be taken leaves each
     // record to the suite's build key, and never fails the sweep.
     match seal_tested(&base, root, ids.0, format) {
@@ -13066,6 +13165,7 @@ fn reached(
         )?,
         Err(why) => writeln!(out, "mutate schema: no selection digest taken: {why:#}")?,
     }
+    stage_took(out, "selection digest", at)?;
     // ONE RED CASE NO LONGER REFUSES THE SWEEP (#1276: four of ~10,500 left
     // 12,452 mutants with no verdict). Each is a finding, and poisons only the
     // mutants it reaches; a run that could not say which case failed still
@@ -20973,6 +21073,153 @@ mod tests {
         );
     }
 
+    /// The reach line counts the cases a run starts: none under `none()`, the
+    /// unfinished ones under a naming filter, every listed one without a
+    /// filter; and how many were finished before it.
+    ///
+    /// Fails by: the count read off the listing whatever the filter, so a
+    /// relaunch that re-ran no finished case reported the whole suite.
+    #[test]
+    fn the_reach_line_counts_the_cases_a_run_starts() {
+        let case = |name: &str| (name.to_owned(), String::from("fix"));
+        let listed: BTreeSet<Case> = ["a", "b", "c", "d"].map(case).into();
+        let finished: BTreeSet<Case> = ["a", "b", "c"].map(case).into();
+        let line = |filter: Option<&str>| reach_starts_line(Some(&listed), filter, &finished);
+        assert_eq!(
+            line(Some("none()")),
+            "mutate schema: reach runs 0 of 4 listed case(s), 3 finished before"
+        );
+        assert_eq!(
+            line(Some("test(=d)")),
+            "mutate schema: reach runs 1 of 4 listed case(s), 3 finished before"
+        );
+        assert_eq!(
+            line(None),
+            "mutate schema: reach runs 4 of 4 listed case(s), 3 finished before"
+        );
+        assert_eq!(
+            reach_starts_line(None, None, &finished),
+            "mutate schema: reach runs the whole suite, its cases unlisted"
+        );
+    }
+
+    /// Two files are the same bytes only if both end together: a length that
+    /// lies (procfs reports 0 for a file holding bytes) is read past, never
+    /// trusted.
+    ///
+    /// Fails by: either stream's end taken as both ends (`&& -> ||`, which
+    /// the sweep at b878238b4 found survived), so a file holding bytes
+    /// matched an empty one of the same reported length.
+    #[test]
+    fn same_bytes_reads_past_a_length_that_lies() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let empty = crate::scratch::scratch("schema-same-bytes-lying").join("empty");
+        std::fs::write(&empty, "").unwrap();
+        let lying = std::path::Path::new("/proc/self/cmdline");
+        assert_eq!(
+            std::fs::metadata(lying).unwrap().len(),
+            0,
+            "procfs reports 0"
+        );
+        assert!(!same_bytes(lying, &empty));
+        assert!(!same_bytes(&empty, lying));
+        assert!(same_bytes(&empty, &empty));
+    }
+
+    /// The finished cases are exactly the records a recorder would skip: each
+    /// one done passing, by the case it names; a record unfinished, failed or
+    /// naming no case is none.
+    ///
+    /// Fails by: a case answered that no record holds (the sweep at b878238b4
+    /// found an added default case survived), which a relaunch's count of
+    /// finished cases would then overstate.
+    #[test]
+    fn the_finished_cases_are_the_records_done_passing() {
+        let base = crate::scratch::scratch("schema-finished-cases");
+        let record = |dir: &str, case: Option<&str>, done: Option<&str>| {
+            let at = base.join(dir);
+            std::fs::create_dir_all(&at).unwrap();
+            if let Some(case) = case {
+                std::fs::write(at.join("case"), case).unwrap();
+            }
+            if let Some(code) = done {
+                std::fs::write(at.join(DONE), code).unwrap();
+            }
+        };
+        record("1", Some("a::passed\tfix::it"), Some("0"));
+        record("2", Some("a::failed\tfix::it"), Some("101"));
+        record("3", Some("a::running\tfix::it"), None);
+        record("4", None, Some("0"));
+        assert_eq!(
+            finished_cases(&base),
+            BTreeSet::from([(String::from("a::passed"), String::from("fix::it"))])
+        );
+    }
+
+    /// `super` from a crate's root names no module: the path is unknown, never
+    /// the root again.
+    ///
+    /// Fails by: the root's `super` read as the root (the guard on its arm
+    /// dropped, which the sweep at b878238b4 found survived), so `super::x`
+    /// at the top of a crate resolved to the crate's own `x`.
+    #[test]
+    fn super_from_a_crates_root_is_unknown() {
+        let definitions_owned = [format!("x{HOMED}fix{HOMED}{MODULE_ITEM}")];
+        let items: std::collections::BTreeMap<String, BTreeSet<String>> = definitions_owned
+            .iter()
+            .map(|definition| (definition.clone(), BTreeSet::from([String::from("i")])))
+            .collect();
+        let mentions = std::collections::BTreeMap::new();
+        let definitions: Vec<&str> = definitions_owned.iter().map(String::as_str).collect();
+        let by_base = std::collections::HashMap::from([("x", vec![0])]);
+        let (globs, crates, macros) = (
+            Globs::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        );
+        let index = Resolver::new(
+            &by_base,
+            &definitions,
+            &items,
+            &mentions,
+            (&globs, &crates, &macros),
+        );
+        assert_eq!(
+            index.path("fix", "", &["x"], 0),
+            Place::Module("fix", String::from("x")),
+            "`x` from the root is its module"
+        );
+        assert_eq!(index.path("fix", "", &["super", "x"], 0), Place::Unknown);
+    }
+
+    /// A stage's line names it and the seconds since its start, and the
+    /// instant it answers starts the next stage.
+    ///
+    /// Fails by: a stage's line unsaid or unnamed, or the next stage timed
+    /// from the sweep's start, so every line after the first carried the
+    /// stages before it.
+    #[test]
+    fn a_stage_says_its_own_seconds_and_starts_the_next() {
+        let mut out = Vec::new();
+        let long_ago = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(90))
+            .unwrap();
+        let next = stage_took(&mut out, "copy", long_ago).unwrap();
+        stage_took(&mut out, "render and build", next).unwrap();
+        let said = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = said.lines().collect();
+        assert!(
+            lines[0].starts_with("mutate schema: stage copy took 90."),
+            "{said}"
+        );
+        assert_eq!(
+            lines[1], "mutate schema: stage render and build took 0.0s",
+            "{said}"
+        );
+    }
+
     /// A use binding imports by the one mention written where it is, in its
     /// own package and module, with a path: never one made in another
     /// package, and never one written with no path, though either names the
@@ -24175,6 +24422,39 @@ pub fn repo() -> u8 {{ scratch() }}
         })
         .unwrap();
         (red, asked)
+    }
+
+    /// Each control batch is kept as it ends: a run that fails in a later
+    /// batch, as a kill does, leaves every batch before it kept.
+    ///
+    /// Fails by: the batches' seconds kept once, after the last batch, so a
+    /// shard restarted mid-control relaunched to "control ran 10213 of the
+    /// 10213 case(s), 0 journaled".
+    #[test]
+    fn each_control_batch_is_kept_as_it_ends() {
+        let batches: Vec<BTreeSet<Case>> = vec![[case("a")].into(), [case("b")].into()];
+        let mut asked = 0;
+        let mut kept: Vec<Vec<Case>> = Vec::new();
+        let ended = control_batches(
+            batches,
+            &mut |_, _| {
+                asked += 1;
+                if asked == 1 {
+                    (
+                        Ok(control_ran(super::super::Outcome::Passed)),
+                        Some(control_report(&[("a", None)])),
+                    )
+                } else {
+                    (Err(anyhow::anyhow!("killed in flight")), None)
+                }
+            },
+            &mut |times| {
+                kept.push(times.keys().cloned().collect());
+                Ok(())
+            },
+        );
+        assert!(ended.is_err(), "the second batch's run failed");
+        assert_eq!(kept, vec![vec![case("a")]], "the first batch was kept");
     }
 
     /// THE CONTROL'S BOUND IS NEVER A CASE'S VERDICT (CLOUD-2936): a case the
