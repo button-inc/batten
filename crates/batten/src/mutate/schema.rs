@@ -1515,6 +1515,15 @@ fn glob_targets(item: &ast::Item, place: &FileScope) -> BTreeSet<String> {
                 segments = own;
             }
         }
+        // A GLOB FROM A PATH NO MODULE SAYS (CLOUD-2927): an external crate,
+        // an enum's variants or a module named relatively; what it brings in
+        // is unknown, so no mention in the module is narrowed through it.
+        if !segments
+            .first()
+            .is_some_and(|first| ["crate", "self", "super"].contains(&first.as_str()))
+        {
+            targets.insert(format!("{USE_SCOPE}*?"));
+        }
         let target = glob_module(&module, &segments);
         targets.insert(use_scope(place, &target));
         targets.insert(use_globs(place, &target));
@@ -1905,6 +1914,40 @@ const ASSOCIATED: char = '\u{1}';
 const DEFINED_IN: char = '\u{2}';
 /// Between a mention's name and the scope it is made in ([`mentions_in`]).
 const MENTIONED_IN: char = '\u{3}';
+/// Before a definition's home, its package and then its module, each after
+/// one: where a path names it from ([`definitions`], [`narrowed`]). A
+/// definition no path names has none: one in a block, or in a package or
+/// module whose tree its paths do not say.
+const HOMED: char = '\u{4}';
+/// After a mention's scope, how it is written ([`written_as`]): nothing for
+/// a bare name, the module a `crate::`, `self::` or `super::` path names, or
+/// `?` where no path says which.
+const WRITTEN: char = '\u{8}';
+/// The macros that pass a name through as written, where it is called: what
+/// they are handed resolves as it would outside them.
+const PASSED_AS_WRITTEN: [&str; 21] = [
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "dbg",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "eprint",
+    "eprintln",
+    "format",
+    "format_args",
+    "matches",
+    "panic",
+    "print",
+    "println",
+    "todo",
+    "unimplemented",
+    "unreachable",
+    "vec",
+    "write",
+    "writeln",
+];
 /// After an impl's definition key: an impl is keyed wherever its names are,
 /// and followed only where it is a name's one definition ([`Graph::new`]).
 const IMPL_DEFINED: char = '\u{5}';
@@ -2082,13 +2125,31 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
         Visible::Module if place.flat || widened.contains(&module) => Visible::Package,
         other => other,
     };
+    // HOMED WHERE A PATH NAMES IT FROM (CLOUD-2927): its package and module,
+    // unless it is in a block or its module's tree is not the one its path
+    // says ([`FileScope::flat`]).
+    let home = if place.unscoped
+        || place.flat
+        || widened.contains(&module)
+        || item
+            .syntax()
+            .ancestors()
+            .any(|node| node.kind() == SyntaxKind::STMT_LIST)
+    {
+        String::new()
+    } else {
+        format!("{HOMED}{}{HOMED}{module}", place.package)
+    };
     let free = item_names(item).into_iter().map(|name| {
         if place.unscoped || visible == Visible::Workspace {
-            name
+            format!("{name}{home}")
         } else if visible == Visible::Package {
-            format!("{name}{DEFINED_IN}{}", place.package)
+            format!("{name}{DEFINED_IN}{}{home}", place.package)
         } else {
-            format!("{name}{DEFINED_IN}{}{DEFINED_IN}{module}", place.package)
+            format!(
+                "{name}{DEFINED_IN}{}{DEFINED_IN}{module}{home}",
+                place.package
+            )
         }
     });
     let mut linked_names: Vec<String> = Vec::new();
@@ -2171,7 +2232,12 @@ fn owner_type_names(item: &ast::Item) -> Vec<String> {
         .parent()
         .and_then(|list| list.parent())
         .and_then(ast::Impl::cast)
-        .map(|it| impl_names(&it))
+        .map(|it| {
+            impl_names(&it)
+                .into_iter()
+                .map(|name| format!("{name}{IMPL_DEFINED}"))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -2409,7 +2475,11 @@ fn token_mentions(
         if method_call(token) || macro_called(token) {
             mentions.insert(use_scope(place, &module));
         }
-        format!("{MENTIONED_IN}{}{MENTIONED_IN}{module}", place.package)
+        format!(
+            "{MENTIONED_IN}{}{MENTIONED_IN}{module}{}",
+            place.package,
+            written_as(token, &module)
+        )
     });
     for name in names {
         if associated {
@@ -2420,6 +2490,125 @@ fn token_mentions(
             None => mentions.insert(name),
         };
     }
+}
+
+/// How `token`'s name is written, from `module` ([`WRITTEN`]): nothing for a
+/// bare name a path resolves in its own module, or a name a std macro passes
+/// through as written ([`PASSED_AS_WRITTEN`]); the module a `crate::`,
+/// `self::` or `super::` qualifier names; and `?` for a macro's own name, a
+/// name in an attribute, a string or another macro's tokens, or any other
+/// qualifier, which no module of a path says.
+fn written_as(token: &ra_ap_syntax::SyntaxToken, module: &str) -> String {
+    let unknown = format!("{WRITTEN}?");
+    if token.kind() == SyntaxKind::STRING
+        || macro_called(token)
+        || token
+            .parent_ancestors()
+            .any(|node| node.kind() == SyntaxKind::ATTR)
+    {
+        return unknown;
+    }
+    if token
+        .parent_ancestors()
+        .any(|node| node.kind() == SyntaxKind::TOKEN_TREE)
+    {
+        return if passed_as_written(token) {
+            String::new()
+        } else {
+            unknown
+        };
+    }
+    let Some(path) = token
+        .parent()
+        .and_then(ast::NameRef::cast)
+        .and_then(|name| name.syntax().parent())
+        .and_then(ast::PathSegment::cast)
+        .and_then(|segment| segment.parent_path().qualifier())
+    else {
+        return String::new();
+    };
+    let mut segments: Vec<String> = Vec::new();
+    for enclosing in path
+        .top_path()
+        .syntax()
+        .parent()
+        .and_then(ast::UseTree::cast)
+        .into_iter()
+        .flat_map(|tree| {
+            tree.syntax()
+                .ancestors()
+                .skip(1)
+                .filter_map(ast::UseTree::cast)
+                .collect::<Vec<_>>()
+        })
+    {
+        let Some(prefix) = enclosing.path().and_then(|prefix| path_segments(&prefix)) else {
+            return unknown;
+        };
+        segments.splice(0..0, prefix);
+    }
+    let Some(own) = path_segments(&path) else {
+        return unknown;
+    };
+    segments.extend(own);
+    if segments
+        .first()
+        .is_some_and(|first| ["crate", "self", "super"].contains(&first.as_str()))
+    {
+        format!("{WRITTEN}{}", glob_module(module, &segments))
+    } else {
+        unknown
+    }
+}
+
+/// A path's segments, each a plain name or `crate`, `self` or `super`; none
+/// where one carries generics or a type.
+fn path_segments(path: &ast::Path) -> Option<Vec<String>> {
+    path.segments()
+        .map(|segment| {
+            let text = segment.syntax().to_string();
+            let text = text.trim();
+            (!text.is_empty() && text.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                .then(|| text.to_owned())
+        })
+        .collect()
+}
+
+/// Whether `token`, in a macro's tokens, is passed through as written: the
+/// macro is a std one that does ([`PASSED_AS_WRITTEN`]), called by its bare
+/// name, no macro call inside it holds the token, and no `::` qualifies it.
+fn passed_as_written(token: &ra_ap_syntax::SyntaxToken) -> bool {
+    let previous = |element: Option<ra_ap_syntax::SyntaxElement>| {
+        std::iter::successors(element, ra_ap_syntax::SyntaxElement::prev_sibling_or_token)
+            .find(|element| !element.kind().is_trivia())
+    };
+    if previous(token.prev_sibling_or_token())
+        .is_some_and(|element| element.kind() == SyntaxKind::COLON2)
+    {
+        return false;
+    }
+    for tree in token
+        .parent_ancestors()
+        .filter(|node| node.kind() == SyntaxKind::TOKEN_TREE)
+    {
+        if let Some(call) = tree.parent().and_then(ast::MacroCall::cast) {
+            return call.path().is_some_and(|path| {
+                path.qualifier().is_none()
+                    && path
+                        .segment()
+                        .and_then(|segment| segment.name_ref())
+                        .is_some_and(|name| {
+                            PASSED_AS_WRITTEN.contains(&name.text().to_string().as_str())
+                        })
+            });
+        }
+        if previous(tree.prev_sibling_or_token())
+            .is_some_and(|element| element.kind() == SyntaxKind::BANG)
+        {
+            return false;
+        }
+    }
+    false
 }
 
 /// Whether `token` names the macro a macro call invokes.
@@ -2475,7 +2664,7 @@ fn associated_position(token: &ra_ap_syntax::SyntaxToken) -> bool {
 /// The name a definition or mention key is keyed under, its namespace kept:
 /// an associated key keeps its prefix, a scope is cut.
 fn key_base(key: &str) -> &str {
-    key.split([DEFINED_IN, MENTIONED_IN, IMPL_DEFINED])
+    key.split([DEFINED_IN, MENTIONED_IN, HOMED, IMPL_DEFINED, WRITTEN])
         .next()
         .unwrap_or(key)
 }
@@ -2494,7 +2683,12 @@ fn visible_from(mention: &str, definition: &str) -> bool {
     let Some((_, made)) = mention.split_once(MENTIONED_IN) else {
         return true;
     };
+    let made = made.split(WRITTEN).next().unwrap_or(made);
     let (package, module) = made.split_once(MENTIONED_IN).unwrap_or((made, ""));
+    let definition = definition
+        .split([HOMED, IMPL_DEFINED])
+        .next()
+        .unwrap_or(definition);
     let Some((_, scope)) = definition.split_once(DEFINED_IN) else {
         return true;
     };
@@ -6641,6 +6835,148 @@ struct Graph<'g> {
     definitions: Vec<&'g str>,
     /// Each definition's token, by definition id.
     tokens: Vec<Option<blake3::Hash>>,
+    /// Each module's glob targets ([`globs_of`]).
+    globs: Globs<'g>,
+}
+
+/// Each module's glob targets, by package and module: the modules its `*`
+/// `use`s import from, or `None` where one names a module no path says.
+type Globs<'g> = std::collections::HashMap<(&'g str, &'g str), Option<Vec<&'g str>>>;
+
+/// [`Globs`] from the mentions of every module's glob key ([`use_globs`]),
+/// which name each target's ([`glob_targets`]).
+fn globs_of(mentions: &std::collections::BTreeMap<String, BTreeSet<String>>) -> Globs<'_> {
+    let glob = format!("{USE_SCOPE}*");
+    let mut globs = Globs::new();
+    for (key, mentioned) in mentions {
+        let Some((package, module)) = key
+            .strip_prefix(glob.as_str())
+            .and_then(|rest| rest.split_once('\u{7}'))
+        else {
+            continue;
+        };
+        let mut targets = Some(Vec::new());
+        for target in mentioned {
+            let Some(rest) = target.strip_prefix(glob.as_str()) else {
+                continue;
+            };
+            match rest.split_once('\u{7}') {
+                None => targets = None,
+                Some((_, at)) if at != module => {
+                    if let Some(list) = targets.as_mut() {
+                        list.push(at);
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+        globs.insert((package, module), targets);
+    }
+    globs
+}
+
+/// A definition's home, its package and module ([`HOMED`]).
+fn home_of(definition: &str) -> Option<(&str, &str)> {
+    definition
+        .split_once(HOMED)?
+        .1
+        .split(IMPL_DEFINED)
+        .next()?
+        .split_once(HOMED)
+}
+
+/// Where a mention is resolved: its package and the module whose names it
+/// is looked up among, or `None` where no path says ([`WRITTEN`]).
+fn written(mention: &str) -> Option<(&str, &str)> {
+    let (_, made) = mention.split_once(MENTIONED_IN)?;
+    let (package, rest) = made.split_once(MENTIONED_IN)?;
+    match rest.split_once(WRITTEN) {
+        None => Some((package, rest)),
+        Some((_, "?")) => None,
+        Some((_, named)) => Some((package, named)),
+    }
+}
+
+/// The definitions `mention` is keyed on and the ones a walk follows from
+/// it: the ONE its path names, where [`narrowed`] finds it, keyed with every
+/// impl it sees and followed alone; else every definition it sees, followed
+/// as [`followed`] says.
+fn resolve(
+    mention: &str,
+    by_base: &std::collections::HashMap<&str, Vec<usize>>,
+    definitions: &[&str],
+    items: &std::collections::BTreeMap<String, BTreeSet<String>>,
+    globs: &Globs<'_>,
+) -> (Vec<usize>, Vec<usize>) {
+    let visible: Vec<usize> = by_base
+        .get(key_base(mention))
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|id| visible_from(mention, definitions[*id]))
+        .collect();
+    if let Some(one) = narrowed(mention, &visible, definitions, items, globs) {
+        let keyed = visible
+            .iter()
+            .copied()
+            .filter(|id| *id == one || definitions[*id].ends_with(IMPL_DEFINED))
+            .collect();
+        return (keyed, vec![one]);
+    }
+    let follow = followed(&visible, definitions, items).collect();
+    (visible, follow)
+}
+
+/// The one definition among `visible` that `mention` names, where the
+/// module it is resolved in says which: one defined or `use`d there, else
+/// one its globs bring in, through theirs in turn; `None` where it holds
+/// none or several, a glob names a module no path says, or a definition it
+/// sees has no home ([`HOMED`]).
+///
+/// THE ONE DEFINITION A PATH NAMES (CLOUD-2927): matched by spelling, a
+/// mention of `Schema` keyed every `Schema` in the workspace, and an edit to
+/// one re-keyed every case naming another. A module's own items and `use`s
+/// shadow its globs, and a `use` is a definition whose own path is a mention
+/// written with its module, so the walk goes on from it to what it imports.
+fn narrowed(
+    mention: &str,
+    visible: &[usize],
+    definitions: &[&str],
+    items: &std::collections::BTreeMap<String, BTreeSet<String>>,
+    globs: &Globs<'_>,
+) -> Option<usize> {
+    let (package, start) = written(mention)?;
+    let candidates: Vec<(usize, (&str, &str))> = visible
+        .iter()
+        .filter(|id| !definitions[**id].ends_with(IMPL_DEFINED))
+        .map(|id| home_of(definitions[*id]).map(|home| (*id, home)))
+        .collect::<Option<_>>()?;
+    let mut found: BTreeSet<usize> = BTreeSet::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut frontier = vec![start];
+    while let Some(at) = frontier.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        let here: Vec<usize> = candidates
+            .iter()
+            .filter(|(_, home)| *home == (package, at))
+            .map(|(id, _)| *id)
+            .collect();
+        if !here.is_empty() {
+            found.extend(here);
+            continue;
+        }
+        match globs.get(&(package, at)) {
+            None => {}
+            Some(None) => return None,
+            Some(Some(targets)) => frontier.extend(targets.iter().copied()),
+        }
+    }
+    let mut found = found.into_iter();
+    let one = found.next()?;
+    (found.next().is_none() && items.get(definitions[one]).map_or(0, BTreeSet::len) == 1)
+        .then_some(one)
 }
 
 /// One walk's reusable state: the visited map and the ids it set.
@@ -6679,27 +7015,13 @@ impl<'g> Graph<'g> {
             .enumerate()
             .map(|(id, name)| (*name, id))
             .collect();
-        let resolves: Vec<Vec<usize>> = names
+        let globs = globs_of(depends.mentions);
+        // A MENTION RESOLVES TO THE ONE DEFINITION ITS PATH NAMES (CLOUD-2927),
+        // else to every definition it sees ([`resolve`]).
+        let (resolves, follows): (Vec<Vec<usize>>, Vec<Vec<usize>>) = names
             .iter()
-            .map(|name| {
-                by_base
-                    .get(key_base(name))
-                    .into_iter()
-                    .flatten()
-                    .copied()
-                    .filter(|id| visible_from(name, definitions[*id]))
-                    .collect()
-            })
-            .collect();
-        // EVERY DEFINITION A MENTION SEES IS FOLLOWED BUT AN AMBIGUOUS IMPL
-        // (CLOUD-2904). Cut at every name with more than one definition, an
-        // edit reached only through a type's own definition or a `use`'s
-        // target reused a stale verdict; followed through every impl too, the
-        // impls of common names (`new`, `fmt`, `from`) joined one component
-        // and a `///` edit on any type in it re-keyed 97.6% of probed
-        // functions. So an impl is keyed wherever its names are and followed
-        // only where it is a name's one definition: its header names traits
-        // and bounds, and its bodies are probed functions run or not.
+            .map(|name| resolve(name, &by_base, &definitions, depends.items, &globs))
+            .unzip();
         let def_mentions: Vec<Vec<usize>> = definitions
             .iter()
             .map(|key| {
@@ -6716,16 +7038,17 @@ impl<'g> Graph<'g> {
         // function would reach everything its module imports.
         let edges = names
             .iter()
-            .zip(&resolves)
-            .map(|(name, found)| {
+            .zip(&follows)
+            .map(|(name, follow)| {
                 // A GLOB IS FOLLOWED (round 4 #7): what it imports from is in
                 // scope as surely as its own text, and its mentions name that
                 // module's `use`s and globs ([`glob_targets`]).
                 if name.starts_with(USE_SCOPE) && !name[USE_SCOPE.len_utf8()..].starts_with('*') {
                     return Vec::new();
                 }
-                followed(found, &definitions, depends.items)
-                    .flat_map(|id| def_mentions[id].iter().copied())
+                follow
+                    .iter()
+                    .flat_map(|id| def_mentions[*id].iter().copied())
                     .collect()
             })
             .collect();
@@ -6744,6 +7067,7 @@ impl<'g> Graph<'g> {
             resolves,
             definitions,
             tokens,
+            globs,
         }
     }
 
@@ -6756,16 +7080,16 @@ impl<'g> Graph<'g> {
         mention: &str,
         items: &std::collections::BTreeMap<String, BTreeSet<String>>,
     ) -> (Vec<usize>, Vec<usize>) {
-        let found: Vec<usize> = self
-            .by_base
-            .get(key_base(mention))
-            .into_iter()
-            .flatten()
-            .copied()
-            .filter(|id| visible_from(mention, self.definitions[*id]))
-            .collect();
-        let nodes = followed(&found, &self.definitions, items)
-            .flat_map(|id| self.def_mentions[id].iter().copied())
+        let (found, follow) = resolve(
+            mention,
+            &self.by_base,
+            &self.definitions,
+            items,
+            &self.globs,
+        );
+        let nodes = follow
+            .iter()
+            .flat_map(|id| self.def_mentions[*id].iter().copied())
             .collect();
         (found, nodes)
     }
@@ -15815,13 +16139,13 @@ mod tests {
         }
     }
 
-    /// T2 (CLOUD-2904): a name is followed through every definition it has,
-    /// so an edit one hop on moves the case naming it, a name with several
-    /// definitions included: `S` is a struct and an impl, and an edit to the
-    /// `C` the struct names moves the case naming `S`.
+    /// T2 (CLOUD-2904, CLOUD-2927): a name is followed through the one
+    /// definition its module says it names, so an edit one hop on moves the
+    /// case naming it: `S` is a struct and an impl, the struct is its one
+    /// definition in the module naming it, and an edit to the `C` the struct
+    /// names moves the case naming `S`.
     ///
-    /// Fails by: a name with more than one definition keyed but not expanded
-    /// (`C`'s edit reuses a stale verdict), a unique one not followed (`B`'s
+    /// Fails by: the one definition keyed but not followed (`C`'s or `B`'s
     /// edit reuses a stale verdict), or a definition dropped (a field added to
     /// `S` moves nothing).
     #[test]
@@ -15836,10 +16160,12 @@ mod tests {
         let hop = source_digests(&cases, &executed, &base.replace("B: u32 = 1", "B: u32 = 9"));
         assert_ne!(hop[&f], held[&f], "A's one definition names B");
         let beyond = source_digests(&cases, &executed, &base.replace("C(u32)", "C(u64)"));
-        // KEYED ON ALL, FOLLOWED THROUGH NONE (owner ruling 2026-11-24).
-        assert_eq!(
+        // THE ONE DEFINITION ITS MODULE SAYS IS FOLLOWED (CLOUD-2927); a
+        // name no path narrows is keyed on all and followed through none
+        // ([`an_unresolved_mention_is_keyed_on_every_definition_and_followed_through_none`]).
+        assert_ne!(
             beyond[&g], held[&g],
-            "S has two definitions: keyed on both, followed through neither to C"
+            "S's impl is no definition of S: its one struct is followed to C"
         );
         let own = source_digests(
             &cases,
@@ -15847,6 +16173,81 @@ mod tests {
             &base.replace("struct S { c: C }", "struct S { c: C, d: u8 }"),
         );
         assert_ne!(own[&g], held[&g], "keyed on S's own definitions");
+    }
+
+    /// CLOUD-2927 (a): a mention narrows through its module's `use` to the
+    /// one definition it imports, and follows that one: two `Schema`s in two
+    /// modules, each imported by one case's module, and an edit to either
+    /// moves only the case importing it, an edit one hop on (the `C` the
+    /// imported `Schema` names) included.
+    ///
+    /// Fails by: a mention resolved by its spelling alone, so an edit to
+    /// `b`'s `Schema` moves the case importing `a`'s; or the imported
+    /// definition keyed and not followed, so `C`'s edit reuses a stale verdict.
+    #[test]
+    fn a_mention_follows_the_one_definition_its_module_imports() {
+        let (f, g) = (case("f"), case("g"));
+        let cases: BTreeSet<Case> = [f.clone(), g.clone()].into();
+        let executed = [(f.clone(), [0].into()), (g.clone(), [1].into())].into();
+        let base = "mod a { pub struct C(pub u8); pub struct Schema { pub x: C } }\n\
+                    mod b { pub struct Schema { pub y: u8 } }\n\
+                    mod c { use super::a::Schema; pub fn f(s: Schema) -> u8 { s.x.0 } }\n\
+                    mod d { use super::b::Schema; pub fn g(s: Schema) -> u8 { s.y } }\n";
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(&cases, &executed, &base.replace("pub y: u8", "pub y: u16"));
+        assert_eq!(other[&f], held[&f], "f imports a's Schema, not b's");
+        assert_ne!(other[&g], held[&g], "g imports b's");
+        let own = source_digests(
+            &cases,
+            &executed,
+            &base.replace("pub x: C", "pub x: C, pub z: u8"),
+        );
+        assert_ne!(own[&f], held[&f], "f imports a's Schema");
+        assert_eq!(own[&g], held[&g], "g does not");
+        let hop = source_digests(&cases, &executed, &base.replace("C(pub u8)", "C(pub u16)"));
+        assert_ne!(
+            hop[&f], held[&f],
+            "the one Schema f imports is followed to C"
+        );
+    }
+
+    /// CLOUD-2927 (b): a mention no path narrows to one definition is keyed on
+    /// every definition it sees and followed through none (owner ruling
+    /// 2026-11-24): in a module whose glob names a module no path says, and in
+    /// one whose two `use`s each import a `Schema`.
+    ///
+    /// Fails by: a glob of an unknown module read as bringing in nothing, or
+    /// two `use`s of one name narrowed to either, so an edit to the other
+    /// `Schema` reuses a stale verdict; or an ambiguous mention followed, so
+    /// `C`'s edit moves a case no path says names it.
+    #[test]
+    fn an_unresolved_mention_is_keyed_on_every_definition_and_followed_through_none() {
+        let (h, k) = (case("h"), case("k"));
+        let cases: BTreeSet<Case> = [h.clone(), k.clone()].into();
+        let executed = [(h.clone(), [0].into()), (k.clone(), [1].into())].into();
+        let base = "mod a { pub struct C(pub u8); pub struct Schema { pub x: C } }\n\
+                    mod b { pub struct Schema { pub y: u8 } }\n\
+                    mod e { use ext::*; use super::a::*; pub fn h(s: Schema) -> u8 { 0 } }\n\
+                    mod m { #[cfg(test)] use super::a::Schema; \
+                    #[cfg(not(test))] use super::b::Schema; pub fn k(s: Schema) -> u8 { 0 } }\n";
+        let held = source_digests(&cases, &executed, base);
+        for (edit, from) in [
+            ("pub x: C", "pub x: C, pub z: u8"),
+            ("pub y: u8", "pub y: u16"),
+        ] {
+            let moved = source_digests(&cases, &executed, &base.replace(edit, from));
+            assert_ne!(moved[&h], held[&h], "h's glob may bring in either: {from}");
+            assert_ne!(moved[&k], held[&k], "k's two uses import both: {from}");
+        }
+        let hop = source_digests(&cases, &executed, &base.replace("C(pub u8)", "C(pub u16)"));
+        assert_eq!(
+            hop[&h], held[&h],
+            "keyed on every Schema, followed through none"
+        );
+        assert_eq!(
+            hop[&k], held[&k],
+            "keyed on every Schema, followed through none"
+        );
     }
 
     /// T3 (CLOUD-2904): a `//!` edit at a file's head moves no case key, and
@@ -15942,7 +16343,9 @@ mod tests {
         );
         assert_eq!(
             keys("fn helper() {}\n"),
-            [format!("helper{DEFINED_IN}crates/p{DEFINED_IN}src::m")]
+            [format!(
+                "helper{DEFINED_IN}crates/p{DEFINED_IN}src::m{HOMED}crates/p{HOMED}src::m"
+            )]
         );
     }
 
@@ -16727,7 +17130,10 @@ mod tests {
         let none: Vec<String> = Vec::new();
         assert_eq!(item_names(named("K")), none);
         assert_eq!(associated_names(named("K")), ["K"]);
-        assert_eq!(owner_type_names(named("K")), ["S", "Tr"]);
+        assert_eq!(
+            owner_type_names(named("K")),
+            [format!("S{IMPL_DEFINED}"), format!("Tr{IMPL_DEFINED}")]
+        );
         assert_eq!(owner_type_names(named("f")), none);
         assert_eq!(owner_type_names(named("TOP")), none);
         assert_eq!(member_names(named("T")), ["B", "a"]);
@@ -16963,10 +17369,10 @@ mod tests {
         );
     }
 
-    /// B16 (CLOUD-2904, round 3): a name with several definitions is followed
-    /// through its non-impl ones and keys its impls without following them,
-    /// so an edit a type's own definition reaches moves the case naming it
-    /// and an edit only one of its impls' headers names does not.
+    /// B16 (CLOUD-2904, round 3; CLOUD-2927): a type's impls are keyed
+    /// without being followed, and its one definition is followed, so an edit
+    /// the type's own definition reaches moves the case naming it and an edit
+    /// only one of its impls' headers names does not.
     ///
     /// Fails by: every impl followed (the impls of common names join one
     /// component, and a `///` edit on any type in it re-keyed 97.6% of probed
@@ -16985,12 +17391,9 @@ mod tests {
         };
         let held = source_digests(&cases, &executed, &source("u32", "u32"));
         let field = source_digests(&cases, &executed, &source("u64", "u32"));
-        // S ANSWERS TO THREE ITEMS, SO IT IS FOLLOWED THROUGH NONE (owner
-        // ruling 2026-11-24): its field's type is reached only through it.
-        assert_eq!(
-            field[&g], held[&g],
-            "S's field type, through S's three items"
-        );
+        // S'S IMPLS ARE NO DEFINITION OF S (CLOUD-2927): its one struct is
+        // followed to its field's type.
+        assert_ne!(field[&g], held[&g], "S's field type, through S's struct");
         let bound = source_digests(&cases, &executed, &source("u32", "u64"));
         assert_eq!(
             bound[&g], held[&g],
