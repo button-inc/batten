@@ -3972,7 +3972,7 @@ description = "Gate: no crate source root scores worse than modules.lock, and th
 # Writes nothing, so a lap judges one tree: a looser record is refused too, so
 # the commit that improves a metric carries the tightened record (`mise run
 # modules-ratchet`) and no later commit can spend it.
-run = "{{vars.batten}} modules ratchet --record modules.lock --check"
+run = "{% if env.BATTEN_BIN %}{{vars.batten}} step run modules-ratchet -- {% endif %}{{vars.batten}} modules ratchet --record modules.lock --check"
 
 [tasks.hook-cost]
 description = "Gate: this session's hook output fits its per-session budget, and no hook repeats itself (CLOUD-417)"
@@ -5280,7 +5280,7 @@ description = "Gate: no test this lap removed is gone without a recorded answer,
 # hour into the lap behind the replay's build; `verify:test-replay` still runs
 # the modified tests' base bodies in tier 2.
 env = { TEST_REPLAY_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }
-run = "{{vars.batten}} test replay --structural --base {{env.TEST_REPLAY_BASE}}"
+run = "{% if env.BATTEN_BIN %}{{vars.batten}} step run test-replay-structural -- {% endif %}{{vars.batten}} test replay --structural --base {{env.TEST_REPLAY_BASE}}"
 
 [tasks."verify:test-replay"]
 description = "Gate: every modified test's base form passes against HEAD, or a recorded answer admits it — invoked through `verify`"
