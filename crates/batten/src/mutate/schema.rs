@@ -14028,45 +14028,66 @@ mod tests {
     /// the case asserts it was replaced. The source is sparse.
     #[test]
     fn the_tree_walks_hold_no_file_whole() {
-        const BIG: u64 = 512 << 20;
-        if let Some(dir) = std::env::var_os(BOUNDED_WALK) {
-            let dir = std::path::PathBuf::from(dir);
-            // THE CAP IS UNIX'S: `rustix` is a `cfg(unix)` dependency, so a
-            // Windows build runs the same walks uncapped and still asserts the
-            // stale copy is replaced.
-            #[cfg(unix)]
-            {
-                const LIMIT: u64 = 128 << 20;
-                let cap = rustix::process::Rlimit {
-                    current: Some(LIMIT),
-                    maximum: Some(LIMIT),
-                };
-                rustix::process::setrlimit(rustix::process::Resource::Data, cap).expect("cap");
-            }
-            let (live, work) = (dir.join("live"), dir.join("work"));
-            sync(&live, &work, &BTreeSet::new()).expect("sync");
-            assert_eq!(
-                std::fs::metadata(work.join("big.bin"))
-                    .map(|m| m.len())
-                    .ok(),
-                Some(BIG),
-                "the differing copy is replaced"
-            );
-            tree_digest(&live).expect("digest");
-            let ids = resource_ids(&live).expect("ids");
-            assert!(
-                ids.get("big.bin").is_some_and(|id| id.starts_with("b3:")),
-                "{ids:?}"
-            );
-            return;
+        // ONE BODY PER SIDE, NO RETURN BEFORE AN ASSERT: the child run walks
+        // under its cap, and the case's own run plants the trees and spawns it.
+        match std::env::var_os(BOUNDED_WALK) {
+            Some(dir) => bounded_walk(&std::path::PathBuf::from(dir)),
+            None => bounded_walk_from_a_capped_child(),
         }
+    }
+
+    /// The size of [`the_tree_walks_hold_no_file_whole`]'s large file.
+    const BOUNDED_BIG: u64 = 512 << 20;
+
+    /// The capped child of [`the_tree_walks_hold_no_file_whole`]: sync, digest
+    /// and name the trees under `dir` within its data cap.
+    fn bounded_walk(dir: &std::path::Path) {
+        const BIG: u64 = BOUNDED_BIG;
+        // THE CAP IS UNIX'S: `rustix` is a `cfg(unix)` dependency, so a
+        // Windows build runs the same walks uncapped and still asserts the
+        // stale copy is replaced.
+        #[cfg(unix)]
+        {
+            const LIMIT: u64 = 128 << 20;
+            let cap = rustix::process::Rlimit {
+                current: Some(LIMIT),
+                maximum: Some(LIMIT),
+            };
+            rustix::process::setrlimit(rustix::process::Resource::Data, cap).expect("cap");
+        }
+        let (live, work) = (dir.join("live"), dir.join("work"));
+        sync(&live, &work, &BTreeSet::new()).expect("sync");
+        assert_eq!(
+            std::fs::metadata(work.join("big.bin"))
+                .map(|m| m.len())
+                .ok(),
+            Some(BIG),
+            "the differing copy is replaced"
+        );
+        tree_digest(&live).expect("digest");
+        let ids = resource_ids(&live).expect("ids");
+        assert!(
+            ids.get("big.bin").is_some_and(|id| id.starts_with("b3:")),
+            "{ids:?}"
+        );
+    }
+
+    /// The case's own run of [`the_tree_walks_hold_no_file_whole`]: plant a
+    /// sparse large file and a stale copy, and spawn the capped child.
+    fn bounded_walk_from_a_capped_child() {
+        const BIG: u64 = BOUNDED_BIG;
         let dir = crate::scratch::scratch("schema-bounded-walk");
         let (live, work) = (dir.join("live"), dir.join("work"));
         for (tree, len) in [(&live, BIG), (&work, BIG - 1)] {
             std::fs::create_dir_all(tree).unwrap();
             std::fs::write(tree.join("a.txt"), "a\n").unwrap();
-            std::fs::File::create(tree.join("big.bin"))
-                .and_then(|file| file.set_len(len))
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(tree.join("big.bin"))
+                .unwrap()
+                .set_len(len)
                 .unwrap();
         }
         crate::gitwrite::init_on_main(&live).expect("a repository");
