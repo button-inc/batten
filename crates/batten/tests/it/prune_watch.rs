@@ -1248,8 +1248,18 @@ fn a_compile_defers_only_to_the_watcher_of_its_own_worktree() {
 }
 
 /// A `step run` build is watched (CLOUD-2197): it is not a tool call, so only
-/// the watcher around it can collect while it runs. The step waits for the aged
-/// unit to go — which only the watcher can make happen.
+/// the watcher around it can collect while it runs.
+///
+/// THE STEP ENDS AT THE PASS'S OWN END, `disk-pass` (CLOUD-2789), never at the
+/// unit going. The pass removes a unit's fingerprint first, so a step spinning
+/// on the fingerprint returned mid-pass, its stop ended the pass, and the
+/// record read `disk-stopped 0 1` or `disk-collected` by the scheduler's draw:
+/// red once in 40 under CPU, memory and disk pressure, with no code changed. A
+/// watcher that never collects never traces `disk-pass`, so it hangs the case,
+/// and the runner's cut files that as the timeout it is.
+///
+/// Fails by: no watcher around the step, a pass that leaves the unit, or a
+/// finished pass recorded as stopped.
 #[test]
 fn a_step_run_build_is_watched() {
     if !cfg!(unix) {
@@ -1257,32 +1267,8 @@ fn a_step_run_build_is_watched() {
     }
     let dir = hooked("step-run-watched", true);
     let profile = dir.join("target/debug");
-    // THE STEP WAITS ON THE EVENT, the unit going, and on no clock (CLOUD-2789):
-    // it spins on a builtin test of the very condition, so a watcher that never
-    // collects hangs the case and the mutation judge's per-case cut files that
-    // as the timeout it is. It used to poll `sleep 0.05` two hundred times,
-    // which made a never-collecting watcher exit 1 at a guessed ten seconds.
-    // The watcher samples at startup rather than after a tick, so on the real
-    // path the collection lands in about a second (measured 1.092s).
-    let waits = "while [ -e target/debug/.fingerprint/aged-dddddddddddddddd ]; do :; done";
-    let ran = common::batten()
-        .current_dir(&dir)
-        .env("TMPDIR", own_temp(&dir))
-        .args(["step", "run", "probe", "--", "sh", "-c", waits])
-        .env("TARGET_PRUNE_FREE_MB", "50")
-        .stdin(std::process::Stdio::null())
-        .streamed_output_keeping(batten::capture::Keep {
-            stdin: true,
-            stdout: false,
-            stderr: false,
-        })
-        .expect("the binary runs");
-    let said = common::stderr(&ran);
-    assert_eq!(
-        ran.status.code(),
-        Some(0),
-        "the unit went while it ran: {said}"
-    );
+    let (code, said) = step_released_at("step-run-watched", &dir, "disk-pass ");
+    assert_eq!(code, Some(0), "{said}");
     assert!(!present(&profile, "aged", "dddddddddddddddd"), "{said}");
     assert!(said.contains("step run probe: disk-collected "), "{said}");
 }
@@ -1854,6 +1840,86 @@ fn a_traced_watch_writes_its_samples_to_stderr() {
     let said = common::stderr(&ran);
     assert_eq!(ran.status.code(), Some(0), "{said}");
     assert!(said.contains("disk-sample"), "{said}");
+}
+
+/// A RUNNING SUITE KEEPS ITS FIXTURE THROUGH A PASS THAT KEEPS EVERY RUNNING
+/// PROGRAM (CLOUD-2789). [`batten::collect::engine_kept`] names every program
+/// running on the host, so a running test binary is in the kept set a hook or a
+/// compile hands its pass. The fixture window excluded kept executables, so no
+/// suite rooted anything, the window opened at the scan, and a running case's
+/// fixture went whole: below the floor, a hand-back's mirror and target under
+/// `target/tmp/state-<pid>` were removed mid-run (`classic/src/lib.rs does not
+/// exist`), twice at 4.3-4.5 GB free.
+///
+/// The suite is a running program under the tree's `deps/`, started before
+/// the fixture it roots was last written; a stale fixture beside it shows the
+/// pass ran and took what no suite roots.
+///
+/// Fails by: a kept executable excluded from the fixture window, so the live
+/// fixture goes with the stale one.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the running suite is a real process under the tree's `deps/`, which the collector reads from the host's process table"
+)]
+fn a_running_suites_fixture_outlives_a_pass_that_keeps_every_running_program() {
+    use std::io::Write as _;
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let repo = common::scratch("fixture-suite-kept");
+    common::init_repo(&repo);
+    let tree = repo.join("target");
+    let deps = tree.join("debug").join("deps");
+    std::fs::create_dir_all(&deps).unwrap();
+    let suite = deps.join("suite");
+    std::fs::copy("/bin/sh", &suite).expect("stand a suite binary under deps/");
+    let mut running = std::process::Command::new(&suite)
+        .args(["-c", "read _"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the suite runs");
+    // Written after the suite started, and dated so: the suite roots it.
+    let written = SystemTime::now();
+    let live = tree.join("tmp").join("live");
+    let stale = tree.join("tmp").join("stale");
+    std::fs::create_dir_all(&live).unwrap();
+    std::fs::create_dir_all(&stale).unwrap();
+    common::set_times(&live, std::fs::FileTimes::new().set_modified(written));
+    common::set_times(
+        &stale,
+        std::fs::FileTimes::new().set_modified(written - Duration::from_secs(7200)),
+    );
+    let mut config = rules("target");
+    config.min_free_mb = Some(10);
+    config.max_free_mb = Some(11);
+    let kept = batten::collect::engine_kept();
+    // A bounded pass, as a hook's or a compile's is: it reads no mutant copy
+    // from the shared temp directory.
+    let bound = std::time::Instant::now() + Duration::from_secs(3600);
+    let done = batten::collect::collect_toward_max(
+        &repo,
+        &config,
+        &kept,
+        1,
+        &mut || Ok(1),
+        Some(bound),
+        false,
+    );
+    let _ = running
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(b"\n");
+    let _ = running.wait();
+    assert!(done.is_some(), "the band is declared, so a pass ran");
+    assert!(!stale.exists(), "a fixture no running suite roots is taken");
+    assert!(
+        live.exists(),
+        "the running suite's fixture is kept: {done:?}"
+    );
 }
 
 /// Cargo's `RUSTC_WRAPPER` (CLOUD-2197): every compile unit, whoever started

@@ -607,11 +607,19 @@ pub fn earliest_build_start(processes: &[Process], trees: &[PathBuf]) -> Option<
 /// was written after the lap's own `cargo run` started, and that process lives
 /// as long as the lap. A fixture is written by a suite, so a suite still running
 /// is what keeps it — never a cargo, and never the engine's own build, which
-/// runs from the same tree for the whole lap ([`is_kept`] over `kept`).
+/// runs from the same tree for the whole lap and is no test harness.
+///
+/// A RUNNING SUITE IS NEVER EXCLUDED FOR BEING KEPT (CLOUD-2789). The pass's
+/// kept set is [`engine_kept`]: every program running on the host, so every
+/// running test binary is in it. Excluding kept executables here excluded
+/// every suite a fresh kept set saw, the window opened at the scan, and a
+/// hook's or a compile's pass took a running case's fixture whole: a
+/// hand-back's mirror and target under `target/tmp/state-<pid>` went mid-run,
+/// and the case failed on `classic/src/lib.rs does not exist`.
 #[must_use]
-pub fn fixtures_since(trees: &[PathBuf], kept: &[Kept]) -> Option<SystemTime> {
+pub fn fixtures_since(trees: &[PathBuf]) -> Option<SystemTime> {
     match processes() {
-        Some(table) => earliest_fixture_writer(&table, trees, kept),
+        Some(table) => earliest_fixture_writer(&table, trees),
         None => Some(SystemTime::UNIX_EPOCH),
     }
 }
@@ -624,13 +632,9 @@ pub fn no_later_than(window: Option<SystemTime>, scanned: SystemTime) -> SystemT
 }
 
 /// The earliest start among `processes` whose executable is a test harness under one of
-/// `trees` and is not a kept file.
+/// `trees`, kept or not ([`fixtures_since`]).
 #[must_use]
-pub fn earliest_fixture_writer(
-    processes: &[Process],
-    trees: &[PathBuf],
-    kept: &[Kept],
-) -> Option<SystemTime> {
+pub fn earliest_fixture_writer(processes: &[Process], trees: &[PathBuf]) -> Option<SystemTime> {
     let trees: Vec<PathBuf> = trees
         .iter()
         .map(|tree| crate::git::canonical(tree))
@@ -644,9 +648,7 @@ pub fn earliest_fixture_writer(
         .iter()
         .filter(|process| {
             process.exe.as_ref().is_some_and(|exe| {
-                is_test_harness(exe)
-                    && trees.iter().any(|tree| exe.starts_with(tree))
-                    && !is_kept(exe, kept)
+                is_test_harness(exe) && trees.iter().any(|tree| exe.starts_with(tree))
             })
         })
         .map(|process| process.started)
@@ -1707,7 +1709,7 @@ pub(crate) fn collect_toward_max_in(
         wait,
         stop,
         live_since: Some(no_later_than(live_since(&trees), scanned)),
-        fixtures_since: Some(no_later_than(fixtures_since(&trees, &kept), scanned)),
+        fixtures_since: Some(no_later_than(fixtures_since(&trees), scanned)),
     });
     Some(Collected {
         freed_bytes: pass.freed_bytes,
@@ -2067,9 +2069,9 @@ mod tests {
     /// the engine's own build, running from the same tree all lap, do not. A
     /// table that names no executable falls back to the build window.
     ///
-    /// Fails by: a cargo or the kept engine rooting fixtures, which keeps every
-    /// fixture a lap's finished suites wrote; no fallback where no executable is
-    /// named, which leaves a running suite's fixtures unprotected.
+    /// Fails by: a cargo or the engine's own build rooting fixtures, which keeps
+    /// every fixture a lap's finished suites wrote; no fallback where no
+    /// executable is named, which leaves a running suite's fixtures unprotected.
     #[test]
     fn a_fixture_is_rooted_by_a_running_suite_alone() {
         let tree = scratch("fixture-writers").join("target");
@@ -2078,7 +2080,6 @@ mod tests {
         std::fs::create_dir_all(suite.parent().expect("deps")).expect("mkdir");
         std::fs::write(&engine, b"engine").expect("write the engine");
         std::fs::write(&suite, b"suite").expect("write the suite");
-        let kept = super::kept(std::slice::from_ref(&engine));
         let tree = crate::git::canonical(&tree);
         let process = |exe: &Path, secs| Process {
             exe: Some(exe.to_path_buf()),
@@ -2094,7 +2095,7 @@ mod tests {
             host.clone(),
         ];
         assert_eq!(
-            super::earliest_fixture_writer(&lap, std::slice::from_ref(&tree), &kept),
+            super::earliest_fixture_writer(&lap, std::slice::from_ref(&tree)),
             None,
             "a lap with no suite running roots no fixture"
         );
@@ -2105,7 +2106,7 @@ mod tests {
             host,
         ];
         assert_eq!(
-            super::earliest_fixture_writer(&running, std::slice::from_ref(&tree), &kept),
+            super::earliest_fixture_writer(&running, std::slice::from_ref(&tree)),
             Some(at(300)),
             "a running suite roots what it writes from its start"
         );
@@ -2116,7 +2117,7 @@ mod tests {
         };
         let macos = [named("cargo", 70), named("batten", 50)];
         assert_eq!(
-            super::earliest_fixture_writer(&macos, &[tree], &kept),
+            super::earliest_fixture_writer(&macos, &[tree]),
             Some(at(70)),
             "with no executable named, the build window stands"
         );
@@ -2827,7 +2828,7 @@ mod tests {
         let exe = std::env::current_exe().unwrap();
         let profile = exe.parent().and_then(Path::parent).unwrap().to_path_buf();
         assert!(
-            super::fixtures_since(&[profile], &[]).is_some(),
+            super::fixtures_since(&[profile]).is_some(),
             "this suite is running"
         );
     }
