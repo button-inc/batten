@@ -16,8 +16,9 @@
 //!   `crates/`, plus the root `Cargo.toml` and `Cargo.lock` — as path, NUL, bytes,
 //!   NUL, in sorted order. Tracked, so `target/` and scratch never enter; the
 //!   bytes on disk, so an uncommitted edit to a tracked file does. `batten engine
-//!   stamp` writes it beside the running binary as `<binary>.source` once
-//!   `install:local` has installed it.
+//!   stamp` writes it beside the running binary as `<binary>.source` once a
+//!   source pin's build is installed. A release pin is never built: `batten
+//!   engine install` places the release (CLOUD-2840).
 //!
 //! # Before the parse, and on every load
 //!

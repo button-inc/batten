@@ -103,10 +103,12 @@ fn an_unknown_key_names_the_rebuild() {
     // The parse error still leads: it carries the line, and the note is an
     // addition rather than a replacement.
     assert!(said.contains("invalid config"), "got: {said}");
-    // THE POINTER THE DEFECT WAS MISSING. Naming the task is the whole remedy;
-    // an agent that reads only "invalid config" edits the wrong file.
+    // THE POINTER THE DEFECT WAS MISSING. Naming the install is the whole
+    // remedy; an agent that reads only "invalid config" edits the wrong file.
+    // The pinned engine's install, never a tree build (CLOUD-2840): under a
+    // release pin a build is the engine nobody pinned.
     assert!(
-        said.contains("mise run install:local"),
+        said.contains("batten engine install"),
         "the rebuild must be named, or the reader edits a file that is correct: {said}"
     );
     // BOTH READINGS, because the parser cannot decide between them and a
@@ -155,7 +157,7 @@ fn a_malformed_config_does_not_mention_a_rebuild() {
     assert_eq!(output.status.code(), Some(1), "got: {said}");
     assert!(said.contains("invalid config"), "got: {said}");
     assert!(
-        !said.contains("mise run install:local"),
+        !said.contains("batten engine install"),
         "a syntax error is not a version skew, and sending the reader to rebuild \
          a current binary is this defect with the subject swapped: {said}"
     );
@@ -176,7 +178,7 @@ fn a_schema_fault_that_names_no_unknown_key_does_not_mention_a_rebuild() {
     assert_eq!(output.status.code(), Some(1), "got: {said}");
     assert!(said.contains("invalid config"), "got: {said}");
     assert!(
-        !said.contains("mise run install:local"),
+        !said.contains("batten engine install"),
         "a type fault is not a version skew: {said}"
     );
 }

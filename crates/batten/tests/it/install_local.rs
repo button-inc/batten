@@ -102,3 +102,53 @@ fn a_row_that_builds_locally_is_refused() {
     assert!(repair_of(&row).join(" ").contains(&local_build()));
     assert_ne!(repair_of(&row), RELEASE_INSTALL);
 }
+
+/// The committed local-build task's `depends` and `run` steps.
+fn local_build_task() -> (Vec<String>, Vec<String>) {
+    let text = std::fs::read_to_string(common::at_root("mise.toml")).expect("the task manifest");
+    let table: toml::Table = text.parse().expect("the task manifest parses");
+    let task = table["tasks"]
+        .get(local_build().as_str())
+        .unwrap_or_else(|| panic!("`{}` is a declared task", local_build()))
+        .clone();
+    let strings = |key: &str| -> Vec<String> {
+        match task.get(key) {
+            Some(toml::Value::String(one)) => vec![one.clone()],
+            Some(toml::Value::Array(many)) => many
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    (strings("depends"), strings("run"))
+}
+
+/// The guard the local build runs before it compiles anything.
+const SOURCE_GUARD: &str = "batten engine pin --require-source";
+
+/// Fails by: the local build compiling before it asks what the pin is. Under a
+/// release pin the answer is `batten engine install`, and a `depends` on the
+/// build runs ahead of every run step — the compile happens, THEN the refusal.
+/// So the guard is the first step, and nothing compiles in a `depends`.
+#[test]
+fn the_local_build_asks_the_pin_before_it_compiles() {
+    let (depends, run) = local_build_task();
+    assert!(
+        depends.is_empty(),
+        "`{}` declares depends {depends:?}, which mise runs before the guard",
+        local_build()
+    );
+    assert_eq!(
+        run.first().map(String::as_str),
+        Some(SOURCE_GUARD),
+        "`{}`'s first step reads the pin through the engine",
+        local_build()
+    );
+    let build = run
+        .iter()
+        .position(|step| step.contains("build:release"))
+        .expect("the source-pin arm still builds the tree");
+    assert!(build > 0, "the build runs after the guard");
+}

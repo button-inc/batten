@@ -622,6 +622,9 @@ pub enum EngineCommand {
         value: Option<String>,
         /// Report whether the pin would change, writing nothing.
         check: bool,
+        /// Refuse a release pin, writing nothing: the guard ahead of a tree
+        /// build (CLOUD-2840).
+        require_source: bool,
     },
     /// The landing gate over the pin (CLOUD-2063).
     Gate {
@@ -3832,6 +3835,7 @@ fn engine_of(matches: &ArgMatches) -> Option<EngineCommand> {
         ("pin", matches) => Some(EngineCommand::Pin {
             value: matches.get_one::<String>("value").cloned(),
             check: flag(matches, "check"),
+            require_source: flag(matches, "require_source"),
         }),
         ("gate", matches) => Some(EngineCommand::Gate {
             lanes: matches

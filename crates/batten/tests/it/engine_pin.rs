@@ -615,3 +615,39 @@ fn a_followed_pin_names_itself_once() {
         text(&second)
     );
 }
+
+/// Fails by: `--require-source` passing a release pin, which sends the tree
+/// build a release-pinned session should never run (CLOUD-2840). The refusal is
+/// a verdict (`2`), names the one route to a release, and writes nothing.
+#[test]
+fn require_source_refuses_a_release_pin_and_names_the_install() {
+    let config = format!("version = 1\nengine = {{ release = \"{RELEASE}\" }}\n");
+    let dir = repo("engine-pin-require-source-release", &config);
+    let output = run(&shared(), &dir, &["engine", "pin", "--require-source"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains("batten engine install"),
+        "the refusal names the install: {}",
+        text(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
+        config,
+        "the guard writes nothing"
+    );
+}
+
+/// Fails by: `--require-source` refusing the cases a tree build is right for —
+/// a source pin, or no pin at all.
+#[test]
+fn require_source_admits_a_source_pin_and_no_pin() {
+    let source = repo(
+        "engine-pin-require-source-source",
+        "version = 1\nengine = { source = \"0000\" }\n",
+    );
+    let output = run(&shared(), &source, &["engine", "pin", "--require-source"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let unpinned = repo("engine-pin-require-source-none", "version = 1\n");
+    let output = run(&shared(), &unpinned, &["engine", "pin", "--require-source"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+}

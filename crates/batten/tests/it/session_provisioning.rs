@@ -653,8 +653,8 @@ fn the_committed_provisioning_declares_every_step_in_order() {
 
 /// The two entry points that compile the engine, named once.
 ///
-/// `install:local` declares `depends = ["build:release"]`, so either spelling
-/// reaching a session-start task is the same four-minute compile.
+/// `install:local` runs `build:release` as a step, so either spelling reaching
+/// a session-start task is the same four-minute compile.
 const COMPILE_ENTRY_POINTS: [&str; 2] = ["install:local", "build:release"];
 
 /// The task each `session-start` row dispatches, plus every task those bodies
@@ -675,9 +675,8 @@ const COMPILE_ENTRY_POINTS: [&str; 2] = ["install:local", "build:release"];
 /// retired mechanism is supposed to still be written down.
 ///
 /// So this reads `run` and `depends` — what mise will actually execute —
-/// discarding the commentary around them. `depends` is here because
-/// `install:local` carries `depends = ["build:release"]`: a task can compile
-/// without its own body naming a compiler.
+/// discarding the commentary around them. `depends` is here because a task
+/// can compile through one without its own body naming a compiler.
 ///
 /// `[tasks."name"]` and `[tasks.name]` are both spelled in this file, and both
 /// are anchored to their own line: `[tasks.verify]` appears inside two comments
@@ -1049,10 +1048,13 @@ fn the_install_step_is_declared_locked() {
 /// a reclaim step: neither the build nor the install it serves declares one.
 #[test]
 fn no_build_entry_point_waits_on_a_reclaim_step() {
-    let install = task_depends("install:local");
+    // A STEP, NO LONGER A `depends` (CLOUD-2840): the install asks the pin
+    // before it compiles, and a `depends` would run the build ahead of that
+    // question. It still runs the build, so it inherits what the build declares.
+    let install = task_surface("install:local").expect("the local install is a declared task");
     assert!(
-        install.iter().any(|entry| entry == "build:release"),
-        "the install DECLARES the build, so it inherits what the build declares: {install:?}"
+        install.contains("mise run build:release"),
+        "the install RUNS the build, so it inherits what the build declares: {install}"
     );
     for name in ["build:release", "install:local"] {
         let depends = task_depends(name);
