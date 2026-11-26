@@ -2371,9 +2371,13 @@ fn spawn_scrubbed(
     let waited = wait_bounded(child, bound);
     drop(listed);
     // THE GROUP IS GONE BY NOW (`wait_bounded` ends it on every path), so each
-    // pipe's last writer has exited and its pump reaches EOF. The deadline is
-    // for a writer that left the group; what it pumped is in the file either way.
+    // pipe's last writer has exited and its EOF is the event the drain waits
+    // on, with no clock (CLOUD-2789). Elsewhere there is no group to end, so a
+    // grandchild can still hold a pipe and the drain keeps its bound.
     for pumping in pumps.into_iter().flatten().flatten() {
+        #[cfg(unix)]
+        let _ = pumping.eof();
+        #[cfg(not(unix))]
         let _ = pumping.finished(crate::exec::PIPE_DRAIN_TIMEOUT);
     }
     // A signal outranks the row: the sweep was asked to stop, so it stops, with
@@ -9151,6 +9155,37 @@ mod tests {
             "",
             "the job the suite left running outlived the group kill: {}",
             survivors(&dir)
+        );
+    }
+
+    /// Fails by: the drain answering before the group end, or the group left
+    /// standing while the drain waits on its EOF. The suite's job holds its
+    /// stdout and would write `late` into it; only the group end closes the
+    /// pipe without it, and that EOF is what `spawn` returns on (CLOUD-2789).
+    #[test]
+    fn a_grandchild_holding_the_pipe_is_ended_and_its_eof_drains_the_capture() {
+        // Only unix has the group whose end delivers the EOF.
+        if !cfg!(unix) {
+            return;
+        }
+        let dir = crate::scratch::scratch("mutate-held-pipe");
+        let ran = spawn(
+            &dir,
+            Program::Suite("sh"),
+            &[
+                String::from("-c"),
+                String::from("(sleep 30; echo late) & echo early"),
+            ],
+            &[],
+            std::time::Duration::from_secs(60),
+        )
+        .expect("the wait answers");
+        assert_eq!(ran.outcome, Outcome::Passed, "{}", ran.output);
+        assert!(ran.output.contains("early"), "{}", ran.output);
+        assert!(
+            !ran.output.contains("late"),
+            "the job holding the pipe outlived the group end: {}",
+            ran.output
         );
     }
 
