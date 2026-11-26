@@ -5315,8 +5315,11 @@ fn lap_held_schema() -> serde_json::Value {
     })
 }
 
-/// CLOUD-2840: a segment's variable names assigned before its program,
-/// wrappers included. Added here rather than in the literal, which is at
+/// CLOUD-2840: every assignment a segment's programs run under, as
+/// `NAME=value` with quotes resolved, wrappers included — read PER LINE (a
+/// newline-joined segment's later line keeps its own prefix) and THROUGH
+/// `env -S`, whose string is split into the command (`hook.rs`'s
+/// `segment_assignments`). Added here rather than in the literal, which is at
 /// `json!`'s recursion limit.
 fn segment_schema_keys(document: &mut serde_json::Value) {
     if let Some(segment) = document
@@ -5325,7 +5328,11 @@ fn segment_schema_keys(document: &mut serde_json::Value) {
     {
         segment.insert(
             "assigns".to_owned(),
-            serde_json::json!({"type": "array", "items": {"type": "string"}}),
+            serde_json::json!({
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Every assignment the segment's programs run under, as `NAME=value` with quotes resolved, wrappers included: read per line (a later line of a newline-joined segment keeps its own prefix) and through `env -S`, whose string is split into the command. The value rides with the name, because an inert name can carry a value that is not (`GIT_PAGER=./x`)."
+            }),
         );
     }
 }
