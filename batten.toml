@@ -19333,11 +19333,16 @@ id = "test:cargo"
 # KEEPS `.` (CLOUD-2784): its cases read across the tree (fixtures, policy,
 # rules, tasks), more than half the top-level entries; it narrows when plan
 # steps 5-6 key it by case.
+#
+# NO `mise tasks info` LINE WHERE THE ARGV IS THE COMMAND (CLOUD-2789): `step
+# run` keys its own argv, so for this row and cross-check's, darwin-link's,
+# semver's and hk-drift's the line keyed the same words a second time and cost a
+# `mise` process on every hit. A row whose argv is `mise run <task>` (`ci-suite`)
+# or whose task sets an `env` the argv does not carry still keys the task.
 inputs = ["."]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
-  ["mise", "tasks", "info", "test:cargo", "--json"],
   # THE ENVIRONMENT IT IS KEYED ON (CLOUD-2786), answered in-process: the step
   # key and the nextest journal read every variable these patterns match, and
   # none an `--exclude` names — the per-run values the engine itself sets (a
@@ -19508,7 +19513,6 @@ inputs = [
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
-  ["mise", "tasks", "info", "cross-check", "--json"],
 ]
 
 # `cross-check`'s per-package half (CLOUD-2789), keyed as `lint:clippy:facts`
@@ -19530,7 +19534,6 @@ inputs = [
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
-  ["mise", "tasks", "info", "cross-check", "--json"],
   # Workspace loading probes, keyed on presence (CLOUD-2835): see
   # `lint:clippy:facts`.
   [
@@ -19734,7 +19737,6 @@ inputs = [
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
-  ["mise", "tasks", "info", "cross-check", "--json"],
   # Workspace loading probes, keyed on presence (CLOUD-2835): see
   # `lint:clippy:facts`.
   [
@@ -19835,7 +19837,6 @@ inputs = [
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
-  ["mise", "tasks", "info", "cross-check", "--json"],
   # Workspace loading probes, keyed on presence (CLOUD-2835): see
   # `lint:clippy:facts`.
   [
@@ -19929,7 +19930,6 @@ tools = [
   ["cargo-zigbuild", "--version"],
   ["zig", "version"],
   ["rustc", "--version"],
-  ["mise", "tasks", "info", "darwin-link", "--json"],
 ]
 
 [[step]]
@@ -19985,7 +19985,6 @@ inputs = ["."]
 tools = [
   ["cargo", "semver-checks", "--version"],
   ["rustc", "--version"],
-  ["mise", "tasks", "info", "semver", "--json"],
   ["batten", "step", "base", "--ref", "origin/main", "--", "crates", "Cargo.toml", "Cargo.lock"],
   ["git", "log", "--format=%B", "origin/main..HEAD"],
 ]
@@ -20139,7 +20138,6 @@ inputs = ["."]
 tools = [
   ["hk", "--version"],
   ["rustc", "--version"],
-  ["mise", "tasks", "info", "hk-drift", "--json"],
 ]
 
 # THE SUITE TIER (CLOUD-2788): `verify:gated` runs `mise run ci` through this
