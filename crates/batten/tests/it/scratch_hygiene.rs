@@ -185,6 +185,94 @@ fn the_collector_publishes_a_temp_dir_it_owns() {
     }
 }
 
+/// A nextest running in ANOTHER checkout defers the shared temp root, and
+/// leaves this checkout's `target/tmp` as every run does since CLOUD-2789: a
+/// target dir's scratch is its own run's, reaped under that run's lock
+/// (`common::target_tmp`), so one checkout's collector no longer decides it.
+/// Two cargo-mutants jobs each deferred the other's collection, and a copy
+/// grew 3 GB of fixtures until the disk filled under a build (CLOUD-2716);
+/// that growth is now `a_target_triples_scratch_is_collected_too`'s reaper's.
+///
+/// Linux only, inside the case: the other run's directory is read from
+/// `/proc`, and where it cannot be read the run counts as this checkout's.
+///
+/// Fails by: the collector taking `target/tmp` again, or the shared root
+/// guarded by this checkout's runs alone.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the other run is a real process whose directory `/proc` reports"
+)]
+fn a_run_in_another_checkout_defers_only_the_shared_root() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let elsewhere = crate::common::scratch("clear-scratch-elsewhere");
+    // `cat` on a stdin pipe this case holds: alive exactly until the case
+    // closes that pipe, which ends it on the EOF rather than on a clock or a
+    // kill (CLOUD-2789).
+    let mut other = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .current_dir(&elsewhere)
+        .spawn()
+        .expect("start the other run");
+    let (survived, published) = collect_seeded(
+        "clear-scratch-other-checkout",
+        &other.id().to_string(),
+        &["tmp", "../tmpdir/batten-suite"],
+    );
+    drop(other.stdin.take());
+    let _ = other.wait();
+    assert_eq!(
+        survived,
+        vec![true, true],
+        "neither this checkout's scratch nor the shared root is taken: {published}"
+    );
+}
+
+/// A RUN IN ANOTHER CHECKOUT SHARING THIS TARGET DIR IS A RUN HERE (#1276).
+///
+/// Measured on #1276: two agents' clones shared one absolute `CARGO_TARGET_DIR`,
+/// and each one's collector judged "here" by the other run's working directory
+/// alone, so it deleted `target/tmp` under the other's live cases, which then
+/// read their scratch as empty. The owner of `target/tmp` is the target dir, so
+/// a run whose `CARGO_TARGET_DIR` resolves to this one defers it.
+///
+/// Fails by: the collector comparing working directories only, so the sentinel
+/// is taken while the sharing run is alive.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the other run is a real process whose environment `/proc` reports"
+)]
+fn a_run_sharing_this_target_dir_from_another_checkout_defers_it() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let root = crate::common::scratch("clear-scratch-shared-target");
+    let elsewhere = root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    // `cat` on a stdin pipe this case holds: alive exactly until the case
+    // closes that pipe, which ends it on the EOF rather than on a clock or a
+    // kill (CLOUD-2789).
+    let mut other = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .current_dir(&elsewhere)
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .spawn()
+        .expect("start the sharing run");
+    let (survived, published) = collect_seeded_at(&root, &other.id().to_string(), &["tmp"]);
+    drop(other.stdin.take());
+    let _ = other.wait();
+    assert_eq!(
+        survived,
+        vec![true],
+        "a live run on this target dir keeps its scratch: {published}"
+    );
+}
+
 /// The committed `clear-scratch` command, exactly as nextest runs it.
 fn collector_command() -> String {
     let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
@@ -279,6 +367,43 @@ fn collect_seeded_at(root: &std::path::Path, others: &str, seeds: &[&str]) -> (V
     )
 }
 
+/// CLOUD-1976. A `--target <triple>` run's scratch parent is
+/// `target/<triple>/tmp`, and the collector used to take `target/tmp` alone, so
+/// the musl lane's parent grew across runs and rode the cache into the next job.
+///
+/// SINCE CLOUD-2789 THE REAPER IS THE RUN'S OWN, so the triple's parent is
+/// collected by the triple run's first case, over the parent it writes into:
+/// a run whose lock is free (here, one from before the lock) is taken, and one
+/// whose lock a live case holds is left. No glob of `target/*/tmp` is needed to
+/// reach it, and none reaches a parent another run owns.
+///
+/// Fails by: a triple's finished run left behind, or a live one taken.
+#[test]
+fn a_target_triples_scratch_is_collected_too() {
+    let triple = crate::common::scratch("clear-scratch-triple")
+        .join("target")
+        .join("x86_64-unknown-linux-musl")
+        .join("tmp");
+    let finished = triple.join("run-finished").join("sentinel");
+    let live = triple.join("run-live").join("sentinel");
+    for sentinel in [&finished, &live] {
+        std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        std::fs::write(sentinel, "").unwrap();
+    }
+    let holder = cfg!(target_os = "linux")
+        .then(|| hold_shared(&triple.join(format!("run-live{}", crate::common::RUN_LOCK))));
+    crate::common::reap_finished(&triple, "run-mine");
+    assert!(
+        !finished.exists(),
+        "a triple's finished run was left behind"
+    );
+    if let Some(mut holder) = holder {
+        assert!(live.exists(), "a triple's live run was taken");
+        drop(holder.stdin.take());
+        let _ = holder.wait();
+    }
+}
+
 /// NO TARGET DIR'S SCRATCH IS THE COLLECTOR'S (CLOUD-2789).
 ///
 /// The collector took `target/tmp` and every `target/*/tmp`, so a suite started
@@ -340,10 +465,6 @@ fn the_collector_collects_when_it_is_alone() {
 /// Fails by: the reap removing an entry whose lock it did not take (the first
 /// assertion), or never removing a finished run's (the second).
 #[test]
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only: the other run is a real process holding a real advisory lock, which an in-process holder in the reaping thread could not contend"
-)]
 fn a_live_runs_scratch_survives_another_runs_reap() {
     if !cfg!(target_os = "linux") {
         return;
@@ -353,21 +474,7 @@ fn a_live_runs_scratch_survives_another_runs_reap() {
     std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
     std::fs::write(&sentinel, "").unwrap();
     let lock = parent.join(format!("run-other{}", crate::common::RUN_LOCK));
-    let mut holder = std::process::Command::new("flock")
-        .arg("-s")
-        .arg(&lock)
-        .args(["sh", "-c", "echo held; exec cat"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .expect("start the live run's holder");
-    let mut line = String::new();
-    std::io::BufRead::read_line(
-        &mut std::io::BufReader::new(holder.stdout.take().expect("piped")),
-        &mut line,
-    )
-    .expect("read the holder's line");
-    assert_eq!(line.trim(), "held", "the holder took its lock");
+    let mut holder = hold_shared(&lock);
 
     crate::common::reap_finished(&parent, "run-mine");
     let alive = sentinel.exists();
@@ -400,6 +507,32 @@ fn a_lockless_entry_is_reaped_and_the_reapers_own_run_is_not() {
     crate::common::reap_finished(&parent, "run-mine");
     assert!(!stray.exists(), "a lockless entry was left behind");
     assert!(own.exists(), "the reaping run took its own scratch");
+}
+
+/// A live run's case, as another process: `flock(1)` holding `lock` shared
+/// until its stdin closes. Returned once it says it holds the lock, so a case
+/// waits on that line rather than on a clock.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the live run is a real process holding a real advisory lock"
+)]
+fn hold_shared(lock: &std::path::Path) -> std::process::Child {
+    let mut holder = std::process::Command::new("flock")
+        .arg("-s")
+        .arg(lock)
+        .args(["sh", "-c", "echo held; exec cat"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start the live run's holder");
+    let mut line = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(holder.stdout.take().expect("piped")),
+        &mut line,
+    )
+    .expect("read the holder's line");
+    assert_eq!(line.trim(), "held", "the holder took its lock");
+    holder
 }
 
 /// Whether another process can take `lock` exclusively right now.
