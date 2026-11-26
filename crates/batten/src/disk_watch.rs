@@ -664,26 +664,19 @@ mod tests {
         PathBuf::new()
     }
 
-    /// A finished collection's answer is taken by the next wake, so the one
-    /// after it may start another; one still running is left in place.
+    /// A sampler over `config` whose every reading is `free` MiB, untraced.
     ///
-    /// Fails by: `reap` taking nothing, so the first pass's answer was never
-    /// recorded and no second pass ever started (the census timed out on it
-    /// rather than failing).
-    #[test]
-    fn a_finished_collection_is_reaped_and_a_running_one_kept() {
-        let config: crate::config_model::Prune = match serde_json::from_str("{}") {
-            Ok(config) => config,
-            Err(why) => panic!("an empty table: {why}"),
-        };
-        let sampler = Sampler {
+    /// Its `started` instant is the trace's origin and nothing a case asserts,
+    /// so it is set here, apart from any case (`wall_clock`, CLOUD-2059).
+    fn sampler_reading(config: &crate::config_model::Prune, free: u64) -> Sampler<'_> {
+        Sampler {
             repo: PathBuf::new(),
-            config: &config,
+            config,
             kept: Vec::new(),
             copies: no_copies(),
             min: 1,
             reader: std::cell::RefCell::new(
-                Box::new(|| Ok(7_u64)) as Box<dyn FnMut() -> anyhow::Result<u64> + Send>
+                Box::new(move || Ok(free)) as Box<dyn FnMut() -> anyhow::Result<u64> + Send>
             ),
             lines: std::cell::RefCell::new(Vec::new()),
             sink: None,
@@ -696,7 +689,22 @@ mod tests {
             trace: false,
             started: std::time::Instant::now(),
             last_wake: std::cell::Cell::new(None),
+        }
+    }
+
+    /// A finished collection's answer is taken by the next wake, so the one
+    /// after it may start another; one still running is left in place.
+    ///
+    /// Fails by: `reap` taking nothing, so the first pass's answer was never
+    /// recorded and no second pass ever started (the census timed out on it
+    /// rather than failing).
+    #[test]
+    fn a_finished_collection_is_reaped_and_a_running_one_kept() {
+        let config: crate::config_model::Prune = match serde_json::from_str("{}") {
+            Ok(config) => config,
+            Err(why) => panic!("an empty table: {why}"),
         };
+        let sampler = sampler_reading(&config, 7);
         let (answer, answered) = std::sync::mpsc::channel();
         sampler.pending.replace(Some(answered));
         sampler.reap();
