@@ -1949,6 +1949,10 @@ const GLOB_NAMED: char = '\u{e}';
 /// generic self type, a reference): which type's `T::f` it answers
 /// ([`Resolver::owned_by`]).
 const OWNED: char = '\u{10}';
+/// Before a `macro_rules!` macro's name, and between it and whether it
+/// passes the names it is handed through as written (`pass`) or may put
+/// them where no call site says (`path`) ([`macro_passes`]).
+const MACRO_PASSES: char = '\u{11}';
 /// The macros that pass a name through as written, where it is called: what
 /// they are handed resolves as it would outside them.
 const PASSED_AS_WRITTEN: [&str; 21] = [
@@ -2207,6 +2211,16 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
             linked_names.push(String::new());
         }
     }
+    // A MACRO SAYS WHETHER IT PASSES A NAME THROUGH AS WRITTEN (CLOUD-2927).
+    if let ast::Item::MacroRules(it) = item
+        && let Some(name) = ast::HasName::name(it)
+    {
+        let passes = if macro_passes(it) { "pass" } else { "path" };
+        linked_names.push(format!(
+            "{MACRO_PASSES}{}{MACRO_PASSES}{passes}",
+            name.text()
+        ));
+    }
     // A CRATE RENAMED IN SCOPE (CLOUD-2927): its alias names a crate no
     // path resolution knows, so a path through it is unknown.
     if let ast::Item::ExternCrate(it) = item
@@ -2249,6 +2263,44 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
         .chain(owner_type_names(item, &owned))
         .chain(linked_names)
         .collect()
+}
+
+/// Whether a `macro_rules!` macro puts every name it is handed where its call
+/// site resolves it: its body writes no metavariable after a `::`, holds no
+/// `use`, `mod`, `impl` or `extern` that could bring another into scope,
+/// and calls no macro but a std one that passes names through
+/// ([`PASSED_AS_WRITTEN`]). A macro this cannot say for is never read as
+/// passing.
+fn macro_passes(it: &ast::MacroRules) -> bool {
+    let Some(body) = it.token_tree() else {
+        return false;
+    };
+    let tokens: Vec<ra_ap_syntax::SyntaxToken> = body
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+        .filter(|token| !token.kind().is_trivia())
+        .collect();
+    // A `::` IN A TOKEN TREE IS TWO `:` TOKENS: either spelling before a `$`
+    // pastes a metavariable under a path.
+    let colons = tokens.windows(3).any(|three| {
+        three[0].kind() == SyntaxKind::COLON
+            && three[1].kind() == SyntaxKind::COLON
+            && three[2].kind() == SyntaxKind::DOLLAR
+    });
+    !colons
+        && tokens.windows(2).all(|pair| {
+            let (first, second) = (&pair[0], &pair[1]);
+            let pasted = first.kind() == SyntaxKind::COLON2 && second.kind() == SyntaxKind::DOLLAR;
+            let scoping = ["use", "mod", "impl", "extern"].contains(&first.text());
+            let called = second.kind() == SyntaxKind::BANG
+                && first.kind() == SyntaxKind::IDENT
+                && !PASSED_AS_WRITTEN.contains(&first.text());
+            !(pasted || scoping || called)
+        })
+        && tokens
+            .last()
+            .is_none_or(|last| !["use", "mod", "impl", "extern"].contains(&last.text()))
 }
 
 /// Where a path names `item` from ([`HOMED`]): its package and `module`.
@@ -2667,11 +2719,7 @@ fn written_as(token: &ra_ap_syntax::SyntaxToken, root: &str) -> String {
         .parent_ancestors()
         .any(|node| node.kind() == SyntaxKind::TOKEN_TREE)
     {
-        return if passed_as_written(token) {
-            String::new()
-        } else {
-            unknown
-        };
+        return passed_as_written(token);
     }
     let Some(own_path) = token
         .parent()
@@ -2766,41 +2814,54 @@ fn path_segments(path: &ast::Path) -> Option<Vec<String>> {
         .collect()
 }
 
-/// Whether `token`, in a macro's tokens, is passed through as written: the
-/// macro is a std one that does ([`PASSED_AS_WRITTEN`]), called by its bare
-/// name, no macro call inside it holds the token, and no `::` qualifies it.
-fn passed_as_written(token: &ra_ap_syntax::SyntaxToken) -> bool {
+/// How `token`, in a macro's tokens, is written ([`written_as`]): bare where
+/// the macro is a std one that passes it through as written
+/// ([`PASSED_AS_WRITTEN`]); `!` and the macro's name where it is another
+/// macro called by its bare name, which passes it through as written if
+/// its definition says so ([`macro_passes`]); `?` where a `::` qualifies
+/// it, a macro call inside the one holding it holds it, or the macro is
+/// named by a path.
+fn passed_as_written(token: &ra_ap_syntax::SyntaxToken) -> String {
+    let unknown = format!("{WRITTEN}?");
     let previous = |element: Option<ra_ap_syntax::SyntaxElement>| {
         std::iter::successors(element, ra_ap_syntax::SyntaxElement::prev_sibling_or_token)
             .find(|element| !element.kind().is_trivia())
     };
-    if previous(token.prev_sibling_or_token())
-        .is_some_and(|element| element.kind() == SyntaxKind::COLON2)
-    {
-        return false;
+    // A `::` IN A TOKEN TREE IS TWO `:` TOKENS (CLOUD-2927): either spelling
+    // qualifies the name.
+    let before = previous(token.prev_sibling_or_token());
+    if before.as_ref().is_some_and(|element| {
+        element.kind() == SyntaxKind::COLON2
+            || (element.kind() == SyntaxKind::COLON
+                && previous(element.prev_sibling_or_token())
+                    .is_some_and(|earlier| earlier.kind() == SyntaxKind::COLON))
+    }) {
+        return unknown;
     }
     for tree in token
         .parent_ancestors()
         .filter(|node| node.kind() == SyntaxKind::TOKEN_TREE)
     {
         if let Some(call) = tree.parent().and_then(ast::MacroCall::cast) {
-            return call.path().is_some_and(|path| {
-                path.qualifier().is_none()
-                    && path
-                        .segment()
-                        .and_then(|segment| segment.name_ref())
-                        .is_some_and(|name| {
-                            PASSED_AS_WRITTEN.contains(&name.text().to_string().as_str())
-                        })
-            });
+            let name = call
+                .path()
+                .filter(|path| path.qualifier().is_none())
+                .and_then(|path| path.segment())
+                .and_then(|segment| segment.name_ref())
+                .map(|name| name.text().to_string());
+            return match name {
+                Some(name) if PASSED_AS_WRITTEN.contains(&name.as_str()) => String::new(),
+                Some(name) => format!("{WRITTEN}!{name}"),
+                None => unknown,
+            };
         }
         if previous(tree.prev_sibling_or_token())
             .is_some_and(|element| element.kind() == SyntaxKind::BANG)
         {
-            return false;
+            return unknown;
         }
     }
-    false
+    unknown
 }
 
 /// Whether `token` names the macro a macro call invokes.
@@ -7104,6 +7165,8 @@ struct Graph<'g> {
     globs: Globs<'g>,
     /// Each workspace crate's package by its name ([`crates_of`]).
     crates: std::collections::HashMap<&'g str, Option<&'g str>>,
+    /// Whether each workspace macro passes names through ([`macros_of`]).
+    macros: std::collections::HashMap<&'g str, bool>,
     /// Every skeleton item's mentioned names, by name.
     mentions: &'g std::collections::BTreeMap<String, BTreeSet<String>>,
 }
@@ -7152,6 +7215,25 @@ fn crates_of(
             Some((name, package))
         })
         .collect()
+}
+
+/// Whether each `macro_rules!` macro passes the names it is handed through
+/// as written, by name: every definition of the name must ([`MACRO_PASSES`]).
+fn macros_of(
+    items: &std::collections::BTreeMap<String, BTreeSet<String>>,
+) -> std::collections::HashMap<&str, bool> {
+    let mut macros: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+    for key in items.keys() {
+        let Some((name, passes)) = key
+            .strip_prefix(MACRO_PASSES)
+            .and_then(|rest| rest.split_once(MACRO_PASSES))
+        else {
+            continue;
+        };
+        let all = macros.entry(name).or_insert(true);
+        *all = *all && passes == "pass";
+    }
+    macros
 }
 
 /// A definition's home, its package and module ([`HOMED`]).
@@ -7211,6 +7293,9 @@ struct Resolver<'r> {
     mentions: &'r std::collections::BTreeMap<String, BTreeSet<String>>,
     globs: &'r Globs<'r>,
     crates: &'r std::collections::HashMap<&'r str, Option<&'r str>>,
+    /// Whether each workspace macro passes the names it is handed through as
+    /// written, by name: all of its definitions must ([`macro_passes`]).
+    macros: &'r std::collections::HashMap<&'r str, bool>,
     /// The lookups under way, by name, package and module: one met again is
     /// a glob whose own path needs itself, which brings in nothing.
     active: std::cell::RefCell<BTreeSet<(String, String, String)>>,
@@ -7225,9 +7310,10 @@ impl<'r> Resolver<'r> {
         definitions: &'r [&'r str],
         items: &'r std::collections::BTreeMap<String, BTreeSet<String>>,
         mentions: &'r std::collections::BTreeMap<String, BTreeSet<String>>,
-        (globs, crates): (
+        (globs, crates, macros): (
             &'r Globs<'r>,
             &'r std::collections::HashMap<&'r str, Option<&'r str>>,
+            &'r std::collections::HashMap<&'r str, bool>,
         ),
     ) -> Self {
         Self {
@@ -7237,6 +7323,7 @@ impl<'r> Resolver<'r> {
             mentions,
             globs,
             crates,
+            macros,
             active: std::cell::RefCell::default(),
             impls: std::cell::RefCell::default(),
         }
@@ -7299,7 +7386,7 @@ impl<'r> Resolver<'r> {
         let Some((last, before)) = segments.split_last() else {
             return Found::Unknown;
         };
-        if *last == "Self" || last.starts_with('@') {
+        if *last == "Self" || last.starts_with('@') || raw.starts_with('!') {
             return Found::Unknown;
         }
         let found = if before.is_empty() {
@@ -7370,6 +7457,15 @@ impl<'r> Resolver<'r> {
         let base = key_base(mention);
         match written(mention) {
             None => Found::Unknown,
+            // A NAME HANDED TO A MACRO IS RESOLVED WHERE IT IS CALLED only
+            // where the macro's own definition says so.
+            Some((package, module, Some(called))) if called.starts_with('!') => {
+                if self.macros.get(&called[1..]) == Some(&true) {
+                    self.lookup(mention, base, package, module.to_owned(), 0)
+                } else {
+                    Found::Unknown
+                }
+            }
             Some((package, module, None)) => {
                 self.lookup(mention, base, package, module.to_owned(), 0)
             }
@@ -7715,6 +7811,7 @@ impl<'g> Graph<'g> {
             .collect();
         let globs = globs_of(depends.mentions);
         let crates = crates_of(depends.items);
+        let macros = macros_of(depends.items);
         // A MENTION RESOLVES TO THE ONE DEFINITION ITS PATH NAMES (CLOUD-2927),
         // else to every definition it sees ([`resolve`]).
         let index = Resolver::new(
@@ -7722,7 +7819,7 @@ impl<'g> Graph<'g> {
             &definitions,
             depends.items,
             depends.mentions,
-            (&globs, &crates),
+            (&globs, &crates, &macros),
         );
         let (resolves, follows): (Vec<Vec<usize>>, Vec<Vec<usize>>) =
             names.iter().map(|name| resolve(name, &index)).unzip();
@@ -7773,6 +7870,7 @@ impl<'g> Graph<'g> {
             tokens,
             globs,
             crates,
+            macros,
             mentions: depends.mentions,
         }
     }
@@ -7793,7 +7891,7 @@ impl<'g> Graph<'g> {
                 &self.definitions,
                 items,
                 self.mentions,
-                (&self.globs, &self.crates),
+                (&self.globs, &self.crates, &self.macros),
             ),
         );
         let nodes = follow
@@ -17326,6 +17424,54 @@ mod tests {
         assert_ne!(
             named[&traited], held[&traited],
             "an impl of Tr's L is named"
+        );
+    }
+
+    /// CLOUD-2927 (f): a name handed to a workspace `macro_rules!` that puts it
+    /// where it is called resolves there; one handed to a macro that pastes
+    /// it after a `::` of its own is keyed on every definition it sees.
+    ///
+    /// Fails by: every non-std macro's tokens read as unknown (an edit to
+    /// `b::LIMIT` moves the case handing `a::LIMIT` to `wrap!`), or a
+    /// pasting macro's read as passing (the same edit leaves `qual!`'s case
+    /// on a stale verdict).
+    #[test]
+    fn a_name_a_workspace_macro_passes_through_resolves_where_it_is_called() {
+        let (wrapped, qualified) = (case("f"), case("g"));
+        let cases: BTreeSet<Case> = [wrapped.clone(), qualified.clone()].into();
+        let executed = [
+            (wrapped.clone(), [0].into()),
+            (qualified.clone(), [1].into()),
+        ]
+        .into();
+        let base = "macro_rules! wrap { ($e:expr) => { $e } }\n\
+                    macro_rules! qual { ($n:ident) => { crate::b::$n } }\n\
+                    mod a { pub const LIMIT: u8 = 1; }\n\
+                    mod b { pub const LIMIT: u8 = 2; }\n\
+                    mod c { use super::a::LIMIT; pub fn f() -> u8 { wrap!(LIMIT) } \
+                    pub fn g() -> u8 { qual!(LIMIT) } }\n";
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 2", "LIMIT: u8 = 3"),
+        );
+        assert_eq!(
+            other[&wrapped], held[&wrapped],
+            "wrap! puts LIMIT where c imports a's"
+        );
+        assert_ne!(
+            other[&qualified], held[&qualified],
+            "qual! puts it under a path of its own"
+        );
+        let own = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 1", "LIMIT: u8 = 4"),
+        );
+        assert_ne!(
+            own[&wrapped], held[&wrapped],
+            "a::LIMIT is the one wrap! is handed"
         );
     }
 
