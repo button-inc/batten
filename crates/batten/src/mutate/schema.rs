@@ -13772,15 +13772,21 @@ mod tests {
     #[test]
     fn the_tree_walks_hold_no_file_whole() {
         use crate::capture::Streamed as _;
-        const LIMIT: u64 = 128 << 20;
         const BIG: u64 = 512 << 20;
         if let Some(dir) = std::env::var_os(BOUNDED_WALK) {
             let dir = std::path::PathBuf::from(dir);
-            let cap = rustix::process::Rlimit {
-                current: Some(LIMIT),
-                maximum: Some(LIMIT),
-            };
-            rustix::process::setrlimit(rustix::process::Resource::Data, cap).expect("cap");
+            // THE CAP IS UNIX'S: `rustix` is a `cfg(unix)` dependency, so a
+            // Windows build runs the same walks uncapped and still asserts the
+            // stale copy is replaced.
+            #[cfg(unix)]
+            {
+                const LIMIT: u64 = 128 << 20;
+                let cap = rustix::process::Rlimit {
+                    current: Some(LIMIT),
+                    maximum: Some(LIMIT),
+                };
+                rustix::process::setrlimit(rustix::process::Resource::Data, cap).expect("cap");
+            }
             let (live, work) = (dir.join("live"), dir.join("work"));
             sync(&live, &work, &BTreeSet::new()).expect("sync");
             assert_eq!(
