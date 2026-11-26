@@ -4941,6 +4941,11 @@ fn judge_run(
     if !fail_fast {
         args.push(String::from("--no-fail-fast"));
     }
+    // EACH WORKER ITS SHARE OF THE CASES MEMORY HOLDS (CLOUD-2253): nextest's
+    // own default is a case a core, in every worker at once.
+    if let Some(threads) = judging.threads {
+        args.extend([String::from("--test-threads"), threads.to_string()]);
+    }
     // INSIDE THE MIRROR (W2), as the reach run's fixtures are: a case whose
     // fixture needs a checkout around it passed under reach and failed here,
     // which read as a kill.
@@ -10182,7 +10187,13 @@ pub fn ran(args: impl Iterator<Item = std::ffi::OsString>) -> Option<std::proces
             &root,
             &mutants,
             &listed_over,
-            (jobs, Scope::default()),
+            (
+                super::Judges {
+                    workers: jobs,
+                    threads: None,
+                },
+                Scope::default(),
+            ),
             None,
             &mut out,
         )
@@ -10227,6 +10238,9 @@ struct Judging<'a> {
     control: &'a Control,
     /// The clean build's recorded binaries, when they could be recorded.
     reuse: Option<&'a Reuse>,
+    /// How many cases each judging run's nextest runs at once
+    /// ([`super::judging_jobs`]); `None` leaves it to nextest.
+    threads: Option<usize>,
 }
 
 impl<'a> Judging<'a> {
@@ -11589,7 +11603,7 @@ pub fn sweep(
     root: &std::path::Path,
     mutants: &[Listed],
     listed_over: &str,
-    (jobs, scope): (usize, Scope),
+    (judges, scope): (super::Judges, Scope),
     handback: Option<&Handback<'_>>,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Swept> {
@@ -11654,7 +11668,6 @@ pub fn sweep(
     let classic = schema.classic(handed);
     let built = (mutants.len(), unviable.len(), classic.len());
     announce_built(out, built, started.elapsed().as_secs())?;
-    let ids = (&resource_ids, resources.as_str());
     let format = sweep_format(live, mutants, &schema, unprobed);
     let skipped = unswitched(&classic, &unviable);
     let (reach, digests, seconds, red) = reached(
@@ -11662,7 +11675,7 @@ pub fn sweep(
         &root,
         mutants,
         (&schema, &site_keys, &skipped, &format),
-        ids,
+        (&resource_ids, resources.as_str()),
         out,
     )?;
     // RECORDED ONCE, AFTER THE BUILD AND THE REACH RUN THAT USED IT: nothing
@@ -11693,11 +11706,12 @@ pub fn sweep(
         red: &red,
         control: &Control::new(),
         reuse: reuse.as_ref(),
+        threads: judges.threads,
     };
     let shown = shown_over(&judging, &todo, &schema)?;
     let (red, control) = control_red(&judging, out)?;
     let judging = judging.with_red(&red).with_control(&control);
-    let mut verdicts = judge_all(&judging, &todo, jobs, out);
+    let mut verdicts = judge_all(&judging, &todo, judges.workers, out);
     drop(shown);
     let (names, handed_unviable) = settle_handed(
         &judging,
@@ -14831,7 +14845,21 @@ mod tests {
         let held = hold(&state).unwrap().expect("the first hold is taken");
         assert!(hold(&state).unwrap().is_none(), "a second hold is refused");
         let mut out = Vec::new();
-        let swept = sweep(&root, &[], "", (1, Scope::default()), None, &mut out).unwrap();
+        let swept = sweep(
+            &root,
+            &[],
+            "",
+            (
+                crate::mutate::Judges {
+                    workers: 1,
+                    threads: None,
+                },
+                Scope::default(),
+            ),
+            None,
+            &mut out,
+        )
+        .unwrap();
         assert_eq!(swept.code, 3, "a held mirror could not look");
         let text = String::from_utf8(out).unwrap();
         assert!(
@@ -14866,7 +14894,13 @@ mod tests {
             &root,
             &[],
             "",
-            (1, Scope::default()),
+            (
+                crate::mutate::Judges {
+                    workers: 1,
+                    threads: None,
+                },
+                Scope::default(),
+            ),
             Some(&handback),
             &mut Vec::new(),
         )
@@ -14911,6 +14945,7 @@ mod tests {
             red: &none,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let judged = judging.with_red(&control);
         assert_eq!(judged.red, &control);
@@ -14954,6 +14989,7 @@ mod tests {
             red: &red,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let nowhere = base.join("nowhere");
         let handback = Handback {
@@ -15015,6 +15051,7 @@ mod tests {
             red: &red,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let nowhere = base.join("nowhere");
         let handback = Handback {
@@ -15173,6 +15210,7 @@ mod tests {
             red: &red,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let nowhere = base.join("nowhere");
         let handback = Handback {
@@ -15234,6 +15272,7 @@ mod tests {
             red: &red,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let schema = Schema {
             names: vec![BTreeSet::from([String::from("f")])],
@@ -15303,6 +15342,7 @@ mod tests {
             red: &red,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         // NO PROBED FILE, SO NO OBSERVING SET AND NO FILTER: the run would be
         // the whole suite, the red case with it.
@@ -15371,6 +15411,7 @@ mod tests {
             red: &red,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let schema = Schema {
             names: vec![BTreeSet::from([String::from("unrelated")])],
@@ -22720,6 +22761,7 @@ pub fn repo() -> u8 {{ scratch() }}
             red: &red,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let mut out = Vec::new();
         let verdicts = judge_all(&judging, &[0], 1, &mut out);
@@ -22939,6 +22981,7 @@ pub fn repo() -> u8 {{ scratch() }}
                 red: &Red::new(),
                 control: &Control::new(),
                 reuse: None,
+                threads: None,
             };
             let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
             let journal = std::sync::Mutex::new(Journal::default());
@@ -23327,6 +23370,7 @@ pub fn repo() -> u8 {{ scratch() }}
             red: &red,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let cases: BTreeSet<Case> = [case("m::slow")].into();
         let store = work.join("store");
@@ -23834,6 +23878,7 @@ pub fn repo() -> u8 {{ scratch() }}
             red: &Red::new(),
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let todo: Vec<u32> = (0..105).collect();
         let mut out = Vec::new();
@@ -23933,6 +23978,7 @@ pub fn repo() -> u8 {{ scratch() }}
             red: &red,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let mut out = Vec::new();
         let verdicts = judge_all(&judging, &[0], 1, &mut out);
@@ -24740,6 +24786,7 @@ pub fn repo() -> u8 {{ scratch() }}
             red: &red,
             control: &Control::new(),
             reuse: None,
+            threads: None,
         };
         let nowhere = base.join("nowhere");
         let handback = Handback {

@@ -871,6 +871,7 @@ fn cargo_sweep(repo: &std::path::Path, base: &str) -> (Option<i32>, String) {
         // `mutant:rust`'s per-job cost, which a hand-back is sized by.
         .env("MUTANT_JOB_DISK_MB", "6200")
         .env("MUTANT_JOB_MEMORY_MB", "4000")
+        .env("MUTANT_JUDGE_MEMORY_MB", "1")
         .env_remove("CI")
         .env_remove(batten::mutate::WHOLE_TREE)
         .streamed_output()
