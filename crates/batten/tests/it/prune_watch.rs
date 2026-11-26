@@ -1468,6 +1468,7 @@ fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
     std::fs::create_dir_all(&bin).unwrap();
     let rustc = bin.join("rustc");
     std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
