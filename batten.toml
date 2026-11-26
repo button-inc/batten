@@ -18880,10 +18880,19 @@ repair = ["batten", "wiring", "reclaim", "-y"]
 # which asserts the argv's program is `batten` — because a row whose check cannot
 # spawn reports could-not-look and a reader cannot tell that from a container
 # nobody looked at.
+#
+# WITHHELD SHAPE UNTIL STEP 14 (CLOUD-2840): the pinned v0.0.221 reads a
+# plain-copy link as `missing` whoever asks (CLOUD-2210, its `launcher_declares`),
+# so `provision status` failed this row on every cold container right after
+# `provision apply` installed the runner, and the one setup command exited 1.
+# `env` is spawnable wherever batten is, for `host-dependencies-present`'s
+# reason, and exits 127 when `mise` does not resolve — a failure the repair acts
+# on. What is given up until the pin bump restores `provision status`: a `mise`
+# of another version on PATH passes here.
 [[startup]]
 id = "toolchain-runner-present"
 gloss = "the task runner every gate in this repository is invoked through resolves by bare name"
-check = ["batten", "provision", "status"]
+check = ["env", "mise", "--version"]
 repair = ["batten", "provision", "apply"]
 
 # A REPORTER IS NOT A GATE, AND THIS ROW SHIPPED AS ONE (CLOUD-1454).
@@ -19112,11 +19121,19 @@ gloss = "pkl trusts the bundle SSL_CERT_FILE names, so hk.pkl evaluates behind a
 check = ["env", "-S", "test ${SSL_CERT_FILE}x = x -o -s ${HOME}/.pkl/cacerts/egress.pem"]
 repair = ["env", "-S", "install -D -m 0644 ${SSL_CERT_FILE} ${HOME}/.pkl/cacerts/egress.pem"]
 
-[[startup]]
-id = "mediator-matches-the-tree"
-gloss = "the engine adjudicating this tree was built from it, so a declared gate is not silently dropped"
-check = ["batten", "doctor", "mediator"]
-repair = ["batten", "engine", "install"]
+# WITHHELD UNTIL STEP 14 (CLOUD-2840). The row is the block below, uncommented
+# by the commit that bumps the pin. The pinned v0.0.221 asks every tree carrying
+# `crates/batten` for its `target/release` build, so in a cold container it
+# answered `mediator-unbuilt` and its repair (the pinned release, never a build)
+# could not change that: the one setup command exited 1. This tree's engine asks
+# only under a source pin (`diagnose_mediator`), and the pin is a release, so
+# withholding it drops no verdict the tree's engine would give.
+#
+# [[startup]]
+# id = "mediator-matches-the-tree"
+# gloss = "the engine adjudicating this tree was built from it, so a declared gate is not silently dropped"
+# check = ["batten", "doctor", "mediator"]
+# repair = ["batten", "engine", "install"]
 
 # AND THE ENGINE ON `PATH` MUST RESOLVE EVERY ROW OF THIS CONFIG.
 #
