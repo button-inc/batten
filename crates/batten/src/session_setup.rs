@@ -83,19 +83,30 @@ const INSTALLED: &str = "installed";
 /// The one install task, as the agent dispatches it (CLOUD-2840).
 pub const DISPATCH: &str = "batten startup --session";
 
-/// What the agent is told to do, at `SessionStart` and in the install gate's
-/// refusal: THE ONE SPELLING of the instruction, so the two never drift.
+/// What the agent is told to do at `SessionStart`: THE ONE SPELLING of the
+/// instruction for each kind of host, so it never drifts from what the install
+/// gate admits (CLOUD-2840).
 ///
-/// Claude Code's own facility is named because it is the measured host; every
-/// other harness reads the same sentence with its own background facility.
+/// `backgrounds` is the host's answer to `HarnessExt::backgrounds`, asked by
+/// the caller so this module stays harness-blind. A host with a background
+/// facility is told to use it and never to run the dispatch inline, which the
+/// gate holds there. A host without one is told to run it inline: that is the
+/// dispatch it can make, and the gate admits it there. Neither is told to
+/// detach it with `&`, `nohup` or a redirect, whose end the host cannot see.
 #[must_use]
-pub fn instruction() -> String {
+pub fn instruction(backgrounds: bool) -> String {
+    let how = if backgrounds {
+        "as a background task with your harness's own facility (Claude Code: the \
+         Bash tool with run_in_background and an explicit timeout of 3600000 ms), \
+         never inline"
+    } else {
+        "inline: this harness has no background facility, so the call holds the \
+         turn until setup ends"
+    };
     format!(
-        "session setup not dispatched: run `{DISPATCH}` once, as a background task \
-         with your harness's own facility (Claude Code: the Bash tool with \
-         run_in_background and an explicit timeout of 3600000 ms), never inline, \
-         never with `&`, `nohup` or a redirect; until it is dispatched every call \
-         but a read is held, and until it records `ok` a program it installs is held"
+        "session setup not dispatched: run `{DISPATCH}` once, {how}, never with `&`, \
+         `nohup` or a redirect; until it is dispatched every call but a read is held, \
+         and until it records `ok` a program it installs is held"
     )
 }
 
@@ -727,6 +738,26 @@ mod tests {
         assert!(!is_dispatch("mise exec -- batten startup --session"));
         assert!(!is_dispatch("notbatten startup --session"));
         assert!(!is_dispatch(""));
+    }
+
+    /// Fails by: a host with no background facility told to dispatch in the
+    /// background, which it cannot, so it is never told the dispatch the gate
+    /// admits there; or a host that has one told to run it inline, which the
+    /// gate holds there (CLOUD-2840 r5).
+    #[test]
+    fn the_instruction_asks_each_host_for_the_dispatch_it_can_make() {
+        let background = instruction(true);
+        assert!(
+            background.contains("run_in_background") && background.contains("never inline"),
+            "{background}"
+        );
+        let inline = instruction(false);
+        assert!(
+            inline.contains(&format!("`{DISPATCH}` once, inline"))
+                && !inline.contains("run_in_background")
+                && !inline.contains("never inline"),
+            "{inline}"
+        );
     }
 
     /// Fails by: `started` answering true where setup was never prepared.

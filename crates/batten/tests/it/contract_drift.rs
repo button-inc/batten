@@ -183,7 +183,7 @@ fn a_session_seeded_at_session_start_is_silent_and_stays_silent() {
     // (CLOUD-2840, admitted by the owner): no contract-drift notice rides it.
     assert_eq!(
         drift_on(&dir, "s1", "SessionStart", &[]).pipe_notice(),
-        Some(batten::session_setup::instruction()),
+        Some(batten::session_setup::instruction(true)),
         "the seeding event is the one the silence argument is about"
     );
     assert_eq!(

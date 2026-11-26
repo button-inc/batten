@@ -20648,6 +20648,7 @@ fn live_lap_outside_its_gate(holder: Option<String>, ours: Option<&str>) -> Opti
 fn install_pending_for(
     rules: &hook::Policy,
     envelope: &hook::Envelope,
+    harness: crate::config_model::Harness,
 ) -> Option<serde_json::Value> {
     if envelope.event != crate::config_model::Event::PreTool || !rules.reads_pinned(envelope) {
         return None;
@@ -20661,12 +20662,11 @@ fn install_pending_for(
     let state = setup.token();
     // NOTHING IS PENDING ONCE THE INSTALL PHASE ENDED `ok` (#1276): a handler or
     // health row failing after it is a finding said once, not a hold on
-    // programs it has already installed.
-    let pending: Vec<String> = if matches!(
-        setup,
-        session_setup::State::Undispatched | session_setup::State::Ok(_)
-    ) || session_setup::installed(&git_dir)
-    {
+    // programs it has already installed. BEFORE THE DISPATCH IT IS RESOLVED TOO
+    // (CLOUD-2840 r5): the gate admits a read there, and a reader that resolves
+    // to a manager's shim would run the manager's auto-install before setup.
+    let ended = matches!(setup, session_setup::State::Ok(_)) || session_setup::installed(&git_dir);
+    let pending: Vec<String> = if ended {
         Vec::new()
     } else {
         let roots = install_roots();
@@ -20694,6 +20694,10 @@ fn install_pending_for(
         "pending": pending,
         "dispatch": session_setup::DISPATCH,
         "dispatching": dispatching,
+        // WHETHER THIS HOST CAN RUN THE DISPATCH IN THE BACKGROUND (CLOUD-2840
+        // r5): where it cannot, the inline dispatch is the one it can make,
+        // and the gate admits that rather than holding the session for good.
+        "background": harness.backgrounds(),
     }))
 }
 
@@ -20758,7 +20762,11 @@ struct CallFacts {
     ratcheted: hook::RatchetFacts,
 }
 
-fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
+fn call_facts(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    harness: crate::config_model::Harness,
+) -> CallFacts {
     let (discards, singleton) = destructive_call_facts(envelope);
     let land_live = land_live_for(policy, envelope);
     let lap_held = land_live
@@ -20768,7 +20776,7 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         discards,
         singleton,
         land_live,
-        install_pending: install_pending_for(policy, envelope),
+        install_pending: install_pending_for(policy, envelope, harness),
         lap_held,
         unread_history: unread_history(envelope),
         dispatch: dispatch_facts(envelope),
@@ -21370,7 +21378,7 @@ fn dispatch_envelope(
     // git and opens nothing. `None` is could-not-look and allows.
     let manifest = manifest_for(&policy, &envelope);
     let ((tasks, task_bodies), extracted) = session_facts(&policy, &envelope);
-    let call = call_facts(&policy, &envelope);
+    let call = call_facts(&policy, &envelope, harness);
     let facts = hook::Facts {
         singleton: &call.singleton,
         land_live: &call.land_live,
@@ -22158,7 +22166,7 @@ fn handle_unless_floored(
         return None;
     }
     config_write_breaks(envelope, overrides, harness)
-        .or_else(|| dispatch_handlers(envelope, raw, overrides, advice))
+        .or_else(|| dispatch_handlers(envelope, harness, raw, overrides, advice))
 }
 
 /// The id a write that would leave the config unloadable is refused under.
@@ -24241,7 +24249,12 @@ fn mediated_payload(raw: &str, tool: &str, params: &serde_json::Value) -> Option
 /// [`session_setup::DISPATCH`] with its harness's background facility, and the
 /// install gate holds its calls until it does. Silent on failure, like every
 /// side effect at this boundary.
-fn prepare_session_setup(raw: &str, envelope: &hook::Envelope, advice: &mut Vec<advisory::Advice>) {
+fn prepare_session_setup(
+    raw: &str,
+    envelope: &hook::Envelope,
+    harness: crate::config_model::Harness,
+    advice: &mut Vec<advisory::Advice>,
+) {
     let here = hook_authority_root();
     if !here.join(crate::config_model::CONFIG_FILE).exists() {
         return;
@@ -24257,7 +24270,7 @@ fn prepare_session_setup(raw: &str, envelope: &hook::Envelope, advice: &mut Vec<
     if session_setup::prepare(&git_dir, raw, session) {
         advice.push(advisory::Advice::rendered(
             severity::AdvisoryTier::Warning,
-            session_setup::instruction(),
+            session_setup::instruction(harness.backgrounds()),
         ));
     }
 }
@@ -24289,6 +24302,7 @@ fn surface_session_setup(envelope: &hook::Envelope, advice: &mut Vec<advisory::A
 /// being that a dispatched program cannot invent a second one.
 fn dispatch_handlers(
     envelope: &hook::Envelope,
+    harness: crate::config_model::Harness,
     raw: &str,
     overrides: &Overrides,
     advice: &mut Vec<advisory::Advice>,
@@ -24311,7 +24325,7 @@ fn dispatch_handlers(
     // the next call. The host's bytes are spooled here because this is where
     // they are in hand, and they are what each row reads on stdin.
     if session_setup::detaches(envelope.event) {
-        prepare_session_setup(raw, envelope, advice);
+        prepare_session_setup(raw, envelope, harness, advice);
         return None;
     }
     let hook_config = hook_table(overrides)?;
