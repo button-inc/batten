@@ -7514,6 +7514,28 @@ mod tests {
         );
     }
 
+    /// Fails by: a judged case's peak read as anything but the declared
+    /// `MUTANT_JUDGE_MEMORY_MB` (bootstrap shard 0/8 at 34c6e4d1f survived
+    /// `declared_judge_mb -> Ok(0)` and `Ok(1)`, either of which sizes the
+    /// judging workers to the whole machine), or an absent count admitted.
+    #[test]
+    fn a_judged_case_costs_its_declared_megabytes() {
+        let declared = [("MUTANT_JUDGE_MEMORY_MB", " 2400 ")];
+        assert_eq!(
+            with_overlay_vars(&declared, JobCost::declared_judge_mb).expect("declared"),
+            2400
+        );
+        assert!(with_overlay_vars(&[], JobCost::declared_judge_mb).is_err());
+        assert!(
+            with_overlay_vars(
+                &[("MUTANT_JOB_MEMORY_MB", "2400")],
+                JobCost::declared_judge_mb
+            )
+            .is_err(),
+            "the job's memory is not the judged case's"
+        );
+    }
+
     #[test]
     fn a_declared_overlay_names_its_features_to_every_invocation() {
         let root = Path::new("/r");
