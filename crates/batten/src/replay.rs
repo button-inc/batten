@@ -1562,9 +1562,11 @@ fn run_union(
         "",
         crate::exec::Diagnostics::Keep,
         published,
-    ) && code != 0
-        && output.contains(COMPILE_FAILED)
+    ) && output.contains(COMPILE_FAILED)
     {
+        // The words alone decide: cargo prints them only on a failed exit,
+        // so a second test of the exit code would be a branch nothing takes.
+        debug_assert_ne!(code, 0, "cargo said `{COMPILE_FAILED}` and exited 0");
         return Some((BUILD_FAILED, output));
     }
     let tests: Vec<&str> = splices
