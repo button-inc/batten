@@ -19608,6 +19608,120 @@ tools = [
   ],
 ]
 
+# THE PROBE BUILD BEHIND `test cover never` (CLOUD-2789): a `cargo test` of the
+# crate with `probe-evaluator-io` on, 77 s a lap, re-run every lap with nothing
+# moved. Its record is claim-partitioned, so the `step record` line keys the
+# file this branch and claim read it from, and whether it is there: a re-claim or
+# a lost record misses and writes it, where a key on the tree alone would hit and
+# leave the module reading an absent record as silence. UNTRACED: the command
+# writes the store under `.git`, which no tree input declares; the line keys it.
+[[step]]
+id = "evaluator-io-record"
+inputs = ["."]
+tools = [
+  ["batten", "step", "untraced"],
+  ["batten", "step", "record", "--", "evaluator-io-probe"],
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  [
+    "batten",
+    "step",
+    "env",
+    "--exclude",
+    "BATTEN_TASK_PID",
+    "--exclude",
+    "BATTEN_GATE_PID",
+    "--exclude",
+    "BATTEN_LAND_LAP",
+    "--exclude",
+    "BATTEN_LAND_GATE",
+    "--exclude",
+    "BATTEN_BOOT_TIME",
+    "--exclude",
+    "BATTEN_SESSION",
+    "--exclude",
+    "BATTEN_SESSION_PARENT",
+    "--exclude",
+    "BATTEN_SPEC_BASE",
+    "--exclude",
+    "BATTEN_CLAIM_CHECK_BYPASS",
+    "--exclude",
+    "BATTEN_GH_GUARD_BYPASS",
+    "--exclude",
+    "BATTEN_STEP_RECEIPT_BYPASS",
+    "--exclude",
+    "BATTEN_STOP_GUARD_BYPASS",
+    "--exclude",
+    "BATTEN_UNLANDED_CHECK_BYPASS",
+    "--",
+    "BATTEN_*",
+    "RUST*",
+    "CARGO_*",
+    "CI",
+    "HOME",
+    "PATH",
+  ],
+]
+
+# THE DIST LEG (CLOUD-2789): `dist:lap` builds the release binary through
+# cargo-dist, 125 s a lap with nothing moved. Keyed on the tree, the toolchain,
+# `dist --version` (cargo-auditable's pin is in `mise.toml`, an input) and the
+# `CARGO_*` profile overrides `dist:lap` sets, plus `test -f` on the binary the
+# next entry (`sbom-binary`) reads: an absent binary is no key, so a wiped
+# target misses and builds. A binary another tree's build left there (T, T+1,
+# back to T) can only fail `sbom-binary-check` loud, never pass it: its embedded
+# dependency tree is read against this tree's `Cargo.lock`, and where the two
+# agree the verdict is the one this tree's build would have given. UNTRACED: a
+# cargo-dist build writes and reads outside the tree; the lines key what it reads.
+[[step]]
+id = "dist:lap"
+inputs = ["."]
+tools = [
+  ["batten", "step", "untraced"],
+  ["test", "-f", "target/x86_64-unknown-linux-gnu/dist/batten"],
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["dist", "--version"],
+  [
+    "batten",
+    "step",
+    "env",
+    "--exclude",
+    "BATTEN_TASK_PID",
+    "--exclude",
+    "BATTEN_GATE_PID",
+    "--exclude",
+    "BATTEN_LAND_LAP",
+    "--exclude",
+    "BATTEN_LAND_GATE",
+    "--exclude",
+    "BATTEN_BOOT_TIME",
+    "--exclude",
+    "BATTEN_SESSION",
+    "--exclude",
+    "BATTEN_SESSION_PARENT",
+    "--exclude",
+    "BATTEN_SPEC_BASE",
+    "--exclude",
+    "BATTEN_CLAIM_CHECK_BYPASS",
+    "--exclude",
+    "BATTEN_GH_GUARD_BYPASS",
+    "--exclude",
+    "BATTEN_STEP_RECEIPT_BYPASS",
+    "--exclude",
+    "BATTEN_STOP_GUARD_BYPASS",
+    "--exclude",
+    "BATTEN_UNLANDED_CHECK_BYPASS",
+    "--",
+    "BATTEN_*",
+    "RUST*",
+    "CARGO_*",
+    "CI",
+    "HOME",
+    "PATH",
+  ],
+]
+
 # THE TREE HALF OF `batten-check` (step 13a): `enforce --half tree` judges only
 # rows whose verdict is a function of the index, so the key is the index plus
 # what those rows read beside it — the toolchain that builds the engine, the
