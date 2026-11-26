@@ -249,4 +249,13 @@ exclude_re = [
   # such row surviving, so that sweep is this arm's gate (CLOUD-2789, shard
   # 0/8 at 34c6e4d1f).
   'preset\.rs:\d+:\d+: replace library_overlay -> Option<std::path::PathBuf> with None$',
+  # `listed_cases`' one caller hands its set to `run_filter` alone. A set
+  # holding only the empty case is one case due, since no record a recorder
+  # kept names an empty case (nextest names none), and one due of one listed
+  # is "at least half", so `run_filter` answers no filter: the path it takes
+  # whenever the listing reads nothing, where the recorder's own skip decides
+  # which cases record. Only the run's length differs, never which records it
+  # keeps, and its cost is `nextest list` over the built suite, which no unit
+  # case can run (CLOUD-2789, shard 1/8 at 34c6e4d1f).
+  'schema\.rs:\d+:\d+: replace listed_cases -> Option<BTreeSet<Case>> with Some\(BTreeSet::from_iter\(\[Default::default\(\)\]\)\)$',
 ]

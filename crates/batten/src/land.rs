@@ -7696,4 +7696,20 @@ mod hold_tests {
             None
         );
     }
+
+    /// A beat holds as many ticks as divide it, never fewer than one
+    /// (CLOUD-2789).
+    ///
+    /// Fails by: one tick a beat whatever the cadence, or a remainder taken for
+    /// the quotient.
+    #[test]
+    fn a_beat_holds_as_many_ticks_as_divide_it() {
+        use super::ticks_per_beat;
+        use std::time::Duration;
+        let s = Duration::from_secs;
+        assert_eq!(ticks_per_beat(s(10), s(1)), 10);
+        assert_eq!(ticks_per_beat(s(7), s(2)), 3);
+        assert_eq!(ticks_per_beat(s(1), s(2)), 1, "a tick longer than the beat");
+        assert_eq!(ticks_per_beat(s(10), Duration::ZERO), 1);
+    }
 }
