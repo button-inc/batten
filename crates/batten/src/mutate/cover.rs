@@ -83,14 +83,19 @@ pub fn pristine(root: &Path, dest: &Path) -> Result<String> {
     let _ = std::fs::remove_dir_all(dest);
     let mut digest = blake3::Hasher::new();
     for path in checkout_files(root)? {
-        let bytes = std::fs::read(root.join(&path)).with_context(|| format!("read {path}"))?;
         let to = dest.join(&path);
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        crate::durable::replace(&to, &bytes).with_context(|| format!("copy {path}"))?;
+        // ONLY A SOURCE IS READ, AND ONLY TO DIGEST IT (CLOUD-2253): every
+        // other file, untracked and ignored ones too, is copied by the kernel,
+        // never held whole, so no one file's size sets the sweep's peak.
         if is_rust(&path) {
+            let bytes = std::fs::read(root.join(&path)).with_context(|| format!("read {path}"))?;
+            crate::durable::replace(&to, &bytes).with_context(|| format!("copy {path}"))?;
             digest_one(&mut digest, &path, &bytes);
+        } else {
+            std::fs::copy(root.join(&path), &to).with_context(|| format!("copy {path}"))?;
         }
     }
     Ok(digest.finalize().to_hex().to_string())
