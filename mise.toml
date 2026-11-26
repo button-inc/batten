@@ -1556,19 +1556,24 @@ run = "{{vars.batten}} step run test:cargo -- cargo nextest run --workspace"
 # filter would match the lib's whole `mutate::` tree too. NOT receipt-routed:
 # a `step run` miss would trace the suite and fail it.
 #
-# ITS `CI = "true"` FORKS THE BUILD (CLOUD-2789, measured): `ra_ap_stdx` reads
+# NO `CI` IN THIS LANE'S ENV (CLOUD-2789, measured): `ra_ap_stdx` reads
 # `option_env!("CI")`, and cargo tracks a variable a crate reads that way as a
-# build input, so this lane and `test:cargo` (no `CI`) rebuild `ra_ap_stdx`,
-# `ra_ap_syntax` and the five workspace crates over each other in the shared
-# `target/debug`, once each way per lap. Target selection does not: `-p batten
-# --test it`, `-p batten --lib` and `--workspace` reuse one another's units.
+# build input, so with `CI = "true"` here this lane and `test:cargo` rebuilt
+# `ra_ap_stdx`, `ra_ap_syntax` and the five workspace crates over each other in
+# the shared `target/debug`, once each way per lap. Every local build now sees
+# one environment. A process's runtime `CI` is its case's to set, or clear, on
+# what the case spawns; the lane's switch is only `BATTEN_TEST_TRACED_REQUIRED`.
+# Measured: all 361 cases pass here with it and no `CI`, so every case that asks
+# for a tracer got one. Target selection never forked the build: `-p
+# batten --test it`, `-p batten --lib` and `--workspace` reuse one another's
+# units.
 [tasks."test:traced"]
 description = "Gate: every case that takes a traced branch on CI's `ci` job, run here as that job runs it (CLOUD-2789)"
 run = [
   "cargo nextest run -p batten --no-tests=fail --test it ci_tools:: land:: mutate:: mutate_schema:: prune_watch:: step_cover:: step_journal:: step_receipt::",
   "cargo nextest run -p batten --no-tests=fail --lib mutate::trace::tests::",
 ]
-env = { CI = "true", BATTEN_TEST_SCRATCH_LANE = "narrow", BATTEN_TEST_TRACED_REQUIRED = "1", NEXTEST_PROFILE = "narrow" }
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow", BATTEN_TEST_TRACED_REQUIRED = "1", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:reference-coverage"]
 description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"
