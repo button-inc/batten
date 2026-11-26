@@ -3819,12 +3819,13 @@ run = "{{vars.batten}} check --rule 'lock cover partial'"
 # THE COMMITTED LOCKED INSTALL, mutated in place (CLOUD-2881). These rows flip
 # `[settings]` and `session:install`'s env elsewhere in this file; they live in
 # this block because a `task-` gate reads only its own block, so `[settings]`,
-# which no task owns, would leave them swept by nothing.
-#MUTANT-SUITE crates/batten/tests/it/lock_complete.rs
-#MUTANT settings-lockfile-off|s@^lockfile = true$@lockfile = false@|the_committed_config_installs_locked_everywhere
-#MUTANT settings-unlocked|s@^locked = true$@locked = false@|the_committed_config_installs_locked_everywhere
+# which no task owns, would leave them swept by nothing. `tool_install_locked.rs`
+# judges the committed rule over this tree.
+#MUTANT-SUITE crates/batten/tests/it/tool_install_locked.rs
+#MUTANT settings-lockfile-off|s@^lockfile = true$@lockfile = false@|the_committed_tree_installs_locked_everywhere
+#MUTANT settings-unlocked|s@^locked = true$@locked = false@|the_committed_tree_installs_locked_everywhere
 #MUTANT settings-split-verdicts|s@^lockfile = true$@lockfile = false@|the_toolchain_checks_decide_as_the_job_resolves
-#MUTANT task-env-unlocked|s@^env = { MISE_LOCKED_SCOPES = "project", MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent"@env = { MISE_LOCKED_SCOPES = "project", MISE_LOCKFILE = "true", MISE_LOCKED = "false", MISE_ENV = "agent"@|the_committed_config_installs_locked_everywhere
+#MUTANT task-env-unlocked|s@^env = { MISE_LOCKED_SCOPES = "project", MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent"@env = { MISE_LOCKED_SCOPES = "project", MISE_LOCKFILE = "true", MISE_LOCKED = "false", MISE_ENV = "agent"@|the_committed_tree_installs_locked_everywhere
 #MUTANT-SUITE crates/batten/tests/it/locked_scopes.rs
 #MUTANT scopes-dropped|s@^env = { MISE_LOCKED_SCOPES = "project" }$@@|locked_mode_reaches_project_tools_only
 
@@ -4130,7 +4131,8 @@ description = "Currency only: would regenerating mise.lock change it? Runs on a 
 # restored either way), so neither assignment is what makes the regeneration
 # work — together they declare that this task, alone in the repo, writes the
 # file `[settings] locked = true` holds every install to (CLOUD-223,
-# CLOUD-2881), and `lock-complete` admits the off-switch here and nowhere else.
+# CLOUD-2881). `tool install loose` (`policy/tool-install-locked.rego`) exempts
+# this table alone: an off-switch or a `mise lock` anywhere else is refused.
 # They also hold the currency job upright if a later mise gates `lock` on either.
 #
 # ATTESTATIONS OFF FOR THE WRITE (CLOUD-2395). A lock that records
@@ -5475,11 +5477,12 @@ run = "release-plz release-pr"
 # api.github.com requests, no attestation setting, and the lock byte-identical.
 #
 # The one writer opts out, by name: `[tasks.lock-check]` (`mise lock`, run by
-# `lock-currency.yml`) sets `MISE_LOCKED=false` in its own env. Nothing else may,
-# and `lock-complete` refuses a tree where `lockfile` or `locked` is off, or where
-# any other task, handler, startup row or workflow turns either off. Its
-# `#MUTANT` rows over these two lines sit in `[tasks.lock-complete]`, whose gate
-# owns them.
+# `lock-currency.yml`) sets `MISE_LOCKED=false` in its own env. Nothing else may:
+# `tool install loose` (`policy/tool-install-locked.rego`) refuses a tree where
+# `lockfile` or `locked` is off here or in any overlay, or where any other task,
+# handler, startup row, workflow, action, hk step or task script turns either
+# off. Its `#MUTANT` rows over these two lines sit in `[tasks.lock-complete]`,
+# whose gate owns them.
 #
 # PROJECT TOOLS ONLY, INSIDE A TASK. Locked mode is invocation-wide and mise
 # applies it to the user-global scope too. Measured: with a tool pinned in

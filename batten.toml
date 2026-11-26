@@ -9480,6 +9480,30 @@ line_sources = ["mise.lock", "mise.toml", ".github/workflows/*.yml"]
 module = "policy/lock-complete.rego"
 severity = "deny"
 
+# CLOUD-2881: every mise install reads `mise.lock` and nothing turns that off.
+# `policy/tool-install-locked.rego` owns the reasoning. The paths are mise's own
+# config search list (mise 2026.9.1 `src/config/mod.rs`, LOCAL_CONFIG_FILENAMES
+# and env_config_patterns; `src/config/miserc.rs`) and its file-task dirs
+# (`default_task_includes`). EVERY overlay is parsed: a literally named config is
+# STAGED, and a name only a glob reaches is a document `sources` selects, so an
+# indented header or a quoted key reads as TOML does. Every config is also on the
+# line surface (for env switches), with the task dirs, this authority (handler
+# and startup argv), renovate, every root `*.pkl`, the actions and the
+# workflows. `tool_install_locked.rs`'s `every_line_source_is_read` and
+# `a_globbed_overlay_turning_the_lock_off_is_reported` hold the module to these
+# lists.
+[[rule]]
+id = "tool install loose"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the switch to remove spans TOML, YAML, pkl and shell"
+kind = "policy"
+scope = "tree"
+staged = ["mise.toml", "batten.toml", "mise.local.toml", ".mise.toml", ".mise.local.toml", ".rtx.toml", ".rtx.local.toml", "mise/config.toml", "mise/config.local.toml", ".mise/config.toml", ".mise/config.local.toml", ".config/mise.toml", ".config/mise.local.toml", ".config/mise/config.toml", ".config/mise/config.local.toml", ".config/mise/mise.toml", ".config/mise/mise.local.toml", ".miserc.toml", ".config/miserc.toml"]
+format = "toml"
+sources = ["**/mise.toml", "**/.mise.toml", "**/mise.*.toml", "**/.mise.*.toml", "**/.rtx.toml", "**/.rtx.local.toml", "**/mise/config.toml", "**/mise/config.*.toml", "**/mise/conf.d/*.toml", "**/.mise/config.toml", "**/.mise/config.*.toml", "**/.mise/conf.d/*.toml", "**/.config/mise.toml", "**/.config/mise.*.toml", "**/.config/mise/config.toml", "**/.config/mise/config.*.toml", "**/.config/mise/mise.toml", "**/.config/mise/mise.*.toml", "**/.config/mise/conf.d/*.toml", "**/.miserc.toml", "**/.config/miserc.toml", "**/.cargo/config.toml"]
+line_sources = ["**/mise.toml", "**/.mise.toml", "**/mise.*.toml", "**/.mise.*.toml", "**/.rtx.toml", "**/.rtx.local.toml", "**/mise/config.toml", "**/mise/config.*.toml", "**/mise/conf.d/*.toml", "**/.mise/config.toml", "**/.mise/config.*.toml", "**/.mise/conf.d/*.toml", "**/.config/mise.toml", "**/.config/mise.*.toml", "**/.config/mise/config.toml", "**/.config/mise/config.*.toml", "**/.config/mise/mise.toml", "**/.config/mise/mise.*.toml", "**/.config/mise/conf.d/*.toml", "**/.miserc.toml", "**/.config/miserc.toml", "**/.cargo/config.toml", "**/mise-tasks/**", "**/.mise-tasks/**", "**/.mise/tasks/**", "**/.config/mise/tasks/**", "**/mise/tasks/**", "batten.toml", "renovate.json5", "**/*.pkl", "**/action.yml", "**/action.yaml", ".github/actions/**", ".github/workflows/*.yml", ".github/workflows/*.yaml", ".claude/hooks/**", ".claude/*.json", "**/.mcp.json", "tools/**", "**/.env", "**/.env.*", "**/.envrc", "**/*.sh", "**/*.bash", "**/*.bats"]
+module = "policy/tool-install-locked.rego"
+severity = "deny"
+
 # The `Weakens:` trailer, over a declared range (CLOUD-1187, the successor shape
 # for `config-lint.sh:174`).
 #
@@ -12009,6 +12033,7 @@ gates = [
   "license-table",
   "linear-history",
   "lock-complete",
+  "tool-install-locked",
   "mcp-timeout-budget",
   "mise",
   "mise-action-floor",
@@ -14105,9 +14130,33 @@ target = "mise run lock-check"
 
 [[verdict]]
 id = "lock write unsafe"
-gloss = "an install can run unlocked: `lockfile` or `locked` is off in `[settings]` or in an env outside the lock writer"
+gloss = "the manifest enables install-time lockfile writes: the lockfile is on and locked mode is off"
 class = """
-The other half of `lock write other` rather than a separate concern: that class is half a mechanism while any install can produce a residue key, and an unlocked install also resolves through the forges' release APIs, which a cloud session's proxy refuses for a third party (CLOUD-2881). Locked mode is the one setting that closes both: every install reads the lock's URLs and checksums, makes no API call and never writes the file. A per-caller opt-in cannot reach a caller it does not own — `mise run`'s pre-task install never sees a task's `env` — so set `[settings] lockfile = true` and `locked = true`, and remove any `MISE_LOCKED`/`MISE_LOCKFILE` off-switch outside `[tasks.lock-check]`, the declared writer.
+The other half of `lock write other` rather than a separate concern: that class is half a mechanism while any install can produce a residue key. A per-caller opt-out cannot reach a caller it does not own, which is how a sandbox's own provisioning kept dirtying the tree. mise writes the lock at install time only while locked mode is off, so `[settings] lockfile = true` with `locked = true` writes nothing (CLOUD-2881); the scheduled currency job is the writer, and `tool install loose` refuses the rest.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "lock read loose"
+gloss = "a mise config leaves an install unlocked: `lockfile` or `locked` is not true in its settings"
+class = """
+An unlocked install resolves versions and assets through the forges' release APIs, which a cloud session's proxy refuses for a third party, and it writes the lock. With `lockfile = false` every path that did not opt in by env took that route — `mise run`'s pre-task install never sees a task's `env` — so a cold container's toolchain 403'd before any task ran (CLOUD-2881). The root `mise.toml` must set `[settings] lockfile = true` and `locked = true`, and no overlay (`mise.local.toml`, `mise.<env>.toml`, `.mise.toml`, `.miserc.toml`) may set either to anything else. Remove the override.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "tool install unsafe"
+gloss = "an env outside the declared lock writer sets MISE_LOCKED or MISE_LOCKFILE to something other than true"
+class = """
+An env assignment outranks `[settings]` for the command it wraps, so a task, handler, startup row, workflow, action, hk step or task script that sets `MISE_LOCKED` or `MISE_LOCKFILE` to anything not literally true puts that command back on the unlocked install path (CLOUD-2881). A value that cannot be read as on — `false`, `0`, empty, `${{ inputs.x }}`, a folded scalar — is refused for that reason. `[tasks.lock-check]` is the one declared writer. Remove the assignment, or set it true.
 """
 
 [[verdict.route]]
@@ -14117,9 +14166,9 @@ target = "mise.toml"
 
 [[verdict]]
 id = "workflow run unsafe"
-gloss = "a workflow installs with mise-action and sets no MISE_LOCKFILE, so it installs UNLOCKED and passes"
+gloss = "a workflow installs with mise-action and sets no `MISE_LOCKFILE` env, so it installs UNLOCKED and passes"
 class = """
-Under `lockfile = false` (this repository's setting until CLOUD-2881) the whole lockfile feature was off, so `mise install --locked` failed outright with "locked mode requires lockfile to be enabled" and a workflow had to set `MISE_LOCKFILE` itself. One that forgot did not fail loudly: mise-action passes `--locked` only when it detects a lockfile, so the job installed unlocked and went green — a checksum check silently dropped. Locked `[settings]` now cover a workflow without it; the assignment stays required so a workflow keeps its locked install through any later edit to `[settings]`. Add `MISE_LOCKFILE: "true"` to the workflow's env.
+Under `lockfile = false` (this repository's setting until CLOUD-2881) the whole lockfile feature was off, so `mise install --locked` failed outright with "locked mode requires lockfile to be enabled" and a workflow had to set `MISE_LOCKFILE` itself. One that forgot did not fail loudly: mise-action passes `--locked` only when it detects a lockfile, so the job installed unlocked and went green — a checksum check silently dropped. Locked `[settings]` now cover a workflow without it; the assignment stays required so a workflow keeps its locked install through any later edit to `[settings]`. Set the workflow's `MISE_LOCKFILE` env to `true`.
 """
 
 [[verdict.route]]
@@ -18204,13 +18253,123 @@ regex = 'holds the lists above to those two files'
 id = "plain-dotted-version"
 regex = '^[0-9]+(\.[0-9]+)*$'
 
-# CLOUD-2881, for `policy/lock-complete.rego`'s predicate 8: an env assignment
-# turning mise's lockfile read or locked mode off, in any of the three spellings
-# the tree uses — a TOML inline table (`MISE_LOCKED = "false"`), an argv string
-# (`"MISE_LOCKFILE=0"`) and a YAML mapping (`MISE_LOCKED: false`).
+# CLOUD-2881, for `policy/tool-install-locked.rego`. Each row's comment says
+# what it matches; the module's header says why.
+
+# Every mise config file name the line surface reaches (mise's LOCAL_CONFIG_FILENAMES and env_config_patterns).
 [[pattern]]
-id = "mise-lock-switched-off"
-regex = '''MISE_LOCK(ED|FILE)["']?\s*[:=]\s*["']?(?i:false|0|no|off)\b'''
+id = "mise-config-file"
+regex = '''^(?:.+/)?(\.?mise(\.[^/]+)?\.toml|\.rtx(\.local)?\.toml|(mise|\.mise|\.config/mise)/(config|mise)(\.[^/]+)?\.toml|(mise|\.mise|\.config/mise)/conf\.d/[^/]+\.toml|\.config/mise(\.[^/]+)?\.toml)$'''
+
+# The `miserc` files, whose settings sit at the top level.
+[[pattern]]
+id = "mise-rc-file"
+regex = '''^(?:.+/)?(\.miserc\.toml|\.config/miserc\.toml)$'''
+
+# A file task under one of mise's default task dirs.
+[[pattern]]
+id = "mise-task-file"
+regex = '''(?:^|/)(mise-tasks|\.mise-tasks|\.mise/tasks|\.config/mise/tasks|mise/tasks)/'''
+
+# Every other file that can carry a lock env: this authority, renovate, a root pkl, an action, a workflow.
+[[pattern]]
+id = "lock-env-file"
+regex = '''^(batten\.toml|renovate\.json5|(?:.+/)?[^/]+\.(?:pkl|sh|bash|bats)|(?:.+/)?action\.ya?ml|\.github/actions/.+|\.github/workflows/[^/]+\.ya?ml|\.claude/hooks/.+|\.claude/[^/]+\.json|(?:.+/)?\.mcp\.json|tools/.+|(?:.+/)?\.env(?:\..+)?|(?:.+/)?\.envrc|(?:.+/)?\.cargo/config\.toml)$'''
+
+# A TOML table header, indented or not, each key bare or quoted (`"lock:refresh"`, `'x'`), with inner whitespace and a trailing comment; group 1 is the key path. A shell test (`[ -n "$x" ]`) carries two keys with no dot and never matches.
+[[pattern]]
+id = "toml-table-header"
+regex = '''^\s*\[\[?\s*((?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'))*)\s*\]\]?\s*(?:#.*)?$'''
+
+# One key of a TOML key path: bare (group 1), basic-quoted (group 2) or literal-quoted (group 3).
+[[pattern]]
+id = "toml-key-segment"
+regex = '''([A-Za-z0-9_-]+)|"((?:[^"\\]|\\.)*)"|\x27([^\x27]*)\x27'''
+
+# A whole-line `#` comment, in TOML, YAML and shell; a `#!` shebang is a command (`env -S` runs its arguments), never a comment.
+[[pattern]]
+id = "comment-hash"
+regex = '''^\s*#([^!]|$)'''
+
+# A whole-line `//` comment, in pkl and JSON5 — the formats where `#` is not one.
+[[pattern]]
+id = "comment-slash"
+regex = '''^\s*//'''
+
+# A file-task header mise reads (mise `src/task/mod.rs` header_regex).
+[[pattern]]
+id = "mise-task-directive"
+regex = '''^(#|//|::)\s*(MISE|\[MISE\]) '''
+
+# The only values that leave the lock on.
+[[pattern]]
+id = "mise-lock-truthy"
+regex = '''^\s*["']?\s*(?i:true|1|yes|on)\s*["']?\s*$'''
+
+# An env assignment of MISE_LOCKED/MISE_LOCKFILE in TOML, argv, YAML, pkl or shell, its value captured; a shell READ is not one.
+[[pattern]]
+id = "mise-lock-env"
+regex = '''(?:(?:^|[^${]|(?:^|[^$])\{)MISE_LOCK(?:ED|FILE)[\x60"']?\]?\s*(==|\+=|=|:|,)|\$MISE_LOCK(?:ED|FILE)(=))\s*("[^"]*"|'[^']*'|[^\s,})\]#;&|]*)'''
+
+# A shell expansion that assigns or defaults MISE_LOCKED/MISE_LOCKFILE (`${X=v}`, `${X:=v}`, `${X-v}`, `${X:-v}`), its operand captured; a bare `${X}` has no operator and is a read.
+[[pattern]]
+id = "mise-lock-expansion"
+regex = '''\$\x7bMISE_LOCK(?:ED|FILE)(?::?[-=?+])([^}]*)\}'''
+
+# The same expansion of MISE_LOCKED_SCOPES, its operand captured. `\x7b` spells the brace and a group follows the name, so this row's own line is not read as one.
+[[pattern]]
+id = "mise-locked-scopes-expansion"
+regex = '''\$\x7bMISE_LOCKED_SCOPES(?::?[-=?+])([^}]*)\}'''
+
+# An env assignment of MISE_LOCKED_SCOPES, captured as mise-lock-env captures one.
+[[pattern]]
+id = "mise-locked-scopes-env"
+regex = '''(?:(?:^|[^${]|(?:^|[^$])\{)MISE_LOCKED_SCOPES[\x60"']?\]?\s*(==|\+=|=|:|,)|\$(?:MISE_LOCKED_SCOPES)(=))\s*("[^"]*"|'[^']*'|[^\s,})\]#;&|]*)'''
+
+# The one MISE_LOCKED_SCOPES value that is not a switch.
+# A builtin that assigns a lock env by NAME, its value elsewhere on the line (`printf -v`, `read`, `mapfile`), or a line writing to `$GITHUB_ENV`; `\x45` spells the E so this row's line is not one.
+[[pattern]]
+id = "mise-lock-indirect"
+regex = '''\bprintf\s+(?:-\S+\s+)*-v\s*["']?MISE_LOCK|\b(?:read|mapfile|readarray)\s+(?:-\S+\s+)*(?:\w+\s+)*["']?MISE_LOCK|GITHUB_\x45NV'''
+
+# A `mise settings` or `mise config set` write of `locked`/`lockfile`, its value captured; a `get` is a read.
+[[pattern]]
+id = "mise-settings-lock"
+regex = '''\bmise\s+(?:-\S+\s+)*(?:settings\s+(?:set\s+)?|config\s+set\s+)(?:-\S+\s+)*(?:settings\.)?lock(?:ed|file)(?:\s*=\s*|\s+)(\S*)'''
+
+# A `mise settings unset` of `locked`/`lockfile`, which falls back to the default: off.
+[[pattern]]
+id = "mise-settings-unset"
+regex = '''\bmise\s+(?:-\S+\s+)*settings\s+(?:unset|rm)\s+(?:-\S+\s+)*(?:settings\.)?lock(?:ed|file)\b'''
+
+# An assignment of an env that points mise at another config, or at none; every value is a switch.
+[[pattern]]
+id = "mise-config-env"
+regex = '''(?:^|[^$\x7b\w])\x7b?MISE_(?:GLOBAL_CONFIG_(?:FILE|ROOT)|CONFIG_(?:FILE|DIR)|DEFAULT_CONFIG_FILENAME|OVERRIDE_CONFIG_FILENAMES|SYSTEM_(?:CONFIG_(?:FILE|DIR)|DIR)|ENV_FILE|IGNORED_CONFIG_PATHS|NO_CONFIG|CEILING_PATHS)[\x60"']?\]?\s*(?:\+=|=(?:[^=]|$)|:|,)|\$\x7bMISE_(?:GLOBAL_CONFIG_(?:FILE|ROOT)|CONFIG_(?:FILE|DIR)|DEFAULT_CONFIG_FILENAME|OVERRIDE_CONFIG_FILENAMES|SYSTEM_(?:CONFIG_(?:FILE|DIR)|DIR)|ENV_FILE|IGNORED_CONFIG_PATHS|NO_CONFIG|CEILING_PATHS):?='''
+
+# mise-action's `mise_toml` input, which writes a config at run time.
+[[pattern]]
+id = "mise-action-config"
+regex = '''^\s*-?\s*["']?mise_toml["']?\s*:'''
+
+# A redirect, `tee`, `cp`, `mv`, `install` or `ln` whose target is a mise config name.
+[[pattern]]
+id = "mise-config-write"
+regex = '''(?:>>?|\btee\s+(?:-\S+\s+)*|\b(?:cp|mv|install|ln)\s+(?:\S+\s+)+)\s*["']?(?:[^\s"'<>|;&]*/)?(?:\.?mise(?:\.[^\s/"'<>|;&]+)?\.toml|\.rtx(?:\.local)?\.toml|\.?miserc\.toml|(?:mise|\.mise|\.config/mise)/(?:config|mise)(?:\.[^\s/"'<>|;&]+)?\.toml|(?:mise|\.mise|\.config/mise)/conf\.d/|\.config/mise(?:\.[^\s/"'<>|;&]+)?\.toml)'''
+
+# A `mise lock` run as a command: at a line's or a command's start, or opening a quoted, listed or substituted string; prose in backticks is not one.
+[[pattern]]
+id = "mise-lock-writer"
+regex = '''(?:^|[;&|(\["',:=]|\bthen\b|\bdo\b|\bexec\b|=\s*\x60)\s*(?:command\s+)?mise\s+(?:-\S+\s+)*lock\b'''
+
+# A MISE_ name spelled with an escape or an interpolation (`MISE_LOCK\x45D`, pkl `MISE_\(x)`, `\u004dISE_`), which no name pattern can read.
+[[pattern]]
+id = "mise-name-escaped"
+regex = '''MISE_[A-Z_]*\\[xuU0-7(]|\\(?:x|u\x7b?0*|U0*)4[dD]ISE_'''
+
+[[pattern]]
+id = "mise-locked-scopes-project"
+regex = '''^\s*["']?\s*project\s*["']?\s*$'''
 
 # The partition claim AGENTS.md's branch clause refuses, for
 # `policy/pr-partition-restated.rego` (CLOUD-TBD). A `[[pattern]]` row rather than
@@ -18724,6 +18883,7 @@ repair = [
   "env",
   "MISE_LOCKFILE=true",
   "MISE_LOCKED=1",
+  "MISE_LOCKED_SCOPES=project",
   "MISE_AQUA_GITHUB_ATTESTATIONS=false",
   "MISE_GITHUB_GITHUB_ATTESTATIONS=false",
   "mise",
@@ -18753,6 +18913,7 @@ repair = [
   "MISE_ENV=agent",
   "MISE_LOCKFILE=true",
   "MISE_LOCKED=1",
+  "MISE_LOCKED_SCOPES=project",
   "MISE_AQUA_GITHUB_ATTESTATIONS=false",
   "MISE_GITHUB_GITHUB_ATTESTATIONS=false",
   "mise",
