@@ -73,14 +73,177 @@ pub(crate) fn set_times(path: &Path, times: fs::FileTimes) {
 }
 
 /// The scratch root inside this crate's `target/`, where fixtures that *are*
-/// repositories live.
+/// repositories live: THIS RUN'S own directory under [`scratch_parent`].
+///
+/// # Owned by a lock, never by a guess about who else is running (CLOUD-2789)
+///
+/// Every nextest run writes under `<parent>/run-<id>`, `<id>` its
+/// `NEXTEST_RUN_ID` (a pid outside nextest), and every case process of that run
+/// holds a SHARED lock on `<parent>/run-<id>.lock` for its whole life. What
+/// collects a finished run is [`reap_finished`], here, on first use: it removes
+/// an entry only once it has taken that entry's lock EXCLUSIVELY, so never while
+/// any case of its run is alive.
+///
+/// The collector it replaces was a shell glob over `target/tmp` and
+/// `target/*/tmp`, guarded by guessing which other `cargo-nextest` processes
+/// shared the directory from their working directory and `CARGO_TARGET_DIR`.
+/// `batten test replay` builds under `target/replay` from a tree outside the
+/// checkout, which neither guess named, so a suite started here wiped
+/// `target/replay/tmp` under a live replay's cases. A lock is the owner itself,
+/// so every layout is covered, `target/mutate` and the next one included, and
+/// each run reaps only its own parent, so no glob reaches another's.
 #[must_use]
 pub(crate) fn target_tmp() -> PathBuf {
+    run_scratch().to_path_buf()
+}
+
+/// The directory every run's scratch lives under.
+fn scratch_parent() -> PathBuf {
     // A RUNTIME OVERRIDE FIRST: cargo bakes `CARGO_TARGET_TMPDIR` into the
     // binary, so a mutation sweep running one case on several workers at once
     // gives each its own root here, or two runs would share a fixture path.
     std::env::var_os(TEST_TMPDIR)
         .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
+}
+
+/// The suffix of the lock file beside each run's scratch directory.
+pub(crate) const RUN_LOCK: &str = ".lock";
+
+/// This run's directory name: one per nextest invocation, shared by its cases.
+fn run_name() -> String {
+    match std::env::var("NEXTEST_RUN_ID") {
+        Ok(id) if !id.is_empty() => format!("run-{}", id.chars().take(8).collect::<String>()),
+        _ => format!("run-pid{}", std::process::id()),
+    }
+}
+
+/// This run's scratch directory, created and held on first use.
+fn run_scratch() -> &'static Path {
+    static RUN: std::sync::OnceLock<(PathBuf, batten_facts::lock_wait::Held)> =
+        std::sync::OnceLock::new();
+    &RUN.get_or_init(|| {
+        let parent = scratch_parent();
+        fs::create_dir_all(&parent).expect("create the scratch parent");
+        // OFF LINUX A HELD LOCK IS WAITED ON THROUGH A HELPER PROCESS, which is
+        // the batten binary; a test binary installs none of its own.
+        let _ = batten_facts::lock_wait::install(lock_helper);
+        let run = run_name();
+        let lock = parent.join(format!("{run}{RUN_LOCK}"));
+        let held = hold_linked(&lock, batten_facts::lock_wait::Mode::Shared, true)
+            .unwrap_or_else(|error| panic!("hold {}: {error}", lock.display()))
+            .expect("a waiting hold answers only once it holds");
+        // HELD BEFORE THE REAP, so this run is never a finished one to a
+        // sibling reaping at the same moment.
+        reap_finished(&parent, &run);
+        let dir = parent.join(&run);
+        fs::create_dir_all(&dir).expect("create this run's scratch");
+        (dir, held)
+    })
+    .0
+}
+
+/// The off-Linux lock-wait helper: the batten binary this suite built.
+fn lock_helper(
+    path: &Path,
+    mode: batten_facts::lock_wait::Mode,
+) -> std::io::Result<std::process::Child> {
+    batten::exec::spawn_lock_helper_as(Path::new(env!("CARGO_BIN_EXE_batten")), path, mode)
+}
+
+/// Lock the file at `path` in `mode` — waiting on its holder's release when
+/// `wait`, else answering `None` when it is held — and answer only a lock on
+/// the file STILL LINKED at `path`.
+///
+/// A reaper unlinks a lock file once it has removed the run it guarded, so a
+/// process that opened the old file and was then handed its lock holds a file
+/// nobody else can see: it would believe it owns a path a fresh lock file now
+/// guards. Each such hand-over follows an unlink, so it reopens and tries
+/// again; nothing here waits on a clock.
+fn hold_linked(
+    path: &Path,
+    mode: batten_facts::lock_wait::Mode,
+    wait: bool,
+) -> std::io::Result<Option<batten_facts::lock_wait::Held>> {
+    use batten_facts::lock_wait::{Taken, acquire, try_acquire};
+    loop {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)?;
+        let held = if wait {
+            match acquire(file, path, mode, None)? {
+                Taken::Held(held) => held,
+                Taken::Stopped | Taken::Reentrant => {
+                    return Err(std::io::Error::other("the run lock could not be waited on"));
+                }
+            }
+        } else {
+            match try_acquire(file, mode)? {
+                Some(held) => held,
+                None => return Ok(None),
+            }
+        };
+        if still_linked(held.file(), path) {
+            return Ok(Some(held));
+        }
+    }
+}
+
+/// Whether `file` is the file linked at `path` right now.
+fn still_linked(file: &fs::File, path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        match (file.metadata(), fs::metadata(path)) {
+            (Ok(open), Ok(linked)) => open.dev() == linked.dev() && open.ino() == linked.ino(),
+            _ => false,
+        }
+    }
+    // Windows refuses to delete a file another handle holds open, so a lock
+    // file is never unlinked under a holder there.
+    #[cfg(not(unix))]
+    {
+        let _ = (file, path);
+        true
+    }
+}
+
+/// Remove every entry of `parent` but `own` whose run has ended: one whose lock
+/// this process takes EXCLUSIVELY, which no live case of that run would allow.
+/// An entry with no lock file is a run that predates the lock, or a stray, and
+/// its lock is free by construction. A lock file whose entry is gone goes too.
+/// Every failure leaves the entry for the next reaper: this deletes what it has
+/// proven finished and nothing else.
+pub(crate) fn reap_finished(parent: &Path, own: &str) {
+    let Ok(listing) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in listing.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let run = name.strip_suffix(RUN_LOCK).unwrap_or(&name);
+        if run == own || (run != name && parent.join(run).exists()) {
+            // A lock beside a live entry is decided with that entry.
+            continue;
+        }
+        let lock = parent.join(format!("{run}{RUN_LOCK}"));
+        let Ok(Some(held)) = hold_linked(&lock, batten_facts::lock_wait::Mode::Exclusive, false)
+        else {
+            continue;
+        };
+        let target = parent.join(run);
+        if target.is_dir() {
+            let _ = fs::remove_dir_all(&target);
+        } else {
+            let _ = fs::remove_file(&target);
+        }
+        if !target.exists() {
+            let _ = fs::remove_file(&lock);
+        }
+        drop(held);
+    }
 }
 
 /// The variable a mutation sweep sets to move [`target_tmp`] per worker.
@@ -2309,11 +2472,9 @@ pub(crate) fn native_row(gate: &str, severity: &str) -> String {
 /// Absent or empty is the default lane and adds nothing, which is what keeps the
 /// ~130 binaries only `test:cargo` runs on the exact paths they have always had.
 ///
-/// **THE COLLECTOR DOES NOT READ THIS NAME** (CLOUD-1912). `clear-scratch` in
-/// `.config/nextest.toml` runs at the start of every nextest invocation, and
-/// `verify` runs several at once; it protects a live run by deferring while any
-/// other `cargo-nextest` is alive, not by sparing names. The qualifier's job is
-/// the one above: two concurrent runs of one task never resolve the same path.
+/// **NO COLLECTOR READS THIS NAME** (CLOUD-1912, CLOUD-2789). A run's scratch
+/// is removed whole, by a reaper holding that run's lock ([`target_tmp`]),
+/// never by sparing or matching names.
 fn in_lane(name: &str) -> String {
     match std::env::var("BATTEN_TEST_SCRATCH_LANE") {
         Ok(lane) if !lane.is_empty() => format!("{name}.lane-{lane}-{}", std::process::id()),
