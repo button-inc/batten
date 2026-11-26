@@ -362,4 +362,21 @@ mod tests {
             Witness::from([(case("green"), set(&["d0"]))])
         );
     }
+
+    /// Fails by: a witness directory that cannot be removed read as cleared
+    /// (`clear`'s refusal guard answering `false`, a mutant missed at
+    /// 34c6e4d1f, CLOUD-2789), so the next run compares against a stale draw
+    /// it was told was gone. A FILE where the directory belongs is the failure
+    /// a root sandbox can still produce; an absent one is cleared already.
+    #[test]
+    fn a_witness_store_that_cannot_be_removed_is_an_error() {
+        let base = crate::scratch::scratch("stable-witness-unremovable");
+        assert!(clear(&base).is_ok(), "nothing to clear is cleared");
+        std::fs::write(base.join(WITNESSES), "not a directory").unwrap();
+        assert!(base.join(WITNESSES).is_file(), "the store is a file");
+        assert!(
+            clear(&base).is_err(),
+            "a store that cannot be removed is refused"
+        );
+    }
 }

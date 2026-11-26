@@ -2072,6 +2072,44 @@ mod tests {
         assert!(forwarded_items(&base, &head, &texts).is_empty());
     }
 
+    /// Fails by: a one-call body whose callee's path ends in ANOTHER name
+    /// taken for a forwarder (the length and the name tests joined with `||`,
+    /// a mutant missed at 34c6e4d1f, CLOUD-2789): a call through a renaming
+    /// `use` to an item of the forwarder's own name pairs the two, though the
+    /// body names no item of its name.
+    #[test]
+    fn a_call_through_a_renamed_path_is_no_forwarder() {
+        let lib = (
+            "src/lib.rs",
+            "pub mod engine;\npub mod durable;\npub mod other;\n",
+        );
+        let base = index(&[
+            ROOT,
+            lib,
+            (
+                "src/engine.rs",
+                "pub fn make_executable(p: u8) -> u8 { p + 1 }\n",
+            ),
+            ("src/durable.rs", ""),
+            ("src/other.rs", ""),
+        ]);
+        let renamed = (
+            "src/engine.rs",
+            "pub fn make_executable(p: u8) -> u8 { crate::durable::run(p) }\n",
+        );
+        let durable = (
+            "src/durable.rs",
+            "pub use crate::other::make_executable as run;\n",
+        );
+        let other = (
+            "src/other.rs",
+            "pub fn make_executable(p: u8) -> u8 { p + 1 }\n",
+        );
+        let head = index(&[ROOT, lib, renamed, durable, other]);
+        let texts = texts_of(&[lib, renamed, durable, other]);
+        assert!(forwarded_items(&base, &head, &texts).is_empty());
+    }
+
     /// Fails by: an item edited as it moved, with nothing left at its old home,
     /// spliced as written and failing to compile, so its base assertion never
     /// ran against HEAD's item (#1276: `crate::preset::MANIFESTS`). Paired by a

@@ -11685,6 +11685,13 @@ fn handback_run(
     }
 }
 
+/// Whether a hand-back's verdict `name` is the run's own error, whose cause
+/// [`judge_handbacks`] keeps beside the mirror: only then, never for a
+/// verdict the run reached.
+fn erred(name: &str) -> bool {
+    name == Verdict::Error.name()
+}
+
 /// Keep why hand-back `id` erred, and whatever cargo-mutants logged under
 /// `output`, in `state`'s `errors/` beside a switched run's ([`keep_error`]);
 /// answer that directory. Best effort: keeping a cause never fails a sweep.
@@ -12036,7 +12043,7 @@ fn judge_handbacks(
             );
             // A RUN THAT ERRED KEEPS WHY (CLOUD-2253): a census's five
             // hand-back errors left no cause to read.
-            if name == Verdict::Error.name() {
+            if erred(name) {
                 let kept = keep_handback_error(state, id, &format!("{outcome:?}\n"), output);
                 writeln!(
                     out,
@@ -20299,6 +20306,50 @@ mod tests {
         assert_eq!(written("inline"), unknown, "a name in an attribute");
     }
 
+    /// CLOUD-2789: in a std macro's tokens, a name after ONE `:` (a field
+    /// value) and a name inside a nested group are each passed as written;
+    /// only a `::` before it qualifies it.
+    ///
+    /// Fails by: the two `:` tests joined with `||`, so one `:` reads as a
+    /// path; or a nested group not opened by a `!` read as a macro call's
+    /// unknowable tokens (two mutants missed at 34c6e4d1f).
+    #[test]
+    fn a_field_value_and_a_grouped_name_in_a_std_macro_pass_as_written() {
+        let root = parsed("fn f() { vec![S { a: value }, (inner), q::r]; }\n");
+        let passed = |name: &str| {
+            let token = root
+                .descendants_with_tokens()
+                .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+                .find(|token| token.text() == name)
+                .unwrap_or_else(|| panic!("{name} is written"));
+            passed_as_written(&token)
+        };
+        assert_eq!(passed("value"), "", "a field's value after one `:`");
+        assert_eq!(passed("inner"), "", "a name in a nested group");
+        assert_eq!(
+            passed("r"),
+            format!("{WRITTEN}?"),
+            "a `::` qualifies its name"
+        );
+    }
+
+    /// Fails by: a hand-back's cause kept for every verdict BUT the error
+    /// (the comparison inverted, a mutant missed at 34c6e4d1f, CLOUD-2789),
+    /// so a caught or missed run is said to have erred and an erring run
+    /// keeps no cause to read.
+    #[test]
+    fn only_an_erring_handback_keeps_its_cause() {
+        assert!(erred(Verdict::Error.name()));
+        for verdict in [
+            Verdict::Caught,
+            Verdict::Missed,
+            Verdict::Uncovered,
+            Verdict::Timeout,
+        ] {
+            assert!(!erred(verdict.name()), "{}", verdict.name());
+        }
+    }
+
     /// CLOUD-2789: a glob `use` beside a module of the name it globs leaves
     /// the module alone answering to it: `a::K` in `c` is `c::a`'s `K`.
     ///
@@ -21019,6 +21070,43 @@ mod tests {
             Found::Unknown,
             "one binding longer is unknown"
         );
+    }
+
+    /// A `use super::zed` in a module whose parent defines no `zed` imports
+    /// nothing of the workspace: the binding resolves to nothing, which is
+    /// certain, not to unknown, which is not.
+    ///
+    /// Fails by: the `Found::Nothing` arm deleted, so the binding falls to the
+    /// catch-all and reads as unknown (a mutant uncovered at 34c6e4d1f).
+    #[test]
+    fn a_use_naming_nothing_resolves_to_nothing() {
+        let binding = format!("zed{HOMED}fix{HOMED}src::x::x{USE_BOUND}");
+        let mentions = std::collections::BTreeMap::from([(
+            binding.clone(),
+            BTreeSet::from([format!(
+                "zed{MENTIONED_IN}fix{MENTIONED_IN}src::x::x{WRITTEN}super"
+            )]),
+        )]);
+        let items: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::from([(
+                binding.clone(),
+                BTreeSet::from([String::from("i")]),
+            )]);
+        let definitions = vec![binding.as_str()];
+        let by_base = std::collections::HashMap::from([("zed", vec![0])]);
+        let (globs, crates, macros) = (
+            Globs::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        );
+        let index = Resolver::new(
+            &by_base,
+            &definitions,
+            &items,
+            &mentions,
+            (&globs, &crates, &macros),
+        );
+        assert_eq!(index.through_uses(Found::One(0), "zed", 0), Found::Nothing);
     }
 
     /// A name found only through globs whose own paths are found through

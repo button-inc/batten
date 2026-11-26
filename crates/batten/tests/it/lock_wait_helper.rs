@@ -289,3 +289,44 @@ fn no_helper_outlives_a_waiter_that_panics() {
     assert!(!exists(pid), "the unwinding guard reaped helper {pid}");
     drop(holder);
 }
+
+/// Fails by: a helper that ends WITHOUT the lock read as one that took it
+/// (`Helper::wait` answering a success it never reaped, a mutant missed at
+/// 34c6e4d1f, CLOUD-2789), so the waiter spawns helper after helper against a
+/// lock it never gets. The helper here names a lock file that does not exist,
+/// so it exits 2 at once; the second park raises the stop, which is the only
+/// way a wait that hid the first exit ends.
+#[test]
+fn a_helper_ending_without_the_lock_is_an_error() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (path, file) = lock_file("lock-helper-fails");
+    let holder = reopen(&path);
+    holder.try_lock().expect("free in a fresh fixture");
+    let absent = path.with_file_name("absent");
+    assert!(!absent.exists(), "the helper's lock file is absent");
+    let failing = |_: &Path, mode: Mode| helper(&absent, mode);
+    let stop = Stop::new().expect("a stop");
+    let mut parks = 0_usize;
+    let waited = wait_with_helper(
+        &file,
+        &path,
+        Mode::Exclusive,
+        Some(&stop),
+        &failing,
+        &mut |_| {
+            parks += 1;
+            if parks > 1 {
+                stop.raise();
+            }
+        },
+    );
+    let err = waited.expect_err("a helper that ended without the lock is the wait's error");
+    assert!(
+        err.to_string().contains("ended without the lock"),
+        "the error names the helper's exit: {err}"
+    );
+    assert_eq!(parks, 1, "the wait ended on the first helper's exit");
+    drop(holder);
+}

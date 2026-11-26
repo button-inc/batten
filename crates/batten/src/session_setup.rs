@@ -589,6 +589,37 @@ pub fn surface(git_dir: &Path) -> Vec<Refusal> {
 mod tests {
     use super::*;
 
+    /// Fails by: any git dir anchored on its parent (`dir_of`'s `.git` guard
+    /// answering `true`, a mutant missed at 34c6e4d1f, CLOUD-2789), so two
+    /// linked worktrees' git dirs, both under `.git/worktrees`, read one
+    /// record between them. A `.git` keys its working tree; a worktree's git
+    /// dir keys itself.
+    #[test]
+    fn a_linked_worktrees_git_dir_keys_its_own_record() {
+        let base = crate::scratch::scratch("session-setup-dir-of");
+        let one = base.join(".git/worktrees/one");
+        let two = base.join(".git/worktrees/two");
+        for dir in [&one, &two] {
+            assert!(
+                std::fs::create_dir_all(dir).is_ok(),
+                "premise: the worktree git dir is made"
+            );
+        }
+        let Ok(tree_state) = crate::state::repo_state_dir(&base) else {
+            panic!("premise: a state root resolves for the case's tree");
+        };
+        assert_eq!(
+            dir_of(&base.join(".git")),
+            tree_state.join(DIR),
+            "a .git keys its tree"
+        );
+        assert_ne!(
+            dir_of(&one),
+            dir_of(&two),
+            "each worktree's git dir keys its own"
+        );
+    }
+
     /// A setup task that exited and was never reaped reads as crashed, not
     /// running (CLOUD-2789). `detached_in` never waits, so its child stays a
     /// zombie of this test process until the process ends, on any Linux.
