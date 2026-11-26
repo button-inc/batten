@@ -1178,6 +1178,59 @@ fn a_session_start_re_arms_every_fingerprint() {
     );
 }
 
+/// A WATCHER COVERS ITS OWN WORKTREE, NEVER ANOTHER (CLOUD-2789). A step
+/// publishes the worktree its watcher watches, and a compile below the floor
+/// defers to it only there. Every disk case under `test:cargo` runs inside
+/// that step's command, over a fixture repository of its own: told only
+/// "watched", each skipped its own collection and its own watcher, and the
+/// land's lap went red on two and hung on four.
+///
+/// Fails by: a compile in another worktree deferring, or one in the watched
+/// worktree collecting inside the step.
+#[test]
+fn a_compile_defers_only_to_the_watcher_of_its_own_worktree() {
+    if !cfg!(unix) {
+        return;
+    }
+    let compile = |name: &str, watched: &dyn Fn(&Path) -> PathBuf| {
+        let dir = hooked(name, true);
+        let bin = dir.join("fake-bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let rustc = bin.join("rustc");
+        std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let ran = common::batten()
+            .current_dir(&dir)
+            .arg(&rustc)
+            .args(["--crate-name", "probe", "--out-dir"])
+            .arg(dir.join("target/debug/deps"))
+            .env("TARGET_PRUNE_FREE_MB", "50")
+            .env("BATTEN_DISK_WATCHED", watched(&dir))
+            .stdin(std::process::Stdio::null())
+            .streamed_output_keeping(batten::capture::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
+            .expect("the binary runs");
+        assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
+        present(&dir.join("target/debug"), "aged", "dddddddddddddddd")
+    };
+    let elsewhere = common::scratch("watched-elsewhere");
+    assert!(
+        !compile("compile-watched-elsewhere", &|_| elsewhere.clone()),
+        "a watcher over another worktree covers nothing here: the unit went"
+    );
+    assert!(
+        compile("compile-watched-here", &Path::to_path_buf),
+        "the watcher over this worktree collects for it: the compile left the unit"
+    );
+}
+
 /// A `step run` build is watched (CLOUD-2197): it is not a tool call, so only
 /// the watcher around it can collect while it runs. The step waits for the aged
 /// unit to go — which only the watcher can make happen.
@@ -1539,7 +1592,11 @@ fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
                 .join("\n")
         );
     } else {
-        assert_eq!(recorded, "1", "the watched step told its command: {said}");
+        assert_eq!(
+            std::fs::canonicalize(&recorded).ok(),
+            std::fs::canonicalize(&dir).ok(),
+            "the watched step told its command which worktree it watches: {recorded:?} {said}"
+        );
     }
 }
 
