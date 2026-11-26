@@ -374,6 +374,14 @@ fn read_spool(lock: &Path, watermark: &Path, data: &Path, from: u64) -> String {
         ])
         .streamed_output()
         .expect("read the spool");
+    // THE READER'S OWN FAILURE IS NAMED, never read as an empty spool: under a
+    // full suite a `flock`, `sh`, `cat` or `dd` that could not run printed
+    // nothing, and the case then reported a watermark it never got to read.
+    assert!(
+        out.status.success(),
+        "the locked reader did not run: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 

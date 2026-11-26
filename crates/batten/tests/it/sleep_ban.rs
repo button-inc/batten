@@ -292,8 +292,12 @@ fn the_inventory_is_not_empty() {
             annotations_naming(&source, LINT).len()
         })
         .sum();
+    // FIVE, NOT EIGHT (CLOUD-2789): test code carries no delay verdict any
+    // more — every test wait is on its event — so what is left is production's
+    // own rows, seven today. The floor still says what it said: a sweep that
+    // reads nothing finds none.
     assert!(
-        annotated >= 8,
+        annotated >= 5,
         "only {annotated} delay verdicts found — the sweep is not reaching the crate"
     );
 }
