@@ -5182,20 +5182,30 @@ fn judge_files(temp: &std::path::Path) -> (std::path::PathBuf, std::path::PathBu
 /// A control run could not start, or failed and named no failed case.
 fn control_red(
     judging: &Judging<'_>,
+    scope: &BTreeSet<Case>,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<(Red, Control)> {
-    let cases: BTreeSet<Case> = judging
-        .reach
-        .values()
-        .flatten()
-        .filter(|case| !judging.red.contains_key(*case))
-        .cloned()
-        .collect();
     let mut red = Red::new();
     let mut control = Control::new();
+    // A CASE WHOSE CONTROL PASSED OVER THE SAME DIGEST IS NOT RUN AGAIN
+    // (CLOUD-2253, C3): its journaled seconds stand. Never under CI, whose
+    // cache is empty ([`cache_for`]).
+    let cases: BTreeSet<Case> = scope
+        .iter()
+        .filter(|case| !judging.red.contains_key(*case))
+        .filter(|case| match journaled_control(judging, case) {
+            Some(seconds) => {
+                control.insert((*case).clone(), seconds);
+                false
+            }
+            None => true,
+        })
+        .cloned()
+        .collect();
     let Some(mutant) = judging.mutants.first() else {
         return Ok((judging.red.clone(), control));
     };
+    let mut lines = String::new();
     for batch in batches(&cases) {
         // THE CONTROL IS NEVER CUT (CLOUD-2911): a slow case passing with no
         // mutant active is the baseline, and a cut would file it red.
@@ -5208,13 +5218,138 @@ fn control_red(
              judging run's verdict would mean anything"
         );
         if let Some(xml) = xml.as_deref() {
-            control.extend(control_times(xml, &batch, &found));
+            let times = control_times(xml, &batch, &found);
+            lines.push_str(&control_lines(judging, &times));
+            control.extend(times);
         }
         red.extend(found.into_iter().filter(|(case, _)| batch.contains(case)));
     }
+    journal_or_say(judging.store, &lines, out)?;
+    writeln!(
+        out,
+        "mutate schema: control ran {} of the {} case(s) still to judge, {} journaled passing",
+        cases.len(),
+        scope.len(),
+        scope.len() - cases.len()
+    )?;
     write!(out, "{}", control_red_lines(&red))?;
     red.extend(judging.red.clone());
     Ok((red, control))
+}
+
+/// The key a case's passing control run is journaled under: the case and
+/// its digest, so an edit to anything it executed moves it; `None` for a
+/// case with no digest, whose control always runs.
+fn control_key(judging: &Judging<'_>, case: &Case) -> Option<String> {
+    let digest = judging.digests.get(case)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(format!("control\x1f{}\x1f{}\x1f{digest}", case.0, case.1).as_bytes());
+    Some(hasher.finalize().to_hex().to_string())
+}
+
+/// The verdict a passing control is journaled as: its seconds, which a hang
+/// is read against ([`hang_kill`]).
+const CONTROLLED: &str = "control:";
+
+/// The seconds a passing control of `case` was journaled with, over its
+/// digest as it stands.
+fn journaled_control(judging: &Judging<'_>, case: &Case) -> Option<f64> {
+    judging
+        .cache
+        .get(&control_key(judging, case)?)?
+        .strip_prefix(CONTROLLED)?
+        .parse()
+        .ok()
+}
+
+/// The journal lines of every case a control run passed, with its seconds.
+fn control_lines(judging: &Judging<'_>, times: &Control) -> String {
+    times
+        .iter()
+        .filter_map(|(case, seconds)| {
+            let key = control_key(judging, case)?;
+            Some(journal_line(
+                Some(&key),
+                &format!("{CONTROLLED}{seconds}"),
+                &case_label(case),
+            ))
+        })
+        .collect()
+}
+
+/// The cases the hand-backs in `classic` observe ([`handback_cases`]), which
+/// the control covers when they are judged here (`judged`); `None` where one
+/// observes no narrower set than the whole suite.
+fn handed_cases(
+    judging: &Judging<'_>,
+    judged: bool,
+    classic: &BTreeSet<u32>,
+    (schema, reach): (&Schema, &Reach),
+) -> Option<BTreeSet<Case>> {
+    let mut cases = BTreeSet::new();
+    if !judged {
+        return Some(cases);
+    }
+    for &id in classic {
+        let mutant = judging.mutants.get(id as usize)?;
+        cases.extend(handback_cases(judging.root, id, mutant, schema, reach)?);
+    }
+    Some(cases)
+}
+
+/// The cases the control run must cover (CLOUD-2253, C3): those a judging
+/// run will still execute. A mutant `todo` holds is decided without a run
+/// by a stored verdict under its whole key or a journaled kill pair, as
+/// [`judge_all`] and [`judge`] read them, and a case journaled passing it is
+/// not run for it; every other case reaching it is. Beside them, the cases
+/// the hand-backs in `classic` observe when they are `judged` here
+/// ([`handed_cases`]), every reaching case where one runs the whole suite.
+///
+/// THE SLICE ALONE, NEVER THE WHOLE LISTING: the control ran every case
+/// reaching any site, so each CI shard re-ran every reaching case to judge
+/// its eighth.
+fn control_scope(
+    judging: &Judging<'_>,
+    todo: &[u32],
+    (judged, classic, schema, reach): (bool, &BTreeSet<u32>, &Schema, &Reach),
+) -> BTreeSet<Case> {
+    let mut scope: BTreeSet<Case> = match handed_cases(judging, judged, classic, (schema, reach)) {
+        Some(handed) => handed,
+        None => judging.reach.values().flatten().cloned().collect(),
+    };
+    let nobody = BTreeSet::new();
+    for &id in todo {
+        let Some(mutant) = judging.mutants.get(id as usize) else {
+            continue;
+        };
+        let reached = judging.reach.get(&id).unwrap_or(&nobody);
+        let whole = verdict_key(judging.root, mutant, reached, judging.digests);
+        if whole
+            .and_then(|key| judging.cache.get(&key))
+            .is_some_and(|verdict| reusable(verdict))
+        {
+            continue;
+        }
+        let recorded = |case: &Case| {
+            pair_key(judging.root, mutant, case, judging.digests)
+                .and_then(|key| judging.cache.get(&key).cloned())
+        };
+        let outcomes: Vec<(&Case, Option<String>)> =
+            reached.iter().map(|case| (case, recorded(case))).collect();
+        if outcomes
+            .iter()
+            .any(|(_, held)| held.as_deref() == Some("caught"))
+        {
+            continue;
+        }
+        scope.extend(
+            outcomes
+                .into_iter()
+                .filter(|(_, held)| held.as_deref() != Some(PASSED))
+                .map(|(case, _)| case.clone()),
+        );
+    }
+    scope
 }
 
 /// The control run's report ([`control_red`]): how many cases it found red
@@ -11696,6 +11831,10 @@ pub fn mirror_target(root: &std::path::Path) -> anyhow::Result<std::path::PathBu
 ///
 /// The tree cannot be staged, the schema does not build, or the unmutated
 /// suite fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sweep's phases in order, each a call: split, the order they must run in is no longer read in one place"
+)]
 pub fn sweep(
     root: &std::path::Path,
     mutants: &[Listed],
@@ -11806,7 +11945,8 @@ pub fn sweep(
         threads: judges.threads,
     };
     let shown = shown_over(&judging, &todo, &schema)?;
-    let (red, control) = control_red(&judging, out)?;
+    let handed = (handback.is_some(), &classic, &schema, &reach);
+    let (red, control) = control_red(&judging, &control_scope(&judging, &todo, handed), out)?;
     let judging = judging.with_red(&red).with_control(&control);
     let mut verdicts = judge_all(&judging, &todo, judges.workers, out);
     drop(shown);
