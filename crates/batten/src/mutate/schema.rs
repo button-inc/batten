@@ -7836,15 +7836,18 @@ impl<'r> Resolver<'r> {
             return Place::Unknown;
         };
         let segments: Vec<&str> = raw.split("::").collect();
-        match self.path(package, home, &segments, depth + 1) {
+        // ONE DEPTH FOR EVERY STEP IT NESTS, so a chain of `use`s past
+        // [`RESOLVE_DEPTH`] is unknown rather than guessed.
+        let deeper = depth + 1;
+        // A RENAMED `use` OF A MODULE IS THAT MODULE (CLOUD-2927): `alias` of
+        // `use a::inner as alias` goes on in `a::inner`, never `a::alias`.
+        let imported = key_base(target);
+        match self.path(package, home, &segments, deeper) {
             Place::Module(next_package, next) => {
-                let scope = format!(
-                    "{}{MENTIONED_IN}{next_package}{MENTIONED_IN}{next}",
-                    key_base(target)
-                );
-                match self.lookup(&scope, key_base(target), next_package, next, depth + 1) {
+                let scope = format!("{imported}{MENTIONED_IN}{next_package}{MENTIONED_IN}{next}");
+                match self.lookup(&scope, imported, next_package, next, deeper) {
                     Found::One(next_id) if next_id != id => {
-                        self.module_of(next_id, segment, depth + 1)
+                        self.module_of(next_id, imported, deeper)
                     }
                     Found::Nothing => Place::Nothing,
                     _ => Place::Unknown,
@@ -17735,13 +17738,16 @@ mod tests {
     }
 
     /// CLOUD-2927 (f): a name handed to a workspace `macro_rules!` that puts it
-    /// where it is called resolves there; one handed to a macro that pastes
-    /// it after a `::` of its own is keyed on every definition it sees.
+    /// where it is called resolves there, a `::` before anything but a `$`
+    /// in its body included; one handed to a macro that pastes it after a
+    /// `::` of its own is keyed on every definition it sees.
     ///
-    /// Fails by: every non-std macro's tokens read as unknown (an edit to
-    /// `b::LIMIT` moves the case handing `a::LIMIT` to `wrap!`), or a
-    /// pasting macro's read as passing (the same edit leaves `qual!`'s case
-    /// on a stale verdict).
+    /// Fails by: every non-std macro's tokens read as unknown, or any `::`
+    /// in a body read as pasting (a mutant missed at 82e566618: `!=` for
+    /// `==` before `DOLLAR` in [`macro_passes`]), so an edit to `b::LIMIT`
+    /// moves the case handing `a::LIMIT` to `wrap!`; or a pasting macro's
+    /// read as passing (the same edit leaves `qual!`'s case on a stale
+    /// verdict).
     #[test]
     fn a_name_a_workspace_macro_passes_through_resolves_where_it_is_called() {
         let (wrapped, qualified) = (case("f"), case("g"));
@@ -17751,7 +17757,7 @@ mod tests {
             (qualified.clone(), [1].into()),
         ]
         .into();
-        let base = "macro_rules! wrap { ($e:expr) => { $e } }\n\
+        let base = "macro_rules! wrap { ($e:expr) => { core::convert::identity($e) } }\n\
                     macro_rules! qual { ($n:ident) => { crate::b::$n } }\n\
                     mod a { pub const LIMIT: u8 = 1; }\n\
                     mod b { pub const LIMIT: u8 = 2; }\n\
@@ -17904,6 +17910,63 @@ mod tests {
         assert_eq!(
             other[&through_more], held[&through_more],
             "and not b::LIMIT"
+        );
+    }
+
+    /// CLOUD-2927: a renamed `use` of a module goes on in that module, and a
+    /// chain of `use`s past the resolution depth is unknown, keyed on every
+    /// definition it sees rather than resolved to a guess.
+    ///
+    /// Fails by: an alias read as a module of its own name (`alias::LIMIT`
+    /// looked up in `a::alias`, which holds nothing, so an edit to
+    /// `a::inner::LIMIT` reuses a stale verdict); or a chain past the depth
+    /// resolved (a mutant missed at 82e566618: `depth - 1` in
+    /// [`Resolver::module_of`], so an edit to `z::S` leaves `deep` stale).
+    #[test]
+    fn a_renamed_module_goes_on_in_its_module_and_a_deep_chain_is_unknown() {
+        let (aliased, deep) = (case("f"), case("g"));
+        let cases: BTreeSet<Case> = [aliased.clone(), deep.clone()].into();
+        let executed = [(aliased.clone(), [0].into()), (deep.clone(), [1].into())].into();
+        let mut chain = String::from(
+            "mod m19 { pub mod inner { pub struct S; } pub use self::inner as next; }\n",
+        );
+        chain.extend((0..19).rev().map(|hop| {
+            format!(
+                "mod m{hop} {{ pub use super::m{}::next as next; }}\n",
+                hop + 1
+            )
+        }));
+        let base = format!(
+            "mod a {{ pub mod inner {{ pub const LIMIT: u8 = 1; }} }}\n\
+             mod b {{ pub const LIMIT: u8 = 2; }}\n\
+             mod z {{ pub struct S; }}\n{chain}\
+             mod c {{ use super::a::inner as alias; pub fn f() -> u8 {{ alias::LIMIT }} \
+             pub fn g(s: super::m0::next::S) -> u8 {{ 0 }} }}\n"
+        );
+        let held = source_digests(&cases, &executed, &base);
+        let own = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 1", "LIMIT: u8 = 3"),
+        );
+        assert_ne!(
+            own[&aliased], held[&aliased],
+            "alias is a::inner, whose LIMIT f names"
+        );
+        let other = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 2", "LIMIT: u8 = 4"),
+        );
+        assert_eq!(other[&aliased], held[&aliased], "and not b's");
+        let unrelated = source_digests(
+            &cases,
+            &executed,
+            &base.replace("mod z { pub struct S; }", "mod z { pub struct S(u8); }"),
+        );
+        assert_ne!(
+            unrelated[&deep], held[&deep],
+            "twenty hops of `use` is past the depth: every S is keyed"
         );
     }
 
