@@ -1476,42 +1476,52 @@ mod tests {
     /// (the privacy rule's one escape), one assertion per spelling.
     #[test]
     fn a_state_repo_naming_origin_is_refused_in_every_spelling() {
-        let origin = "https://github.com/example-org/project";
+        // A RESERVED FIXTURE ORIGIN, and every other spelling derived from it:
+        // no real owner or repository is named in the core (rule 1).
+        let (host, owner, repo) = ("example.invalid", "o", "r");
+        let origin = format!("https://{host}/{owner}/{repo}");
+        let path = format!("{owner}/{repo}");
+        let upper = path.to_uppercase();
         for value in [
-            "example-org/project",
-            "Button-Inc/Batten",
-            "example-org/project.git",
-            "BUTTON-INC/BATTEN.GIT",
-            "/example-org/project/",
-            "example-org/project.git/",
-            "https://github.com/example-org/project",
-            "https://github.com/example-org/project.git",
-            "https://user@GitHub.com/Button-Inc/Batten.git",
-            "git@github.com:example-org/project.git",
-            "github.com/example-org/project",
-            "GitHub.com/example-org/project.git",
+            path.clone(),
+            upper.clone(),
+            format!("{path}.git"),
+            format!("{upper}.GIT"),
+            format!("/{path}/"),
+            format!("{path}.git/"),
+            origin.clone(),
+            format!("{origin}.git"),
+            format!("https://user@{}/{upper}.git", host.to_uppercase()),
+            format!("git@{host}:{path}.git"),
+            format!("{host}/{path}"),
+            format!("{}/{path}.git", host.to_uppercase()),
         ] {
             assert_eq!(
-                state_remote(Some(value), Some(origin)),
+                state_remote(Some(&value), Some(&origin)),
                 Remote::IsOrigin,
                 "{value}"
             );
         }
         // Origin's own spelling varies too: `.git`, case, userinfo.
-        for origin in [
-            "https://github.com/example-org/project.git",
-            "https://x-access-token:t@GitHub.com/Button-Inc/Batten.git/",
+        for spelled in [
+            format!("{origin}.git"),
+            format!(
+                "https://x-access-token:t@{}/{upper}.git/",
+                host.to_uppercase()
+            ),
         ] {
             assert_eq!(
-                state_remote(Some("example-org/project"), Some(origin)),
+                state_remote(Some(&path), Some(&spelled)),
                 Remote::IsOrigin,
-                "{origin}"
+                "{spelled}"
             );
         }
-        // The control: the private state repository on the same host resolves.
+        // The control: a state repository beside origin, on the same host,
+        // resolves — its name derived from origin's, never written out.
+        let state = format!("{path}-state");
         assert_eq!(
-            state_remote(Some("example-org/project-state"), Some(origin)),
-            Remote::At("https://github.com/example-org/project-state".to_owned())
+            state_remote(Some(&state), Some(&origin)),
+            Remote::At(format!("https://{host}/{state}"))
         );
     }
 
