@@ -1712,7 +1712,10 @@ pub(crate) fn collect_toward_max_in(
 pub fn await_builds(held: &[PathBuf]) -> bool {
     await_locks(
         held,
-        |lock| lock.file_name().is_some_and(|name| name == ".cargo-lock"),
+        |lock| {
+            lock.file_name()
+                .is_some_and(|name| crate::prune::BUILD_LOCKS.iter().any(|build| name == *build))
+        },
         &mut || {},
     )
 }
