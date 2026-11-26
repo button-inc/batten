@@ -585,13 +585,6 @@ LAND_WORKFLOW = "fast-forward.yml"
 # retired task's literal `ci.yml` moved here, beside its sibling, as a bare name
 # for `LAND_WORKFLOW`'s reason: it is a path segment of `actions/workflows/…`.
 LAND_CI_WORKFLOW = "ci.yml"
-# HOW MANY TIMES THE FAST-FORWARD POLL ASKS before reporting no answer. Its OWN
-# row rather than `LAND_ANSWER_MAX_UNKNOWNS`, which bounds the CI wait: one name
-# over two loops with two different defaults is a setting that cannot be tuned
-# for either, and in the predecessor that name meant a third thing again (the
-# count of unreadable bot answers, default 3) — so a consumer carrying it forward
-# would have truncated the CI wait to about three seconds (review of #848).
-LAND_ANSWER_ASKS = "120"
 # THE RECLAIM CENSUS'S STOP NOTE (CLOUD-451), declared here because the program
 # is this consumer's and a census name inside `crates/batten` is non-negotiable
 # rule 1's plainest violation. The engine spawns it wherever a holder CHOSE to

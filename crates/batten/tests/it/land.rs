@@ -77,9 +77,8 @@ fn repo(name: &str) -> std::path::PathBuf {
 ///
 /// **The anti-vacuity mirror is the first assertion of (2)**, and it is not
 /// decoration: a fix that made every masked set wait would trade the wedge for an
-/// unbounded poll, which is the failure `LAND_ANSWER_MAX_UNKNOWNS` exists to
-/// bound and which this row's own Acceptance names. Page one alone must still be
-/// a dead end.
+/// wait that only a pushed fix or a fresh run can end, which this row's own
+/// Acceptance names. Page one alone must still be a dead end.
 ///
 /// **What it does not assert:** that `read` actually walks. Reaching that needs a
 /// forge serving two pages, which would make the case a test of the network — the
