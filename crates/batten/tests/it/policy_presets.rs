@@ -1676,32 +1676,127 @@ fn ejecting_plan_mode_refuses_writes_carries_its_call_closure() {
     assert!(!again.status.success(), "a copy already exists");
 }
 
-/// A copy recorded at an older preset version than this binary ships is a
-/// `warn` naming the file; at the shipped version it is silent.
+/// The `red-head` preset as the one rule of a config.
+const RED_HEAD_CONFIG: &str = r#"version = 1
+
+[[rule]]
+id = "red"
+kind = "policy"
+scope = "mediated_call"
+preset = "red-head"
+severity = "deny"
+"#;
+
+/// `module` (`<preset>/<module>`), ejected into a fresh repository under
+/// `config`.
+fn ejected_module(name: &str, config: &str, module: &str) -> PathBuf {
+    let dir = common::scratch_repo(name);
+    common::write(&dir, "batten.toml", config);
+    let outcome = common::run(&dir, &["preset", "eject", module]);
+    assert!(
+        outcome.status.success(),
+        "{}{}",
+        common::stdout(&outcome),
+        common::stderr(&outcome)
+    );
+    dir
+}
+
+/// Rewrite the copy at `path`'s recorded preset version from `shipped` to `to`.
+fn rewind(dir: &std::path::Path, path: &str, shipped: &semver::Version, to: &semver::Version) {
+    let text = fs::read_to_string(dir.join(path)).expect("the copy");
+    let behind = text.replacen(
+        &format!("version {shipped}\n"),
+        &format!("version {to}\n"),
+        1,
+    );
+    assert_ne!(behind, text, "the premise: the header carried the version");
+    fs::write(dir.join(path), behind).expect("rewind the copy");
+}
+
+/// `batten check` in `dir`: whether it passed, and everything it said.
+fn checked(dir: &std::path::Path) -> (bool, String) {
+    let out = common::run(dir, &["check"]);
+    (
+        out.status.success(),
+        format!("{}{}", common::stdout(&out), common::stderr(&out)),
+    )
+}
+
+/// A copy recorded at an older version IN THE SAME MAJOR as this binary ships
+/// is reported, naming the file, and only advised: the shipped preset admits
+/// more or rewords, so the copy is stricter or equal (CLOUD-2822). At the
+/// shipped version it is silent.
+///
+/// THE PREMISE IS `red-head`, not `claude-code-cloud`: a preset at `X.0.0` has
+/// no older version in its own major, and `claude-code-cloud` went to `1.0.0`,
+/// so this case needs a preset whose shipped version has a minor or a patch to
+/// step back over. The major arm is `an_ejected_module_a_major_behind_is_refused`.
 #[test]
 fn an_ejected_module_behind_the_manifest_version_is_reported() {
-    let dir = ejected("eject-drift");
-    let current = common::run(&dir, &["check"]);
-    let said = format!("{}{}", common::stdout(&current), common::stderr(&current));
-    assert!(!said.contains("module pin stale"), "fresh copies: {said}");
+    let path = "policy/red-head/no-push-over-unread-red.rego";
+    let dir = ejected_module(
+        "eject-drift",
+        RED_HEAD_CONFIG,
+        "red-head/no-push-over-unread-red",
+    );
+    // The eject removed the `red` row its only module left compiling nothing,
+    // so the copy loads and decides: a refused config would read as silence.
+    let (fresh, said) = checked(&dir);
+    assert!(fresh, "the ejected config loads: {said}");
+    assert!(!said.contains("module pin stale"), "a fresh copy: {said}");
 
+    let shipped = batten::preset_catalog::find("red-head")
+        .expect("the preset ships")
+        .version
+        .clone();
+    let older = if shipped.patch > 0 {
+        semver::Version::new(shipped.major, shipped.minor, 0)
+    } else {
+        semver::Version::new(shipped.major, 0, 0)
+    };
+    assert!(
+        older < shipped && older.major == shipped.major,
+        "the premise: {shipped} has an older version in its own major"
+    );
+    rewind(&dir, path, &shipped, &older);
+
+    let (passed, said) = checked(&dir);
+    assert!(
+        said.contains("module pin stale") && said.contains(path),
+        "names the class and the copy: {said}"
+    );
+    assert!(passed, "a warning, never a refusal: {said}");
+}
+
+/// A copy a MAJOR behind is refused, naming the file: the shipped preset now
+/// refuses something the copy admits, so the copy is a gate the binary no
+/// longer agrees with (CLOUD-2822).
+#[test]
+fn an_ejected_module_a_major_behind_is_refused() {
+    let dir = ejected("eject-drift-major");
     let path = "policy/claude-code-cloud/unwatch-is-preapproved.rego";
     let shipped = batten::preset_catalog::find("claude-code-cloud")
         .expect("the preset ships")
         .version
         .clone();
-    let text = fs::read_to_string(dir.join(path)).expect("the copy");
-    let behind = text.replacen(&format!("version {shipped}\n"), "version 0.0.0\n", 1);
-    assert_ne!(behind, text, "the premise: the header carried the version");
-    fs::write(dir.join(path), behind).expect("rewind the copy");
-
-    let stale = common::run(&dir, &["check"]);
-    let said = format!("{}{}", common::stdout(&stale), common::stderr(&stale));
     assert!(
-        said.contains("module pin stale") && said.contains(path),
-        "names the class and the copy: {said}"
+        shipped.major >= 1,
+        "the premise: {shipped} has a major to fall behind"
     );
-    assert!(stale.status.success(), "a warning, never a refusal: {said}");
+    rewind(
+        &dir,
+        path,
+        &shipped,
+        &semver::Version::new(shipped.major - 1, 0, 0),
+    );
+
+    let (passed, said) = checked(&dir);
+    assert!(
+        said.contains("batten deny module pin stale") && said.contains(path),
+        "refuses, naming the class and the copy: {said}"
+    );
+    assert!(!passed, "a refusal: {said}");
 }
 
 /// CLOUD-2354: no vendored preset carries its own copy of git's option table.

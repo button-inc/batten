@@ -119,6 +119,15 @@ pub enum Edit {
         /// The row's keys and values, in the order they are written.
         fields: Vec<(String, Scalar)>,
     },
+    /// Remove the one row of the array of tables `array` whose `id` is `id`,
+    /// with its nested tables. No row, or more than one, with that `id` is
+    /// refused rather than guessed, as for [`Edit::InRow`].
+    RemoveRow {
+        /// The array of tables, as `rule` for `[[rule]]`.
+        array: String,
+        /// The `id` value naming the row.
+        id: String,
+    },
 }
 
 /// Apply `edits`, in order, to `source`, and return the edited text.
@@ -176,11 +185,16 @@ fn toml(source: &str, edits: &[Edit]) -> Result<String> {
                     match edit {
                         Edit::Set { path, value } => set(row, path, value)?,
                         Edit::Remove { path } => remove(row, path)?,
-                        Edit::InRow { .. } | Edit::AppendRow { .. } => {
+                        Edit::InRow { .. } | Edit::AppendRow { .. } | Edit::RemoveRow { .. } => {
                             bail!("an edit inside a row addresses a key, never another row")
                         }
                     }
                 }
+            }
+            Edit::RemoveRow { array, id } => {
+                let rows = rows_mut(&mut doc, array)?;
+                let index = row_index(rows, array, id)?;
+                rows.remove(index);
             }
             Edit::AppendRow { array, fields } => {
                 let position = last_position(doc.as_table()).map_or(0, |last| last + 1);
@@ -336,5 +350,34 @@ mod tests {
         }];
         let refused = apply(Format::Toml, source, &edits).map_err(|error| error.to_string());
         assert_eq!(refused, Err(String::from("no `[[rule]]` row has id `b`")));
+    }
+
+    /// Fails by: removing a row other than the named one, or keeping the named
+    /// row's own nested table behind it, or removing anything when the id is
+    /// absent.
+    #[test]
+    fn a_removed_row_takes_its_nested_tables_and_nothing_else() {
+        let source = "version = 1\n\n[[rule]]\nid = \"a\"\n\n[[rule]]\nid = \"b\"\n\n[rule.extra]\nx = 1\n\n[[rule]]\nid = \"c\"\n";
+        let remove = |id: &str| {
+            apply(
+                Format::Toml,
+                source,
+                &[Edit::RemoveRow {
+                    array: String::from("rule"),
+                    id: id.to_owned(),
+                }],
+            )
+            .map_err(|error| error.to_string())
+        };
+        assert_eq!(
+            remove("b"),
+            Ok(String::from(
+                "version = 1\n\n[[rule]]\nid = \"a\"\n\n[[rule]]\nid = \"c\"\n"
+            ))
+        );
+        assert_eq!(
+            remove("z"),
+            Err(String::from("no `[[rule]]` row has id `z`"))
+        );
     }
 }
