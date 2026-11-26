@@ -17,10 +17,8 @@
 
 use crate::common;
 
-/// The `[[startup]]` rows that repair the engine. `mediator-matches-the-tree`
-/// joins it again at step 14; until then it is withheld (`batten.toml`), because
-/// the pinned engine answers it `mediator-unbuilt` on every cold container.
-const ENGINE_ROWS: [&str; 1] = ["engine-resolves-every-row"];
+/// The two `[[startup]]` rows that repair the engine.
+const ENGINE_ROWS: [&str; 2] = ["mediator-matches-the-tree", "engine-resolves-every-row"];
 
 /// The pinned-release install, as a row's `repair` spells it.
 const RELEASE_INSTALL: [&str; 3] = ["batten", "engine", "install"];
