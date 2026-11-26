@@ -4889,13 +4889,21 @@ fn carried_unless_ci(
     carry: (&Recompute<'_>, Option<Over<'_>>),
 ) -> anyhow::Result<(usize, usize)> {
     if !ci {
-        return carry_forward(base, inputs, identity, carry);
+        return carry_forward(base, inputs, identity, carry, true);
     }
+    // EVERY RECORD CI WOULD HAVE TRUSTED IS A WITNESS (CLOUD-2904): it is about
+    // to be recorded again over the same inputs anyway, so the second recording
+    // is free and [`super::stable::judge`] compares the two.
+    let _ = carry_forward(base, inputs, identity, carry, false)?;
+    let witnesses = super::stable::witnesses(base);
     match std::fs::remove_dir_all(base) {
         Err(gone) if gone.kind() != std::io::ErrorKind::NotFound => return Err(gone.into()),
         _ => {}
     }
     std::fs::create_dir_all(base)?;
+    for (case, functions) in &witnesses {
+        super::stable::keep(base, case, functions)?;
+    }
     crate::durable::replace(base.join(TREE), inputs)?;
     Ok((0, 0))
 }
@@ -5256,6 +5264,7 @@ fn carry_forward(
     inputs: &str,
     identity: &Identity<'_>,
     (recompute, over): (&Recompute<'_>, Option<Over<'_>>),
+    carry: bool,
 ) -> anyhow::Result<(usize, usize)> {
     std::fs::create_dir_all(base)?;
     let same_tree = crate::fsio::read_to_string(base.join(TREE)).is_ok_and(|held| held == inputs);
@@ -5288,8 +5297,9 @@ fn carry_forward(
         }
     }
     let functions = ids_by_value(identity.probes.iter().enumerate());
-    let mut candidates: Vec<(std::path::PathBuf, Case, Carried)> = Vec::new();
+    let mut candidates: Vec<(std::path::PathBuf, Case, Carried, bool)> = Vec::new();
     let mut resumed = 0;
+    super::stable::clear(base)?;
     for entry in std::fs::read_dir(base)? {
         let dir = entry?.path();
         if !dir.is_dir() {
@@ -5305,12 +5315,14 @@ fn carry_forward(
                 (name.to_owned(), binary.to_owned())
             });
         match (finished_passing(&dir), record, case) {
+            // A RECORD TRUSTED BUT NOT CARRIED IS A WITNESS (CLOUD-2904): every
+            // function it ran is here by digest, so if its dependency digest
+            // holds too its case is recorded again over identical inputs.
             (true, Some(record), Some(case))
-                if !fresh_unplaced
-                    && record.functions.is_disjoint(&fresh_fns)
-                    && record.functions.iter().all(|f| functions.contains_key(f)) =>
+                if record.functions.iter().all(|f| functions.contains_key(f)) =>
             {
-                candidates.push((dir, case, record));
+                let carried = carry && !fresh_unplaced && record.functions.is_disjoint(&fresh_fns);
+                candidates.push((dir, case, record, carried));
             }
             (true, None, Some(_)) if same_tree => resumed += 1,
             _ => {
@@ -5320,7 +5332,7 @@ fn carry_forward(
     }
     let mut executed = std::collections::BTreeMap::new();
     let mut read = std::collections::BTreeMap::new();
-    for (dir, case, record) in &candidates {
+    for (dir, case, record, _) in &candidates {
         let ids: BTreeSet<usize> = record
             .functions
             .iter()
@@ -5333,11 +5345,14 @@ fn carry_forward(
     }
     let now = recompute(&executed, &read);
     let mut kept: Vec<(std::path::PathBuf, Case, Ran)> = Vec::new();
-    for (dir, case, record) in candidates {
-        if now.get(&case) == Some(&record.digest) {
+    for (dir, case, record, carried) in candidates {
+        if now.get(&case) != Some(&record.digest) {
+            let _ = std::fs::remove_dir_all(&dir);
+        } else if carried {
             let touched = read.get(&case).cloned();
             kept.push((dir, case, (record.functions, touched)));
         } else {
+            super::stable::keep(base, &case, &record.functions)?;
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
@@ -5965,26 +5980,59 @@ pub fn record_reach(
     ]);
     // THE CASES READ THE ORIGINALS, THE BUILD'S BINARIES RUN (CLOUD-2911): a
     // case scanning the tree read the rendering and went red here alone.
-    let shown = Shown::originals(root, work, rendered)?;
-    let ran = super::spawn_suite(
-        work,
-        super::Program::Cargo,
-        &args,
-        &env,
-        super::runner_bound(),
-        super::Said::Streamed,
-    );
-    drop(shown);
-    let ran = ran?;
+    let suite = || -> anyhow::Result<bool> {
+        let shown = Shown::originals(root, work, rendered)?;
+        let ran = super::spawn_suite(
+            work,
+            super::Program::Cargo,
+            &args,
+            &env,
+            super::runner_bound(),
+            super::Said::Streamed,
+        );
+        drop(shown);
+        Ok(ran?.passed())
+    };
     // A FAILED BASELINE STILL KEEPS WHAT PASSED: the caller seals every case
     // that finished passing before it refuses, so the next run carries them
     // across the fix instead of re-running the whole suite (9,952 of 9,959
     // cases thrown away on #1276 when seven failed and the tree then moved).
-    let passed = ran.passed();
+    let mut passed = suite()?;
+    // THE WHOLE SUITE RECORDED TWICE, ONCE (CLOUD-2904): every case that passed
+    // is its own witness, its record cleared, and the suite recorded again over
+    // the same inputs.
+    if passed && super::stable::twice() {
+        let first = collect_reach(&base, identity)?;
+        let red = failed_records(&base);
+        for (case, functions) in super::stable::by_digest(&first.executed, &identity.probes) {
+            if !red.contains(&case) {
+                super::stable::keep(&base, &case, &functions)?;
+            }
+        }
+        for entry in std::fs::read_dir(&base)? {
+            let dir = entry?.path();
+            if kept_case(&dir).is_some() {
+                std::fs::remove_dir_all(&dir)?;
+            }
+        }
+        passed = suite()?;
+    }
     // THE FINISHED SUITE'S FIXTURES GO: nothing reads them once it has exited,
     // and on #1276 they held 3.7 GB of the tree's target while the judging ran.
     let _ = std::fs::remove_dir_all(target.join("tmp"));
     let mut reach = collect_reach(&base, identity)?;
+    // EVERY CASE RECORDED TWICE OVER IDENTICAL INPUTS RAN THE SAME FUNCTIONS,
+    // or the sweep refuses ([`super::stable`]). A red case has its own verdict.
+    let red = failed_records(&base);
+    let mut after = super::stable::by_digest(&reach.executed, &identity.probes);
+    after.retain(|case, _| !red.contains(case));
+    let compared = super::stable::judge(&base, &after)?;
+    if compared > 0 {
+        writeln!(
+            out,
+            "mutate schema: reach stable for {compared} case(s) recorded twice over identical inputs"
+        )?;
+    }
     reach.tree = inputs;
     Ok((reach, passed))
 }
@@ -11379,7 +11427,8 @@ mod tests {
                 &base,
                 "t1",
                 &identity,
-                (&same, Some((&root, &none, &format)))
+                (&same, Some((&root, &none, &format))),
+                true,
             )
             .unwrap(),
             (3, 0),
@@ -11517,7 +11566,7 @@ mod tests {
             std::collections::BTreeMap::new()
         };
         assert_eq!(
-            carry_forward(&base, "tree-1", &no_identity(), (&none, None)).unwrap(),
+            carry_forward(&base, "tree-1", &no_identity(), (&none, None), true).unwrap(),
             (0, 1)
         );
         assert!(base.join("a").exists());
@@ -11526,7 +11575,7 @@ mod tests {
             "run again"
         );
         assert_eq!(
-            carry_forward(&base, "tree-2", &no_identity(), (&none, None)).unwrap(),
+            carry_forward(&base, "tree-2", &no_identity(), (&none, None), true).unwrap(),
             (0, 0)
         );
         assert!(
@@ -11647,13 +11696,16 @@ mod tests {
                 executed
                     .iter()
                     .map(|(case, ids)| {
-                        assert_eq!(ids, &BTreeSet::from([1]), "carried to the new probe id");
+                        // `fresh` is read too: cleared for its new mutant, it
+                        // is a witness when its digest holds (CLOUD-2936).
+                        let id = if case.0 == "fresh" { 0 } else { 1 };
+                        assert_eq!(ids, &BTreeSet::from([id]), "carried to the new probe id");
                         (case.clone(), String::from("same"))
                     })
                     .collect()
             };
         assert_eq!(
-            carry_forward(&base, "tree-2", &identity, (&recompute, None)).unwrap(),
+            carry_forward(&base, "tree-2", &identity, (&recompute, None), true).unwrap(),
             (1, 0)
         );
         assert!(base.join("kept").exists());
@@ -11662,6 +11714,17 @@ mod tests {
         assert!(
             !base.join("fresh").exists(),
             "a new mutant sits in a function it ran"
+        );
+        // Cleared over identical inputs, it is recorded again regardless, so
+        // what it ran is kept to compare (CLOUD-2936); the others moved.
+        let witnessed = super::super::stable::witnesses(&base);
+        assert_eq!(
+            witnessed,
+            [(
+                (String::from("fresh"), String::from("bin")),
+                BTreeSet::from([String::from("fb")])
+            )]
+            .into()
         );
         let reach = collect_reach(&base, &identity).unwrap();
         let kept = (String::from("kept"), String::from("bin"));
@@ -11724,7 +11787,7 @@ mod tests {
                 "{label}: no record could reach it, so it is not listed"
             );
             assert_eq!(
-                carry_forward(&base, "tree-2", &recorded, (&same, None)).unwrap(),
+                carry_forward(&base, "tree-2", &recorded, (&same, None), true).unwrap(),
                 (1, 0),
                 "{label} still: the record of its function carries"
             );
@@ -11733,7 +11796,7 @@ mod tests {
                 ..recorded
             };
             assert_eq!(
-                carry_forward(&base, "tree-3", &now, (&same, None)).unwrap(),
+                carry_forward(&base, "tree-3", &now, (&same, None), true).unwrap(),
                 (0, 0),
                 "{label} then switched: the record never saw it"
             );
@@ -11791,7 +11854,7 @@ mod tests {
             classic: &classic,
         };
         assert_eq!(
-            carry_forward(&base, "tree-2", &identity, (&same, None)).unwrap(),
+            carry_forward(&base, "tree-2", &identity, (&same, None), true).unwrap(),
             (1, 0)
         );
         assert!(!base.join("near").exists(), "it ran the mutant's file");
@@ -11803,7 +11866,7 @@ mod tests {
             ..identity
         };
         assert_eq!(
-            carry_forward(&base, "tree-2", &identity, (&same, None)).unwrap(),
+            carry_forward(&base, "tree-2", &identity, (&same, None), true).unwrap(),
             (0, 0)
         );
         assert!(!base.join("near").exists() && !base.join("far").exists());
@@ -12000,7 +12063,7 @@ mod tests {
                 digests.clone()
             };
         assert_eq!(
-            carry_forward(&by_recorder, "tree-2", &identity, (&recompute, None)).unwrap(),
+            carry_forward(&by_recorder, "tree-2", &identity, (&recompute, None), true).unwrap(),
             (1, 0),
             "the recorder's seal carries to a new tree"
         );
@@ -14367,7 +14430,7 @@ mod tests {
                     now.clone()
                 };
             assert_eq!(
-                carry_forward(&base, "tree-2", &no_identity(), (&recompute, None)).unwrap(),
+                carry_forward(&base, "tree-2", &no_identity(), (&recompute, None), true).unwrap(),
                 (0, 0),
                 "{why} drops the carried record"
             );
@@ -14390,7 +14453,7 @@ mod tests {
             |_: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
              _: &std::collections::BTreeMap<Case, BTreeSet<String>>| { held.clone() };
         assert_eq!(
-            carry_forward(&base, "tree-2", &no_identity(), (&recompute, None)).unwrap(),
+            carry_forward(&base, "tree-2", &no_identity(), (&recompute, None), true).unwrap(),
             (1, 0)
         );
     }
