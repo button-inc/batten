@@ -27253,7 +27253,10 @@ pub fn repo() -> u8 {{ scratch() }}
                  mod m0 { pub use super::a as x; }\n",
             );
             for k in 1..=n {
-                s += &format!("mod m{k} {{ pub use super::m{}::x; }}\n", k - 1);
+                let _ = std::fmt::Write::write_fmt(
+                    &mut s,
+                    format_args!("mod m{k} {{ pub use super::m{}::x; }}\n", k - 1),
+                );
             }
             s + &format!("mod c {{ pub fn f() -> u8 {{ super::m{n}::x::LIMIT }} }}\n")
         };
