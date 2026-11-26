@@ -7121,6 +7121,25 @@ enum Carried {
     Moved(Vec<land::receipts::Moved>),
 }
 
+/// Where the checkout with git dir `git_dir`, under the state directory
+/// `state` resolves for it, keeps what a land carries
+/// ([`land::receipts::Stores`]).
+///
+/// AT THE CRATE ROOT, not on `Stores`: the step store's path is
+/// [`record::KEYED_STORE`] then [`step::RECEIPTS`], and `land::receipts`
+/// naming either put it in their reach for two constants, which is the
+/// modules ratchet's 5268 -> 5277 at 9bc54081c (CLOUD-2789). The root
+/// already reaches both.
+#[must_use]
+pub fn receipt_stores(state: &Path, git_dir: &Path) -> land::receipts::Stores {
+    land::receipts::Stores {
+        receipts: state.join("receipts"),
+        compat: git_dir.join("batten-receipts"),
+        steps: git_dir.join(record::KEYED_STORE).join(step::RECEIPTS),
+        mutate: state.join("mutate").join("schema"),
+    }
+}
+
 /// Publish (`publish`) or pull this branch's receipt set and mutate state
 /// through the state repository: the one implementation the verbs, the land
 /// lap and `step run` share, so none of them can carry a different set.
@@ -7146,7 +7165,7 @@ fn carry(publish: bool, overrides: &Overrides) -> Result<Carried> {
     };
     let name = land::receipts::reference(&branch)?;
     let mutate_name = land::receipts::mutate_reference(&branch)?;
-    let stores = land::receipts::Stores::at(&state::repo_state_dir(&repo_root)?, &git_dir);
+    let stores = receipt_stores(&state::repo_state_dir(&repo_root)?, &git_dir);
     let moved = if publish {
         let producer =
             attribution::producer(here, &attribution_policy(overrides)?)?.unwrap_or_default();

@@ -361,21 +361,10 @@ pub struct Stores {
     pub mutate: std::path::PathBuf,
 }
 
-impl Stores {
-    /// The stores of the checkout at `repo_root` with git dir `git_dir`, under
-    /// the state directory `state` resolves for it.
-    #[must_use]
-    pub fn at(state: &Path, git_dir: &Path) -> Self {
-        Self {
-            receipts: state.join("receipts"),
-            compat: git_dir.join("batten-receipts"),
-            steps: git_dir
-                .join(crate::record::KEYED_STORE)
-                .join(crate::step::RECEIPTS),
-            mutate: state.join("mutate").join("schema"),
-        }
-    }
-}
+// Built by [`crate::receipt_stores`], at the crate root: the step store's
+// path is `record`'s and `step`'s to name, and this module reaching either
+// would put it in their reach for two constants (CLOUD-2789, the modules
+// ratchet's 5268 -> 5277 at 9bc54081c).
 
 /// The receipt set this checkout holds, as `<kind>/<name>` to bytes.
 ///
