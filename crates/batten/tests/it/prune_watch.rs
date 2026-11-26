@@ -1472,11 +1472,14 @@ fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let trace = own_temp(&dir).join("command.strace");
+    // THE CASE'S OWN temp directory, made once: `own_temp` names one after the
+    // fixture's last component, `repo`, which a case beside this one remakes.
+    let temp = common::scratch("step-run-uncharged-tmp");
+    let trace = temp.join("command.strace");
     let engine = common::batten().get_program().to_owned();
     let mut step = common::batten();
     step.current_dir(&dir)
-        .env("TMPDIR", own_temp(&dir))
+        .env("TMPDIR", &temp)
         .env("TARGET_PRUNE_FREE_MB", "50")
         .args([
             "step",
