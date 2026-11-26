@@ -6834,6 +6834,14 @@ fn run_ready(
     }
 }
 
+/// The fan-in check a roster names: `raw` unless it is empty. An empty
+/// `--fanin` or `CI_FANIN_CHECK` is the same as an unset one, and that
+/// direction is the safe one: every failure stays manufacturable, which is
+/// CLOUD-363's ordering intact.
+fn fanin_field(raw: Option<String>) -> Option<String> {
+    raw.filter(|name| !name.is_empty())
+}
+
 /// Split a comma-separated roster field, dropping the empties.
 ///
 /// An unset or empty field splits to nothing, which is what makes the STRICT
@@ -6953,10 +6961,7 @@ fn run_checks(
         required: roster_field(Some(&required)),
         absent_ok: roster_field(absent_ok.as_deref()),
         answered: roster_field(Some(&answered)),
-        // An empty `--fanin` is the same as an unset one, and that direction is
-        // the safe one: every failure stays manufacturable, which is CLOUD-363's
-        // ordering intact.
-        fanin: fanin.filter(|name| !name.is_empty()),
+        fanin: fanin_field(fanin),
     };
 
     // A roster that cannot decide anything is a statement about the INVOCATION,
@@ -7591,7 +7596,7 @@ fn run_pr(
         required: roster_field(Some(&required)),
         absent_ok: roster_field(absent_ok.as_deref()),
         answered: roster_field(Some(&answered)),
-        fanin: fanin.filter(|name| !name.is_empty()),
+        fanin: fanin_field(fanin),
     };
     pr_watch::watch(&config, &roster, out, err)
 }
@@ -17106,9 +17111,7 @@ fn land_roster() -> checks_green::Roster {
             &std::env::var("CI_ANSWERED_CONCLUSIONS")
                 .unwrap_or_else(|_| String::from("success,failure,timed_out,action_required")),
         )),
-        fanin: std::env::var("CI_FANIN_CHECK")
-            .ok()
-            .filter(|name| !name.is_empty()),
+        fanin: fanin_field(std::env::var("CI_FANIN_CHECK").ok()),
     }
 }
 
@@ -34211,6 +34214,21 @@ mod mutation_markers;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// A fan-in check named is kept; one empty or unset is none.
+    ///
+    /// Fails by: the filter's `!` deleted (`land_roster`'s `delete !`, which
+    /// the land sweep at c72bd2ba6 found survived), so the one name a roster
+    /// waits on is dropped and an empty one is waited on.
+    #[test]
+    fn a_fanin_check_is_named_or_none() {
+        assert_eq!(
+            super::fanin_field(Some(String::from("all-green"))).as_deref(),
+            Some("all-green")
+        );
+        assert_eq!(super::fanin_field(Some(String::new())), None);
+        assert_eq!(super::fanin_field(None), None);
+    }
 
     /// Fails by: the wait's reading said nowhere (`say_what_the_wait_saw`
     /// answering `Ok(())` unwritten, a mutant uncovered at 34c6e4d1f,
