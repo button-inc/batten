@@ -3810,6 +3810,15 @@ const PACKED_KNOWN: &str = "known.json";
 /// at its path relative to the target it was built in.
 const PACKED: &str = "packed";
 
+/// The file under the reuse directory naming, by content, what each package's
+/// build script wrote for the packed build ([`built_outputs`]).
+///
+/// PACKED WITH THE BINARIES (CLOUD-2904): a run that restores them runs no
+/// build script, so no `OUT_DIR` is on its disk, and every case including one
+/// was keyed on the whole tree instead: a fresh container over the same tree
+/// carried 0 of its imported reach records and reused 0 of 741 verdicts.
+const PACKED_BUILT: &str = "built.json";
+
 /// The target a nextest `binaries-only` document was built in, and every file
 /// a reused run needs from it, relative to it: each test binary, and each
 /// binary a case launches through `CARGO_BIN_EXE_*`. `None` when the document
@@ -3848,7 +3857,11 @@ fn packed_paths(document: &str) -> Option<(std::path::PathBuf, Vec<std::path::Pa
 /// target, 6 GB on #1276, was more than half the repository's 10 GB cache
 /// store, and saved once per run it evicted the Rust caches every other job
 /// restores. A reused run reads the test binaries and what they launch.
-fn pack(state: &std::path::Path, document: &str, tree: &str, known: &Known) -> Option<()> {
+fn pack(
+    state: &std::path::Path,
+    document: &str,
+    (tree, known, built): (&str, &Known, &std::collections::BTreeMap<String, String>),
+) -> Option<()> {
     let (target, files) = packed_paths(document)?;
     let dir = state.join("reuse");
     let into = dir.join(PACKED);
@@ -3862,7 +3875,19 @@ fn pack(state: &std::path::Path, document: &str, tree: &str, known: &Known) -> O
     }
     let sets = serde_json::to_string(known).ok()?;
     crate::durable::replace(dir.join(PACKED_KNOWN), sets).ok()?;
+    crate::durable::replace(dir.join(PACKED_BUILT), serde_json::to_string(built).ok()?).ok()?;
     crate::durable::replace(dir.join(PACKED_TREE), tree).ok()
+}
+
+/// What the packed build under `state` recorded its build scripts wrote
+/// ([`PACKED_BUILT`]), when it was packed over the rendering `tree`.
+fn packed_built(
+    state: &std::path::Path,
+    tree: &str,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    let dir = state.join("reuse");
+    (crate::fsio::read_to_string(dir.join(PACKED_TREE)).ok()? == tree).then_some(())?;
+    serde_json::from_str(&crate::fsio::read_to_string(dir.join(PACKED_BUILT)).ok()?).ok()
 }
 
 /// The reuse record under `state`, its packed binaries put back where they
@@ -3927,7 +3952,9 @@ fn prebuilt(
     for sets in std::iter::once(known).chain(recorded.as_ref()) {
         let skip: BTreeSet<u32> = sets.unviable.union(&sets.handed).copied().collect();
         let schema = write_schema(root, work, mutants, &skip, &sets.unprobed)?;
-        if tree_digest(work)? == packed {
+        // NOT WITHOUT WHAT ITS BUILD SCRIPTS WROTE: a pack that recorded none
+        // leaves this run to build, which writes it.
+        if tree_digest(work)? == packed && packed_built(state, &packed).is_some() {
             return Ok(Some(Built {
                 unviable: sets.unviable.difference(&sets.handed).copied().collect(),
                 handed: sets.handed.clone(),
@@ -4083,7 +4110,8 @@ fn record_reuse(
     )?;
     // PACKED FOR THE NEXT RUN OVER THIS RENDERING, a shard above all: best
     // effort, since a pack that fails costs that run a build and nothing else.
-    let _ = pack(state, &listed, tree, known);
+    let built = built_outputs(target, &package_dirs(mutants));
+    let _ = pack(state, &listed, (tree, known, &built));
     Some(Reuse {
         binaries,
         metadata,
@@ -9947,7 +9975,7 @@ pub fn sweep(
         out,
     )?;
     // WHAT EACH BUILD SCRIPT PRODUCED, BY CONTENT (CLOUD-2927 item 5).
-    resource_ids.extend(built_outputs(&target, &package_dirs(mutants)));
+    resource_ids.extend(build_outputs((&work, &target, &state), mutants, &schema)?);
     // PACKED FOR A SHARD THAT READS NO JOURNAL (CLOUD-2882).
     let rendered_with = Known::of(&unviable, &handed, &unprobed);
     let classic = schema.classic(handed);
@@ -10152,6 +10180,44 @@ fn stable_resources<T>(
          was built; run the sweep again once the tree is still"
     );
     Ok((done, (before, ids)))
+}
+
+/// What each package's build script wrote ([`built_outputs`]): read off this
+/// target, else taken from the build packed for this rendering, which ran them.
+///
+/// NEVER A MISSING ONE WIDENED TO THE WHOLE TREE (CLOUD-2904): an include of a
+/// build's output no key can name refuses the sweep by name.
+///
+/// # Errors
+///
+/// The rendered tree cannot be read, or an output the schema includes is
+/// neither on disk nor packed.
+fn build_outputs(
+    (work, target, state): (&std::path::Path, &std::path::Path, &std::path::Path),
+    mutants: &[Listed],
+    schema: &Schema,
+) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+    let mut produced = built_outputs(target, &package_dirs(mutants));
+    if let Some(packed) = packed_built(state, &tree_digest(work)?) {
+        for (target, content) in packed {
+            produced.entry(target).or_insert(content);
+        }
+    }
+    let unbuilt = schema
+        .compiled
+        .probe_includes
+        .values()
+        .chain(schema.compiled.item_includes.values())
+        .flatten()
+        .find(|target| target.starts_with(BUILT) && !produced.contains_key(*target));
+    if let Some(target) = unbuilt {
+        anyhow::bail!(
+            "no build output for {} is on disk or packed with the build, so no key could \
+             name what includes it; run the sweep where the build runs",
+            target.trim_start_matches(BUILT)
+        );
+    }
+    Ok(produced)
 }
 
 /// What each package's build script wrote, by content: every file under its
@@ -19668,7 +19734,16 @@ pub fn repo() -> u8 {{ scratch() }}
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("binaries.json"), &document).unwrap();
         std::fs::write(dir.join("cargo-metadata.json"), "{}").unwrap();
-        pack(&state, &document, "tree-1", &Known::default()).unwrap();
+        pack(
+            &state,
+            &document,
+            (
+                "tree-1",
+                &Known::default(),
+                &std::collections::BTreeMap::new(),
+            ),
+        )
+        .unwrap();
         std::fs::remove_dir_all(&target).unwrap();
         assert!(restore(&state, "tree-2").is_none(), "another rendering");
         assert!(!target.join("debug/batten").exists(), "nothing put back");
@@ -19713,6 +19788,13 @@ pub fn repo() -> u8 {{ scratch() }}
             "another rendering"
         );
         std::fs::write(state.join("reuse").join(PACKED_TREE), &rendered).unwrap();
+        assert!(
+            prebuilt(&root, &work, &state, &[], &known)
+                .unwrap()
+                .is_none(),
+            "no record of what its build scripts wrote"
+        );
+        std::fs::write(state.join("reuse").join(PACKED_BUILT), "{}").unwrap();
         let built = prebuilt(&root, &work, &state, &[], &known)
             .unwrap()
             .expect("its own rendering");
@@ -19765,7 +19847,16 @@ pub fn repo() -> u8 {{ scratch() }}
             target.display(),
             target.join("debug/deps/x-1").display()
         );
-        pack(&state, &document, &rendered, &rendered_with).unwrap();
+        pack(
+            &state,
+            &document,
+            (
+                &rendered,
+                &rendered_with,
+                &std::collections::BTreeMap::new(),
+            ),
+        )
+        .unwrap();
         assert!(!state.join("verdicts").exists(), "no journal");
         // WHAT A CI SHARD KNOWS: nothing, since it reads no journal.
         let known = Known::default();
@@ -19775,6 +19866,48 @@ pub fn repo() -> u8 {{ scratch() }}
         assert_eq!(built.unviable, rendered_with.unviable);
         assert_eq!(built.handed, rendered_with.handed);
         assert_eq!(tree_digest(&work).unwrap(), rendered);
+    }
+
+    /// A run that restored the packed build keys what its build scripts wrote
+    /// as packed, with no `OUT_DIR` on its own disk; and one that can name it
+    /// nowhere refuses, never keying it on the whole tree.
+    ///
+    /// Fails by: the output read off this disk alone, so a fresh container
+    /// keyed every case including it on the whole tree and carried 0 of its
+    /// imported reach records (CLOUD-2904); or a missing output widened.
+    #[test]
+    fn a_restored_build_keys_its_outputs_as_packed_or_refuses() {
+        let work = crate::scratch::scratch("schema-built-work");
+        let state = crate::scratch::scratch("schema-built-state");
+        let target = state.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(work.join("lib.rs"), "pub fn f() {}\n").unwrap();
+        let built = format!("{BUILT}crates/x");
+        let mut schema = Schema::default();
+        schema
+            .compiled
+            .item_includes
+            .insert(String::from("TABLE"), BTreeSet::from([built.clone()]));
+        let dir = state.join("reuse");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(PACKED_TREE), tree_digest(&work).unwrap()).unwrap();
+        std::fs::write(
+            dir.join(PACKED_BUILT),
+            serde_json::to_string(&std::collections::BTreeMap::from([(
+                built.clone(),
+                String::from("out-1"),
+            )]))
+            .unwrap(),
+        )
+        .unwrap();
+        let outputs = build_outputs((&work, &target, &state), &[], &schema).unwrap();
+        assert_eq!(outputs.get(&built).map(String::as_str), Some("out-1"));
+        std::fs::remove_file(dir.join(PACKED_BUILT)).unwrap();
+        let refused = build_outputs((&work, &target, &state), &[], &schema).unwrap_err();
+        assert!(
+            refused.to_string().contains("no build output for crates/x"),
+            "{refused:#}"
+        );
     }
 
     /// A judging run reuses a pack over its own rendering without asking cargo
@@ -19801,7 +19934,12 @@ pub fn repo() -> u8 {{ scratch() }}
         std::fs::write(dir.join("binaries.json"), &document).unwrap();
         std::fs::write(dir.join("cargo-metadata.json"), "{}").unwrap();
         let tree = tree_digest(&work).unwrap();
-        pack(&state, &document, &tree, &Known::default()).unwrap();
+        pack(
+            &state,
+            &document,
+            (&tree, &Known::default(), &std::collections::BTreeMap::new()),
+        )
+        .unwrap();
         let mut out = Vec::new();
         let reuse = announce_reuse(&work, &target, (&[], &Known::default()), &state, &mut out)
             .unwrap()
