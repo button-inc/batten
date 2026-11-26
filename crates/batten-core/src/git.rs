@@ -5099,13 +5099,24 @@ pub fn remote_tips_before(dir: &Path, at: i64) -> Vec<String> {
 /// One ref's value before `at`, from its reflog read newest first: the newest
 /// entry stamped before `at` names it; otherwise the oldest entry's previous
 /// value does, unless that is null (the ref did not exist).
+///
+/// **A FETCH THE CALL MADE ALSO COUNTS** (CLOUD-2923, on #1276). Git records a
+/// fetch's tracking-ref move with a `fetch` message, and the value it writes is
+/// the remote's answer, not anything the call authored. So the newest entry
+/// that is either before `at` or a fetch names the tip.
+/// `git fetch && git merge --ff-only` in one call is the ordinary way a
+/// session syncs, and reading its fetch as the call's own move refused the
+/// fast-forward as an authored write. Every other in-call move still counts
+/// at its previous value: an `update-ref`, or a push's `update by push`, is
+/// this clone's own history. The threat model is honest error: a hand-written
+/// `fetch` message is not a fetch an honest call makes.
 fn tip_before(reference: &gix::Reference<'_>, at: i64) -> Option<gix::ObjectId> {
     let mut log = reference.log_iter();
     let lines = log.rev().ok()??;
     let mut earliest_previous = None;
     for line in lines {
         let line = line.ok()?;
-        if line.signature.time.seconds < at {
+        if line.signature.time.seconds < at || line.message.starts_with(b"fetch") {
             return Some(line.new_oid);
         }
         earliest_previous = Some(line.previous_oid);
