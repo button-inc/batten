@@ -6443,6 +6443,12 @@ pub fn target_diff(file: &str, source: &str, line: usize) -> Option<String> {
 /// `name`, its tests narrowed to `filter` when one is given. The run's
 /// `--in-diff` is [`target_diff`]'s, which already scopes it to the target's
 /// file and line.
+///
+/// ALWAYS UNDER NEXTEST (CLOUD-2253): the filter is nextest's `-E`, and a
+/// repository whose cargo-mutants defaults to `cargo test` handed it to
+/// `cargo test`, which exits 1 on the unknown argument, and cargo-mutants
+/// read that failed test run as the mutant CAUGHT. Every mutant is judged
+/// under nextest ([`nextest_absent`] is asked first), so this one is too.
 fn in_place_rest(
     (name, filter): (&str, Option<&str>),
     timeout: std::time::Duration,
@@ -6451,6 +6457,8 @@ fn in_place_rest(
 ) -> Vec<String> {
     let mut rest: Vec<String> = [
         "--in-place",
+        "--test-tool",
+        "nextest",
         "--baseline",
         "skip",
         "--test-workspace",
@@ -6831,8 +6839,9 @@ mod tests {
     /// target's own line ([`target_diff`]).
     ///
     /// Fails by: a `--file` added back (which widens the run to every field
-    /// deletion of the file), the filter passed without its `--`, or the
-    /// target's name or bound misplaced.
+    /// deletion of the file), the filter passed without its `--`, the
+    /// target's name or bound misplaced, or the test tool left to the
+    /// repository, under which `cargo test` refused `-E` as a kill.
     #[test]
     fn an_in_place_run_names_its_target_and_no_file() {
         let output = Path::new("/o");
@@ -6841,6 +6850,9 @@ mod tests {
         let cargo = [String::from("--target-dir"), String::from("/t")];
         let rest = in_place_rest((name, Some("test(=t)")), bound, output, &cargo);
         assert!(!rest.iter().any(|arg| arg == "--file"), "{rest:?}");
+        // NEXTEST, WHATEVER THE REPOSITORY'S DEFAULT: the filter is its `-E`.
+        let at = rest.iter().position(|arg| arg == "--test-tool").unwrap();
+        assert_eq!(rest[at + 1], "nextest");
         assert_eq!(
             rest[rest.len() - 4..],
             ["--", "-E", "test(=t)", "--no-tests=pass"]
