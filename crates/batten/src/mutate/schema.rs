@@ -6027,6 +6027,9 @@ pub struct Reach {
     pub tree: String,
     /// How many recorded cases were not traced, by reason ([`UNTRACED`]).
     untraced: std::collections::BTreeMap<Untraced, usize>,
+    /// Whether the record was resumed whole from a sealed one, no suite run
+    /// ([`sealed_over`]): no report of this pass exists to read.
+    pub resumed: bool,
 }
 
 /// Each case's seconds: the report's for a case that ran, and the sealed ones
@@ -6504,6 +6507,7 @@ pub fn record_reach(
     if sealed_over(&base, &inputs) {
         let mut reach = collect_reach(&base, identity)?;
         reach.tree = inputs;
+        reach.resumed = true;
         return Ok((reach, true));
     }
     let (carried, resumed) = carried_unless_ci(
@@ -11583,7 +11587,7 @@ fn reached(
         recorded.entry(case.clone()).or_default();
     }
     let digests = recompute(&recorded, &reach.read);
-    let seconds = measured_seconds(case_seconds(state)?, &reach);
+    let seconds = sweep_seconds(state, &reach)?;
     seal_reach(
         &state.join("reach"),
         &reach,
@@ -11682,6 +11686,23 @@ fn sweep_format(
 /// A COULD-NOT-LOOK: the report is absent or is not XML. Read as no
 /// measurements, every case would cost [`UNMEASURED_SECONDS`] and every
 /// mutant's bound would sit at the floor, so a slow kill reads as a hang.
+/// Each case's seconds for a sweep's seal: a resumed record's as its sealed
+/// records carry them ([`Reach::seconds`]), else the reach run's report's
+/// ([`measured_seconds`]).
+///
+/// A RESUME READS NOTHING THE RECORDING CONTAINER ALONE HAS (CLOUD-2904): an
+/// imported store carries its records, never the run's report, and a resumed
+/// sweep refused before judging for want of it.
+fn sweep_seconds(
+    state: &std::path::Path,
+    reach: &Reach,
+) -> anyhow::Result<std::collections::BTreeMap<Case, f64>> {
+    if reach.resumed {
+        return Ok(reach.seconds.clone());
+    }
+    Ok(measured_seconds(case_seconds(state)?, reach))
+}
+
 fn case_seconds(state: &std::path::Path) -> anyhow::Result<std::collections::BTreeMap<Case, f64>> {
     let at = state
         .join("nextest")
@@ -13846,6 +13867,42 @@ mod tests {
         );
         assert_eq!(sealed("ran"), "Dd3\nT3\n");
         assert!(!base.join("carried").join(SKIPPED).exists());
+    }
+
+    /// A sweep resumed whole from sealed records, an imported store's
+    /// included, takes each case's seconds from those records and reads no
+    /// reach run's report, which only the recording container has; one that
+    /// ran its suite reads the report.
+    ///
+    /// Fails by: the report read on a resume, so a sweep over an imported
+    /// store refuses before judging (`the reach run's report …/cover.xml: No
+    /// such file or directory`, fe80fb54b's import).
+    #[test]
+    fn a_resumed_sweep_takes_its_seconds_from_the_sealed_records() {
+        let state = crate::scratch::scratch("schema-resumed-seconds");
+        let case = (String::from("a::t"), String::from("fix::it"));
+        let resumed = Reach {
+            seconds: [(case.clone(), 2.5)].into(),
+            resumed: true,
+            ..Reach::default()
+        };
+        assert!(
+            !state.join("nextest").exists(),
+            "no report in this container"
+        );
+        assert_eq!(
+            sweep_seconds(&state, &resumed).unwrap(),
+            [(case, 2.5)].into(),
+            "the sealed records' seconds"
+        );
+        let ran = Reach {
+            resumed: false,
+            ..resumed
+        };
+        assert!(
+            sweep_seconds(&state, &ran).is_err(),
+            "a run reads its report"
+        );
     }
 
     /// A reach run's seconds are read from its report, and a report that is
