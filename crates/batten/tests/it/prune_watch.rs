@@ -1456,11 +1456,7 @@ fn a_forced_collection_exits_from_a_worktree_and_waits_out_a_held_tree() {
 /// Fails by: a compile under a watched step collecting inside the command.
 #[test]
 fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
-    // The tracer on `PATH`, found without running anything: the case is the
-    // tracer's, and a host with none has nothing for it to look at.
-    let traced = std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("strace").is_file()));
-    if !cfg!(target_os = "linux") || !traced {
+    if !cfg!(unix) {
         return;
     }
     let dir = hooked("step-run-uncharged", true);
@@ -1476,28 +1472,38 @@ fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
     // THE CASE'S OWN temp directory, made once: `own_temp` names one after the
     // fixture's last component, `repo`, which a case beside this one remakes.
     let temp = common::scratch("step-run-uncharged-tmp");
-    let trace = temp.join("command.strace");
     let engine = common::batten().get_program().to_owned();
+    let compile = |step: &mut common::Batten| {
+        step.arg(&engine)
+            .arg(&rustc)
+            .args(["--crate-name", "probe", "--out-dir"])
+            .arg(dir.join("target/debug/deps"));
+    };
     let mut step = common::batten();
     step.current_dir(&dir)
         .env("TMPDIR", &temp)
         .env("TARGET_PRUNE_FREE_MB", "50")
-        .args([
-            "step",
-            "run",
-            "probe",
-            "--",
-            "strace",
-            "-f",
-            "-e",
-            "trace=open,openat",
-            "-o",
+        .args(["step", "run", "probe", "--"]);
+    // TRACED OR NOT, BY THE HOST ([`common::traced`]), and each branch asserts.
+    let traced = common::traced();
+    let record = temp.join(if traced { "command.strace" } else { "watched" });
+    if traced {
+        // The command under `strace`, which records every path its process
+        // tree opens: what a step's undeclared-read gate reads.
+        step.args(["strace", "-f", "-e", "trace=open,openat", "-o"])
+            .arg(&record);
+        compile(&mut step);
+    } else {
+        // Untraced, the mechanism itself: the command is told a watcher
+        // outside it collects, which is what the wrapper defers to.
+        step.args([
+            "sh",
+            "-c",
+            "printf %s \"$BATTEN_DISK_WATCHED\" > \"$1\"",
+            "sh",
         ])
-        .arg(&trace)
-        .arg(&engine)
-        .arg(&rustc)
-        .args(["--crate-name", "probe", "--out-dir"])
-        .arg(dir.join("target/debug/deps"));
+        .arg(&record);
+    }
     let ran = step
         .stdin(std::process::Stdio::null())
         .streamed_output_keeping(batten::capture::Keep {
@@ -1508,21 +1514,25 @@ fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
         .expect("the binary runs");
     let said = common::stderr(&ran);
     assert_eq!(ran.status.code(), Some(0), "{said}");
-    let opened = std::fs::read_to_string(&trace).expect("the command was traced");
-    assert!(
-        opened.contains(&rustc.display().to_string()),
-        "THE PREMISE: the trace saw the command's compile: {opened}"
-    );
-    assert!(
-        !opened.contains(".fingerprint"),
-        "the command's process tree walked the build tree: {}",
-        opened
-            .lines()
-            .filter(|line| line.contains(".fingerprint"))
-            .take(3)
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
+    let recorded = std::fs::read_to_string(&record).expect("the command ran");
+    if traced {
+        assert!(
+            recorded.contains(&rustc.display().to_string()),
+            "THE PREMISE: the trace saw the command's compile: {recorded}"
+        );
+        assert!(
+            !recorded.contains(".fingerprint"),
+            "the command's process tree walked the build tree: {}",
+            recorded
+                .lines()
+                .filter(|line| line.contains(".fingerprint"))
+                .take(3)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    } else {
+        assert_eq!(recorded, "1", "the watched step told its command: {said}");
+    }
 }
 
 /// A three-crate cargo workspace over `dir`: `app` uses `dep` and `other`,
