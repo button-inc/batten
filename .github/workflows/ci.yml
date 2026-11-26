@@ -1194,6 +1194,9 @@ jobs:
       - run: mise run mutant:changed
         env:
           MUTANT_PHASE: reach
+          # ONE BASE FOR EVERY JOB (CLOUD-2882): the merge commit's first
+          # parent, which every shard and this reach job diff alike.
+          MUTANT_CHANGED_SINCE: HEAD^1
           DOCTOR_TARGETS: ""
       # THIS RUN'S BUILD AND REACH, FOR THIS RUN'S SHARDS: keyed on the run, so
       # no other run reads it, and the pull request's ref scopes it
@@ -1312,6 +1315,8 @@ jobs:
           # Both halves from `strategy`, so another matrix axis cannot leave a
           # shard unrun: k is this job's index over every combination.
           MUTANT_SHARD: ${{ strategy.job-index }}/${{ strategy.job-total }}
+          # ONE BASE FOR EVERY JOB (CLOUD-2882), as the reach job's.
+          MUTANT_CHANGED_SINCE: HEAD^1
           DOCTOR_TARGETS: ""
 
   final:
