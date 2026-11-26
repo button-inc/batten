@@ -1286,3 +1286,25 @@ fn a_published_pack_carries_each_object_once() {
         assert_eq!(unique.len(), ids.len(), "each object once: {ids:?}");
     }
 }
+
+/// Fails by: the session-start route stopping a session whose environment
+/// names a state repository it cannot read. The host serves origin and refuses
+/// the state path; `receipt pull --advisory` says one line and exits `0`, while
+/// the plain verb, asked on purpose, still answers could-not-look (`3`).
+#[test]
+fn the_advisory_pull_never_stops_a_session_that_cannot_reach_the_state_repo() {
+    let case = "receipt-pull-advisory-unreachable";
+    let origin = state_repo(&format!("{case}-origin"));
+    let host = https_host(case, vec![(ORIGIN_PATH, origin)]);
+    let one = wired_clone(case, &host);
+    let state = scratch(&format!("{case}-state")).join("state");
+
+    let advisory = in_container(&one, &state, &host, &["receipt", "pull", "--advisory"]);
+    assert_eq!(advisory.status.code(), Some(0), "{advisory:?}");
+    let line = stdout(&advisory);
+    assert_eq!(line.lines().count(), 1, "one line: {line}");
+    assert!(line.starts_with("receipt pull: could not carry"), "{line}");
+
+    let plain = in_container(&one, &state, &host, &["receipt", "pull"]);
+    assert_eq!(plain.status.code(), Some(3), "{plain:?}");
+}
