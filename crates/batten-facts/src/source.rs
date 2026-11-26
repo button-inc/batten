@@ -96,7 +96,23 @@ pub fn rust_parse(
     source: &str,
     edition: ra_ap_syntax::Edition,
 ) -> ra_ap_syntax::Parse<ra_ap_syntax::SourceFile> {
+    PARSES.with(|parses| parses.set(parses.get() + 1));
     ra_ap_syntax::SourceFile::parse(source, edition)
+}
+
+thread_local! {
+    static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many sources this thread has parsed ([`rust_parse`]).
+///
+/// COUNTED, NEVER TIMED (CLOUD-2904): a cache over parsed files is proven by
+/// a second pass over an unchanged tree parsing nothing, which a count states
+/// exactly and a clock only suggests. Per thread, so a parallel test sees its
+/// own parses alone.
+#[must_use]
+pub fn parses() -> usize {
+    PARSES.with(std::cell::Cell::get)
 }
 
 /// [`rust_parse`] in the shape a fact producer wants: the tree, or
