@@ -9403,7 +9403,9 @@ impl Shared {
                 );
                 Some(names)
             }
-            ast::Item::MacroCall(_) => None,
+            // A MACRO CALL NAMES NOTHING HERE (CLOUD-2789): `AnyHasName` does
+            // not cast one, so it falls through to `None` like any unnamed
+            // item, and an arm saying so was an arm whose deletion changed nothing.
             other => ast::AnyHasName::cast(other.syntax().clone())
                 .and_then(|named| ast::HasName::name(&named))
                 .map(|name| BTreeSet::from([name.text().to_string()])),
@@ -12455,6 +12457,23 @@ pub fn seal_tested(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A MACRO CALL ITEM HAS NO NAME `Shared::of` COULD TAKE (CLOUD-2789): the
+    /// premise that let its `MacroCall => None` arm go, since the catch-all
+    /// already answers `None` for it.
+    ///
+    /// Fails by: a syntax crate that casts a macro call to `AnyHasName`, which
+    /// would hand an invocation's path a name it never declared.
+    #[test]
+    fn a_macro_call_item_is_not_named() {
+        let parse =
+            batten_facts::source::rust_parse("foo!();\n", ra_ap_syntax::Edition::Edition2024);
+        let item = ast::HasModuleItem::items(&parse.tree())
+            .next()
+            .expect("one item");
+        assert!(matches!(item, ast::Item::MacroCall(_)), "{item:?}");
+        assert!(ast::AnyHasName::cast(item.syntax().clone()).is_none());
+    }
 
     /// THE NAMED-PART MEMO HOLDS NO CASE'S NAMES (the `mutate cargo` OOM: 13.6
     /// GB anonymous on a 46-mutant run in a 16 GB container). A case's
