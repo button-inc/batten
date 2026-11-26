@@ -221,10 +221,13 @@ pub fn delete_ref(dir: &Path, reference: &str) -> Result<()> {
 /// name: `land` refused there with "a detached HEAD has no branch to key", and a
 /// cold container could not reach `verify` without a hand-run `git switch`.
 ///
-/// **ONLY A FAST-FORWARD, ONLY ONE BRANCH.** A local branch qualifies when its
-/// tip is an ancestor of `HEAD` and its upstream carries `HEAD`, so moving it to
-/// `HEAD` loses no commit of its own and claims nothing its remote does not
-/// already hold. Exactly one must qualify: two is a choice this must not make,
+/// **NO COMMIT OF ITS OWN, ONLY ONE BRANCH.** A local branch qualifies when its
+/// upstream carries `HEAD` and its tip is either an ancestor of `HEAD` or a
+/// value its upstream ref once held (its reflog), so moving it to `HEAD` loses
+/// no commit the remote never had and claims nothing the remote does not hold.
+/// The second arm is the cloud checkout after a rewrite: the harness's branch is
+/// a cached snapshot of history the remote replaced, measured as
+/// `588922f04 … fetch … storing head` under a tip it does not descend from. Exactly one must qualify: two is a choice this must not make,
 /// and none is a detached `HEAD` somebody chose (a bisect, a rebase, a review),
 /// which is left exactly as it was. The branch moves only if it still holds the
 /// tip that was judged, and the index and worktree are untouched because `HEAD`
@@ -252,6 +255,19 @@ pub fn attach_detached(dir: &Path) -> Result<Option<String>> {
                 .merge_base(base, tip)
                 .is_ok_and(|found| found.is_some_and(|found| found.detach() == base))
     };
+    // A TIP THE REMOTE ONCE HELD carries nothing of this clone's own: every
+    // commit under it was on the remote, so moving the branch off it loses no
+    // work. That is the cloud checkout after a rewrite, whose branch is the
+    // clone's snapshot of history the remote has since replaced.
+    let held = |upstream: &gix::refs::FullName, tip: gix::ObjectId| {
+        repo.find_reference(upstream.as_ref())
+            .is_ok_and(|reference| {
+                let mut log = reference.log_iter();
+                log.all().ok().flatten().is_some_and(|mut lines| {
+                    lines.any(|line| line.is_ok_and(|line| line.new_oid() == tip))
+                })
+            })
+    };
     let mut fits: Vec<(gix::refs::FullName, gix::ObjectId)> = Vec::new();
     let references = repo
         .references()
@@ -264,15 +280,21 @@ pub fn attach_detached(dir: &Path) -> Result<Option<String>> {
         let Some(tip) = branch.target().try_id().map(ToOwned::to_owned) else {
             continue;
         };
-        let Some(upstream) = repo
+        let Some(upstream_name) = repo
             .branch_remote_tracking_ref_name(name.as_ref(), gix::remote::Direction::Fetch)
             .and_then(std::result::Result::ok)
-            .and_then(|tracking| repo.find_reference(tracking.as_ref()).ok())
+            .map(|tracking| tracking.as_ref().to_owned())
+        else {
+            continue;
+        };
+        let Some(upstream) = repo
+            .find_reference(upstream_name.as_ref())
+            .ok()
             .and_then(|mut tracking| tracking.peel_to_id().ok().map(gix::Id::detach))
         else {
             continue;
         };
-        if carries(tip, at) && carries(at, upstream) {
+        if carries(at, upstream) && (carries(tip, at) || held(&upstream_name, tip)) {
             fits.push((name, tip));
         }
     }
@@ -2565,6 +2587,31 @@ mod tests {
         assert_eq!(
             crate::git::current_branch(&dir).unwrap_or_else(|err| panic!("{err}")),
             None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The rewrite shape (CLOUD-2840, measured): the branch sits on a commit off
+    /// `HEAD`'s line that the remote once held and then force-replaced. Fails by:
+    /// attaching only a strict ancestor, so every cloud checkout cut before a
+    /// rewrite refuses `land` for good.
+    #[test]
+    fn a_branch_on_history_the_remote_replaced_is_attached() {
+        let (dir, _b, c) = cloud_checkout("gitwrite-attach-rewritten");
+        std::fs::write(dir.join(".git/HEAD"), "ref: refs/heads/main\n")
+            .unwrap_or_else(|err| panic!("{err}"));
+        let replaced = commit_tool(&dir, "replaced\n", "replaced");
+        set_ref(&dir, "refs/remotes/origin/main", &replaced).unwrap_or_else(|err| panic!("{err}"));
+        set_ref(&dir, "refs/remotes/origin/main", &c).unwrap_or_else(|err| panic!("{err}"));
+        std::fs::write(dir.join(".git/HEAD"), format!("{c}\n"))
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(
+            attach_detached(&dir).unwrap_or_else(|err| panic!("{err}")),
+            Some(String::from("main"))
+        );
+        assert_eq!(
+            crate::git::resolve_ref(&dir, "refs/heads/main").unwrap_or_else(|err| panic!("{err}")),
+            Some(c)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
