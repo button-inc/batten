@@ -1588,7 +1588,8 @@ pub fn collect_if_pressed(
 }
 
 /// The trees a collection ranks together: the checkout's `[prune] root`, each
-/// linked worktree's, and the mutant schema mirror's build. Measured 2026-10-11:
+/// linked worktree's, and the mutant schema mirror's two builds, the schema's
+/// and the hand-backs'. Measured 2026-10-11:
 /// a sibling worktree's `target/` filled the volume, and nothing the main
 /// checkout collected could see it. The mirror is the same case, measured on
 /// #1276 (`mutate::schema::mirror_target`).
@@ -1598,6 +1599,7 @@ pub fn trees(repo: &Path, prune: &crate::config_model::Prune) -> Vec<PathBuf> {
         worktree_trees(repo, &prune.root)
             .into_iter()
             .chain(crate::mutate::schema::mirror_target(repo).ok())
+            .chain(crate::mutate::schema::handback_mirror_target(repo).ok())
             .filter(|tree| tree.is_dir()),
     )
 }
@@ -2679,16 +2681,20 @@ mod tests {
         );
     }
 
-    /// Fails by: the schema mirror's build left out of the ranking, so a lap's
-    /// builds fill the volume beside 6 GB the collector never sees (#1276).
+    /// Fails by: the schema mirror's build, or its hand-backs' (CLOUD-2904),
+    /// left out of the ranking, so a lap's builds fill the volume beside 6 GB
+    /// the collector never sees (#1276).
     #[test]
     fn the_schema_mirror_build_is_a_tree_the_collector_ranks() {
         let repo = scratch("trees-mirror");
         let mirror = crate::mutate::schema::mirror_target(&repo).expect("state dir");
+        let handback = crate::mutate::schema::handback_mirror_target(&repo).expect("state dir");
         std::fs::create_dir_all(&mirror).expect("mkdir");
+        std::fs::create_dir_all(&handback).expect("mkdir");
         let trees = super::trees(&repo, &band(None));
         let _ = std::fs::remove_dir_all(&mirror);
-        assert_eq!(trees, vec![mirror]);
+        let _ = std::fs::remove_dir_all(&handback);
+        assert_eq!(trees, vec![mirror, handback]);
     }
 
     /// Fails by: a reading at the minimum collected, or one below it not.
