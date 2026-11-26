@@ -2126,8 +2126,13 @@ fn pinned_by(pin: Option<crate::config_model::Pin>) -> Result<Option<Want>> {
 /// release, else fetched from `repository` and checked against its
 /// `SHA256SUMS`. A tag the host does not publish is refused (CLOUD-2033), never
 /// answered with whatever binary is running.
+///
+/// A STAMPED BINARY IS A TREE BUILD, NEVER THE RELEASE (CLOUD-2840). A build of
+/// the checkout reports the release's version, so the tag alone named it the
+/// release and `engine install` wrote the tree build over itself, exiting 0 with
+/// the pin unserved. Only `engine stamp` writes a stamp, and only over a build.
 fn release_bytes(tag: &str, exe: &Path, repository: &str) -> Result<Vec<u8>> {
-    if tag == engine::release() {
+    if tag == engine::release() && engine::stamp_of(exe).is_none() {
         return Ok(crate::fsio::read(exe)?);
     }
     match engine::fetch_published(repository, tag)? {
@@ -2237,6 +2242,14 @@ fn install_wanted(
                 }
                 durable::replace(&target, &bytes)?;
                 engine::make_executable(&target)?;
+                // The build's stamp goes with the build: left beside the release,
+                // it would name that release a tree build on the next read.
+                match std::fs::remove_file(engine::stamp_path(&target)) {
+                    Err(why) if why.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(why.into());
+                    }
+                    _ => {}
+                }
                 writeln!(out, "{}", target.display())?;
             }
             Ok(ExitCode::Success)
