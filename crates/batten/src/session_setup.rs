@@ -41,7 +41,8 @@ pub fn detaches(event: crate::config_model::Event) -> bool {
 /// The registry name the task registers under and holds its singleton by.
 pub const TASK: &str = "session-setup";
 
-/// Where the task's inputs and outputs live, under the git dir.
+/// Where the task's inputs and outputs live, under the repository's state
+/// directory ([`dir_of`]).
 const DIR: &str = "batten-session-setup";
 
 /// The host's `SessionStart` payload, as the handlers read it on stdin.
@@ -111,7 +112,32 @@ pub fn instruction(backgrounds: bool) -> String {
 }
 
 fn dir(git_dir: &Path) -> PathBuf {
-    git_dir.join(DIR)
+    dir_of(git_dir)
+}
+
+/// The setup record for the repository whose git dir is `git_dir`: under the
+/// STATE ROOT, in that repository's state directory, never beside the
+/// repository itself (CLOUD-2789).
+///
+/// THE RECORD IS THE SESSION'S, AND A SESSION'S STATE IS THE STATE ROOT'S. It
+/// lived under the git dir, so every process judging a checkout read one
+/// record whatever state root it ran under: a test case adjudicating the
+/// committed policy at the checkout read the HOST's session, held on
+/// `session-setup undispatched` wherever the host had only prepared setup and
+/// admitted wherever it had dispatched it. Land lap 10 failed 25 cases so. The
+/// state root is what a harness contains per process, so under it a case reads
+/// its own record and the host its own, for the same repository.
+///
+/// Keyed on the WORKING TREE where `git_dir` is its `.git`, so the record sits
+/// beside the repository's other state; a linked worktree's git dir keys its
+/// own. Where no state root resolves, the git dir is the one place left.
+#[must_use]
+pub fn dir_of(git_dir: &Path) -> PathBuf {
+    let anchor = match git_dir.parent() {
+        Some(tree) if git_dir.file_name() == Some(std::ffi::OsStr::new(".git")) => tree,
+        _ => git_dir,
+    };
+    crate::state::repo_state_dir(anchor).map_or_else(|_| git_dir.join(DIR), |state| state.join(DIR))
 }
 
 /// The git dir the setup task lives under for the authority at `root`, or
@@ -136,7 +162,7 @@ pub fn git_dir_of(root: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Whether `SessionStart` ever prepared setup under `git_dir`: one stat, so a
+/// Whether `SessionStart` ever prepared setup for `git_dir`: one stat, so a
 /// reader with nothing to read opens no registry. Prepared is not dispatched:
 /// [`state`] answers that.
 #[must_use]
@@ -610,15 +636,24 @@ mod tests {
     }
 
     /// Fails by: the spooled payload's path answered as an empty path, so the
-    /// handlers read nothing where `start` wrote the host's payload.
+    /// handlers read nothing where `start` wrote the host's payload; or the
+    /// record kept under the git dir again (CLOUD-2789), where every process
+    /// judging the checkout reads one session's setup whatever state root it
+    /// runs under.
     #[test]
     fn the_spooled_payload_is_the_file_start_writes() {
         let git_dir = Path::new("/repo/.git");
+        let state =
+            crate::state::repo_state_dir(Path::new("/repo")).expect("a state root resolves here");
         assert_eq!(
             payload_path(git_dir),
-            git_dir.join("batten-session-setup").join("payload")
+            state.join("batten-session-setup").join("payload")
         );
         assert_eq!(payload_path(git_dir), dir(git_dir).join(PAYLOAD));
+        assert!(
+            !payload_path(git_dir).starts_with(git_dir),
+            "the record is the state root's, never the repository's"
+        );
     }
 
     /// Fails by: a recorded finding that does not come back as the refusal the

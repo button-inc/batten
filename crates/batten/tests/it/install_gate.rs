@@ -54,7 +54,7 @@ fn setup(dir: &Path, pid: &str, phase: &str) {
     // THE SETUP DIRECTORY `SessionStart` PREPARES, with what a task leaves in
     // it for the session it ran for: its start, and its finish once its phase
     // is terminal. The gate reads no registry where no setup was prepared.
-    let setup = git_dir.join("batten-session-setup");
+    let setup = batten::session_setup::dir_of(&git_dir);
     std::fs::create_dir_all(&setup).expect("the setup dir");
     std::fs::write(setup.join("session"), "").expect("the session");
     std::fs::write(setup.join("began"), format!("\t{pid}")).expect("the start");
@@ -123,14 +123,23 @@ fn tool_call(
 
 /// The session's `SessionStart` through the door: what it said.
 fn session_start(dir: &Path) -> String {
+    session_start_with(dir, &[])
+}
+
+/// [`session_start`], with `envs` set.
+fn session_start_with(dir: &Path, envs: &[(&str, &std::ffi::OsStr)]) -> String {
     let payload = serde_json::json!({
         "hook_event_name": "SessionStart",
         "source": "startup",
         "cwd": dir,
     })
     .to_string();
+    let mut command = common::batten();
+    for (key, value) in envs {
+        command.env(key, value);
+    }
     let answer = common::stdin_run(
-        &mut common::batten(),
+        &mut command,
         dir,
         &["adjudicate", "--harness", "claude-code"],
         &payload,
@@ -298,6 +307,47 @@ fn a_call_before_the_dispatch_is_held_and_a_read_is_not() {
     assert!(
         held(&inline) && inline.contains("batten startup --session"),
         "an inline dispatch is refused with the instruction: {inline}"
+    );
+}
+
+/// A SESSION PREPARED UNDER ANOTHER STATE ROOT HOLDS NOTHING HERE (CLOUD-2789).
+///
+/// Land lap 10 failed 25 cases (`gh_guard`, `git_preset`, `forced_push`,
+/// `preset_segments`, ...) on `tool install pending at session-setup
+/// undispatched`: they adjudicate the committed policy at the checkout itself,
+/// and the setup record lived under that checkout's git dir, so each read
+/// whatever the HOST's session had left there, green where the host dispatched
+/// setup and red where it only prepared it. The record is the session's, and a
+/// session's state lives under the state root every harness spawn contains, so
+/// a case reads the record of its own state root and never the host's.
+///
+/// The host here is a second state root over the SAME repository: a session
+/// prepared there and never dispatched holds its own calls (anti-vacuity), and
+/// a call under this case's own root is not held.
+///
+/// Fails by: the record kept beside the repository rather than under the
+/// state root, so the host's undispatched setup holds this call.
+#[test]
+fn a_session_prepared_under_another_state_root_holds_nothing_here() {
+    let dir = bench("install-gate-host-setup");
+    let host = common::scratch("install-gate-host-state");
+    let pins: Vec<(&str, &std::ffi::OsStr)> = batten::testing::state_pins(&host)
+        .into_iter()
+        .map(|(key, value)| (key, value.as_os_str()))
+        .collect();
+    let started = session_start_with(&dir, &pins);
+    assert!(
+        started.contains("batten startup --session"),
+        "the host prepared setup and was told to dispatch it: {started}"
+    );
+    assert!(
+        held(&call_with(&dir, "cargo build", &pins)),
+        "the host's own call is held until it dispatches"
+    );
+    let said = call(&dir, "cargo build");
+    assert!(
+        !held(&said),
+        "a call under another state root read the host's setup: {said}"
     );
 }
 
@@ -613,7 +663,7 @@ fn a_finished_setup_survives_the_reap() {
 /// Record how the install phase ended for the session `setup` left (#1276).
 fn installed(dir: &Path, outcome: &str) {
     let git_dir = batten::git::git_dir(dir).expect("the bench has a git dir");
-    let setup = git_dir.join("batten-session-setup");
+    let setup = batten::session_setup::dir_of(&git_dir);
     std::fs::write(setup.join("installed"), format!("\t{outcome}")).expect("the install outcome");
 }
 
@@ -628,7 +678,7 @@ fn a_handler_failure_after_a_clean_install_holds_nothing() {
     installed(&dir, "ok");
     let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
     std::fs::write(
-        git_dir.join("batten-session-setup/outcome"),
+        batten::session_setup::dir_of(&git_dir).join("outcome"),
         "{\"report\":{\"id\":\"session-container-preflight\",\"text\":\"egress failed\"}}\n",
     )
     .expect("the outcome");
