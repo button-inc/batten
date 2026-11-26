@@ -156,6 +156,9 @@ fn bare() -> String {
 
 #[test]
 fn this_repository_is_clean_today() {
+    // ITS OWN STATE ROOT (CLOUD-2936): the policy load writes its cache, and
+    // against the developer's store one recording wrote it and the next read it.
+    common::scratch_state_root();
     let root = common::at_root(".")
         .canonicalize()
         .expect("this checkout is where the manifest says it is");
