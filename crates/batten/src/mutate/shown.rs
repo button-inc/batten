@@ -70,13 +70,24 @@ impl Drop for Shown {
     }
 }
 
-/// Replace `at` with `text`, then set its modification time to `modified`.
+/// Overwrite `at` with `text` IN PLACE, then set its modification time to
+/// `modified`.
+///
+/// NEVER A RENAME: `crates/batten/build.rs` watches `src/` as a directory, and
+/// cargo reads a directory's freshness from every entry under it, the
+/// directories' own times included. A temp file renamed over `at` moves the
+/// parent's time, the build script reruns, and the library is rebuilt from the
+/// original text: the reach run then recorded 0 sites. An existing file
+/// rewritten through its own handle moves no directory. A torn write leaves a
+/// file whose text is not its rendering, which the next render rewrites.
 fn write_at(at: &Path, text: &[u8], modified: SystemTime) -> std::io::Result<()> {
-    crate::durable::replace(at, text)?;
-    std::fs::OpenOptions::new()
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
         .write(true)
-        .open(at)?
-        .set_modified(modified)
+        .truncate(true)
+        .open(at)?;
+    file.write_all(text)?;
+    file.set_modified(modified)
 }
 
 #[cfg(test)]
@@ -107,6 +118,11 @@ mod tests {
             .unwrap()
             .set_modified(built)
             .unwrap();
+        // The directory a build script's `rerun-if-changed` watches, pinned.
+        std::fs::File::open(work.join("src"))
+            .unwrap()
+            .set_modified(built)
+            .unwrap();
         let files = BTreeSet::from([String::from("src/lib.rs")]);
 
         let shown = Shown::originals(&root, &work, &files).unwrap();
@@ -115,12 +131,22 @@ mod tests {
             "fn f() {}\n"
         );
         assert_eq!(modified(&work.join("src/lib.rs")), built);
+        assert_eq!(
+            modified(&work.join("src")),
+            built,
+            "a rename moved the directory"
+        );
         drop(shown);
         assert_eq!(
             std::fs::read_to_string(work.join("src/lib.rs")).unwrap(),
             "fn f() { probe(); }\n"
         );
         assert_eq!(modified(&work.join("src/lib.rs")), built);
+        assert_eq!(
+            modified(&work.join("src")),
+            built,
+            "a rename moved the directory"
+        );
     }
 
     /// Fails by: a file whose rendering equals its original being rewritten,
