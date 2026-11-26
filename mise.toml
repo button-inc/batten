@@ -1615,7 +1615,8 @@ description = "Gate: no config key left the published schema without a deprecati
 # compiled the whole `it` binary before `test:cargo` had: measured at 266.9 s of
 # `enforce --half live`, every other row of which ran in under 3 s. The suite
 # still runs whole under `test:cargo`; the gate asks the verb, against the
-# newest `v*` tag by version order, named on its output line.
+# release `install.lock` records, read at the commit that baked it so a clone
+# without tags answers the same (CLOUD-2789), named on its output line.
 run = "{{vars.batten}} config deprecations latest"
 
 [tasks.prose-only-check]

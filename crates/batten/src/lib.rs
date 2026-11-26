@@ -24674,7 +24674,12 @@ fn key_facts(base: &str) -> hook::KeyFacts {
     )
 )]
 fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
-    let here = Path::new(".");
+    stop_facts_at(Path::new("."), overrides)
+}
+
+/// [`stop_facts`] for the checkout at `here`, so a case reads a fixture's
+/// facts and never the host's (CLOUD-2789).
+fn stop_facts_at(here: &Path, overrides: &Overrides) -> Result<stop::StopFacts> {
     let Ok(repo) = git::repo_root(here) else {
         return Ok(stop::StopFacts::default());
     };
@@ -32447,38 +32452,63 @@ fn run_lint_brief(path: Option<&str>, json: bool, out: &mut dyn Write) -> Result
 /// the tag `install.lock` records, else the newest `v*` tag.
 pub const LATEST_RELEASE: &str = "latest";
 
-/// The release `latest` names in the repository at `root` (CLOUD-2789).
+/// The release `latest` names in the repository at `root`, as the name its
+/// output carries and the revision its schema is read at (CLOUD-2789).
 ///
-/// THE TREE'S OWN RECORD FIRST. `install.lock` is committed by every release's
-/// bake and names the tag it baked, so every clone of one commit resolves the
-/// same baseline. The newest tag a clone happened to fetch did not: a clone
-/// holding no tags refused the gate, and one missing a newer tag judged against
-/// an older release, so `config retire unnamed` answered by container. A
-/// repository with no lock falls back to the newest `v*` tag by version order.
+/// THE TREE'S OWN RECORD, READ FROM HISTORY, NEVER FROM A TAG. `install.lock` is
+/// committed by every release's bake and names the tag it baked, and the commit
+/// that first recorded that tag IS the bake, the commit the tag points at. Every
+/// full clone holds it, so every clone of one commit compares against the same
+/// schema. The tags a clone happened to fetch did not: a clone holding none
+/// refused the gate, one missing a newer tag judged an older release, and a
+/// restarted container whose startup fetch never ran stayed refused, so
+/// `config retire unnamed` answered by container. A repository with no lock
+/// falls back to the newest `v*` tag by version order.
 ///
 /// # Errors
 ///
 /// Could-not-look (exit `3`), never a usage refusal and never a pass, when the
-/// recorded tag is not in this clone (naming the fetch that brings it) or no
-/// tag exists at all.
-fn release_baseline(root: &Path) -> Result<String> {
-    if let Ok(text) = crate::fsio::read_to_string(root.join(crate::install::LOCK_FILE)) {
+/// clone is shallow (naming `--unshallow`), when no commit in the first-parent
+/// history records the tag, or, with no lock, when no tag exists at all.
+fn release_baseline(root: &Path) -> Result<(String, String)> {
+    let lock = crate::install::LOCK_FILE;
+    if let Ok(text) = crate::fsio::read_to_string(root.join(lock)) {
         let tag = crate::install::Lock::parse(&text)?.tag;
-        if git::resolve_ref(root, &format!("refs/tags/{tag}"))?.is_none() {
-            anyhow::bail!(
-                "{tag}, the release {} records, is not in this clone, so no baseline \
-                 could be read (fetch it: git fetch origin tag {tag})",
-                crate::install::LOCK_FILE
-            );
-        }
-        return Ok(tag);
+        let changes = git::path_changes(root, lock).map_err(|_| {
+            anyhow::anyhow!(
+                "this clone is shallow, so the commit that baked {tag} cannot be found \
+                 (deepen it: git fetch --unshallow)"
+            )
+        })?;
+        // Newest first: the run of changes still recording `tag` ends at the
+        // commit that first wrote it.
+        let records = |sha: &str| {
+            git::show(root, sha, lock)
+                .ok()
+                .and_then(|text| crate::install::Lock::parse(&text).ok())
+                .is_some_and(|recorded| recorded.tag == tag)
+        };
+        let baked = changes
+            .iter()
+            .map(|(sha, _)| sha)
+            .take_while(|sha| records(sha))
+            .last()
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no commit in this history records {tag} in {lock}, so no baseline \
+                     could be read"
+                )
+            })?;
+        return Ok((tag, baked));
     }
-    git::newest_version_tag(root)?.ok_or_else(|| {
+    let tag = git::newest_version_tag(root)?.ok_or_else(|| {
         anyhow::anyhow!(
             "no `v*` release tag in this clone, so no baseline to compare against \
              (fetch tags, or name the ref)"
         )
-    })
+    })?;
+    Ok((tag.clone(), tag))
 }
 
 fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Result<ExitCode> {
@@ -32487,14 +32517,18 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
     // below carries the tag it resolved to. The rule `config retire unnamed`
     // used to reach this verb through an integration suite, which compiled the
     // whole `it` binary in verify's seconds tier; the lookup now lives here.
+    // The NAME every line carries and the REVISION the schema is read at are
+    // one string for a named ref and two for `latest`, whose release is read
+    // at its bake commit, never at a tag a clone may lack.
     let resolved;
-    let against = if against == LATEST_RELEASE {
+    let (against, revision) = if against == LATEST_RELEASE {
         resolved = release_baseline(Path::new("."))?;
-        resolved.as_str()
+        (resolved.0.as_str(), resolved.1.as_str())
     } else {
-        against
+        (against, against)
     };
-    let Ok(published) = git::show(Path::new("."), against, crate::config_model::SCHEMA_PATH) else {
+    let Ok(published) = git::show(Path::new("."), revision, crate::config_model::SCHEMA_PATH)
+    else {
         // THE DOCUMENT IS EMITTED ANYWAY. A data channel that is sometimes absent
         // is unparseable by the caller that asked for it, so the could-not-look
         // answer is a document too — distinguished by `baseline`, never by an
@@ -34302,13 +34336,24 @@ mod tests {
 
     /// Fails by: a checkout answered as "not asked", so its at-risk half is
     /// never read where the suite runs inside one.
+    ///
+    /// A FIXTURE CHECKOUT, NEVER THE HOST'S (CLOUD-2789): read from the
+    /// suite's own directory, the case answered whatever branch the clone
+    /// running it sat on, and was red in one whose upstream the remote had
+    /// pruned (CLOUD-2937 holds that refusal).
     #[test]
     fn a_checkout_has_its_at_risk_half_read() {
+        let root = crate::scratch::scratch("at-risk-read");
         // ITS OWN STATE ROOT (CLOUD-2936): the read writes its cache, and
         // against the developer's store one recording wrote it and the next
         // read it.
-        crate::testing::contain_state(&crate::scratch::scratch("at-risk-read").join("state"));
-        let facts = super::stop_facts(&crate::Overrides::default()).expect("the stop facts read");
+        crate::testing::contain_state(&root.join("state"));
+        let repo = root.join("repo");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        std::fs::write(repo.join("a.txt"), "one").expect("write");
+        crate::gitwrite::commit_paths(&repo, &[String::from("a.txt")], "seed").expect("commit");
+        let facts =
+            super::stop_facts_at(&repo, &crate::Overrides::default()).expect("the stop facts read");
         assert!(facts.at_risk.is_some());
     }
 
