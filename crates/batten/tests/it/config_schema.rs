@@ -746,8 +746,14 @@ fn schema_check_globbed_modules() -> Vec<String> {
     let start = hk
         .find("[\"schema-check\"]")
         .expect("hk.pkl declares a schema-check step");
+    // THE STEP CLOSES AT ITS OWN INDENT, wherever hk.pkl nests it: it moved from
+    // `gate` into `pre-commit` (CLOUD-2789), and a fixed two-space close then
+    // matched the hook's and read the next step's glob too.
+    let indent = &hk[hk[..start].rfind('\n').map_or(0, |at| at + 1)..start];
     let rest = &hk[start..];
-    let step = &rest[..rest.find("\n  }").expect("the step closes")];
+    let step = &rest[..rest
+        .find(&format!("\n{indent}}}"))
+        .expect("the step closes")];
 
     let mut modules: Vec<String> = step
         .lines()
