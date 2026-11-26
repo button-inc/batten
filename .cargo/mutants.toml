@@ -211,4 +211,12 @@ exclude_re = [
   # are written; only the wall time changes, and `run_filter`
   # already answers no filter when half the cases or more are due (CLOUD-2789).
   'schema\.rs:\d+:\d+: replace listed_cases -> Option<BTreeSet<Case>> with None$',
+  # The inotify mask's flags are distinct bits, so `^` before the last one
+  # sets the same mask `|` does (CLOUD-2789, shard 3/8 at 34c6e4d1f).
+  'lock_wait\.rs:\d+:\d+: replace \| with \^ in wait$',
+  # Only `CrateRead::whole` sets `whole`, and `CaseKeys::holds` compares a
+  # whole read against another `CrateRead::whole` alone: an absent crate is
+  # told from it by `whole` already, so `crate_held` there decides no
+  # comparison (CLOUD-2789, shard 3/8 at 34c6e4d1f).
+  'schema\.rs:\d+:\d+: delete field crate_held from struct Self expression in CrateRead::whole$',
 ]
