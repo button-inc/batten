@@ -20648,12 +20648,44 @@ tools = [
 id = "mutant-changed"
 inputs = ["."]
 tools = [
-  ["batten", "step", "untraced"],
-  ["batten", "step", "env", "--", "MUTANT_CHANGED_SINCE", "MUTANT_WHOLE_TREE", "MUTANT_SHARD"],
-  ["rustc", "--version"],
-  ["cargo", "--version"],
-  ["cargo", "nextest", "--version"],
-  ["batten", "step", "base", "--ref", "origin/main", "--ref-env", "MUTANT_CHANGED_SINCE", "--", "."],
+  [
+    "batten",
+    "step",
+    "untraced",
+  ],
+  [
+    "batten",
+    "step",
+    "env",
+    "--",
+    "MUTANT_CHANGED_SINCE",
+    "MUTANT_WHOLE_TREE",
+    "MUTANT_SHARD",
+  ],
+  [
+    "rustc",
+    "--version",
+  ],
+  [
+    "cargo",
+    "--version",
+  ],
+  [
+    "cargo",
+    "nextest",
+    "--version",
+  ],
+  [
+    "batten",
+    "step",
+    "base",
+    "--ref",
+    "origin/main",
+    "--ref-env",
+    "MUTANT_CHANGED_SINCE",
+    "--",
+    ".",
+  ],
 ]
 
 # EVERY FILESYSTEM READ GOES THROUGH `crate::fsio` (CLOUD-2692, CLOUD-2384). The
