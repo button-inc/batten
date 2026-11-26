@@ -924,4 +924,26 @@ mod tests {
             Taken::Held(_)
         ));
     }
+
+    /// CLOUD-2789: a helper's stdin, held by the stop it waits on, is let go
+    /// when the helper is done with, not kept until the stop is raised.
+    ///
+    /// Fails by: [`Stop::release`] doing nothing (a mutant missed at
+    /// 34c6e4d1f), so each helper a long-lived stop outlives leaks a pipe.
+    #[cfg(unix)]
+    #[test]
+    fn a_finished_helper_is_released_from_its_stop() {
+        let (path, _file) = lock_file("released");
+        let stop = Stop::new().unwrap();
+        let spawn = |_: &Path, _: Mode| {
+            std::process::Command::new("true")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+        };
+        let mut helper = Helper::spawn(&spawn, &path, Mode::Exclusive, Some(&stop)).unwrap();
+        assert_eq!(stop.helpers.lock().unwrap().len(), 1, "adopted");
+        assert!(helper.wait().unwrap().success());
+        drop(helper);
+        assert!(stop.helpers.lock().unwrap().is_empty(), "released");
+    }
 }
