@@ -33,6 +33,7 @@
 //! body returning `impl Trait` (two branches would be two types), a struct
 //! field, and anything the parser does not place.
 
+use super::shown::Shown;
 use super::trace;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -2786,6 +2787,15 @@ fn write_if_changed(path: &std::path::Path, text: &str) -> anyhow::Result<()> {
         crate::durable::replace(path, text)?;
     }
     Ok(())
+}
+
+/// Every file [`write_schema`] wrote over the copy at `work` for `mutants`:
+/// each rendered source and each crate root the prelude went into. The files
+/// a suite run shows the originals of ([`super::shown`], CLOUD-2911).
+fn rendered_files(work: &std::path::Path, mutants: &[Listed], schema: &Schema) -> BTreeSet<String> {
+    let mut files: BTreeSet<String> = schema.files.keys().cloned().collect();
+    files.extend(crate_roots(work, mutants));
+    files
 }
 
 /// The crate roots of the packages `mutants` live in: each package's
@@ -5892,6 +5902,7 @@ pub fn record_reach(
     state: &std::path::Path,
     packages: &BTreeSet<&str>,
     (identity, recompute, over): (&Identity<'_>, &Recompute<'_>, Option<Over<'_>>),
+    (root, rendered): (&std::path::Path, &BTreeSet<String>),
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<(Reach, bool)> {
     let base = state.join("reach");
@@ -5952,6 +5963,9 @@ pub fn record_reach(
         (String::from(TREE_ENV), work.to_string_lossy().into_owned()),
         mirror_trusted(work),
     ]);
+    // THE CASES READ THE ORIGINALS, THE BUILD'S BINARIES RUN (CLOUD-2911): a
+    // case scanning the tree read the rendering and went red here alone.
+    let shown = Shown::originals(root, work, rendered)?;
     let ran = super::spawn_suite(
         work,
         super::Program::Cargo,
@@ -5959,7 +5973,9 @@ pub fn record_reach(
         &env,
         super::runner_bound(),
         super::Said::Streamed,
-    )?;
+    );
+    drop(shown);
+    let ran = ran?;
     // A FAILED BASELINE STILL KEEPS WHAT PASSED: the caller seals every case
     // that finished passing before it refuses, so the next run carries them
     // across the fix instead of re-running the whole suite (9,952 of 9,959
@@ -9228,8 +9244,7 @@ pub fn sweep(
     let (snapshot, (resources, mut resource_ids)) = stable_resources(root, || {
         copy_tree(root, (&work, &state), mutants, listed_over)
     })?;
-    let live = root;
-    let root = snapshot;
+    let (live, root) = (root, snapshot);
     clear_run_state(&state);
     let cache_path = state.join("verdicts");
     // NOT UNDER CI (CLOUD-2850), for `step`'s "Local only" reason: CI's job is
@@ -9258,12 +9273,11 @@ pub fn sweep(
     let classic = schema.classic(handed);
     let built = (mutants.len(), unviable.len(), classic.len());
     announce_built(out, built, started.elapsed().as_secs())?;
-    let trees = (work.as_path(), target.as_path(), state.as_path());
     let ids = (&resource_ids, resources.as_str());
     let format = sweep_format(live, mutants, &schema, unprobed);
     let skipped = unswitched(&classic, &unviable);
     let (reach, digests, seconds, red) = reached(
-        trees,
+        (work.as_path(), target.as_path(), state.as_path()),
         &root,
         mutants,
         (&schema, &site_keys, &skipped, &format),
@@ -9299,9 +9313,12 @@ pub fn sweep(
         control: &Control::new(),
         reuse: reuse.as_ref(),
     };
+    // EVERY JUDGING RUN READS THE ORIGINALS (CLOUD-2911), as the reach run's do.
+    let shown = Shown::originals(&root, &work, &rendered_files(&work, mutants, &schema))?;
     let (red, control) = control_red(&judging, out)?;
     let judging = judging.with_red(&red).with_control(&control);
     let mut verdicts = judge_all(&judging, &todo, jobs, out);
+    drop(shown);
     let (names, handed_unviable) = settle_handed(
         &judging,
         handback.map(|handback| (handback, live, listed_over, state.as_path())),
@@ -9887,6 +9904,7 @@ fn reached(
         state,
         &packages,
         (identity, &recompute, Some((root, ids.0, format))),
+        (root, &rendered_files(work, mutants, schema)),
         out,
     )?;
     let mut recorded = reach.executed.clone();
