@@ -642,23 +642,21 @@ fn a_forward_move_to_a_strict_ancestor_of_a_pushed_tip_is_no_protected_write() {
 #[test]
 fn a_fetch_and_fast_forward_in_one_call_is_no_protected_write() {
     let dir = fixture("protected-escape-fetch-ff");
-    let remote = dir.with_extension("remote.git");
-    drop(std::fs::remove_dir_all(&remote));
-    common::git_in(
-        &dir,
-        &["init", "-q", "--bare", remote.to_str().expect("utf-8 path")],
-    );
+    // The other session's push, held under a branch this clone's tracking refs
+    // do not reach: a real `git fetch` from the clone itself writes the same
+    // `fetch` reflog entry a fetch from a remote does, with no second repository.
     std::fs::write(dir.join(GUARDED), "pushed elsewhere\n").expect("the guarded write lands");
     common::git_in(&dir, &["commit", "-q", "-am", "pushed by another session"]);
-    let url = remote.to_str().expect("utf-8 path").to_owned();
-    common::git_in(&dir, &["push", "-q", &url, "HEAD:refs/heads/main"]);
+    common::git_in(&dir, &["branch", "-q", "pushed"]);
     common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
     let command = "git fetch origin main && git merge --ff-only -q origin/main";
     let (code, said) = around_with(&dir, "call-fetch-ff", command, |dir| {
-        common::git_in(dir, &["fetch", "-q", &url, "main:refs/remotes/origin/main"]);
+        common::git_in(
+            dir,
+            &["fetch", "-q", ".", "pushed:refs/remotes/origin/main"],
+        );
         common::git_in(dir, &["merge", "--ff-only", "-q", "origin/main"]);
     });
-    drop(std::fs::remove_dir_all(&remote));
     assert_eq!(
         code,
         Some(0),
