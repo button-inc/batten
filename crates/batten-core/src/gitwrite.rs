@@ -259,7 +259,7 @@ pub fn attach_detached(dir: &Path) -> Result<Option<String>> {
     // commit under it was on the remote, so moving the branch off it loses no
     // work. That is the cloud checkout after a rewrite, whose branch is the
     // clone's snapshot of history the remote has since replaced.
-    let held = |upstream: &gix::refs::FullName, tip: gix::ObjectId| {
+    let remote_once_held = |upstream: &gix::refs::FullName, tip: gix::ObjectId| {
         repo.find_reference(upstream.as_ref())
             .is_ok_and(|reference| {
                 let mut log = reference.log_iter();
@@ -294,7 +294,7 @@ pub fn attach_detached(dir: &Path) -> Result<Option<String>> {
         else {
             continue;
         };
-        if carries(at, upstream) && (carries(tip, at) || held(&upstream_name, tip)) {
+        if carries(at, upstream) && (carries(tip, at) || remote_once_held(&upstream_name, tip)) {
             fits.push((name, tip));
         }
     }
