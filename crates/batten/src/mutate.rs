@@ -2629,12 +2629,11 @@ impl Deadline {
         let thread = std::thread::spawn(move || {
             // Where no runtime can be built, the clock's sliced blocking face
             // serves the bound, and the join waits out at most one slice.
-            let lapsed = match compio::runtime::Runtime::new() {
-                Ok(runtime) => runtime.block_on(lapsed(bound, &held)),
-                Err(_) => {
-                    crate::pr_watch::pause_until(bound.as_secs_f64(), &held.flag);
-                    !held.flag.load(std::sync::atomic::Ordering::SeqCst)
-                }
+            let lapsed = if let Ok(runtime) = compio::runtime::Runtime::new() {
+                runtime.block_on(lapsed(bound, &held))
+            } else {
+                crate::pr_watch::pause_until(bound.as_secs_f64(), &held.flag);
+                !held.flag.load(std::sync::atomic::Ordering::SeqCst)
             };
             if lapsed {
                 let _ = send.send(fired);
