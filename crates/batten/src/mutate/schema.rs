@@ -1944,6 +1944,11 @@ const MODULE_ITEM: char = '\u{c}';
 /// ([`use_names`]): keyed where it is mentioned, but bound by no `use`, so
 /// no path resolves to it ([`Resolver::lookup`]).
 const GLOB_NAMED: char = '\u{e}';
+/// Before an impl member's owner, its impl's self type and then its trait,
+/// each the path it is written with, `?` where no plain path says (a
+/// generic self type, a reference): which type's `T::f` it answers
+/// ([`Resolver::owned_by`]).
+const OWNED: char = '\u{10}';
 /// The macros that pass a name through as written, where it is called: what
 /// they are handed resolves as it would outside them.
 const PASSED_AS_WRITTEN: [&str; 21] = [
@@ -2228,16 +2233,91 @@ fn definitions(item: &ast::Item, place: &FileScope, widened: &BTreeSet<String>) 
     } else {
         String::new()
     };
+    // AN IMPL MEMBER IS ITS OWNER'S (CLOUD-2927): homed, with the paths its
+    // impl's self type and trait are written with, so `T::f` names the
+    // members of `T`'s impls alone.
+    let owned = impl_owner(item, place)
+        .map(|owner| format!("{}{owner}", home_suffix(item, place, &module, widened)))
+        .unwrap_or_default();
     free.into_iter()
         .chain(
             associated_names(item)
                 .into_iter()
-                .map(|name| format!("{ASSOCIATED}{name}")),
+                .map(|name| format!("{ASSOCIATED}{name}{owned}")),
         )
         .map(|key| format!("{key}{impl_mark}"))
-        .chain(owner_type_names(item))
+        .chain(owner_type_names(item, &owned))
         .chain(linked_names)
         .collect()
+}
+
+/// Where a path names `item` from ([`HOMED`]): its package and `module`.
+///
+/// HOMED WHERE A PATH NAMES IT FROM (CLOUD-2927), unless it is in a block or
+/// its module's tree is not the one its path says ([`FileScope::flat`]).
+fn home_suffix(
+    item: &ast::Item,
+    place: &FileScope,
+    module: &str,
+    widened: &BTreeSet<String>,
+) -> String {
+    if place.unscoped
+        || place.flat
+        || widened.contains(module)
+        || item
+            .syntax()
+            .ancestors()
+            .any(|node| node.kind() == SyntaxKind::STMT_LIST)
+    {
+        String::new()
+    } else {
+        format!("{HOMED}{}{HOMED}{module}", place.package)
+    }
+}
+
+/// The owner of `item`'s associated names ([`OWNED`]): an impl's, or the
+/// impl a member is in; `None` for a trait's members, which a path through
+/// any type implementing it may name.
+fn impl_owner(item: &ast::Item, place: &FileScope) -> Option<String> {
+    let it = match item {
+        ast::Item::Impl(it) => it.clone(),
+        _ if is_member(item) => item
+            .syntax()
+            .parent()
+            .and_then(|list| list.parent())
+            .and_then(ast::Impl::cast)?,
+        _ => return None,
+    };
+    let generic: BTreeSet<String> = ast::HasGenericParams::generic_param_list(&it)
+        .into_iter()
+        .flat_map(|list| {
+            list.syntax()
+                .descendants()
+                .filter_map(ast::TypeParam::cast)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|param| ast::HasName::name(&param).map(|name| name.text().to_string()))
+        .collect();
+    let written = |ty: Option<ast::Type>| -> String {
+        let Some(ast::Type::PathType(path)) = ty else {
+            return String::from("?");
+        };
+        match path.path().as_ref().and_then(path_segments) {
+            Some(segments) if !(segments.len() == 1 && generic.contains(&segments[0])) => {
+                rooted(&segments, &place.root)
+            }
+            _ => String::from("?"),
+        }
+    };
+    let trait_path = if it.trait_().is_some() {
+        written(it.trait_())
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "{OWNED}{}{OWNED}{trait_path}",
+        written(it.self_ty())
+    ))
 }
 
 /// The keys an item's own names are defined under ([`definitions`]): each
@@ -2253,21 +2333,7 @@ fn free_keys(
         Visible::Module if place.flat || widened.contains(module) => Visible::Package,
         other => other,
     };
-    // HOMED WHERE A PATH NAMES IT FROM (CLOUD-2927): its package and module,
-    // unless it is in a block or its module's tree is not the one its path
-    // says ([`FileScope::flat`]).
-    let home = if place.unscoped
-        || place.flat
-        || widened.contains(module)
-        || item
-            .syntax()
-            .ancestors()
-            .any(|node| node.kind() == SyntaxKind::STMT_LIST)
-    {
-        String::new()
-    } else {
-        format!("{HOMED}{}{HOMED}{module}", place.package)
-    };
+    let home = home_suffix(item, place, module, widened);
     let bound: BTreeSet<String> = match item {
         ast::Item::Use(it) => use_leaf_names(it, false).into_iter().collect(),
         _ => BTreeSet::new(),
@@ -2302,7 +2368,7 @@ fn free_keys(
 /// An associated const or type's impl's free names, workspace-wide: a
 /// generic function outside the workspace reads `T::K` naming no `K`, so the
 /// const answers to the type it is defined under too (CLOUD-2904).
-fn owner_type_names(item: &ast::Item) -> Vec<String> {
+fn owner_type_names(item: &ast::Item, owned: &str) -> Vec<String> {
     if !(is_member(item) && matches!(item, ast::Item::Const(_) | ast::Item::TypeAlias(_))) {
         return Vec::new();
     }
@@ -2313,7 +2379,7 @@ fn owner_type_names(item: &ast::Item) -> Vec<String> {
         .map(|it| {
             impl_names(&it)
                 .into_iter()
-                .map(|name| format!("{name}{IMPL_DEFINED}"))
+                .map(|name| format!("{name}{owned}{IMPL_DEFINED}"))
                 .collect()
         })
         .unwrap_or_default()
@@ -2559,9 +2625,19 @@ fn token_mentions(
             written_as(token, &place.root)
         )
     });
+    // A QUALIFIED ASSOCIATED NAME KEEPS WHERE AND HOW IT IS WRITTEN
+    // (CLOUD-2927): `T::f` names the members of `T`'s impls ([`resolve`]).
+    let qualified = scope.as_ref().filter(|scope| {
+        scope
+            .split_once(WRITTEN)
+            .is_some_and(|(_, path)| !path.is_empty() && path != "?")
+    });
     for name in names {
         if associated {
-            mentions.insert(format!("{ASSOCIATED}{name}"));
+            mentions.insert(match qualified {
+                Some(scope) => format!("{ASSOCIATED}{name}{scope}"),
+                None => format!("{ASSOCIATED}{name}"),
+            });
         }
         match &scope {
             Some(scope) => mentions.insert(format!("{name}{scope}")),
@@ -2597,17 +2673,38 @@ fn written_as(token: &ra_ap_syntax::SyntaxToken, root: &str) -> String {
             unknown
         };
     }
-    let Some(path) = token
+    let Some(own_path) = token
         .parent()
         .and_then(ast::NameRef::cast)
         .and_then(|name| name.syntax().parent())
         .and_then(ast::PathSegment::cast)
-        .and_then(|segment| segment.parent_path().qualifier())
+        .map(|segment| segment.parent_path())
     else {
         return String::new();
     };
+    let qualifier = own_path.qualifier();
+    // `<X as Y>::f` IS WRITTEN THROUGH ITS TRAIT (CLOUD-2927): `f` is one of
+    // `Y`'s, wherever `X` is.
+    if let Some(anchor) = qualifier
+        .as_ref()
+        .filter(|path| path.qualifier().is_none())
+        .and_then(ast::Path::segment)
+        .and_then(|segment| segment.type_anchor())
+    {
+        return match anchor
+            .path_type()
+            .and_then(|trait_path| trait_path.path())
+            .as_ref()
+            .and_then(path_segments)
+        {
+            Some(segments) => format!("{WRITTEN}{}", rooted(&segments, root)),
+            None => unknown,
+        };
+    }
+    // A `use` LIST'S LEAF IS WRITTEN WITH ITS PREFIX (CLOUD-2927): the `b` of
+    // `use a::{b}` has no qualifier of its own.
     let mut segments: Vec<String> = Vec::new();
-    for enclosing in path
+    for enclosing in own_path
         .top_path()
         .syntax()
         .parent()
@@ -2626,10 +2723,15 @@ fn written_as(token: &ra_ap_syntax::SyntaxToken, root: &str) -> String {
         };
         segments.splice(0..0, prefix);
     }
-    let Some(own) = path_segments(&path) else {
-        return unknown;
-    };
-    segments.extend(own);
+    if let Some(path) = &qualifier {
+        let Some(own) = path_segments(path) else {
+            return unknown;
+        };
+        segments.extend(own);
+    }
+    if segments.is_empty() {
+        return String::new();
+    }
     format!("{WRITTEN}{}", rooted(&segments, root))
 }
 
@@ -2763,6 +2865,7 @@ fn key_base(key: &str) -> &str {
         USE_BOUND,
         MODULE_ITEM,
         GLOB_NAMED,
+        OWNED,
     ])
     .next()
     .unwrap_or(key)
@@ -7051,7 +7154,7 @@ fn home_of(definition: &str) -> Option<(&str, &str)> {
     definition
         .split_once(HOMED)?
         .1
-        .split([IMPL_DEFINED, USE_BOUND, MODULE_ITEM, GLOB_NAMED])
+        .split([IMPL_DEFINED, USE_BOUND, MODULE_ITEM, GLOB_NAMED, OWNED])
         .next()?
         .split_once(HOMED)
 }
@@ -7134,6 +7237,128 @@ impl<'r> Resolver<'r> {
         }
     }
 
+    /// The mention of `segment` the `use` binding `id` imports by: its own
+    /// path to it, written where the `use` is.
+    fn use_target(&self, id: usize, segment: &str) -> Option<&'r str> {
+        let definition = self.definitions[id];
+        let (package, home) = home_of(definition)?;
+        self.mentions.get(definition).and_then(|mentioned| {
+            mentioned
+                .iter()
+                .find(|mention| {
+                    key_base(mention) == segment
+                        && written(mention).is_some_and(|(made, at, path)| {
+                            made == package && at == home && path.is_some()
+                        })
+                })
+                .map(String::as_str)
+        })
+    }
+
+    /// `found`, a `use` binding of `segment` followed to the definition it
+    /// imports; unknown where its path does not say.
+    fn through_uses(&self, found: Found, segment: &str, depth: usize) -> Found {
+        let Found::One(id) = found else {
+            return found;
+        };
+        let after = self.definitions[id]
+            .split_once(HOMED)
+            .map_or("", |(_, rest)| rest);
+        if !after.contains(USE_BOUND) {
+            return found;
+        }
+        if depth > RESOLVE_DEPTH {
+            return Found::Unknown;
+        }
+        match self.use_target(id, segment) {
+            Some(target) => match self.named(target) {
+                Found::One(next) if next != id => {
+                    self.through_uses(Found::One(next), segment, depth + 1)
+                }
+                Found::Nothing => Found::Nothing,
+                _ => Found::Unknown,
+            },
+            None => Found::Unknown,
+        }
+    }
+
+    /// The definition a qualified associated `mention` is a member of: its
+    /// qualifier's last segment, resolved where it is written and followed
+    /// through `use`s; unknown for `Self`, a generic parameter, an external
+    /// type, or a path no module says.
+    fn owner(&self, mention: &str) -> Found {
+        let Some((package, module, Some(raw))) = written(mention) else {
+            return Found::Unknown;
+        };
+        let segments: Vec<&str> = raw.split("::").collect();
+        let Some((last, before)) = segments.split_last() else {
+            return Found::Unknown;
+        };
+        if *last == "Self" || last.starts_with('@') {
+            return Found::Unknown;
+        }
+        let found = if before.is_empty() {
+            self.lookup(mention, last, package, module.to_owned(), 0)
+        } else {
+            match self.path(package, module, before, 0) {
+                Place::Module(at_package, at) => self.lookup(mention, last, at_package, at, 0),
+                _ => Found::Unknown,
+            }
+        };
+        match self.through_uses(found, last, 0) {
+            Found::Nothing => Found::Unknown,
+            other => other,
+        }
+    }
+
+    /// Whether the associated definition `id` may be a member of `owner`: it
+    /// names no owner (a trait's member), has no home, its impl's self type
+    /// or trait is no plain path, or one of them resolves, from where the
+    /// impl is written, to `owner` or to an unknown.
+    fn owned_by(&self, id: usize, owner: usize) -> bool {
+        self.owners(id).is_none_or(|owners| {
+            owners
+                .iter()
+                .any(|found| *found == Found::Unknown || *found == Found::One(owner))
+        })
+    }
+
+    /// What the owner paths of the definition `id` resolve to, from where it
+    /// is written ([`OWNED`]), followed through `use`s; `None` where it has
+    /// none or no home.
+    fn owners(&self, id: usize) -> Option<Vec<Found>> {
+        let definition = self.definitions[id];
+        let (_, owners) = definition.split_once(OWNED)?;
+        let (package, home) = home_of(definition)?;
+        Some(
+            owners
+            .split(IMPL_DEFINED)
+            .next()
+            .unwrap_or("")
+            .split(OWNED)
+            .filter(|path| !path.is_empty())
+            .map(|path| {
+                if path == "?" {
+                    return Found::Unknown;
+                }
+                let (qualifier, last) = match path.rsplit_once("::") {
+                    Some((qualifier, last)) => (Some(qualifier), last),
+                    None => (None, path),
+                };
+                let mention = match qualifier {
+                    Some(qualifier) => {
+                        format!(
+                            "{last}{MENTIONED_IN}{package}{MENTIONED_IN}{home}{WRITTEN}{qualifier}"
+                        )
+                    }
+                    None => format!("{last}{MENTIONED_IN}{package}{MENTIONED_IN}{home}"),
+                };
+                self.through_uses(self.named(&mention), last, 0)
+            })
+            .collect(),
+        )
+    }
+
     /// What `mention` names ([`Resolver::lookup`]), from where it is made and
     /// through the path it is written with.
     fn named(&self, mention: &str) -> Found {
@@ -7167,6 +7392,11 @@ impl<'r> Resolver<'r> {
         let definition = self.definitions[id];
         if home_of(definition).is_none() {
             return true;
+        }
+        if let Some(owners) = self.owners(id) {
+            return owners
+                .iter()
+                .any(|own| *own == Found::Unknown || *own == named);
         }
         let cached = self.impls.borrow().get(&id).cloned();
         let found = cached.unwrap_or_else(|| {
@@ -7366,14 +7596,7 @@ impl<'r> Resolver<'r> {
             return Place::Nothing;
         }
         // A RENAMED `use` NAMES NO SEGMENT OF ITS OWN: its target is unknown.
-        let Some(target) = self.mentions.get(definition).and_then(|mentioned| {
-            mentioned.iter().find(|mention| {
-                key_base(mention) == segment
-                    && written(mention).is_some_and(|(made, at, path)| {
-                        made == package && at == home && path.is_some()
-                    })
-            })
-        }) else {
+        let Some(target) = self.use_target(id, segment) else {
             return Place::Unknown;
         };
         let Some((_, _, Some(raw))) = written(target) else {
@@ -7412,6 +7635,21 @@ fn resolve(mention: &str, resolver: &Resolver<'_>) -> (Vec<usize>, Vec<usize>) {
         .copied()
         .filter(|id| visible_from(mention, resolver.definitions[*id]))
         .collect();
+    // `T::f` NAMES THE MEMBERS OF `T`'S IMPLS (CLOUD-2927), and of every
+    // trait's, where its qualifier resolves to one definition.
+    if mention.starts_with(ASSOCIATED) {
+        if let Found::One(owner) = resolver.owner(mention) {
+            let keyed: Vec<usize> = visible
+                .iter()
+                .copied()
+                .filter(|id| resolver.owned_by(*id, owner))
+                .collect();
+            let follow = followed(&keyed, resolver.definitions, resolver.items).collect();
+            return (keyed, follow);
+        }
+        let follow = followed(&visible, resolver.definitions, resolver.items).collect();
+        return (visible, follow);
+    }
     let found = resolver.named(mention);
     let impls = |keep: Option<usize>| -> Vec<usize> {
         visible
@@ -16744,7 +16982,7 @@ mod tests {
         let base = "mod a { pub struct C(pub u8); pub struct Schema { pub x: C } }\n\
                     mod b { pub struct Schema { pub y: u8 } }\n\
                     mod c { use super::a::Schema; pub fn f(s: Schema) -> u8 { s.x.0 } }\n\
-                    mod d { use super::b::Schema; pub fn g(s: Schema) -> u8 { s.y } }\n";
+                    mod d { use super::b::{Schema}; pub fn g(s: Schema) -> u8 { s.y } }\n";
         let held = source_digests(&cases, &executed, base);
         let other = source_digests(&cases, &executed, &base.replace("pub y: u8", "pub y: u16"));
         assert_eq!(other[&f], held[&f], "f imports a's Schema, not b's");
@@ -16935,6 +17173,53 @@ mod tests {
             ),
         );
         assert_ne!(own[&named], held[&named], "a's impl is the Schema f names");
+    }
+
+    /// CLOUD-2927 (e): a type-qualified associated name is keyed on the
+    /// members of its type's impls, and a trait-qualified one on those of its
+    /// trait's: `Schema::K` with `a::Schema` in scope is not `b::Schema::K`,
+    /// and `<Schema as Tr>::L` is no other trait's `L`.
+    ///
+    /// Fails by: an associated name matched by spelling, so an edit to
+    /// `b::Schema`'s `K` or to `Other`'s `L` moves a case naming neither; or
+    /// the member it names dropped.
+    #[test]
+    fn a_qualified_associated_name_is_keyed_on_its_owners_members() {
+        let (inherent, traited) = (case("f"), case("g"));
+        let cases: BTreeSet<Case> = [inherent.clone(), traited.clone()].into();
+        let executed = [
+            (inherent.clone(), [0].into()),
+            (traited.clone(), [1].into()),
+        ]
+        .into();
+        let base = "mod t { pub trait Tr { const L: u8; } pub trait Other { const L: u8; } }\n\
+                    mod a { pub struct Schema; impl Schema { pub const K: u8 = 1; } \
+                    impl super::t::Tr for Schema { const L: u8 = 1; } }\n\
+                    mod b { pub struct Schema; impl Schema { pub const K: u8 = 2; } \
+                    impl super::t::Other for Schema { const L: u8 = 7; } }\n\
+                    mod c { use super::a::Schema; pub fn f() -> u8 { Schema::K } \
+                    pub fn g() -> u8 { <Schema as super::t::Tr>::L } }\n";
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(&cases, &executed, &base.replace("K: u8 = 2", "K: u8 = 3"));
+        assert_eq!(
+            other[&inherent], held[&inherent],
+            "b::Schema's K is not a::Schema's"
+        );
+        let own = source_digests(&cases, &executed, &base.replace("K: u8 = 1", "K: u8 = 4"));
+        assert_ne!(
+            own[&inherent], held[&inherent],
+            "a::Schema's K is the one named"
+        );
+        let unrelated = source_digests(&cases, &executed, &base.replace("L: u8 = 7", "L: u8 = 8"));
+        assert_eq!(
+            unrelated[&traited], held[&traited],
+            "b::Schema's Other::L is not a::Schema's Tr::L"
+        );
+        let named = source_digests(&cases, &executed, &base.replace("L: u8 = 1", "L: u8 = 5"));
+        assert_ne!(
+            named[&traited], held[&traited],
+            "an impl of Tr's L is named"
+        );
     }
 
     /// CLOUD-2927 (b): a mention no path narrows to one definition is keyed on
@@ -17861,11 +18146,11 @@ mod tests {
         assert_eq!(item_names(named("K")), none);
         assert_eq!(associated_names(named("K")), ["K"]);
         assert_eq!(
-            owner_type_names(named("K")),
+            owner_type_names(named("K"), ""),
             [format!("S{IMPL_DEFINED}"), format!("Tr{IMPL_DEFINED}")]
         );
-        assert_eq!(owner_type_names(named("f")), none);
-        assert_eq!(owner_type_names(named("TOP")), none);
+        assert_eq!(owner_type_names(named("f"), ""), none);
+        assert_eq!(owner_type_names(named("TOP"), ""), none);
         assert_eq!(member_names(named("T")), ["B", "a"]);
         let block = items
             .iter()
@@ -17911,9 +18196,11 @@ mod tests {
         );
     }
 
-    /// A mention carries the scope it is made in; an associated position, a
-    /// string's capture and a nested `use` leaf make it associated too; a
-    /// mention in a `macro_rules!` body or an unscoped file is bare.
+    /// A mention carries the scope it is made in and how it is written, a
+    /// nested `use` leaf with its list's prefix; an associated position, a
+    /// string's capture and a nested `use` leaf make it associated too,
+    /// scoped where a path qualifies it; a mention in a `macro_rules!` body
+    /// or an unscoped file is bare.
     ///
     /// Fails by: a path's later segment, a nested `use` leaf or a capture
     /// read as free only, a call's name read as associated, or a macro body's
@@ -17928,8 +18215,9 @@ mod tests {
         let made = |name: &str| format!("{name}{MENTIONED_IN}{MENTIONED_IN}src");
         for expected in [
             made("helper"),
-            format!("{ASSOCIATED}here"),
-            format!("{ASSOCIATED}b"),
+            format!("{ASSOCIATED}here{MENTIONED_IN}{MENTIONED_IN}src{WRITTEN}Host"),
+            format!("{ASSOCIATED}b{MENTIONED_IN}{MENTIONED_IN}src{WRITTEN}a"),
+            format!("b{MENTIONED_IN}{MENTIONED_IN}src{WRITTEN}a"),
             format!("{ASSOCIATED}cap"),
             String::from("inside"),
         ] {
