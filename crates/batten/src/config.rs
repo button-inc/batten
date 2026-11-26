@@ -4634,6 +4634,27 @@ mod tests {
         );
     }
 
+    /// A wanted digest read clear of the racy window is recorded beside its
+    /// stamp, and one not wanted is not, whatever the clock says.
+    ///
+    /// Fails by: the `wanted` test inverted or dropped, so a fresh read never
+    /// records its digest (every read re-hashes), or a believed one is written
+    /// over.
+    #[test]
+    fn a_wanted_digest_clear_of_its_window_is_recorded_and_no_other() {
+        let (path, named, later) = digested_authority("config-digest-recorded");
+        let stamp = crate::cache::stamp(&path).unwrap();
+        let at = later.duration_since(std::time::UNIX_EPOCH).unwrap();
+        record_digest(&named, (&stamp, at), &[9_u8; 32], false);
+        assert_eq!(recorded_digest(&named, &stamp.fields), None, "not wanted");
+        record_digest(&named, (&stamp, at), &[7_u8; 32], true);
+        assert_eq!(
+            recorded_digest(&named, &stamp.fields),
+            Some([7_u8; 32]),
+            "wanted and clear of the window"
+        );
+    }
+
     /// A read within the file's racy window records no digest: a second change
     /// in the same tick would not show in the stamp beside it.
     #[test]
