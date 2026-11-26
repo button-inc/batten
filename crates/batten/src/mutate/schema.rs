@@ -3865,6 +3865,10 @@ pub enum Verdict {
     Timeout,
     /// The run itself failed.
     Error,
+    /// A hand-back's build had no room on its volume, so nothing ran
+    /// (CLOUD-2253): could-not-look, like an `error`, but never one, since no
+    /// run failed; journaled nowhere, so the next sweep with room judges it.
+    NoRoom,
     /// A case that fails unmutated reaches it and no passing case killed it,
     /// so nothing could show it caught. Never reused: the red case decided
     /// nothing about the mutant.
@@ -3881,6 +3885,7 @@ impl Verdict {
             Self::Uncovered => "uncovered",
             Self::Timeout => "timeout",
             Self::Error => "error",
+            Self::NoRoom => "no-room",
             Self::Unjudged => "unjudged",
         }
     }
@@ -3948,7 +3953,7 @@ fn split_red(reached: &BTreeSet<Case>, red: &Red) -> (BTreeSet<Case>, Option<Cas
 /// green case passed, or there was none — is unjudged, never a survivor.
 const fn poisoned(green: Verdict) -> Verdict {
     match green {
-        Verdict::Caught | Verdict::Timeout | Verdict::Error => green,
+        Verdict::Caught | Verdict::Timeout | Verdict::Error | Verdict::NoRoom => green,
         Verdict::Missed | Verdict::Uncovered | Verdict::Unjudged => Verdict::Unjudged,
     }
 }
@@ -10293,6 +10298,17 @@ fn report(
         )?;
         return Ok(3);
     }
+    // NOR DID A BUILD THAT HAD NO ROOM (CLOUD-2253): nothing ran, and the
+    // next sweep with room judges it, since nothing was journaled.
+    let no_room = counts.get(Verdict::NoRoom.name()).copied().unwrap_or(0);
+    if no_room > 0 {
+        writeln!(
+            out,
+            "mutate schema: {no_room} hand-back(s) had no room to build, which decided nothing; \
+             the next sweep with room judges them"
+        )?;
+        return Ok(3);
+    }
     // A HANG DECIDED NOTHING EITHER: the run was stopped before a case could
     // fail or pass, so a sweep holding one is could-not-look, never green.
     let hung = counts.get(Verdict::Timeout.name()).copied().unwrap_or(0);
@@ -10728,6 +10744,84 @@ fn handback_room(handback: &Handback<'_>, tree: &std::path::Path) -> anyhow::Res
     Ok(())
 }
 
+/// Run hand-back `id`'s `mutant` in the mirror at `tree` synced to `live`,
+/// its tests narrowed to `filter` within `bound`: its outcome, or the
+/// verdict it takes without one, said on `out`.
+///
+/// NO ROOM IS NO RUN, NEVER A RUN THAT ERRED (CLOUD-2253): it is `no-room`,
+/// and the mirror is not even synced. A run that could not be made is an
+/// `error` whose cause is kept ([`keep_handback_error`]).
+///
+/// # Errors
+///
+/// `out` cannot be written.
+fn handback_run(
+    (handback, live, tree, state): (
+        &Handback<'_>,
+        &std::path::Path,
+        &std::path::Path,
+        &std::path::Path,
+    ),
+    (id, mutant): (u32, &Listed),
+    filter: Option<&str>,
+    bound: std::time::Duration,
+    out: &mut dyn std::io::Write,
+) -> std::io::Result<Result<super::Outcome, Verdict>> {
+    if let Err(why) = handback_room(handback, tree) {
+        writeln!(
+            out,
+            "mutate schema: {} was not judged in the hand-back mirror {}: {why:#}",
+            mutant.name,
+            tree.display()
+        )?;
+        return Ok(Err(Verdict::NoRoom));
+    }
+    match synced_run(live, tree, || {
+        run_from_own_line((handback, state), mutant, filter, bound)
+    }) {
+        Ok(outcome) => Ok(Ok(outcome)),
+        Err(why) => {
+            let output = state.join("classic-out");
+            let kept = keep_handback_error(state, id, &format!("{why:#}\n"), &output);
+            writeln!(
+                out,
+                "mutate schema: {} could not be judged in the hand-back mirror {}: {why:#}; \
+                 errors kept under {}",
+                mutant.name,
+                tree.display(),
+                kept.display()
+            )?;
+            Ok(Err(Verdict::Error))
+        }
+    }
+}
+
+/// Keep why hand-back `id` erred, and whatever cargo-mutants logged under
+/// `output`, in `state`'s `errors/` beside a switched run's ([`keep_error`]);
+/// answer that directory. Best effort: keeping a cause never fails a sweep.
+fn keep_handback_error(
+    state: &std::path::Path,
+    id: u32,
+    why: &str,
+    output: &std::path::Path,
+) -> std::path::PathBuf {
+    let errors = state.join("errors");
+    let mut said = why.to_owned();
+    if let Ok(logs) = std::fs::read_dir(output.join("mutants.out").join("log")) {
+        for log in logs.flatten() {
+            if let Ok(text) = crate::fsio::read_to_string(log.path()) {
+                said.push_str("== ");
+                said.push_str(&log.path().to_string_lossy());
+                said.push('\n');
+                said.push_str(&text);
+            }
+        }
+    }
+    let _ = std::fs::create_dir_all(&errors);
+    let _ = crate::durable::replace(errors.join(format!("handback-{id}.log")), said);
+    errors
+}
+
 /// Sync the mirror at `tree` to `live`, then `run` in it.
 ///
 /// BEFORE EVERY RUN, NEVER ONLY THE FIRST: a run that was stopped, or a
@@ -10843,21 +10937,16 @@ fn judge_handbacks(
             // each one's build grows the mirror's target; refused, it is this
             // mutant's `error` below, journaled nowhere, and the mirror is not
             // even synced.
-            let ran = handback_room(handback, tree).and_then(|()| {
-                synced_run(live, tree, || {
-                    run_from_own_line((handback, state), mutant, filter.as_deref(), bound)
-                })
-            });
-            let outcome = match ran {
+            let outcome = match handback_run(
+                (handback, live, tree, state),
+                (id, mutant),
+                filter.as_deref(),
+                bound,
+                out,
+            )? {
                 Ok(outcome) => outcome,
-                Err(why) => {
-                    writeln!(
-                        out,
-                        "mutate schema: {} could not be judged in the hand-back mirror {}: {why:#}",
-                        mutant.name,
-                        tree.display()
-                    )?;
-                    verdicts.push((id, Verdict::Error));
+                Err(verdict) => {
+                    verdicts.push((id, verdict));
                     continue;
                 }
             };
@@ -10866,6 +10955,17 @@ fn judge_handbacks(
                 handback_verdict(outcome, output, &mutant.name, unobserved),
                 poisoner.is_some(),
             );
+            // A RUN THAT ERRED KEEPS WHY (CLOUD-2253): a census's five
+            // hand-back errors left no cause to read.
+            if name == Verdict::Error.name() {
+                let kept = keep_handback_error(state, id, &format!("{outcome:?}\n"), output);
+                writeln!(
+                    out,
+                    "mutate schema: {} erred in the hand-back mirror; errors kept under {}",
+                    mutant.name,
+                    kept.display()
+                )?;
+            }
             journal_or_say(
                 judging.store,
                 &journal_line(key.as_deref(), name, &mutant.name),
@@ -10939,6 +11039,7 @@ fn handback_tally(name: &str) -> Option<Verdict> {
         "timeout" => Verdict::Timeout,
         "uncovered" => Verdict::Uncovered,
         "unjudged" => Verdict::Unjudged,
+        "no-room" => Verdict::NoRoom,
         _ => Verdict::Error,
     })
 }
@@ -14529,17 +14630,19 @@ mod tests {
     }
 
     /// A hand-back whose cold build the disk cannot hold is refused, said,
-    /// and judged nothing (CLOUD-2882): no sync, no run, no journal line, an
-    /// `error`.
+    /// and judged nothing (CLOUD-2882): no sync, no run, no journal line, and
+    /// `no-room`, could-not-look and never an `error` (CLOUD-2253).
     ///
     /// Fails by: the build forced onto a full disk, which on #1276 failed and
     /// was recorded `unviable`, seen here as the mirror synced for a run; the
-    /// refusal journaled, so a later sweep reused it; or the refusal unsaid.
+    /// refusal journaled, so a later sweep reused it; the refusal unsaid; or a
+    /// disk shortfall read as a run that erred, which a census reported as
+    /// five `error` verdicts with no cause kept.
     #[test]
     fn a_handback_the_disk_cannot_hold_is_refused_unjudged() {
         let (verdicts, said, journaled, synced, _) =
             judged_with_no_room("schema-handback-no-room", false);
-        assert_eq!(verdicts, [(0, Verdict::Error)], "{said}");
+        assert_eq!(verdicts, [(0, Verdict::NoRoom)], "{said}");
         assert!(
             !synced,
             "refused before the mirror was synced for a run: {said}"
@@ -14557,12 +14660,16 @@ mod tests {
     /// as the mirror never synced for its run.
     #[test]
     fn a_warm_mirror_hands_back_under_the_cold_cost() {
-        let (_, said, _, synced, _) = judged_with_no_room("schema-handback-warm", true);
+        let (verdicts, said, _, synced, _) = judged_with_no_room("schema-handback-warm", true);
         assert!(
             synced,
             "the warm mirror was synced and its run reached: {said}"
         );
         assert!(!said.contains("no room"), "{said}");
+        // ITS RUNNER DOES NOT EXIST, SO THE RUN ERRED, AND WHY IS KEPT
+        // (CLOUD-2253): a census's five hand-back errors left no cause.
+        assert_eq!(verdicts, [(0, Verdict::Error)], "{said}");
+        assert!(said.contains("errors kept under"), "{said}");
     }
 
     /// A hand-back's run is listed from its target's own line and nothing
