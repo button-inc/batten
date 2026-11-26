@@ -728,6 +728,9 @@ struct Unit {
     /// A test suite's scratch fixture, whose writer is a test binary rather
     /// than a build: judged live by [`Request::fixtures_since`].
     fixture: bool,
+    /// A unit its profile's current build graph still references
+    /// ([`crate::prune::live_units`]): never collected, however old (CLOUD-2789).
+    in_graph: bool,
 }
 
 /// Every unit under `tree`, at any depth: every `.fingerprint` directory, nested
@@ -755,6 +758,7 @@ fn units_in(tree: &Path, fingerprints: Vec<PathBuf>, wholes: &[PathBuf]) -> Vec<
         // which spent the hook's whole deadline before the first removal, so the
         // collector freed nothing at 6MB free while every call waited on it.
         let index = artifact_index(&profile);
+        let live = crate::prune::live_units(&fingerprints);
         units.extend(caches_in(tree, &profile));
         for entry in entries.filter_map(Result::ok) {
             let fingerprint = entry.path();
@@ -765,6 +769,7 @@ fn units_in(tree: &Path, fingerprints: Vec<PathBuf>, wholes: &[PathBuf]) -> Vec<
             units.push(Unit {
                 tree: tree.to_path_buf(),
                 artifacts: artifacts_of(&index, &profile, &name, hash),
+                in_graph: live.contains(hash),
                 last_use: last_use(&fingerprint),
                 profile: profile.clone(),
                 fingerprint,
@@ -801,6 +806,7 @@ fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
             artifacts: Vec::new(),
             whole: false,
             fixture: false,
+            in_graph: false,
         })
         .collect()
 }
@@ -880,6 +886,7 @@ fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
                 artifacts: Vec::new(),
                 whole: true,
                 fixture: false,
+                in_graph: false,
             });
             continue;
         }
@@ -900,6 +907,7 @@ fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
                     artifacts: Vec::new(),
                     whole: true,
                     fixture: true,
+                    in_graph: false,
                 }),
         );
     }
@@ -966,6 +974,7 @@ fn mutant_copies(dir: &Path, halt: Halt<'_>) -> Vec<Unit> {
             artifacts: Vec::new(),
             whole: true,
             fixture: false,
+            in_graph: false,
         })
         .collect()
 }
@@ -1458,6 +1467,13 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
     for unit in live {
         if freed >= request.need_bytes || past(request.deadline) {
             break;
+        }
+        // THE CURRENT BUILD GRAPH IS NEVER EVICTED (CLOUD-2789): a pass that
+        // cannot reach its need without it stops short and says so
+        // (`disk-live`) rather than costing the next build a recompile.
+        if unit.in_graph {
+            why.live = true;
+            continue;
         }
         // A LIVE BUILD'S UNITS ARE NEVER COLLECTED, AND THE ROOT IS CARGO'S OWN
         // LOCK: a build holds its profile's `.cargo-lock` for exactly as long as

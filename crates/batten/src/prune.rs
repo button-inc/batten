@@ -261,8 +261,18 @@ pub(crate) fn reclaim_superseded(root: &Path, keep: usize, halt: Halt<'_>) -> (u
             continue;
         };
         let fingerprints = deps.parent().map(|profile| profile.join(".fingerprint"));
+        // A GENERATION THE CURRENT GRAPH STILL READS IS NOT SUPERSEDED
+        // (CLOUD-2789): a root not rebuilt since an edit still links the older
+        // one, and removing it costs that root a rebuild.
+        let live = fingerprints.as_deref().map(live_units).unwrap_or_default();
         for victims in superseded_in(&deps, keep).values() {
-            for victim in victims {
+            for victim in victims.iter().filter(|victim| {
+                !victim
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(artifact_hash)
+                    .is_some_and(|hash| live.contains(hash))
+            }) {
                 let size = victim.metadata().map_or(0, |meta| meta.len());
                 if std::fs::remove_file(victim).is_ok() {
                     pruned += 1;
@@ -582,6 +592,176 @@ fn unit_identity(dir: &Path) -> Option<String> {
             .collect::<Vec<_>>()
             .join("\u{1f}"),
     )
+}
+
+/// THE UNITS THE PROFILE'S CURRENT BUILD GRAPH STILL REFERENCES, by the hash
+/// their fingerprint directory and artifacts share (CLOUD-2789).
+///
+/// **Never by mtime.** Cargo does not touch a dependency it reuses, so the
+/// stable third-party units every warm build reads — the `gix-*` family,
+/// `regorus`, `jsonschema` — were the OLDEST by mtime and went first: the next
+/// build recompiled 67 units, 1,128 s against a 599 s cold build, after a
+/// one-function edit (measured on #1276, the schema mirror's target).
+///
+/// The graph is cargo's own, read from `.fingerprint`: each unit's document
+/// lists its dependencies by fingerprint VALUE (`deps[][3]`), the `u64` whose
+/// little-endian bytes are the hex in that dependency's own fingerprint file.
+/// A unit nothing depends on is a ROOT; among roots of one kind — package,
+/// target kind, and the [`UNIT_IDENTITY`] fields, so a check, a build, a test
+/// and every feature set are kinds of their own — the most recently written is
+/// the current one, and every unit it reaches is live. A root an edit replaced,
+/// and everything only it reached, is not.
+///
+/// A directory with no readable document is not in the graph: cargo cannot
+/// reuse what it cannot read, so it is never a unit to protect.
+pub(crate) fn live_units(fingerprints: &Path) -> std::collections::HashSet<String> {
+    struct Node {
+        hash: String,
+        kind: String,
+        deps: Vec<u64>,
+        written: std::time::SystemTime,
+    }
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut by_value: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    let Ok(entries) = std::fs::read_dir(fingerprints) else {
+        return std::collections::HashSet::new();
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let dir = entry.path();
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some((package, hash)) = name.rsplit_once('-') else {
+            continue;
+        };
+        let Some(node) = graph_node(&dir) else {
+            continue;
+        };
+        let at = nodes.len();
+        for value in node.values {
+            by_value.insert(value, at);
+        }
+        nodes.push(Node {
+            hash: hash.to_owned(),
+            kind: format!("{package}\u{1f}{}", node.kind),
+            deps: node.deps,
+            written: node.written,
+        });
+    }
+    let mut depended = vec![false; nodes.len()];
+    for node in &nodes {
+        for value in &node.deps {
+            if let Some(&at) = by_value.get(value) {
+                depended[at] = true;
+            }
+        }
+    }
+    let mut current: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (at, node) in nodes.iter().enumerate().filter(|(at, _)| !depended[*at]) {
+        current
+            .entry(node.kind.as_str())
+            .and_modify(|best| {
+                if node.written > nodes[*best].written {
+                    *best = at;
+                }
+            })
+            .or_insert(at);
+    }
+    let mut live = vec![false; nodes.len()];
+    let mut reach: Vec<usize> = current.into_values().collect();
+    while let Some(at) = reach.pop() {
+        if std::mem::replace(&mut live[at], true) {
+            continue;
+        }
+        reach.extend(
+            nodes[at]
+                .deps
+                .iter()
+                .filter_map(|value| by_value.get(value).copied()),
+        );
+    }
+    nodes
+        .into_iter()
+        .zip(live)
+        .filter_map(|(node, live)| live.then_some(node.hash))
+        .collect()
+}
+
+/// One fingerprint directory as the graph reads it: the values its fingerprint
+/// files carry, the dependency values its documents list, its kind, and when
+/// cargo last wrote it.
+struct GraphNode {
+    values: Vec<u64>,
+    deps: Vec<u64>,
+    kind: String,
+    written: std::time::SystemTime,
+}
+
+/// [`GraphNode`] for `dir`, or `None` where no document parses.
+fn graph_node(dir: &Path) -> Option<GraphNode> {
+    let mut documents: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "json")
+                && !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("dep-"))
+        })
+        .collect();
+    documents.sort();
+    let mut node = GraphNode {
+        values: Vec::new(),
+        deps: Vec::new(),
+        kind: String::new(),
+        written: std::time::UNIX_EPOCH,
+    };
+    for path in documents {
+        let Ok(text) = crate::fsio::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(document) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        // THE FINGERPRINT FILE BESIDE ITS DOCUMENT, `lib-x` for `lib-x.json`:
+        // its hex is the value a dependent's document names this unit by, and
+        // its mtime is when cargo last built the unit.
+        let value_file = path.with_extension("");
+        if let Ok(hex) = crate::fsio::read_to_string(&value_file)
+            && let Ok(value) = u64::from_str_radix(hex.trim(), 16)
+        {
+            node.values.push(value.swap_bytes());
+        }
+        if let Ok(written) = std::fs::metadata(&value_file).and_then(|meta| meta.modified()) {
+            node.written = node.written.max(written);
+        }
+        node.deps.extend(
+            document
+                .get("deps")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|dep| dep.get(3).and_then(serde_json::Value::as_u64)),
+        );
+        let target_kind = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        node.kind = std::iter::once(target_kind.to_owned())
+            .chain(UNIT_IDENTITY.iter().map(|field| {
+                document
+                    .get(field)
+                    .map_or_else(String::new, ToString::to_string)
+            }))
+            .collect::<Vec<_>>()
+            .join("\u{1f}");
+    }
+    (!node.kind.is_empty()).then_some(node)
 }
 
 /// Files grouped by `(stem, kind, unit identity)`, each group holding only what
