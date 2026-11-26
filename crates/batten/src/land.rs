@@ -938,8 +938,9 @@ pub enum Waited {
     /// **THE ARM THAT WAS MISSING, and its absence was not a gap in the type but
     /// an hour of runner time per lap.** The green arm broke only on
     /// `Verdict::Green`, so a red required check was indistinguishable from a
-    /// pending one: the loop asked its whole count — 3600 by default — and then
-    /// reported [`Waited::Unanswered`], which laps. A branch with one failing
+    /// pending one: the loop asked its whole count — 3600 by default, a bound
+    /// since removed (CLOUD-2253 A2) — and then reported no answer, which lapped.
+    /// A branch with one failing
     /// test therefore bought a fresh matrix per lap and waited out an hour on
     /// each. The predecessor stopped on red, and `tests/land.bats` says so in as
     /// many words: *"red CI stops the lap without asking for the merge"*.
@@ -958,31 +959,43 @@ pub enum Waited {
     ///
     /// **THE STATE THAT HELD THE FLEET'S LEASE (CLOUD-497).** Every required check
     /// is terminal and at least one required name's newest run is masked, so the
-    /// reading cannot change without a new event. [`Waited::Unanswered`] laps, and
-    /// lapping this re-asks a question already closed while
+    /// reading cannot change without a new event. Lapping this re-asks a
+    /// question already closed while
     /// `refs/heads/batten-land-lock` renews off a live process rather than off
     /// progress — so one branch in an unrecognised dead end stopped every other
     /// session from landing for as long as its process stayed alive.
     ///
-    /// **Separate from `Unanswered` although both exit `3`,** because the exit
+    /// **Separate from `Unread` although both exit `3`,** because the exit
     /// code is not the discriminator here and never was: `seen` is. That is
     /// already how a red reading is told from a stale one in the same cell, and
     /// [`progress_of`] is the one table over the pair.
     /// The forge answered none of the first
     /// [`crate::pr_watch::UNANSWERED_BEFORE_REFUSING`] asks (CLOUD-1215), so no
-    /// reading was taken at all. Distinct from `Unanswered`, which asked its
-    /// count and read `Pending` every time: that IS a reading, this is not.
+    /// reading was taken at all. A FAULT, never a wait outcome (CLOUD-2253 A2):
+    /// it names the fault and stops, and never re-drafts or cancels.
     Unread,
     DeadEnd {
         /// Which required names are masked, as pointers.
         findings: Vec<crate::checks_green::Finding>,
     },
-    /// Neither question answered inside the lap's bound.
-    ///
-    /// **Exit `3`'s reading, and not an error.** A wait that ran out of asks has
-    /// learned nothing, which is a different state from either answer and from a
-    /// failure — the caller laps again rather than concluding anything.
-    Unanswered,
+    /// The forge refused the checks read outright — `401`, `403` or `404` — on
+    /// the ask it answered so (CLOUD-2253 A2). An answer, not a could-not-look:
+    /// the credential or the repository is wrong, so the wait fails on the first
+    /// one and names its status rather than asking again.
+    Refused {
+        /// The status the forge answered.
+        status: u16,
+    },
+    /// The pull request's head moved off the sha being waited on: somebody
+    /// pushed the branch, so this sha's runs answer about a head nobody will
+    /// land (CLOUD-2253 A2).
+    Moved {
+        /// Where the pull request's head points now.
+        head: String,
+    },
+    /// The branch has no open pull request any more: it was closed or merged
+    /// under the wait (CLOUD-2253 A2). Nothing further will be asked of it.
+    Closed,
 }
 
 /// Whether the undo cancels the runs still spending on this head.
@@ -1013,10 +1026,10 @@ pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
 ///
 /// So after a fresh ready, a dead end is believed only once EVERY name it masks
 /// has registered a run the first reading did not hold. Until then it is the
-/// state the wait exists to sit in. A ready whose runs never register spends the
-/// ask count and answers [`Waited::Unanswered`], which laps: that is the honest
-/// reading of a matrix that never started, and it costs asks rather than a false
-/// stop. A count, never a clock, for the reason [`Ledger`] gives.
+/// state the wait exists to sit in. A required name whose run never registers is
+/// decided on the head's check suites instead (`never_emitted`, CLOUD-2253 A2):
+/// every suite registered and concluded with the name absent is a dead end, and
+/// no count of asks stands in for that event.
 ///
 /// **EACH MASKED NAME, NOT ANY REQUIRED ONE** (CLOUD-2189). Believing the dead
 /// end once any required name re-registered stopped a consumer's lap three
@@ -1064,63 +1077,60 @@ pub fn registered_since(
 /// answer was always at least one green-arm round trip late. That is the latency
 /// the race exists to remove.
 ///
-/// # The bound is a COUNT
+/// # NO BOUND BUT THE EVENTS (CLOUD-2253 A2)
 ///
-/// `asks` is how many times each arm asks, never a deadline. A wall clock would
-/// reintroduce the VM-reap gap `mem:workflow/landing-loop` records, and
-/// `clippy.toml`'s timer ban is the mechanism that refuses one in this crate. The
-/// delay between asks is the server's own interval — a derived delay bounded by a
-/// real exit condition, which is the shape `run-shape-guard` admits.
+/// Neither arm counts its asks. The wait ends on a terminal reading — Green,
+/// Red, a dead end, the trunk moving, the pull request's head moving, or it
+/// closing — or on a forge fault, named. A budget of asks was a deadline in
+/// other units over a wait CI already bounds itself. The delay between asks is
+/// the server's own interval, conditional requests answered `304`.
+///
+/// `primed` is a check-runs reading of this head the lap already took — Ready's
+/// (CLOUD-2253 A7) — answering the first ask in place of a second read.
+/// `branch` names the pull request whose head and state the wait also reads;
+/// `None` reads neither.
+///
+/// Beside its verdict, the [`RedReading`] a red one was taken over
+/// (CLOUD-2270): which failed runs a push over this head owes a read, and which
+/// checks the stop abandoned still running.
 ///
 /// # Errors
 ///
 /// Only for a stream that will not accept output. **Every failure to reach the
 /// forge is a could-not-look**: the arm reports nothing that cycle and asks
-/// again, because a lap that concluded from an unreachable forge would decide
-/// about the network rather than about the work.
-pub fn wait(
-    config: &crate::pr_watch::Config,
-    roster: &crate::checks_green::Roster,
-    trunk: &crate::main_watch::Config,
-    asks: u32,
-    fresh_ready: bool,
-    heartbeat: &(dyn Fn(u64) + Sync),
-    out: &mut dyn std::io::Write,
-) -> Result<Waited> {
-    wait_reading(
-        config,
-        roster,
-        trunk,
-        (asks, fresh_ready),
-        None,
-        heartbeat,
-        out,
-    )
-    .map(|(waited, _)| waited)
-}
-
-/// [`wait`], and beside its verdict the [`RedReading`] a red one was taken over
-/// (CLOUD-2270): which failed runs a push over this head owes a read, and which
-/// checks the stop abandoned still running.
-///
-/// `primed` is a check-runs reading of this head the lap already took — Ready's
-/// (CLOUD-2253 A7) — answering the first ask in place of a second read.
-///
-/// # Errors
-///
-/// [`wait`]'s.
+/// again, until the forge has answered none of
+/// [`crate::pr_watch::UNANSWERED_BEFORE_REFUSING`] asks.
 pub fn wait_reading(
-    config: &crate::pr_watch::Config,
-    roster: &crate::checks_green::Roster,
-    trunk: &crate::main_watch::Config,
-    (asks, fresh_ready): (u32, bool),
+    (config, roster, trunk): (
+        &crate::pr_watch::Config,
+        &crate::checks_green::Roster,
+        &crate::main_watch::Config,
+    ),
+    (fresh_ready, branch): (bool, Option<&str>),
     primed: Option<crate::rest::Answer>,
     heartbeat: &(dyn Fn(u64) + Sync),
     out: &mut dyn std::io::Write,
 ) -> Result<(Waited, RedReading)> {
+    let pulls = branch.map(|branch| {
+        let owner = config.repo.split('/').next().unwrap_or(&config.repo);
+        format!(
+            "repos/{}/pulls?head={owner}:{branch}&state=open&per_page=1",
+            config.repo
+        )
+    });
+    let pull = |etag: Option<&str>| {
+        pulls
+            .as_deref()
+            .and_then(|path| crate::rest::get(path, etag))
+    };
+    let suites_path = format!(
+        "repos/{}/commits/{}/check-suites?per_page=100",
+        config.repo, config.sha
+    );
+    let suites = |etag: Option<&str>| crate::rest::get(&suites_path, etag);
     raced(
         (config, roster, trunk),
-        (asks, fresh_ready),
+        fresh_ready,
         heartbeat,
         out,
         &Waiting {
@@ -1128,6 +1138,8 @@ pub fn wait_reading(
             trunk: &|etag| crate::main_watch::read(trunk, etag),
             pause: &crate::pr_watch::pause_until,
             primed,
+            pull: pulls.is_some().then_some(&pull as Reader<'_>),
+            suites: Some(&suites),
         },
     )
 }
@@ -1153,11 +1165,97 @@ struct Waiting<'a> {
     /// A reading of the checks the lap already took, answering the first ask
     /// (CLOUD-2253 A7). Never after a ready fired: its runs are not in it.
     primed: Option<crate::rest::Answer>,
+    /// The branch's open pull request, read beside the trunk on its interval:
+    /// its head moving or its closing ends the wait (CLOUD-2253 A2). `None`
+    /// where no branch was named, which reads nothing.
+    pull: Option<Reader<'a>>,
+    /// The head's check suites, read when a required name has no run: every
+    /// suite registered and concluded with the name still absent means no
+    /// workflow emits it for this head (CLOUD-2253 A2). `None` reads nothing.
+    suites: Option<Reader<'a>>,
 }
 
-/// Where [`checks_arm`] reports: the race's channel and flag, the slot a red
-/// verdict's reading rides in, and whether its last reading still had a run in
-/// flight (CLOUD-2253 A2).
+/// The ids of the check suites a reading names, and whether every one of them
+/// has completed, or `None` where no reading was taken (CLOUD-2253 A2).
+fn suites_reading(
+    answer: Option<&crate::rest::Answer>,
+) -> Option<(std::collections::BTreeSet<u64>, bool)> {
+    let answer = answer.filter(|answer| answer.is_reading())?;
+    let document: serde_json::Value = serde_json::from_str(&answer.body).ok()?;
+    let suites = document.get("check_suites")?.as_array()?;
+    let ids = suites
+        .iter()
+        .filter_map(|suite| suite.get("id").and_then(serde_json::Value::as_u64))
+        .collect();
+    let closed = suites
+        .iter()
+        .all(|suite| suite.get("status").and_then(serde_json::Value::as_str) == Some("completed"));
+    Some((ids, closed))
+}
+
+/// Whether a suites reading proves the unregistered names are emitted by no
+/// workflow for this head (CLOUD-2253 A2): at least one suite, every one
+/// concluded, and — after a fresh ready — one the first reading did not hold,
+/// so the ready's own workflows are among them. `before` is filled from the
+/// first reading after a fresh ready.
+fn never_emitted(
+    reading: Option<(std::collections::BTreeSet<u64>, bool)>,
+    fresh_ready: bool,
+    before: &mut Option<std::collections::BTreeSet<u64>>,
+) -> bool {
+    let Some((ids, closed)) = reading else {
+        return false;
+    };
+    let registered = if fresh_ready {
+        match before {
+            None => {
+                *before = Some(ids.clone());
+                false
+            }
+            Some(seen) => ids.iter().any(|id| !seen.contains(id)),
+        }
+    } else {
+        true
+    };
+    closed && !ids.is_empty() && registered
+}
+
+/// The required names `runs` holds no run of, less the ones the roster lets be
+/// absent (CLOUD-2253 A2): what a head no workflow emits for is missing.
+fn run_less(
+    runs: &[crate::checks_green::Run],
+    roster: &crate::checks_green::Roster,
+) -> Vec<String> {
+    roster
+        .required
+        .iter()
+        .filter(|name| !roster.absent_ok.contains(name))
+        .filter(|name| !runs.iter().any(|run| &run.name == *name))
+        .cloned()
+        .collect()
+}
+
+/// What one reading of the branch's open pull request says about a wait on
+/// `sha` (CLOUD-2253 A2): `Closed` when the forge answered and holds none,
+/// `Moved` when its head is another sha, and `None` — keep waiting — on an
+/// open pull request still at `sha` or a reading that could not be taken.
+fn pull_ended(answer: Option<&crate::rest::Answer>, sha: &str) -> Option<Waited> {
+    let answer = answer.filter(|answer| answer.is_reading())?;
+    let document: serde_json::Value = serde_json::from_str(&answer.body).ok()?;
+    let entries = document.as_array()?;
+    let Some(entry) = entries.first() else {
+        return Some(Waited::Closed);
+    };
+    let head = entry
+        .pointer("/head/sha")
+        .and_then(serde_json::Value::as_str)?;
+    (head != sha).then(|| Waited::Moved {
+        head: head.to_owned(),
+    })
+}
+
+/// Where [`checks_arm`] reports: the race's channel and flag, and the slot a red
+/// verdict's reading rides in.
 struct Report<'a> {
     /// The race's one channel; the first message is the verdict.
     send: std::sync::mpsc::Sender<Waited>,
@@ -1165,42 +1263,69 @@ struct Report<'a> {
     stop: &'a std::sync::atomic::AtomicBool,
     /// The reading a red verdict was taken over (CLOUD-2270).
     red: &'a std::sync::Mutex<RedReading>,
-    /// Whether the last reading had a run not yet concluded.
-    in_flight: &'a std::sync::atomic::AtomicBool,
+}
+
+impl Report<'_> {
+    /// Answer the race, unless the other arm already did.
+    fn answer(&self, waited: Waited) {
+        if !self.stop.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            drop(self.send.send(waited));
+        }
+    }
+
+    /// Whether the other arm answered.
+    fn answered(&self) -> bool {
+        self.stop.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// The statuses that are the forge refusing the read rather than failing to
+/// answer it (CLOUD-2253 A2): the credential or the repository is wrong, and
+/// asking again changes neither.
+fn refused_read(answer: Option<&crate::rest::Answer>) -> Option<u16> {
+    answer
+        .map(|answer| answer.status)
+        .filter(|status| matches!(status, 401 | 403 | 404))
 }
 
 /// The green arm of [`raced`]: the checks, on the forge's interval, until a
-/// terminal answer, the other arm's, or the last ask.
+/// terminal answer or the other arm's.
+///
+/// **NO ASK COUNT ENDS IT** (CLOUD-2253 A2). A budget of asks at a fixed
+/// interval is a deadline in other units, on a wait whose real end is an event:
+/// CI bounds itself (each job's timeout, the forge's own run limits), and a
+/// matrix longer than the budget was abandoned every lap. The arm ends on Green,
+/// Red or a dead end, on a refused read, or on a forge that answered nothing at
+/// all — the last two faults, named, never a wait outcome.
 ///
 /// Lifted out of [`raced`] for `clippy::too_many_lines`, the remedy
 /// [`watch_arm`] took for the same lint: one nameable arm of the race.
 fn checks_arm(
     (config, roster): (&crate::pr_watch::Config, &crate::checks_green::Roster),
-    (asks, fresh_ready): (u32, bool),
+    fresh_ready: bool,
     heartbeat: &(dyn Fn(u64) + Sync),
     waiting: &Waiting<'_>,
     report: &Report<'_>,
 ) {
-    let (green, stop, red_slot, running) =
-        (&report.send, report.stop, report.red, report.in_flight);
     let mut poll = crate::pr_watch::Poll::default();
     // The runs already on the head when a fresh ready's wait first read
     // it; see `registered_since`. `None` until that first reading.
     let mut before_ready: Option<std::collections::BTreeSet<u64>> = None;
-    for ask in 1..=asks {
-        if stop.load(std::sync::atomic::Ordering::Relaxed) {
-            return;
-        }
+    // And the check suites on it then, for `never_emitted`'s reason.
+    let mut suites_before: Option<std::collections::BTreeSet<u64>> = None;
+    // THE FIRST ASK IS ANSWERED BY READY'S READING WHERE THERE IS ONE
+    // (CLOUD-2253 A7): the same head, read moments ago, and its validator makes
+    // the second ask a conditional one.
+    let mut primed = waiting.primed.clone();
+    while !report.answered() {
         // The conditional read is `pr_watch`'s, so the argv, the client
         // and the empty-string-on-failure posture stay its business and
         // this arm only decides when to ask.
-        // THE FIRST ASK IS ANSWERED BY READY'S READING WHERE THERE IS
-        // ONE (CLOUD-2253 A7): the same head, read moments ago, and its
-        // validator makes the second ask a conditional one.
-        let raw = match (ask, &waiting.primed) {
-            (1, Some(primed)) => Some(primed.clone()),
-            _ => (waiting.checks)(poll.etag()),
-        };
+        let raw = primed.take().or_else(|| (waiting.checks)(poll.etag()));
+        if let Some(status) = refused_read(raw.as_ref()) {
+            report.answer(Waited::Refused { status });
+            return;
+        }
         let interval = poll.absorb(raw.as_ref(), config.interval);
         // THE HOLDER'S HEARTBEAT, AND THIS LOOP IS THE ONLY PLACE THAT
         // SPENDS REAL TIME (review of #848). A lap acquires its lease
@@ -1230,51 +1355,66 @@ fn checks_arm(
         if fresh_ready && before_ready.is_none() && !poll.runs().is_empty() {
             before_ready = Some(poll.runs().iter().map(|run| run.id).collect());
         }
-        // AND THE SAME NEVER-ANSWERED BOUND `pr_watch::watch` TAKES
-        // (review of #848). A credential the forge refuses answers a
-        // could-not-look to every request, so this arm would spend its
-        // whole ask count — 3600 by default — learning nothing, while
-        // the lap holds the lease and the operator sees one line. Left
-        // to the `Unanswered` verdict, which is what the lap already
-        // laps on, so the shape of the refusal is unchanged.
-        // NOT `Unanswered` (CLOUD-1215): no request was answered, so no
-        // reading was taken, and `Unanswered` read as `Pending` re-drafted
-        // the head and cancelled its runs on a forge it could not read.
+        // A FORGE THAT ANSWERS NOTHING IS A FAULT, NAMED, NEVER A WAIT OUTCOME
+        // (CLOUD-1215, CLOUD-2253 A2). `pr_watch::watch`'s never-answered bound,
+        // kept only as the fault's exit: it never re-drafts or cancels.
         if poll.unanswered_from_the_start() >= crate::pr_watch::UNANSWERED_BEFORE_REFUSING {
-            stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            drop(green.send(Waited::Unread));
+            report.answer(Waited::Unread);
             return;
         }
-        // BOTH TERMINAL ANSWERS END THE WAIT, not only the one the lap
+        // EVERY TERMINAL ANSWER ENDS THE WAIT, not only the one the lap
         // hopes for. Breaking on `Green` alone made a red head
-        // byte-identical to a pending one for the whole ask count.
+        // byte-identical to a pending one.
         match crate::checks_green::decide(poll.runs(), roster) {
             Ok(crate::checks_green::Verdict::Green) => {
-                stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                drop(green.send(Waited::Green {
+                report.answer(Waited::Green {
                     verdict: String::from("green"),
-                }));
+                });
                 return;
             }
             Ok(crate::checks_green::Verdict::Red(findings)) => {
-                stop.store(true, std::sync::atomic::Ordering::Relaxed);
                 let reading = red_runs(poll.runs(), roster, &findings);
-                if let Ok(mut slot) = red_slot.lock() {
+                if let Ok(mut slot) = report.red.lock() {
                     *slot = reading;
                 }
-                drop(green.send(Waited::Red { findings }));
+                report.answer(Waited::Red { findings });
                 return;
             }
             // AND THE THIRD TERMINAL ANSWER (CLOUD-497): a closed required
-            // set with a masked name. It ends the wait for the same reason
-            // the two above do — nothing further is coming — and it must
-            // end it HERE rather than by running out of asks, because
-            // running out spells `Unanswered`, which laps.
+            // set with a masked name. Nothing further is coming.
             Ok(crate::checks_green::Verdict::DeadEnd(findings))
                 if registered_since(before_ready.as_ref(), poll.runs(), &findings) =>
             {
-                stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                drop(green.send(Waited::DeadEnd { findings }));
+                report.answer(Waited::DeadEnd { findings });
+                return;
+            }
+            // A REQUIRED NAME NO WORKFLOW EMITS FOR THIS HEAD (CLOUD-2253 A2):
+            // decided on the event — every suite registered and concluded — and
+            // never by asking until a count runs out. A dead end, with the
+            // names as its pointers.
+            //
+            // ANY PENDING, NOT ONLY `Unregistered`: `decide` reads a head whose
+            // required names have no graded run at all as `Running { 0, 0 }`,
+            // which is exactly the head no workflow emits for — so the names
+            // are read off the runs here rather than off the verdict's arm.
+            Ok(crate::checks_green::Verdict::Pending(_))
+                if !run_less(poll.runs(), roster).is_empty()
+                    && waiting.suites.is_some_and(|suites| {
+                        never_emitted(
+                            suites_reading(suites(None).as_ref()),
+                            fresh_ready,
+                            &mut suites_before,
+                        )
+                    }) =>
+            {
+                let findings = run_less(poll.runs(), roster)
+                    .into_iter()
+                    .map(|check| crate::checks_green::Finding {
+                        check,
+                        conclusion: String::from("never-emitted"),
+                    })
+                    .collect();
+                report.answer(Waited::DeadEnd { findings });
                 return;
             }
             // Pending is the state this loop exists to sit in, and a
@@ -1286,26 +1426,45 @@ fn checks_arm(
         }
         // INTERRUPTIBLE, because the OTHER arm may answer during this
         // wait and `thread::scope` joins this one before the verdict can
-        // be acted on. Checking the flag only at the loop head held a
-        // finished landing for a whole interval — survivable at the
-        // poll's one second, and not once `wait_for` began honouring a
-        // rate-limit backoff measured in minutes (review of #848).
-        // NO PAUSE AFTER THE LAST ASK: there is nothing left to wait
-        // for, and a rate-limit backoff measured in minutes would hold
-        // an unanswered race that long (CLOUD-2113's test hang).
-        if ask < asks {
-            (waiting.pause)(interval, stop);
-        }
+        // be acted on (review of #848).
+        (waiting.pause)(interval, report.stop);
     }
-    // WHETHER THE LAST READING STILL HAD A RUN IN FLIGHT, read once both
-    // arms are out of asks (CLOUD-2253 A2): see the verdict below.
-    let in_flight = poll.runs().iter().any(|run| {
-        !matches!(
-            crate::forge::RunState::of(Some(&run.status), Some(&run.conclusion)),
-            crate::forge::RunState::Completed(_)
-        )
-    });
-    running.store(in_flight, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The staleness arm of [`raced`]: the trunk, and beside it the branch's own
+/// pull request, on the trunk's interval until one of them ends the wait or the
+/// other arm answers (CLOUD-2253 A2: no ask count ends it either).
+fn trunk_arm(
+    (config, trunk): (&crate::pr_watch::Config, &crate::main_watch::Config),
+    waiting: &Waiting<'_>,
+    report: &Report<'_>,
+) {
+    let mut poll = crate::main_watch::Poll::default();
+    while !report.answered() {
+        let raw = (waiting.trunk)(poll.etag());
+        let interval = poll.absorb(raw.as_ref(), trunk.interval);
+        if let Some(moved) = poll.moved(&trunk.base) {
+            report.answer(Waited::Stale {
+                base: moved.to_owned(),
+            });
+            return;
+        }
+        // THE PULL REQUEST'S OWN END: its head moved, or it closed or merged.
+        // A merge by fast-forward also moves the trunk, which the read above
+        // answers first; a close never does.
+        if let Some(ended) = waiting
+            .pull
+            .and_then(|pull| pull_ended(pull(None).as_ref(), &config.sha))
+        {
+            report.answer(ended);
+            return;
+        }
+        // `pr_watch`'s pause deliberately, not a second one: there is one
+        // sleep in this crate and it carries the one `disallowed_methods`
+        // exemption, so a second arm cannot grow a timer of its own.
+        // Interruptible, for the sibling arm's reason.
+        (waiting.pause)(interval, report.stop);
+    }
 }
 
 /// [`wait_reading`] over the reads and pause `waiting` names.
@@ -1315,7 +1474,7 @@ fn raced(
         &crate::checks_green::Roster,
         &crate::main_watch::Config,
     ),
-    (asks, fresh_ready): (u32, bool),
+    fresh_ready: bool,
     heartbeat: &(dyn Fn(u64) + Sync),
     out: &mut dyn std::io::Write,
     waiting: &Waiting<'_>,
@@ -1332,7 +1491,6 @@ fn raced(
     // kept.
     let (tx, rx) = std::sync::mpsc::channel::<Waited>();
     let decided = std::sync::atomic::AtomicBool::new(false);
-    let in_flight = std::sync::atomic::AtomicBool::new(false);
     // THE RED READING RIDES BESIDE THE VERDICT, not inside it (CLOUD-2270):
     // filled by the green arm before it sends `Red`, so whoever reads the
     // verdict reads the reading the verdict was taken over.
@@ -1343,73 +1501,25 @@ fn raced(
             send: tx.clone(),
             stop: &decided,
             red: &red,
-            in_flight: &in_flight,
+        };
+        let stale = Report {
+            send: tx.clone(),
+            stop: &decided,
+            red: &red,
         };
         drop(scope.spawn(move || {
-            checks_arm(
-                (config, roster),
-                (asks, fresh_ready),
-                heartbeat,
-                waiting,
-                &report,
-            );
+            checks_arm((config, roster), fresh_ready, heartbeat, waiting, &report);
         }));
-
-        let stale = tx.clone();
-        let stop = &decided;
-        drop(scope.spawn(move || {
-            let mut poll = crate::main_watch::Poll::default();
-            for ask in 1..=asks {
-                if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    return;
-                }
-                let raw = (waiting.trunk)(poll.etag());
-                let interval = poll.absorb(raw.as_ref(), trunk.interval);
-                if let Some(moved) = poll.moved(&trunk.base) {
-                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    drop(stale.send(Waited::Stale {
-                        base: moved.to_owned(),
-                    }));
-                    return;
-                }
-                // `pr_watch`'s pause deliberately, not a second one: there is one
-                // sleep in this crate and it carries the one `disallowed_methods`
-                // exemption, so a second arm cannot grow a timer of its own.
-                //
-                // Interruptible for the reason the sibling arm states: this arm
-                // loses the race most of the time, and holding the scope open
-                // through its last interval delays every verdict the other one
-                // reaches.
-                // NO PAUSE AFTER THE LAST ASK: there is nothing left to wait
-                // for, and a rate-limit backoff measured in minutes would hold
-                // an unanswered race that long (CLOUD-2113's test hang).
-                if ask < asks {
-                    (waiting.pause)(interval, stop);
-                }
-            }
-        }));
-
-        // THE LAST LIVE SENDER MUST BE DROPPED OR THE RECV BELOW NEVER RETURNS.
-        // Both arms exhausting `asks` without answering closes their clones; this
-        // one is the outer handle and would keep the channel open forever.
+        drop(scope.spawn(move || trunk_arm((config, trunk), waiting, &stale)));
+        // THE LAST LIVE SENDER MUST BE DROPPED OR THE RECV BELOW NEVER RETURNS
+        // once both arms have ended; this one is the outer handle.
         drop(tx);
         rx.recv().ok()
     });
 
-    // OUT OF ASKS OVER A MATRIX STILL RUNNING IS UNREAD, NEVER PENDING
-    // (CLOUD-2253 A2). `Unanswered` maps to `Pending`, which re-drafts the head
-    // and cancels its runs, so a CI path longer than the ask budget threw away a
-    // matrix that was about to answer and bought another on the same sha. A run
-    // in flight is an answer still coming: keep the runs and the ready state, as
-    // an unread wait does (CLOUD-1215). Decided only once NEITHER arm answered,
-    // so the staleness arm keeps its whole budget.
-    let waited = waited.unwrap_or_else(|| {
-        if in_flight.load(std::sync::atomic::Ordering::Relaxed) {
-            Waited::Unread
-        } else {
-            Waited::Unanswered
-        }
-    });
+    // EVERY ARM ENDS BY ANSWERING, so the channel closes unanswered only if
+    // both arms died; that is could-not-look, the fault, never a pending wait.
+    let waited = waited.unwrap_or(Waited::Unread);
     let reading = match &waited {
         Waited::Red { .. } => red.into_inner().unwrap_or_default(),
         _ => RedReading::default(),
@@ -2367,7 +2477,7 @@ pub fn verify_log(root: &Path, branch: &str, sha: &str) -> Vec<String> {
 ///
 /// # NO NEW TIMER, WHICH IS A CONSTRAINT RATHER THAN A CONVENIENCE
 ///
-/// This is [`wait`]'s shape reused, deliberately: one `thread::scope`, one
+/// This is [`wait_reading`]'s shape reused, deliberately: one `thread::scope`, one
 /// channel, `recv` taking whichever arm answers first, and one `stop` flag both
 /// arms read. The watcher's pause is [`crate::pr_watch::pause_until`] — *"there
 /// is one sleep in this crate and it carries the one `disallowed_methods`
@@ -2377,7 +2487,7 @@ pub fn verify_log(root: &Path, branch: &str, sha: &str) -> Vec<String> {
 /// waiver.
 ///
 /// **The watcher's loop is bounded by the gate, not by an ask count**, and that
-/// is the difference from [`wait`]'s arms. A watcher outliving its gate would be
+/// is the difference from [`wait_reading`]'s arms. A watcher outliving its gate would be
 /// the unbounded loop CLOUD-1338 refuses; here the sibling's completion sets
 /// `stop`, which is a real terminal state rather than a guess at one.
 ///
@@ -2927,7 +3037,7 @@ fn ticks_per_beat(beat: std::time::Duration, tick: std::time::Duration) -> u32 {
 /// result is then discarded if the base moved. So the gate's minutes are still
 /// spent where the predecessor could reclaim them; what is saved is the CI matrix
 /// and the fast-forward round trip behind it, which is the metered half. Aborting
-/// early needs a poller that can be stopped mid-wait; [`wait`] now has that shape
+/// early needs a poller that can be stopped mid-wait; [`wait_reading`] now has that shape
 /// (a scoped pair over a stop flag), and applying it to the GATE is a different
 /// problem — the gate is a spawn, not a poll — so CLOUD-423's other half stays
 /// open rather than being claimed here.
@@ -2937,7 +3047,7 @@ fn ticks_per_beat(beat: std::time::Duration, tick: std::time::Duration) -> u32 {
 /// This is [`crate::main_watch`]'s poll asked exactly once, not ref discovery. A
 /// single unconditional ref advertisement is affordable in isolation — that is
 /// what made an earlier revision of this function look fine — but it is the same
-/// question [`wait`] asks in a loop, and answering one question two ways is how
+/// question [`wait_reading`] asks in a loop, and answering one question two ways is how
 /// the two readings drift. The first ask carries no validator and costs a full
 /// body; every later lap's does, because the [`crate::main_watch::Poll`] is the
 /// lap's.
@@ -3238,6 +3348,15 @@ pub const fn progress_of(
     // so the stop IS the release, and inventing a variant that did not unwind
     // would have fixed the poll and kept the fleet-scale half of the defect.
     if let (Step::Wait, crate::exit::ExitCode::Internal, Some(TapVerdict::DeadEnd)) =
+        (step, code, seen)
+    {
+        return Progress::Stop;
+    }
+    // AND A FORGE FAULT STOPS, NAMED, where it used to lap (CLOUD-2253 A2). A
+    // wait that took no reading because the forge answered nothing is not a
+    // wait outcome another lap improves: the lap re-asks the same forge. Same
+    // code, told apart by `seen`, as the dead end one cell up.
+    if let (Step::Wait, crate::exit::ExitCode::Internal, Some(TapVerdict::Unread)) =
         (step, code, seen)
     {
         return Progress::Stop;
@@ -4196,11 +4315,10 @@ pub fn closes_the_tap(state: &Tap) -> bool {
 /// **`Stale` is `None`, and that is the load-bearing arm.** The staleness arm
 /// won the race, so the green arm was voided UNREAD — no checks reading was
 /// taken, and [`closes_the_tap`] must not be handed a verdict nobody looked up.
-/// `Unanswered` is the opposite case and must not be collapsed into it: the
-/// green arm asked its full count and never saw a terminal answer, which IS a
-/// reading, and is precisely what `Pending` means.
+/// The pull request's own end — its head moved, or it closed — is `None` for
+/// the same reason: the checks were not read to an answer.
 ///
-/// Pure, and separate from [`wait`] for the reason [`worthless`] is separate
+/// Pure, and separate from [`wait_reading`] for the reason [`worthless`] is separate
 /// from [`abandon`]: the mapping is the decision, and a decision reachable only
 /// through a network call is a decision nothing tests.
 #[must_use]
@@ -4208,10 +4326,16 @@ pub const fn tap_verdict(waited: &Waited) -> Option<TapVerdict> {
     match waited {
         Waited::Green { .. } => Some(TapVerdict::Green),
         Waited::Red { .. } => Some(TapVerdict::Red),
-        Waited::Unanswered => Some(TapVerdict::Pending),
-        Waited::Unread => Some(TapVerdict::Unread),
+        // A FAULT IS UNREAD (CLOUD-2253 A2): a refused read and a forge that
+        // answered nothing both took no reading of the checks, so neither
+        // re-drafts the head nor cancels its runs.
+        Waited::Unread | Waited::Refused { .. } => Some(TapVerdict::Unread),
+        // THE PULL REQUEST ENDED THE WAIT, not the checks: no reading was taken
+        // to re-draft on. A moved head's runs on this sha are waste, which the
+        // undo's `None` already reads as abandon. A stale base likewise took no
+        // reading of this head's checks.
+        Waited::Moved { .. } | Waited::Closed | Waited::Stale { .. } => None,
         Waited::DeadEnd { .. } => Some(TapVerdict::DeadEnd),
-        Waited::Stale { .. } => None,
     }
 }
 
@@ -4615,22 +4739,31 @@ mod forge_tests {
         )
     }
 
+    /// What a race reads besides the checks: Ready's reading, the pull
+    /// request's, and the head's check suites (CLOUD-2253 A2, A7).
+    #[derive(Default)]
+    struct Beside {
+        primed: Option<crate::rest::Answer>,
+        pull: Option<String>,
+        suites: Vec<String>,
+    }
+
     /// One race over `answers` (the checks arm's reads, the last repeating), a
     /// trunk that never moves, and a pause that only records: the verdict, the
-    /// red reading, and every pause asked for, the checks arm's at 7s and the
-    /// trunk arm's at 9s.
-    fn race(answers: &[String], asks: u32, fresh_ready: bool) -> (Waited, RedReading, Vec<f64>) {
-        let (waited, red, paused, _) = race_primed(answers, asks, fresh_ready, None);
+    /// red reading, and every pause the checks arm asked for (7s; the trunk
+    /// arm's 9s pauses race it and are not counted).
+    fn race(answers: &[String], fresh_ready: bool) -> (Waited, RedReading, Vec<f64>) {
+        let (waited, red, paused, _) = race_beside(answers, fresh_ready, Beside::default());
         (waited, red, paused)
     }
 
-    /// [`race`] with the first ask answered by `primed`, and beside the rest
-    /// how many times the checks arm actually read the forge.
-    fn race_primed(
+    /// [`race`] with `beside` read too, and how many times the checks arm
+    /// actually read the forge. A single answer may carry a status of its own
+    /// as `"<status> <body>"`.
+    fn race_beside(
         answers: &[String],
-        asks: u32,
         fresh_ready: bool,
-        primed: Option<crate::rest::Answer>,
+        beside: Beside,
     ) -> (Waited, RedReading, Vec<f64>, usize) {
         let config = crate::pr_watch::Config {
             sha: String::from("s"),
@@ -4649,16 +4782,44 @@ mod forge_tests {
         let paused = std::sync::Mutex::new(Vec::new());
         let checks = |_: Option<&str>| {
             let n = asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Some(reading(&answers[n.min(answers.len() - 1)]))
+            let answer = &answers[n.min(answers.len() - 1)];
+            Some(match answer.split_once(' ') {
+                Some((status, body)) if status.parse::<u16>().is_ok() => {
+                    super::mutate_tests::answer(status.parse().unwrap(), body)
+                }
+                _ => reading(answer),
+            })
         };
-        let trunk_read =
-            |_: Option<&str>| Some(reading(&format!(r#"{{"object":{{"sha":"{BASE}"}}}}"#)));
+        // A RACE NO ARM ENDS FAILS RATHER THAN HANGS: with no ask count left in
+        // the wait, a regression would spin forever, so the trunk "moves" after
+        // far more asks than any case makes and the verdict assertion names it.
+        let trunk_asked = std::sync::atomic::AtomicUsize::new(0);
+        let trunk_read = |_: Option<&str>| {
+            let n = trunk_asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let sha = if n > 100_000 { "runaway" } else { BASE };
+            Some(reading(&format!(r#"{{"object":{{"sha":"{sha}"}}}}"#)))
+        };
         let pause = |seconds: f64, _: &std::sync::atomic::AtomicBool| {
-            paused.lock().unwrap().push(seconds);
+            if (seconds - 7.0).abs() < f64::EPSILON {
+                paused.lock().unwrap().push(seconds);
+            }
+        };
+        let Beside {
+            primed,
+            pull: pull_body,
+            suites: suite_bodies,
+        } = beside;
+        let pull = |_: Option<&str>| pull_body.as_deref().map(reading);
+        let suites_asked = std::sync::atomic::AtomicUsize::new(0);
+        let suites = |_: Option<&str>| {
+            let n = suites_asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            suite_bodies
+                .get(n.min(suite_bodies.len().saturating_sub(1)))
+                .map(|body| reading(body))
         };
         let (waited, red) = raced(
             (&config, &roster, &trunk),
-            (asks, fresh_ready),
+            fresh_ready,
             &|_| {},
             &mut Vec::new(),
             &Waiting {
@@ -4666,11 +4827,12 @@ mod forge_tests {
                 trunk: &trunk_read,
                 pause: &pause,
                 primed,
+                pull: pull_body.is_some().then_some(&pull as Reader<'_>),
+                suites: (!suite_bodies.is_empty()).then_some(&suites as Reader<'_>),
             },
         )
         .unwrap();
-        let mut paused = paused.into_inner().unwrap();
-        paused.sort_by(f64::total_cmp);
+        let paused = paused.into_inner().unwrap();
         (
             waited,
             red,
@@ -4687,40 +4849,62 @@ mod forge_tests {
     /// for one fact.
     #[test]
     fn ready_s_reading_answers_the_first_ask() {
-        let (waited, _, _, asked) = race_primed(
-            &[check("", 1)],
-            3,
-            false,
-            Some(reading(&check("success", 1))),
-        );
+        let primed = |answer: &str| Beside {
+            primed: Some(reading(answer)),
+            ..Beside::default()
+        };
+        let (waited, _, _, asked) =
+            race_beside(&[check("", 1)], false, primed(&check("success", 1)));
         assert!(matches!(waited, Waited::Green { .. }), "{waited:?}");
         assert_eq!(asked, 0, "the forge was not read again");
-        let (_, _, _, asked) = race_primed(&[check("", 1)], 3, false, Some(reading(&check("", 1))));
-        assert_eq!(asked, 2, "every ask after the first reads the forge");
-        let (_, _, _, asked) = race_primed(&[check("", 1)], 3, false, None);
-        assert_eq!(asked, 3, "unprimed, every ask reads");
+        let (_, _, _, asked) = race_beside(&[check("success", 1)], false, primed(&check("", 1)));
+        assert_eq!(asked, 1, "every ask after the first reads the forge");
+        let (_, _, _, asked) = race_beside(
+            &[check("", 1), check("success", 1)],
+            false,
+            Beside::default(),
+        );
+        assert_eq!(asked, 2, "unprimed, every ask reads");
     }
 
+    /// The checks arm pauses between asks and never after the answer that
+    /// ends the wait.
     #[test]
     fn each_arm_pauses_between_its_asks_and_never_after_the_last() {
-        let (waited, _, paused) = race(&[check("", 1)], 3, false);
-        assert_eq!(waited, Waited::Unread);
-        assert_eq!(paused, vec![7.0, 7.0, 9.0, 9.0]);
+        let (waited, _, paused) = race(&[check("", 1), check("", 1), check("success", 1)], false);
+        assert!(matches!(waited, Waited::Green { .. }), "{waited:?}");
+        assert_eq!(paused, vec![7.0, 7.0]);
     }
 
-    /// RUNNING OUT OF ASKS OVER A MATRIX STILL RUNNING IS NOT A PENDING VERDICT
-    /// (CLOUD-2253 A2). The runs are mid-flight and their answer is coming, so
-    /// the wait is `Unread`: the head stays ready and no run is cancelled. A
-    /// set with nothing running when the asks run out stays `Unanswered`.
+    /// NO ASK COUNT ENDS THE WAIT (CLOUD-2253 A2): a matrix running for more
+    /// asks than the 3600 the wait once allowed is still waited on, and its
+    /// green answers. The end is the event, never a budget.
     ///
-    /// Fails by: an exhausted budget re-drafting the pull request and
-    /// cancelling a matrix that was about to answer.
+    /// Fails by: any count of asks ending a wait whose runs are still coming,
+    /// which abandoned every CI path longer than the budget.
     #[test]
-    fn an_exhausted_wait_over_a_running_matrix_keeps_its_runs() {
-        let (waited, _, _) = race(&[check("", 1)], 2, false);
-        assert_eq!(waited, Waited::Unread);
+    fn a_wait_outlasts_any_former_ask_budget() {
+        let mut answers = vec![check("", 1); 3_601];
+        answers.push(check("success", 1));
+        let (waited, _, _, asked) = race_beside(&answers, false, Beside::default());
+        assert!(matches!(waited, Waited::Green { .. }), "{waited:?}");
+        assert_eq!(asked, 3_602);
+    }
+
+    /// A REFUSED READ IS A FAULT, NAMED ON THE FIRST ASK (CLOUD-2253 A2): a
+    /// `401` is the credential, never a reading to wait out, and the fault
+    /// neither re-drafts the head nor cancels its runs.
+    ///
+    /// Fails by: a refused credential polled until something else ends the
+    /// wait, or read as a pending verdict.
+    #[test]
+    fn a_refused_read_is_a_named_fault_on_the_first_ask() {
+        let (waited, _, _, asked) =
+            race_beside(&[String::from("401 {}")], false, Beside::default());
+        assert_eq!(waited, Waited::Refused { status: 401 });
+        assert_eq!(asked, 1);
         let seen = tap_verdict(&waited);
-        assert!(!abandons_the_runs(seen), "the running matrix is kept");
+        assert!(!abandons_the_runs(seen), "no run is cancelled");
         let tap = Tap {
             landed: false,
             singleton_held: true,
@@ -4728,25 +4912,130 @@ mod forge_tests {
             verdict: seen,
         };
         assert!(!closes_the_tap(&tap), "the head is not re-drafted");
-        let (waited, _, _) = race(&[check("skipped", 1)], 2, true);
-        assert_eq!(waited, Waited::Unanswered, "nothing running is not unread");
+        let (waited, _, _, _) = race_beside(
+            &[String::from("500 {}"), check("success", 1)],
+            false,
+            Beside::default(),
+        );
+        assert!(
+            matches!(waited, Waited::Green { .. }),
+            "a server error is could-not-look, asked again: {waited:?}"
+        );
+    }
+
+    /// THE PULL REQUEST'S OWN END ENDS THE WAIT (CLOUD-2253 A2): its head moving
+    /// off the waited sha, or no open pull request for the branch.
+    ///
+    /// Fails by: a wait outliving the pull request it was about.
+    #[test]
+    fn the_pull_request_moving_or_closing_ends_the_wait() {
+        let pull = |body: &str| Beside {
+            pull: Some(body.to_owned()),
+            ..Beside::default()
+        };
+        let (waited, _, _, _) = race_beside(&[check("", 1)], false, pull("[]"));
+        assert_eq!(waited, Waited::Closed);
+        let (waited, _, _, _) = race_beside(
+            &[check("", 1)],
+            false,
+            pull(r#"[{"number":7,"head":{"sha":"t"}}]"#),
+        );
+        assert_eq!(
+            waited,
+            Waited::Moved {
+                head: String::from("t")
+            }
+        );
+        let (waited, _, _, _) = race_beside(
+            &[check("", 1), check("success", 1)],
+            false,
+            pull(r#"[{"number":7,"head":{"sha":"s"}}]"#),
+        );
+        assert!(
+            matches!(waited, Waited::Green { .. }),
+            "an open pull request still at the sha keeps the wait: {waited:?}"
+        );
+    }
+
+    /// A REQUIRED NAME NO WORKFLOW EMITS IS DECIDED ON REGISTRATION (CLOUD-2253
+    /// A2): every check suite on the head registered and concluded, the name
+    /// still without a run, is a dead end naming it — and a suite still running
+    /// keeps the wait.
+    ///
+    /// Fails by: a name no workflow emits waited on forever, or one refused
+    /// while a suite that may emit it is still running.
+    #[test]
+    fn a_required_name_no_workflow_emits_is_a_dead_end_once_the_suites_conclude() {
+        let other = r#"{"check_runs":[{"status":"completed","conclusion":"success","name":"other","id":1}]}"#;
+        let suite = |id: u64, status: &str| {
+            format!(r#"{{"check_suites":[{{"id":{id},"status":"{status}"}}]}}"#)
+        };
+        let (waited, _, _, asked) = race_beside(
+            &[other.to_owned()],
+            false,
+            Beside {
+                suites: vec![suite(1, "in_progress"), suite(1, "completed")],
+                ..Beside::default()
+            },
+        );
+        assert_eq!(asked, 2, "the running suite kept the wait one ask");
+        assert_eq!(
+            waited,
+            Waited::DeadEnd {
+                findings: vec![crate::checks_green::Finding {
+                    check: String::from("ci"),
+                    conclusion: String::from("never-emitted"),
+                }]
+            }
+        );
+        let mut before = None;
+        let closed = Some((std::collections::BTreeSet::from([1]), true));
+        assert!(
+            !never_emitted(closed.clone(), true, &mut before),
+            "after a fresh ready, the first reading is the draft-era suites"
+        );
+        assert!(
+            !never_emitted(closed, true, &mut before),
+            "no new suite yet"
+        );
+        let fresh = Some((std::collections::BTreeSet::from([1, 2]), true));
+        assert!(never_emitted(fresh, true, &mut before));
+        let mut unused = None;
+        assert!(
+            !never_emitted(
+                Some((std::collections::BTreeSet::new(), true)),
+                false,
+                &mut unused
+            ),
+            "no suite at all is no registration"
+        );
     }
 
     #[test]
     fn a_red_verdict_carries_the_failed_run_it_was_read_over() {
-        let (waited, red, _) = race(&[check("failure", 5)], 3, false);
+        let (waited, red, _) = race(&[check("failure", 5)], false);
         assert!(matches!(waited, Waited::Red { .. }), "{waited:?}");
         assert_eq!(red.failed, vec![(5, String::from("ci"))]);
     }
 
     #[test]
     fn a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_run() {
-        let (waited, _, _) = race(&[check("skipped", 1)], 2, false);
+        let (waited, _, _) = race(&[check("skipped", 1)], false);
         assert!(matches!(waited, Waited::DeadEnd { .. }), "{waited:?}");
-        let (waited, _, _) = race(&[check("skipped", 1)], 2, true);
-        assert_eq!(waited, Waited::Unanswered);
-        let (waited, _, _) = race(&[check("skipped", 1), check("skipped", 2)], 3, true);
+        let (waited, _, _, asked) = race_beside(
+            &[
+                check("skipped", 1),
+                check("skipped", 1),
+                check("skipped", 2),
+            ],
+            true,
+            Beside::default(),
+        );
         assert!(matches!(waited, Waited::DeadEnd { .. }), "{waited:?}");
+        assert_eq!(
+            asked, 3,
+            "believed only once the ready's own run registered"
+        );
     }
 
     /// The watcher arm over `trunks` (the trunk ref's reads, the last
@@ -5383,10 +5672,25 @@ mod lap_tests {
         // `Ok(_)` matched rather than unwrapped: the only `Err` here is a stream
         // that will not accept output, and a `Vec` always accepts, so a panic
         // would be reporting the impossible case as the interesting one.
-        assert_eq!(
-            super::wait(&config, &roster, &trunk, 1, false, &|_| (), &mut out).ok(),
-            Some(super::Waited::Unanswered),
-            "an unreachable forge is a could-not-look, never a verdict about the work"
+        // NO ASK COUNT ENDS IT ANY MORE (CLOUD-2253 A2): a repository the forge
+        // will not serve is a refusal, named on the first ask, and a forge that
+        // answers nothing at all is the could-not-look fault. Neither is a
+        // verdict about the work.
+        let waited = super::wait_reading(
+            (&config, &roster, &trunk),
+            (false, None),
+            None,
+            &|_| (),
+            &mut out,
+        )
+        .ok()
+        .map(|(waited, _)| waited);
+        assert!(
+            matches!(
+                waited,
+                Some(super::Waited::Refused { .. } | super::Waited::Unread)
+            ),
+            "an unreachable forge is a fault, never a verdict about the work: {waited:?}"
         );
     }
 
@@ -6898,10 +7202,22 @@ mod tests {
 
     #[test]
     fn a_wait_that_read_nothing_is_not_a_pending_reading() {
+        // NO WAIT ENDS PENDING ANY MORE (CLOUD-2253 A2): with no ask count, a
+        // wait that took no reading ended on a fault, and a fault is unread.
         assert_eq!(
-            tap_verdict(&Waited::Unanswered),
-            Some(TapVerdict::Pending),
-            "asking the full count and seeing nothing terminal IS a reading"
+            tap_verdict(&Waited::Unread),
+            Some(TapVerdict::Unread),
+            "a forge that answered nothing took no reading"
+        );
+        assert_eq!(
+            tap_verdict(&Waited::Refused { status: 403 }),
+            Some(TapVerdict::Unread),
+            "a refused read took no reading either"
+        );
+        assert_eq!(
+            tap_verdict(&Waited::Closed),
+            None,
+            "the checks were not read"
         );
         assert_eq!(
             tap_verdict(&Waited::Stale {
@@ -6999,12 +7315,17 @@ mod tests {
         );
     }
 
-    /// And the mapping reaches the decision: a lap that ran out of asks over a
-    /// pull request it owns closes the tap, and one whose base moved does not.
+    /// And the mapping reaches the decision: a dead end over a pull request the
+    /// lap owns closes the tap, and a fault or a moved base does not
+    /// (CLOUD-2253 A2: no wait runs out of asks any more).
     #[test]
-    fn an_unanswered_lap_closes_the_tap_and_a_stale_one_does_not() {
-        let unanswered = tap_verdict(&Waited::Unanswered);
-        assert!(closes_the_tap(&tap(false, true, Some(false), unanswered)));
+    fn a_dead_end_closes_the_tap_and_a_fault_or_a_stale_one_does_not() {
+        let dead = tap_verdict(&Waited::DeadEnd {
+            findings: Vec::new(),
+        });
+        assert!(closes_the_tap(&tap(false, true, Some(false), dead)));
+        let fault = tap_verdict(&Waited::Unread);
+        assert!(!closes_the_tap(&tap(false, true, Some(false), fault)));
 
         let stale = tap_verdict(&Waited::Stale {
             base: String::from("0000000"),

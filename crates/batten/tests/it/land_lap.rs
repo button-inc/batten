@@ -296,7 +296,8 @@ fn every_lap_ending_is_reachable_from_some_step_and_code() {
 ///
 /// The forge answered none of the first asks, so no reading was taken. Read as
 /// `Pending` it re-drafted a ready head and cancelled its runs on a forge nobody
-/// could read. The lap behaviour is unchanged: it still laps.
+/// could read. And it is a FAULT, named, never a wait outcome (CLOUD-2253 A2):
+/// the landing stops rather than lapping onto the same forge.
 #[test]
 fn an_unread_wait_neither_re_drafts_nor_cancels() {
     let seen = land::tap_verdict(&land::Waited::Unread);
@@ -318,8 +319,8 @@ fn an_unread_wait_neither_re_drafts_nor_cancels() {
     for basis in [land::Basis::Own, land::Basis::Borrowed] {
         assert_eq!(
             land::progress_of(Step::Wait, ExitCode::Internal, seen, basis),
-            Progress::Lap,
-            "the carve-out leaves lapping as it was ({basis:?})"
+            Progress::Stop,
+            "a forge fault stops the landing ({basis:?})"
         );
     }
 }

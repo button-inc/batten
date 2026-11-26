@@ -13156,7 +13156,7 @@ fn run_land_lap(
         // never, so the lap loop fell straight through to the exhausted-laps
         // message and reported "0 lap(s) bought no landing" at exit 3 — a
         // could-not-look about a branch nothing looked at. The same positive
-        // filter `LAND_ANSWER_MAX_UNKNOWNS` already applies to its own count.
+        // filter every declared count here takes.
         .filter(|laps| *laps > 0)
         .unwrap_or(LAPS);
     if let Ok(mut cell) = LAP_ENGINE.lock() {
@@ -14907,6 +14907,30 @@ fn land_remote(root: &Path, err: &mut dyn Write) -> Result<Option<String>> {
     Ok(Some(url.clone()))
 }
 
+/// The fast-forward bot's answer, asked until it gives one (CLOUD-2253 A2):
+/// accepted or refused, never a count of asks. `Unknown` — a transport failure,
+/// an unreadable body, a run that decided nothing — is asked again, and only a
+/// run of [`pr_watch::UNANSWERED_BEFORE_REFUSING`] of them with no reading in
+/// between ends the poll, as the fault, carrying the last `Unknown`.
+fn bot_answer(
+    mut read: impl FnMut() -> fast_forward::Answer,
+    mut pause: impl FnMut(),
+) -> fast_forward::Answer {
+    let mut unanswered: u64 = 0;
+    loop {
+        let verdict = read();
+        match &verdict {
+            fast_forward::Answer::Accepted | fast_forward::Answer::Refused => return verdict,
+            fast_forward::Answer::Unknown(_) => unanswered += 1,
+            fast_forward::Answer::Pending => unanswered = 0,
+        }
+        if unanswered >= pr_watch::UNANSWERED_BEFORE_REFUSING {
+            return verdict;
+        }
+        pause();
+    }
+}
+
 /// `batten land fast-forward` (CLOUD-1338): ask, then read the answer to THAT ask.
 ///
 /// # `$LAND_WORKFLOW` and no default, for `$LAND_VERIFY`'s reason
@@ -15038,62 +15062,31 @@ fn run_land_fast_forward(
             // is the state the loop exists to sit in". No loop sat in it. This is
             // that sentence made true.
             //
-            // A COUNT, never a deadline, matching `run_land_wait`'s own bound and
-            // for its reason: the cost of too many asks is conditional requests
-            // the forge answers cheaply, and the cost of too few is a lap that
-            // reports no answer while one was moments away. Exhausting it still
-            // reports `Pending`, so the lap's own budget stays the outer bound.
-            // `LAND_ANSWER_ASKS`, not `LAND_ANSWER_MAX_UNKNOWNS`. The latter
-            // bounds the CI wait with a default three orders of magnitude larger,
-            // and in the predecessor it meant a third thing again — so one name
-            // over both loops is a setting that cannot be tuned for either
-            // (review of #848).
-            let asks = std::env::var("LAND_ANSWER_ASKS")
-                .ok()
-                .and_then(|raw| raw.trim().parse::<u32>().ok())
-                .unwrap_or(120);
-            let mut verdict = fast_forward::Answer::Pending;
+            // NO ASK COUNT ENDS IT (CLOUD-2253 A2). It ends on the bot's answer —
+            // accepted, or refused (a head that stopped descending, a conflict,
+            // a draft) — the same event-only shape as `run_land_wait`. A count
+            // here was a deadline in other units, and exhausting it reported
+            // `Pending`, which laps and posts a second `/fast-forward`.
+            //
+            // A FORGE THAT NEVER ANSWERS IS THE FAULT, NAMED: the never-answered
+            // bound `pr_watch` takes, counted only while no reading at all has
+            // come back, so it ends a broken credential and never a slow bot.
             // `pause_until` slices its wait so a RACING arm can cut it short.
             // Nothing races this one — the lap is serial here — so the flag is
             // permanently false and the slicing is the only thing borrowed.
             let answer_poll_stop = std::sync::atomic::AtomicBool::new(false);
-            for attempt in 0..asks.max(1) {
-                verdict = fast_forward::answer(&ask, &since, &comment);
-                // **A COULD-NOT-LOOK IS NOT AN ANSWER, and breaking on it undid
-                // the poll.** `Answer::Unknown` covers a transport failure, an
-                // unparseable body and any non-runs document — a 403 error page
-                // included — so ONE transient hiccup during the wait ended it,
-                // which laps: the compensation cancels this head's own in-flight
-                // runs, the lap re-verifies, re-readies (buying another matrix),
-                // re-pushes and posts a SECOND `/fast-forward` comment while the
-                // first may be merging. That is the exact failure this poll was
-                // added to fix, reintroduced by its own exit condition.
-                //
-                // Only a REFUSAL or an ACCEPTANCE ends the wait. Exhausting the
-                // count reports whatever the last read said, so an unknown that
-                // never resolves still reaches the caller as one.
-                if matches!(
-                    verdict,
-                    fast_forward::Answer::Accepted | fast_forward::Answer::Refused
-                ) {
-                    break;
-                }
-                if attempt + 1 < asks.max(1) {
-                    // `pr_watch`'s pause, never a second timer: there is ONE
-                    // sleep in this crate and it carries the one
-                    // `disallowed_methods` escape, which is what `land.rs`'s
-                    // stale arm says at its own site and what `spawn-widening`
-                    // refuses a second copy of. The bound is `LAND_ANSWER_ASKS`
-                    // asks over `fast_forward::answer` — the loop breaks on
-                    // `Accepted` or `Refused`, so this paces a poll rather than
-                    // standing in for an exit condition, and exhausting the
-                    // count reports whatever the last read said (CLOUD-1177).
+            let verdict = bot_answer(
+                || fast_forward::answer(&ask, &since, &comment),
+                // `pr_watch`'s pause, never a second timer: there is ONE sleep
+                // in this crate and it carries the one `disallowed_methods`
+                // escape. It paces a poll whose exit is the bot's answer.
+                || {
                     crate::pr_watch::pause_until(
                         fast_forward::ANSWER_POLL_SECONDS,
                         &answer_poll_stop,
                     );
-                }
-            }
+                },
+            );
             match verdict {
                 fast_forward::Answer::Accepted => {
                     writeln!(out, "land: #{} was accepted", ask.pr)?;
@@ -15862,17 +15855,24 @@ fn verify_environment(root: &Path) -> Vec<crate::config_model::OutputPattern> {
         .unwrap_or_default()
 }
 
-/// How many ticks the guard waits to be killed after a cancellation lands.
-///
-/// A COUNT, never a deadline, and the exit condition is being killed rather than
-/// the clock running out: exiting `0` here would let the job march into the
-/// matrix the cancellation just paid an API call to prevent, and exiting non-zero
-/// would red the run. So neither, for as long as a cancellation plausibly takes.
-const CANCEL_TICKS: u32 = 24;
-
-/// One tick, in seconds. `pr_watch::pause` carries the crate's single sleep
-/// exemption, so waiting through it opens no new site for `sleep_ban.rs`.
+/// One tick between reads of the cancelled run, in seconds. `pr_watch::pause`
+/// carries the crate's single sleep exemption, so waiting through it opens no
+/// new site for `sleep_ban.rs`.
 const CANCEL_TICK_SECONDS: f64 = 5.0;
+
+/// Whether the run a guard cancelled has been seen to end (CLOUD-2253 A2):
+/// the run's own reading, concluded. `None` is could-not-look.
+fn cancel_observed(repo: &str, run: &str) -> Option<bool> {
+    let answer = rest::get(&format!("repos/{repo}/actions/runs/{}", run.trim()), None)?;
+    if !answer.is_reading() {
+        return None;
+    }
+    let row: serde_json::Value = serde_json::from_str(&answer.body).ok()?;
+    Some(matches!(
+        crate::forge::RunState::of_row(&row),
+        crate::forge::RunState::Completed(_)
+    ))
+}
 
 /// Report the guard's decision and, on a stop, act on it.
 ///
@@ -15929,15 +15929,33 @@ fn report_guard(
         return Ok(ExitCode::Success);
     }
 
-    // WAIT TO BE KILLED. See `CANCEL_TICKS`.
-    for _ in 0..CANCEL_TICKS {
+    // WAIT TO BE KILLED, UNTIL THE CANCELLATION IS OBSERVED, never for a count
+    // of ticks (CLOUD-2253 A2). Exiting `0` early would let the job march into
+    // the matrix the cancellation paid to prevent, and exiting non-zero would
+    // red the run. The run's own reading concluding is the event; a forge that
+    // answers none of `UNANSWERED_BEFORE_REFUSING` reads is the fault, named.
+    let mut unanswered: u64 = 0;
+    loop {
         pr_watch::pause(CANCEL_TICK_SECONDS);
+        match cancel_observed(repo, run) {
+            Some(true) => {
+                writeln!(
+                    err,
+                    "lease-precondition: run {run} is seen cancelled and this job still runs; running anyway"
+                )?;
+                return Ok(ExitCode::Success);
+            }
+            Some(false) => unanswered = 0,
+            None => unanswered += 1,
+        }
+        if unanswered >= pr_watch::UNANSWERED_BEFORE_REFUSING {
+            writeln!(
+                err,
+                "lease-precondition: run {run} could not be read {unanswered} time(s) running, so its cancellation cannot be observed; running anyway"
+            )?;
+            return Ok(ExitCode::Success);
+        }
     }
-    writeln!(
-        err,
-        "lease-precondition: still alive after {CANCEL_TICKS} tick(s); running anyway"
-    )?;
-    Ok(ExitCode::Success)
 }
 
 /// What the runner's step-0 guard is standing in and asking about.
@@ -16907,24 +16925,16 @@ fn run_land_wait(
         )?;
         return Ok((ExitCode::Usage, None, None));
     }
-    // A COUNT, never a deadline (CLOUD-1177). The default is generous because
-    // the cost of too many asks is a few conditional requests the forge answers
-    // `304`, and the cost of too few is a lap that reports no answer while one
-    // was moments away.
-    let asks = std::env::var("LAND_ANSWER_MAX_UNKNOWNS")
-        .ok()
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .filter(|asks| *asks > 0)
-        .unwrap_or(3600);
-
+    // NO ASK COUNT (CLOUD-2253 A2). The wait ends on an event — a terminal
+    // reading, the trunk or the pull request moving, the pull request closing —
+    // or on a forge fault; a budget of asks was a deadline in other units, and a
+    // CI path longer than it was abandoned on every lap.
     let trunk = trunk_watch(reference, &base, &config.repo, config.interval);
     let holding = Heartbeat::for_clone(root);
     let primed = take_ready_reading(&config.repo, &sha).filter(|_| !fresh_ready);
     let (waited, red) = land::wait_reading(
-        &config,
-        &roster,
-        &trunk,
-        (asks, fresh_ready),
+        (&config, &roster, &trunk),
+        (fresh_ready, Some(branch)),
         primed,
         &|observed| holding.beat(observed),
         out,
@@ -16944,16 +16954,26 @@ fn run_land_wait(
         // table over. Inventing a fifth code for red would be the per-verb
         // exception non-negotiable rule 5 forbids.
         land::Waited::Red { .. } => (land::answers(&sha, Some("red"), None), ExitCode::Violation),
-        // `Unread` takes `Unanswered`'s record and code (CLOUD-1215): both could
-        // not get an answer, and the reading beside the code tells them apart.
-        land::Waited::Unanswered | land::Waited::Unread => {
-            (land::answers(&sha, None, None), ExitCode::Internal)
+        // A FORGE THAT ANSWERED NOTHING IS COULD-NOT-LOOK, `3`, and the reading
+        // beside it (`Unread`) is what stops the landing rather than lapping it
+        // (CLOUD-2253 A2).
+        land::Waited::Unread => (land::answers(&sha, None, None), ExitCode::Internal),
+        // A REFUSED READ IS AN ANSWER ABOUT THE INVOCATION — the credential or
+        // the repository — so `1`, which stops everywhere (CLOUD-2253 A2). And
+        // a pull request CLOSED OR MERGED UNDER THE WAIT leaves nothing further
+        // to ask of it, and no lap reopens it, so `1` as well.
+        land::Waited::Refused { .. } | land::Waited::Closed => {
+            (land::answers(&sha, None, None), ExitCode::Usage)
         }
-        // THE SAME CODE AS `Unanswered`, AND DELIBERATELY (CLOUD-497). Both are
-        // "could not get an answer"; they differ in whether one is coming, and
-        // that difference travels in the reading beside this code — which is
-        // exactly what the comment above says the stale and red arms do. The
-        // verdict token is what `land::progress_of` reads to stop instead of lap.
+        // THE PULL REQUEST'S HEAD MOVED: this sha's runs answer about a head
+        // nobody will land, the stale base's case on the other ref, and it laps
+        // the same way.
+        land::Waited::Moved { head } => (
+            land::answers(&sha, None, Some(head.as_str())),
+            ExitCode::Violation,
+        ),
+        // THE SAME CODE AS `Unread`, AND DELIBERATELY (CLOUD-497): the verdict
+        // token beside it is what `land::progress_of` reads to stop.
         land::Waited::DeadEnd { .. } => (
             land::answers(&sha, Some("dead-end"), None),
             ExitCode::Internal,
@@ -16973,7 +16993,7 @@ fn run_land_wait(
     if let Err(problem) = kept {
         writeln!(err, "::warning:: land wait: {problem:#}")?;
     }
-    say_what_the_wait_saw(&waited, &red.running, &sha, reference, asks, out, err)?;
+    say_what_the_wait_saw(&waited, &red.running, &sha, reference, out, err)?;
     // THE READING TRAVELS WITH THE CODE, because the exit table cannot carry it:
     // a stale base and an unanswered wait are both a lap, and only one of them
     // took a checks reading at all. Deriving the tap's verdict from the code in
@@ -17002,7 +17022,6 @@ fn say_what_the_wait_saw(
     running: &[String],
     sha: &str,
     reference: &str,
-    asks: u32,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<()> {
@@ -17041,13 +17060,30 @@ fn say_what_the_wait_saw(
                 "land: {reference} moved to {base} under {sha}; this lap's run is already waste"
             )?;
         }
-        land::Waited::Unanswered => {
-            writeln!(out, "land: no answer yet on {sha} after {asks} ask(s)")?;
-        }
+        // FAULTS ARE NAMED, AND NEITHER RE-DRAFTS NOR CANCELS (CLOUD-2253 A2).
         land::Waited::Unread => {
             writeln!(
+                err,
+                "::error:: land: the forge answered none of {} check-run reads on {sha}; no reading was taken, so the landing stops with its runs and ready state left alone",
+                pr_watch::UNANSWERED_BEFORE_REFUSING
+            )?;
+        }
+        land::Waited::Refused { status } => {
+            writeln!(
+                err,
+                "::error:: land: the forge refused the check-run read on {sha} with {status}; the credential or the repository is wrong, and asking again changes neither"
+            )?;
+        }
+        land::Waited::Moved { head } => {
+            writeln!(
                 out,
-                "land: the forge answered none of {asks} ask(s) on {sha}; no reading was taken"
+                "land: the pull request's head moved to {head} under {sha}; this lap's run is already waste"
+            )?;
+        }
+        land::Waited::Closed => {
+            writeln!(
+                err,
+                "::error:: land: the pull request for {sha} was closed or merged under the wait; nothing further is asked of it"
             )?;
         }
         // POINTERS AND A REMEDY, in the red arm's shape rather than the
@@ -34523,6 +34559,40 @@ mod tests {
             super::gate_engine(root).is_empty(),
             "no lap engine publishes nothing, so an inherited one stands"
         );
+    }
+
+    /// THE BOT'S ANSWER ENDS THE POLL, NEVER A COUNT (CLOUD-2253 A2): a bot
+    /// pending for more asks than the 120 the poll once allowed is still asked,
+    /// and its acceptance answers; a forge that answers nothing is the fault.
+    ///
+    /// Fails by: a count reporting `Pending` while the bot was about to answer,
+    /// which laps and posts a second `/fast-forward`.
+    #[test]
+    fn the_fast_forward_poll_ends_on_the_bots_answer() {
+        let asked = std::cell::Cell::new(0_u32);
+        let answered = super::bot_answer(
+            || {
+                asked.set(asked.get() + 1);
+                if asked.get() > 500 {
+                    super::fast_forward::Answer::Accepted
+                } else {
+                    super::fast_forward::Answer::Pending
+                }
+            },
+            || {},
+        );
+        assert_eq!(answered, super::fast_forward::Answer::Accepted);
+        assert_eq!(asked.get(), 501);
+        let asked = std::cell::Cell::new(0_u64);
+        let answered = super::bot_answer(
+            || {
+                asked.set(asked.get() + 1);
+                super::fast_forward::Answer::Unknown(String::from("x"))
+            },
+            || {},
+        );
+        assert!(matches!(answered, super::fast_forward::Answer::Unknown(_)));
+        assert_eq!(asked.get(), super::pr_watch::UNANSWERED_BEFORE_REFUSING);
     }
 
     /// One trunk fetch answers a whole bet precheck and the Replay after it
