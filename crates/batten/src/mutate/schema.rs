@@ -10437,9 +10437,23 @@ fn handback_verdict(
     }
 }
 
+/// The target a hand-back builds into: THE SCHEMA BUILD'S OWN, under the
+/// mirror `state` holds, with its arguments ([`cargo_dirs`]).
+///
+/// NEVER A COLD TARGET OF ITS OWN (CLOUD-2253). The hand-back mirror built
+/// into `classic/target` with no arguments: every dependency again, with
+/// debug info, so its first build needed the declared 6,200 MB, and shards
+/// with 5,585-6,155 MB of headroom recorded nine `error` verdicts that were
+/// all caught when judged narrowed. The schema build's dependency units hash
+/// as a hand-back's do under the same arguments, so they are reused, and
+/// only the workspace crates the hand-back's path holds are built again.
+fn handback_target(state: &std::path::Path) -> std::path::PathBuf {
+    state.join("tree").join("target")
+}
+
 /// Whether a hand-back's declared cold build fits the disk holding the mirror
 /// at `tree`, above the collector's floor. `Ok` when no cost is declared, or
-/// when the mirror is warm.
+/// when the target it builds into ([`handback_target`]) is warm.
 ///
 /// # Errors
 ///
@@ -10449,12 +10463,13 @@ fn handback_room(handback: &Handback<'_>, tree: &std::path::Path) -> anyhow::Res
     let Some((need_mb, floor_mb)) = handback.disk else {
         return Ok(());
     };
-    // THE COLD COST IS A COLD MIRROR'S ALONE: `sync` keeps the mirror's own
-    // `target`, so only the first hand-back builds the workspace, and every
-    // later one rebuilds one mutated crate into it. Charged on every run, a
-    // container with under ~10 GB free refused hand-backs that would have
-    // built. Cargo tags a target directory it has built into.
-    if tree.join("target").join("CACHEDIR.TAG").is_file() {
+    // THE COLD COST IS A COLD TARGET'S ALONE: a hand-back builds into the
+    // schema build's target ([`handback_target`]), warm once the schema has
+    // built, so it rebuilds only what its mutated crate's path holds. Charged
+    // on every run, a container with under ~10 GB free refused hand-backs
+    // that would have built. Cargo tags a target directory it has built into.
+    let built = tree.parent().map(handback_target);
+    if built.is_some_and(|target| target.join("CACHEDIR.TAG").is_file()) {
         return Ok(());
     }
     // THE MIRROR'S OWN VOLUME, its nearest existing ancestor before its
@@ -10653,9 +10668,9 @@ fn run_from_own_line(
     super::cargo_mutant_in_place(
         (&tree, handback.runner),
         (handback.diff, &target),
-        &mutant.name,
-        filter,
+        (&mutant.name, filter),
         (bound, &state.join("classic-out")),
+        &cargo_dirs(&handback_target(state)),
     )
 }
 
@@ -14167,7 +14182,8 @@ mod tests {
         // ITS OWN STATE, so the mirror is not inside the tree it copies.
         let state = crate::scratch::scratch(&format!("{name}-state"));
         if warm {
-            let target = state.join("classic").join("target");
+            // THE SCHEMA BUILD'S TARGET, which a hand-back builds into.
+            let target = handback_target(&state);
             std::fs::create_dir_all(&target).unwrap();
             std::fs::write(
                 target.join("CACHEDIR.TAG"),
