@@ -96,6 +96,20 @@ fn alive(pid: i32) -> bool {
         .success()
 }
 
+/// Block until `pid`'s main thread is blocked waiting on a child, read off the
+/// process table: a fact about the process, never a clock. For a Batten that has
+/// spawned its command, that wait is `exec`'s own, the last point before which
+/// it runs any code of its own.
+///
+/// Off Linux there is no table to read and this answers at once, which is the
+/// case's timing before CLOUD-2936. Answers as well once the process is gone.
+fn await_in_wait(pid: u32) {
+    let wchan = PathBuf::from(format!("/proc/{pid}/wchan"));
+    while fs::read_to_string(&wchan).is_ok_and(|now| now.trim() != "do_wait") {
+        std::thread::yield_now();
+    }
+}
+
 /// Send `signal` to `pid`, by name (`TERM`, `INT`, `KILL`).
 fn signal(pid: u32, name: &str) {
     #[expect(
@@ -280,6 +294,11 @@ fn an_unowned_tree_survives_because_the_opt_in_is_off() {
 
     let mut batten = spawn_exec(&dir, &home, &child, &[]);
     let grandchild: i32 = note.read().parse().expect("a pid");
+    // SIGNALLED IN ITS WAIT, NEVER BEFORE IT (CLOUD-2936). With the opt-in off
+    // Batten installs no forwarder, so the TERM ends it wherever it stands, and
+    // the grandchild's word races Batten's own steps between the spawn and the
+    // wait: one recording died past `GroupRecord::write`, the next before it.
+    await_in_wait(batten.id());
     signal(batten.id(), "TERM");
     let _ = batten.wait().expect("batten exits");
 
