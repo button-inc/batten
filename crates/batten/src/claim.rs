@@ -54,6 +54,14 @@ use crate::error::UsageError;
 // host-free version in `landed` is the survivor; its doc carries the reasoning.
 use crate::landed::is_pull_request_url;
 
+/// The out-of-tree receipt directory both halves of the claim protocol share.
+///
+/// HERE, NOT AT THE CRATE ROOT (CLOUD-2789): the mutant mirror names it to
+/// leave the engine's runtime state out, and a reference to the root from
+/// `mutate::schema` made every module reaching the schema reach the whole
+/// crate, which `modules-ratchet` measured as propagation 5268 to 5374.
+pub(crate) const RECEIPT_DIR: &str = "batten-receipts";
+
 /// A refusal: which issue, and which rule.
 ///
 /// **Pointer-only** (rule 4): the issue key, the rule id, and a PR number where
