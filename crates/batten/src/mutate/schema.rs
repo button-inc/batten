@@ -5349,6 +5349,9 @@ fn control_scope(
     scope
 }
 
+/// One control run over a batch: how it ended, and the junit report it wrote.
+type ControlRun = (anyhow::Result<super::Ran>, Option<String>);
+
 /// One control batch's red cases, and every report its runs wrote (CLOUD-2936).
 ///
 /// THE RUN'S BOUND IS NOT THE CASE'S VERDICT. The first run is fail-fast and
@@ -5367,7 +5370,7 @@ fn control_scope(
 /// A run could not start, or failed and named no failed case.
 fn control_batch(
     batch: &BTreeSet<Case>,
-    run: &mut dyn FnMut(&BTreeSet<Case>, bool) -> (anyhow::Result<super::Ran>, Option<String>),
+    run: &mut dyn FnMut(&BTreeSet<Case>, bool) -> ControlRun,
 ) -> anyhow::Result<(Red, Vec<String>)> {
     let mut red = Red::new();
     let mut reports = Vec::new();
@@ -11910,10 +11913,6 @@ pub fn mirror_target(root: &std::path::Path) -> anyhow::Result<std::path::PathBu
 ///
 /// The tree cannot be staged, the schema does not build, or the unmutated
 /// suite fails.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one sweep's phases in order, each a call: split, the order they must run in is no longer read in one place"
-)]
 pub fn sweep(
     root: &std::path::Path,
     mutants: &[Listed],
@@ -12023,26 +12022,51 @@ pub fn sweep(
         reuse: reuse.as_ref(),
         threads: judges.threads,
     };
-    let shown = shown_over(&judging, &todo, &schema)?;
-    let handed = (handback.is_some(), &classic, &schema, &reach);
-    let (red, control) = control_red(&judging, &control_scope(&judging, &todo, handed), out)?;
+    judge_todo(
+        judging,
+        (&todo, judges.workers),
+        (&classic, unviable, &schema, &reach),
+        handback.map(|handback| (handback, live, listed_over, state.as_path())),
+        (&state, started),
+        out,
+    )
+}
+
+/// A sweep's judging phase over `todo` on `workers`: the control run, every
+/// switched mutant, the hand-backs, and the report over all of them, which
+/// [`sweep`] reaches once its build and reach run have answered.
+///
+/// # Errors
+///
+/// The control run, a hand-back or the report could not be written.
+fn judge_todo(
+    judging: Judging<'_>,
+    (todo, workers): (&[u32], usize),
+    (classic, unviable, schema, reach): (&BTreeSet<u32>, usize, &Schema, &Reach),
+    handback: Option<(&Handback<'_>, &std::path::Path, &str, &std::path::Path)>,
+    (state, started): (&std::path::Path, std::time::Instant),
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<Swept> {
+    let shown = shown_over(&judging, todo, schema)?;
+    let handed = (handback.is_some(), classic, schema, reach);
+    let (red, control) = control_red(&judging, &control_scope(&judging, todo, handed), out)?;
     let judging = judging.with_red(&red).with_control(&control);
-    let mut verdicts = judge_all(&judging, &todo, judges.workers, out);
+    let mut verdicts = judge_all(&judging, todo, workers, out);
     drop(shown);
     let (names, handed_unviable) = settle_handed(
         &judging,
-        handback.map(|handback| (handback, live, listed_over, state.as_path())),
-        (&classic, &schema, &reach),
+        handback,
+        (classic, schema, reach),
         &mut verdicts,
         out,
     )?;
     let code = report(
         out,
-        mutants,
+        judging.mutants,
         &verdicts,
         (&red, &reach.sites),
         (unviable_total(unviable, handed_unviable), classic.len()),
-        &state,
+        state,
         started.elapsed().as_secs(),
     )?;
     Ok(Swept {
