@@ -37,8 +37,8 @@ fn bench(name: &str) -> PathBuf {
              [[verdict]]\nid = \"tool install pending\"\n\
              gloss = \"a program this call runs may still be installing\"\n\
              class = \"held while the session's setup task installs\"\n\n\
-             [[verdict.route]]\nid = \"task watch first\"\nkind = \"command\"\n\
-             target = \"batten task alive\"\n\n\
+             [[verdict.route]]\nid = \"tool install first\"\nkind = \"command\"\n\
+             target = \"batten startup --session\"\n\n\
              [[hook.handler]]\nid = \"setup\"\non = \"session-start\"\nrun = [\"true\"]\n\
              timeout_ms = 5000\n",
         )
@@ -201,8 +201,8 @@ fn a_pending_program_is_held_while_the_setup_task_runs() {
     let said = call(&dir, &format!("{ABSENT} --version"));
     assert!(held(&said), "a program nothing resolves is held: {said}");
     assert!(
-        said.contains("session-setup running") && said.contains("batten task alive"),
-        "the hold names the task, says it is still running, and points at it: {said}"
+        said.contains("session-setup running") && said.contains("batten startup --session"),
+        "the hold names the task, says it is still running, and names the dispatch: {said}"
     );
     let env = shimmed(&dir);
     let env: Vec<(&str, &std::ffi::OsStr)> = env
@@ -258,7 +258,16 @@ fn a_call_before_the_dispatch_is_held_and_a_read_is_not() {
     let source = dir.join("README").display().to_string();
     let said = tool_call(&dir, "Read", &serde_json::json!({"file_path": source}), &[]);
     assert!(!held(&said), "a read is admitted: {said}");
-    assert!(!held(&call(&dir, "git status")), "git status is a read");
+    // GIT IS NO READ BEFORE THE DISPATCH (r5): its options and `GIT_*`
+    // variables can make it run a program, and the reading that tells them
+    // apart is the library's, which the pinned release may not carry.
+    for command in [
+        "git status",
+        "git -c core.fsmonitor=./x status",
+        "GIT_EXTERNAL_DIFF=./x git status",
+    ] {
+        assert!(held(&call(&dir, command)), "`{command}` is held");
+    }
     assert!(!held(&call(&dir, "cat README")), "a reader is a read");
     assert!(
         held(&call(&dir, "cat README > copy")),
@@ -277,6 +286,223 @@ fn a_call_before_the_dispatch_is_held_and_a_read_is_not() {
     assert!(
         held(&foreground),
         "but never in the foreground: {foreground}"
+    );
+    // AN INLINE CALL AS CLAUDE CODE SENDS IT: `run_in_background` omitted
+    // (review of 076a19082). Refused, naming the dispatch to run instead.
+    let inline = tool_call(
+        &dir,
+        "Bash",
+        &serde_json::json!({"command": "batten startup --session"}),
+        &[],
+    );
+    assert!(
+        held(&inline) && inline.contains("batten startup --session"),
+        "an inline dispatch is refused with the instruction: {inline}"
+    );
+}
+
+/// Fails by: an inline `batten startup --session` admitted in any state —
+/// mutant `inline-dispatch-open` — so a dispatch holds the turn for minutes.
+/// `batten` lives outside every install root, so phase (b) alone never named
+/// it, and an `ok` setup judges nothing else.
+#[test]
+fn an_inline_dispatch_is_held_in_every_state() {
+    let dir = bench("install-gate-inline");
+    let _ = session_start(&dir);
+    let inline = |dir: &Path| {
+        tool_call(
+            dir,
+            "Bash",
+            &serde_json::json!({"command": "batten startup --session"}),
+            &[],
+        )
+    };
+    let said = inline(&dir);
+    assert!(held(&said), "undispatched: {said}");
+    let alive = std::process::id().to_string();
+    for (pid, phase) in [
+        (alive.as_str(), "handlers"),
+        (NO_SUCH_PID, "failed"),
+        (NO_SUCH_PID, "ok"),
+    ] {
+        setup(&dir, pid, phase);
+        let said = inline(&dir);
+        assert!(
+            held(&said) && said.contains("batten startup --session inline"),
+            "{phase}: an inline dispatch is held: {said}"
+        );
+        assert!(
+            !held(&call(&dir, "batten startup --session")),
+            "{phase}: the background dispatch is admitted"
+        );
+    }
+}
+
+/// A shell call through `harness`'s `PreToolUse`-moment `event`, its command
+/// nested under `tool_input` as every host but Cursor's specialized events
+/// nests it: what the door said.
+fn host_call(dir: &Path, harness: &str, event: &str, command: &str) -> String {
+    let payload = serde_json::json!({
+        "hook_event_name": event,
+        "cwd": dir,
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    })
+    .to_string();
+    let answer = common::stdin_run(
+        &mut common::batten(),
+        dir,
+        &["adjudicate", "--harness", harness],
+        &payload,
+    );
+    format!("{}{}", common::stdout(&answer), common::stderr(&answer))
+}
+
+/// Fails by: the dispatch admitted only with a background flag — mutant
+/// `host-dispatch-unread` — so a host whose shell tool sends none (Cursor,
+/// Codex, Gemini, Copilot) can never dispatch, and phase (a) holds that
+/// session for good. On such a host the inline dispatch is the one it can
+/// make. Each host's ordinary mutating call is still held, so the case reads
+/// the gate rather than a host it never reached; Claude Code, which has the
+/// facility, still holds its inline dispatch.
+#[test]
+fn a_host_without_a_background_facility_dispatches_inline() {
+    let dir = bench("install-gate-hosts");
+    let _ = session_start(&dir);
+    for (harness, event) in [
+        ("codex-cli", "PreToolUse"),
+        ("gemini-cli", "BeforeTool"),
+        ("copilot-cli", "PreToolUse"),
+    ] {
+        let said = host_call(&dir, harness, event, "cargo build");
+        assert!(held(&said), "{harness}: a mutating call is held: {said}");
+        let said = host_call(&dir, harness, event, "batten startup --session");
+        assert!(
+            !held(&said),
+            "{harness}: the inline dispatch is admitted: {said}"
+        );
+    }
+    assert!(
+        held(&cursor_shell(&dir, "cargo build")),
+        "cursor: a mutating call is held"
+    );
+    let said = cursor_shell(&dir, "batten startup --session");
+    assert!(
+        !held(&said),
+        "cursor: the inline dispatch is admitted: {said}"
+    );
+    let said = host_call(
+        &dir,
+        "claude-code",
+        "PreToolUse",
+        "batten startup --session",
+    );
+    assert!(
+        held(&said) && said.contains("batten startup --session inline"),
+        "claude-code: the inline dispatch is still held: {said}"
+    );
+}
+
+/// Fails by: a reader the install may own admitted before the dispatch —
+/// mutant `pending-read-open` — so a shim under the manager's root runs the
+/// manager, whose auto-install runs before setup.
+#[test]
+fn a_reader_the_install_may_own_is_held_before_the_dispatch() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = bench("install-gate-pending-reader");
+    let _ = session_start(&dir);
+    let data = dir.join("mise-data");
+    let bin = data.join("installs/cat/1.0/bin");
+    std::fs::create_dir_all(&bin).expect("the install root");
+    let cat = bin.join("cat");
+    std::fs::write(&cat, "#!/bin/sh\n").expect("the shim");
+    std::fs::set_permissions(&cat, std::fs::Permissions::from_mode(0o755))
+        .expect("the shim is runnable");
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&common::ambient_path())),
+    )
+    .expect("a joinable PATH");
+    let env = [
+        ("MISE_DATA_DIR", data.as_os_str()),
+        ("PATH", path.as_os_str()),
+    ];
+    let said = call_with(&dir, "cat README", &env);
+    assert!(
+        held(&said),
+        "a reader under the install root is held: {said}"
+    );
+    assert!(
+        !held(&call(&dir, "cat README")),
+        "the same reader resolved outside it is a read"
+    );
+}
+
+/// A call through Cursor's shell hook, which names its tool `Shell`.
+fn cursor_shell(dir: &Path, command: &str) -> String {
+    let payload = serde_json::json!({
+        "hook_event_name": "beforeShellExecution",
+        "cwd": dir,
+        "command": command,
+    })
+    .to_string();
+    let answer = common::stdin_run(
+        &mut common::batten(),
+        dir,
+        &["adjudicate", "--harness", "cursor"],
+        &payload,
+    );
+    format!("{}{}", common::stdout(&answer), common::stderr(&answer))
+}
+
+/// Fails by: phase (a) reading a read only by Claude Code's tool names —
+/// mutant `neutral-read-unread` — so a host the library does not know
+/// (Cursor's `Shell`) cannot look before it dispatches.
+#[test]
+fn a_host_neutral_read_is_admitted_before_the_dispatch() {
+    let dir = bench("install-gate-neutral");
+    let _ = session_start(&dir);
+    for command in ["ls", "cat README"] {
+        let said = cursor_shell(&dir, command);
+        assert!(!held(&said), "`{command}` is a read on any host: {said}");
+    }
+    let said = cursor_shell(&dir, "touch a");
+    assert!(held(&said), "a write is held on any host: {said}");
+}
+
+/// Fails by: the committed `batten.toml` not loading with this verdict's
+/// route, or its `command` route carrying anything but the dispatch's argv. A
+/// command route's target is the refusal's runnable fix, split on whitespace,
+/// so prose there (r4's) is an argv nobody can run (r5). The wait and the
+/// per-host spelling are the class's. The bench above builds its own config,
+/// so only this case reads the shipped one.
+///
+/// Fails too by: the class naming a command to wait with. While setup runs,
+/// this gate holds the environment manager, and `task run loose` refuses a
+/// bare spelling of any task it wraps: `batten task alive`, the wait r3 named,
+/// was refused toward `mise run alive`, which this gate held, a remedy cycle.
+#[test]
+fn the_committed_config_names_the_dispatch_and_the_wait() {
+    let said = common::run(
+        &common::at_root("."),
+        &["policy", "explain", "tool install pending"],
+    );
+    let text = format!("{}{}", common::stdout(&said), common::stderr(&said));
+    assert!(said.status.success(), "the committed config loads: {text}");
+    let route = text
+        .lines()
+        .find(|line| line.starts_with("tool install first"))
+        .unwrap_or_else(|| panic!("the dispatch route is declared: {text}"));
+    let target = route
+        .split_whitespace()
+        .skip_while(|word| *word != "command")
+        .skip(1);
+    assert!(
+        target.eq(["batten", "startup", "--session"]),
+        "the route's target is the dispatch's argv and nothing else: {route}"
+    );
+    assert!(
+        text.contains("Run nothing to wait") && !text.contains("task alive"),
+        "the class says to wait without naming a command: {text}"
     );
 }
 
