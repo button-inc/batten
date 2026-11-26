@@ -2,11 +2,11 @@
 //!
 //! The schema build writes each probed source's rendering over the copy's own
 //! file, so cargo compiles the switches. A case reads the tree as well: a
-//! census scanning `crates/**/*.rs`, a module graph parsed from the sources, a
-//! name searched across the tracked files. Over the rendering each of those
-//! reads differs from the checkout's, so the case went red in the unmutated
-//! baseline while `test:cargo` was green, and every mutant it reaches was left
-//! unjudged (`preset-overlay` "named" by the rendered `policy.rs`).
+//! census scanning `crates/**/*.rs`, a step whose cache key refuses a dirty
+//! tree. Over the rendering each of those reads differs from the checkout's,
+//! so the case went red in the unmutated baseline alone, and every mutant it
+//! reaches was left unjudged (`prune_watch`'s step probe read the copy's
+//! rendered sources as uncommitted and found no key).
 //!
 //! [`Shown`] puts each rendered file's original text back for the length of a
 //! suite run, at the rendered file's own modification time. Cargo decides a
