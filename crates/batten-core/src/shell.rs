@@ -2099,6 +2099,32 @@ mod tests {
         }
     }
 
+    /// A COMPOUND'S STDIN BINDS EVERY COMMAND INSIDE IT, and a command's own
+    /// stdin redirect survives a compound that binds none (CLOUD-2789).
+    ///
+    /// Fails by: the compound's binding intersected with each command's own
+    /// rather than joined, so `{ cat; } < f` reads as `cat` on an open stdin,
+    /// or `{ cat < f; } > out` loses `cat`'s own redirect.
+    #[test]
+    fn a_compounds_stdin_binding_joins_each_commands_own() {
+        for command in ["{ cat; } < f", "{ cat < f; } > out", "( cat ) <<< x"] {
+            let parsed = parsed(command);
+            assert!(
+                parsed.iter().any(|segment| segment
+                    .words
+                    .first()
+                    .is_some_and(|word| word == "cat")
+                    && segment.input_redirect),
+                "`{command}`: {parsed:?}"
+            );
+        }
+        let open = parsed("{ cat; } > out");
+        assert!(
+            open.iter().all(|segment| !segment.input_redirect),
+            "{open:?}"
+        );
+    }
+
     /// Owned words, for the table cases below.
     fn words(list: &[&str]) -> Vec<String> {
         list.iter().map(|word| (*word).to_owned()).collect()
