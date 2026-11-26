@@ -915,6 +915,37 @@ mod tests {
         drop(twin);
     }
 
+    /// A thread holding a lock shared that asks for it exclusive is refused as
+    /// re-entry, either way round: one exclusive side is a conflict. The stop
+    /// is raised, so a wait that should have been a refusal answers `Stopped`
+    /// rather than waiting on this thread.
+    ///
+    /// Fails by: a conflict read only where both sides are exclusive, so the
+    /// mixed pair waits on itself (bootstrap shard 7/8 at 34c6e4d1f survived
+    /// `||` as `&&` in `register`).
+    #[test]
+    fn a_shared_and_an_exclusive_hold_in_one_thread_are_reentry() {
+        let stop = Stop::new().unwrap();
+        stop.raise();
+        for (held, asked) in [
+            (Mode::Shared, Mode::Exclusive),
+            (Mode::Exclusive, Mode::Shared),
+        ] {
+            let (path, file) = lock_file("mixed");
+            let Taken::Held(first) = acquire(file, &path, held, None).unwrap() else {
+                panic!("the first lock is taken");
+            };
+            assert!(
+                matches!(
+                    acquire(reopen(&path), &path, asked, Some(&stop)).unwrap(),
+                    Taken::Reentrant
+                ),
+                "{held:?} then {asked:?}"
+            );
+            drop(first);
+        }
+    }
+
     /// Fails by: two shared holds in one process refused as re-entry.
     #[test]
     fn two_shared_holds_in_one_process_are_not_reentry() {
