@@ -13931,7 +13931,6 @@ mod tests {
     /// the case asserts it was replaced. The source is sparse.
     #[test]
     fn the_tree_walks_hold_no_file_whole() {
-        use crate::capture::Streamed as _;
         const BIG: u64 = 512 << 20;
         if let Some(dir) = std::env::var_os(BOUNDED_WALK) {
             let dir = std::path::PathBuf::from(dir);
@@ -13975,29 +13974,31 @@ mod tests {
         }
         crate::gitwrite::init_on_main(&live).expect("a repository");
         crate::gitwrite::commit_paths(&live, &[String::from("a.txt")], "base").expect("commit");
-        #[expect(
-            clippy::disallowed_types,
-            reason = "test-only: the case runs itself again as a child whose data limit is capped, which only a spawn can hold apart from the suite"
-        )]
-        let child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
+        // The child is this test binary run again, through the sweep's own
+        // spawner for a test binary (`Program::Test`): no spawn of the case's
+        // own, and its data limit is capped inside it, above.
+        let image = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let child = crate::mutate::spawn(
+            &dir,
+            crate::mutate::Program::Test(&image),
+            &[
                 "--exact",
                 "mutate::schema::tests::the_tree_walks_hold_no_file_whole",
                 "--nocapture",
-            ])
-            .env(BOUNDED_WALK, &dir)
-            .streamed_output()
-            .expect("run the capped child");
+            ]
+            .map(ToOwned::to_owned),
+            &[(BOUNDED_WALK.to_owned(), dir.to_string_lossy().into_owned())],
+            crate::mutate::runner_bound(),
+        )
+        .expect("run the capped child");
+        assert!(child.passed(), "{}", child.output);
         assert!(
-            child.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&child.stdout),
-            String::from_utf8_lossy(&child.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&child.stdout).contains("1 passed"),
+            child.stdout.contains("1 passed"),
             "the child ran the case: {}",
-            String::from_utf8_lossy(&child.stdout)
+            child.stdout
         );
     }
 

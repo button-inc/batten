@@ -8548,18 +8548,36 @@ pub(crate) fn is_not_an_executable_image(err: &std::io::Error) -> bool {
 /// nothing above it. Every failure is ignored: progress is a signal, never a
 /// verdict.
 pub fn record_progress(program: &str, args: &[String]) {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: the recorder is a program the CALLER names, so there is no in-process form of it to prefer — the same standing a handler has (CLOUD-320)"
-    )]
     let _ = spawn_resolving(Some(Path::new(".")), program, |program, extra| {
-        std::process::Command::new(program)
-            .args(extra)
-            .args(args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
+        quiet_status(Path::new("."), program, extra, args)
     });
+}
+
+/// Run `program` with `extra` then `args` at `root`, both of its outputs
+/// discarded, and answer its exit status: the one spawn a `command` rule's
+/// checker and `pr watch --progress`'s recorder share. Both are a program the
+/// CALLER names, so neither has an in-process form, and the verdict is the
+/// exit code alone, never what the program said (CLOUD-93).
+///
+/// ONE ESCAPE FOR BOTH (CLOUD-2789): the recorder's own copy, moved here from
+/// the crate root, was a second census row for the same spawn.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: a `command` rule IS a consumer's checker program, and the progress recorder a program its caller names, which is why the kind carries ambient authority and `RuleKind::scopes` keeps it off the mediated call entirely (CLOUD-763, CLOUD-320)"
+)]
+fn quiet_status(
+    root: &Path,
+    program: &str,
+    extra: &[&str],
+    args: &[impl AsRef<std::ffi::OsStr>],
+) -> std::io::Result<std::process::ExitStatus> {
+    std::process::Command::new(program)
+        .args(extra)
+        .args(args)
+        .current_dir(root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
 }
 
 /// Spawn `program`, resolving the two ways Windows refuses a program a shell
@@ -9044,19 +9062,8 @@ fn run_once(
     // The predicate is the exit code alone; the command's own streams are not
     // parsed for meaning (CLOUD-93) and are not surfaced here — a bounded,
     // pointer-only drain is the advisory subsystem's job (CLOUD-82).
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: a `command` rule IS a consumer's checker program, which is why the kind carries ambient authority and `RuleKind::scopes` keeps it off the mediated call entirely (CLOUD-763)"
-    )]
-    let spawn = |program: &str, args: &[&str], extra: &[&str]| {
-        std::process::Command::new(program)
-            .args(extra)
-            .args(args)
-            .current_dir(root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-    };
+    let spawn =
+        |program: &str, args: &[&str], extra: &[&str]| quiet_status(root, program, extra, args);
 
     // CLOUD-617's whole resolution, shared with `secrets` and `judge` rather
     // than restated here — the two Windows refusals and the order they compose

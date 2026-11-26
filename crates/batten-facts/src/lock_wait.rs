@@ -211,6 +211,13 @@ impl Stop {
     pub fn is_raised(&self) -> bool {
         self.raised.load(Ordering::SeqCst)
     }
+
+    /// How many helpers' stdins it holds: one per helper still waiting on its
+    /// behalf, so `0` once every [`wait_with_helper`] on it has returned.
+    #[must_use]
+    pub fn helpers_held(&self) -> usize {
+        self.helpers.lock().map_or(0, |helpers| helpers.len())
+    }
 }
 
 /// A file's identity, so two handles to one file are one lock.
@@ -956,35 +963,5 @@ mod tests {
             acquire(reopen(&path), &path, Mode::Shared, None).unwrap(),
             Taken::Held(_)
         ));
-    }
-
-    /// CLOUD-2789: a helper's stdin, held by the stop it waits on, is let go
-    /// when the helper is done with, not kept until the stop is raised.
-    ///
-    /// Fails by: [`Stop::release`] doing nothing (a mutant missed at
-    /// 34c6e4d1f), so each helper a long-lived stop outlives leaks a pipe.
-    /// `true` is the helper, so off unix the case returns at once; `cfg!`
-    /// rather than `#[cfg]` keeps it compiled, and counted, on every target.
-    #[test]
-    fn a_finished_helper_is_released_from_its_stop() {
-        if !cfg!(unix) {
-            return;
-        }
-        let (path, _file) = lock_file("released");
-        let stop = Stop::new().unwrap();
-        #[expect(
-            clippy::disallowed_types,
-            reason = "test-only: the helper is a program that exits 0 at once, spawned so the stop adopts and then releases a real child's stdin"
-        )]
-        let spawn = |_: &Path, _: Mode| {
-            std::process::Command::new("true")
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-        };
-        let mut helper = Helper::spawn(&spawn, &path, Mode::Exclusive, Some(&stop)).unwrap();
-        assert_eq!(stop.helpers.lock().unwrap().len(), 1, "adopted");
-        assert!(helper.wait().unwrap().success());
-        drop(helper);
-        assert!(stop.helpers.lock().unwrap().is_empty(), "released");
     }
 }

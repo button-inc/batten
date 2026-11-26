@@ -952,13 +952,11 @@ mod tests {
     // tracer then holds. Off Linux, with no `strace`, or already traced (a
     // second tracer cannot attach), the probe cannot be traced: the
     // `test:traced` lane refuses such a host (CLOUD-2789).
+    //
+    // Through the sweep's own spawner (`Program::Tracer`), which is how a
+    // reach case is put under `strace`: no spawn of the case's own.
     #[test]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: test-only, re-running this binary under `strace` is the one way to put a tracer on a process (CLOUD-2789)"
-    )]
     fn a_process_a_tracer_holds_reads_as_traced() {
-        use crate::capture::Streamed as _;
         let strace = std::env::var_os("PATH")
             .and_then(|path| {
                 std::env::split_paths(&path)
@@ -969,24 +967,33 @@ mod tests {
         traceable_where_required(strace.is_some());
         match strace {
             Some(strace) => {
-                let probe = std::process::Command::new(strace)
-                    .args(["-f", "-o", "/dev/null"])
-                    .arg(std::env::current_exe().unwrap())
-                    .args([
-                        "--exact",
-                        "mutate::trace::tests::traced_probe",
-                        "--nocapture",
-                    ])
-                    .env(TRACED_PROBE, "1")
-                    .streamed_output()
-                    .unwrap();
+                let strace = strace.to_string_lossy().into_owned();
+                let args: Vec<String> = [
+                    "-f",
+                    "-o",
+                    "/dev/null",
+                    &std::env::current_exe().unwrap().to_string_lossy(),
+                    "--exact",
+                    "mutate::trace::tests::traced_probe",
+                    "--nocapture",
+                ]
+                .map(ToOwned::to_owned)
+                .to_vec();
+                let probe = crate::mutate::spawn(
+                    &std::env::current_dir().unwrap(),
+                    crate::mutate::Program::Tracer(&strace),
+                    &args,
+                    &[(TRACED_PROBE.to_owned(), String::from("1"))],
+                    crate::mutate::runner_bound(),
+                )
+                .unwrap();
                 assert!(
-                    probe.status.success(),
+                    probe.passed(),
                     "a probe under `strace` did not read as traced"
                 );
                 // A renamed probe matches no case and exits 0 having asserted nothing.
                 assert!(
-                    String::from_utf8_lossy(&probe.stdout).contains("1 passed"),
+                    probe.stdout.contains("1 passed"),
                     "the probe under `strace` did not run"
                 );
             }

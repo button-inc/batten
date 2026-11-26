@@ -81,6 +81,43 @@ fn a_release_by_the_holder_ends_the_helper_and_hands_over_the_lock() {
     );
 }
 
+/// Fails by: a helper's stdin, adopted by the stop the wait runs under, kept
+/// once that helper is done with rather than let go (`Stop::release` doing
+/// nothing, a mutant missed at 34c6e4d1f), so each helper a long-lived stop
+/// outlives leaks a pipe. Moved here from `lock_wait`'s own cases (CLOUD-2789):
+/// the helper is `exec`'s placed spawn, so the case needs no spawn of its own.
+#[test]
+fn a_finished_helper_is_released_from_its_stop() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (path, file) = lock_file("lock-helper-released");
+    let mut holder = Some(reopen(&path));
+    holder
+        .as_ref()
+        .unwrap()
+        .try_lock()
+        .expect("free in a fresh fixture");
+    let stop = Stop::new().expect("a stop");
+    let mut held_while_parked = Vec::new();
+    let taken = wait_with_helper(
+        &file,
+        &path,
+        Mode::Exclusive,
+        Some(&stop),
+        &helper,
+        &mut |_| {
+            held_while_parked.push(stop.helpers_held());
+            drop(holder.take());
+        },
+    )
+    .expect("the wait ends");
+    assert!(taken, "the lock is the waiter's once its helper let go");
+    assert_eq!(held_while_parked, [1], "the stop adopted the one helper");
+    assert_eq!(stop.helpers_held(), 0, "and let it go once it was done");
+    assert!(!stop.is_raised(), "released, never stopped");
+}
+
 /// Fails by: a stop raised mid-wait leaving the helper blocked, or the wait.
 #[test]
 fn a_stop_mid_wait_ends_the_helper_and_returns_stopped() {
