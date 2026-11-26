@@ -109,8 +109,10 @@ fn the_runner_check_is_answerable_with_only_batten_present() {
         .lines()
         .find_map(|line| line.trim().strip_prefix("check = "))
         .expect("the row declares a check");
+    // `env` until step 14 (`batten.toml`'s withheld shape): spawnable wherever
+    // batten is, and exiting 127 over a missing runner, which the repair acts on.
     assert!(
-        check.starts_with(r#"["batten""#),
+        check.starts_with(r#"["batten""#) || check.starts_with(r#"["env""#),
         "the runner row's check must be answerable by batten alone — the runner it \
          is about is what may be missing, and a check that cannot spawn is \
          reported as could-not-look and never repaired. Was: {check}"
