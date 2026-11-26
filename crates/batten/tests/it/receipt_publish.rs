@@ -1048,7 +1048,10 @@ fn a_second_container_hits_the_step_the_first_ran() {
         &["step", "run", "carried", "--", "mark"],
     );
     assert_eq!(hit.status.code(), Some(0), "{hit:?}");
-    assert!(stdout(&hit).starts_with("hit "), "B hits: {hit:?}");
+    assert!(
+        String::from_utf8_lossy(&hit.stderr).starts_with("hit "),
+        "B hits: {hit:?}"
+    );
     assert!(!two.join("bin/ran.log").exists(), "B never ran the command");
     let carried = two.join(".git").join("batten-receipts");
     assert_eq!(
@@ -1102,7 +1105,7 @@ fn the_verdict_journal_and_reach_record_reach_a_second_container() {
     let first = receipts::publish_mutate(REMOTE, &one.join(".git"), &name, &a, PRODUCER, 10)
         .expect("publish");
     assert_eq!(
-        first.count, 4,
+        first.count, 3,
         "one chunk, one archive part, its stamp: {first:?}"
     );
     let again = receipts::publish_mutate(REMOTE, &one.join(".git"), &name, &a, PRODUCER, 11)
