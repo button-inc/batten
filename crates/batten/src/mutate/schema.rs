@@ -8375,6 +8375,13 @@ impl NamedParts {
             })
             .clone()
     }
+
+    /// The bytes the memo's keys hold, what grows with every case it
+    /// answers: a digest's own size per entry, since a key holds no name.
+    #[cfg(test)]
+    fn key_bytes(&self) -> usize {
+        self.0.len() * std::mem::size_of::<blake3::Hash>()
+    }
 }
 
 /// The named part of a case's digest ([`case_digests`]): the `""` item every
@@ -11979,48 +11986,39 @@ mod tests {
     /// sealed cases held 131 MB of keys, and a whole reach of 10,954 cases
     /// some 3 GB of a 3.8 GB peak.
     ///
-    /// Fails by: the memo keeping its key's names, or a copy of a part per
-    /// case: 2,000 cases of 2,000 names each hold some 300 MB that way, against
-    /// a ceiling of 64 MB. Resident size, read where the case ends.
-    ///
-    /// COMPILED EVERYWHERE, MEASURED WHERE A RESIDENT SIZE CAN BE READ
-    /// (`policy/cfg-gated-test.rego`): off Linux no `/proc/self/status` exists,
-    /// so the case asserts that it is not on Linux; on Linux an unreadable one
-    /// fails it. Every path asserts (`silent_skip`).
+    /// Fails by: the memo keeping its key's names (2,000 cases of 2,000 names
+    /// each hold some 120 MB of name bytes that way, against one digest per
+    /// case), or a part's defined ids copied per hit rather than shared.
+    /// Asserted on the memo itself, never on the process, whose size another
+    /// case in it moves.
     #[test]
     fn the_named_part_memo_holds_no_cases_names() {
-        let resident = || -> Option<usize> {
-            crate::fsio::read_to_string("/proc/self/status")
-                .ok()?
-                .lines()
-                .find_map(|line| line.strip_prefix("VmRSS:"))
-                .and_then(|kb| kb.trim().trim_end_matches(" kB").trim().parse().ok())
-        };
-        let before = resident();
         let mut parts = NamedParts::default();
+        let mut names_seen = 0_usize;
         for case in 0..2_000_usize {
             let ran: BTreeSet<usize> = (case..case + 200).collect();
             let outside: BTreeSet<String> = (0..2_000)
                 .map(|name| format!("crate::module::item_{case}_{name}"))
                 .collect();
+            names_seen += outside.iter().map(String::len).sum::<usize>();
             let (_, defined) = parts.part(Some(&ran), &outside, || {
                 (blake3::hash(&case.to_le_bytes()), (0..100).collect())
             });
             assert_eq!(defined.len(), 100);
         }
-        match before.zip(resident()) {
-            Some((before, after)) => {
-                let grown = after.saturating_sub(before);
-                assert!(
-                    grown < 64 * 1024,
-                    "the memo grew {grown} kB over 2,000 cases of 2,000 names"
-                );
-            }
-            None => assert!(
-                std::env::consts::OS != "linux",
-                "Linux reports a resident size in /proc/self/status"
-            ),
-        }
+        assert_eq!(
+            parts.key_bytes(),
+            2_000 * 32,
+            "one digest per case, against {names_seen} bytes of names"
+        );
+        let ran: BTreeSet<usize> = [7].into_iter().collect();
+        let outside: BTreeSet<String> = ["a".to_owned()].into_iter().collect();
+        let (_, first) = parts.part(Some(&ran), &outside, || (blake3::hash(b"7"), vec![1, 2, 3]));
+        let (_, again) = parts.part(Some(&ran), &outside, || (blake3::hash(b"7"), vec![1, 2, 3]));
+        assert!(
+            std::rc::Rc::ptr_eq(&first, &again),
+            "a hit shares its part's defined ids"
+        );
     }
 
     /// Fails by: a memo hit answering another key's part, or a miss for the
