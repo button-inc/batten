@@ -14409,7 +14409,7 @@ fn advance_trunk(root: &Path, reference: &str) {
     });
 }
 
-/// The tracking ref this lap's BetSettled precheck already advanced, if any
+/// The tracking ref this lap's `BetSettled` precheck already advanced, if any
 /// (CLOUD-2253 A8). Forgotten at the start of every such precheck and taken by
 /// the Replay after it, so it never outlives the row that fetched it.
 static TRUNK_ADVANCED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);

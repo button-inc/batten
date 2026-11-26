@@ -3926,41 +3926,44 @@ mod tests {
     /// A two-member workspace at `dir`: a `batten` binary printing `value`
     /// through a `facts` library member, the shape of `batten` over its
     /// workspace crates.
-    fn two_member_tree(dir: &Path, value: &str) {
-        let write = |path: &str, text: &str| {
+    fn two_member_tree(dir: &Path, value: &str) -> std::io::Result<()> {
+        let write = |path: &str, text: &str| -> std::io::Result<()> {
             let path = dir.join(path);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, text).unwrap();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, text)
         };
         write(
             "Cargo.toml",
             "[workspace]\nresolver = \"2\"\nmembers = [\"crates/*\"]\n\n\
              [profile.perf-arm]\ninherits = \"release\"\n",
-        );
+        )?;
         write(
             "crates/batten/Cargo.toml",
             "[package]\nname = \"batten\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n\
              [dependencies]\nfacts = { path = \"../facts\" }\n",
-        );
+        )?;
         write(
             "crates/batten/src/main.rs",
             "fn main() { println!(\"{}\", facts::VALUE); }\n",
-        );
+        )?;
         write(
             "crates/facts/Cargo.toml",
             "[package]\nname = \"facts\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
-        );
+        )?;
         write(
             "crates/facts/src/lib.rs",
             &format!("pub const VALUE: &str = \"{value}\";\n"),
-        );
+        )?;
         // COMMITTED, as a real arm's is: the members are read from it.
         write(
             "Cargo.lock",
             "version = 4\n\n[[package]]\nname = \"batten\"\nversion = \"0.0.0\"\n\
              dependencies = [\n \"facts\",\n]\n\n[[package]]\nname = \"facts\"\n\
              version = \"0.0.0\"\n",
-        );
+        )?;
+        Ok(())
     }
 
     /// The clean names every member the arm's lock carries, `batten` even when
@@ -3969,9 +3972,9 @@ mod tests {
     /// Fails by: a member dropped, `batten` dropped from an unreadable lock, or
     /// a clean that walks up into an enclosing workspace.
     #[test]
-    fn the_clean_names_every_member_of_the_arm() {
+    fn the_clean_names_every_member_of_the_arm() -> Result<()> {
         let root = crate::scratch::scratch("perf-clean-args");
-        two_member_tree(&root, "x");
+        two_member_tree(&root, "x")?;
         let args = clean_args(PAIR_PROFILE, &root);
         let manifest = root.join("Cargo.toml").to_string_lossy().into_owned();
         assert_eq!(
@@ -3996,6 +3999,7 @@ mod tests {
         let bare = crate::scratch::scratch("perf-clean-args-bare");
         let args = clean_args(PAIR_PROFILE, &bare);
         assert_eq!(&args[..3], ["clean", "-p", "batten"]);
+        Ok(())
     }
 
     /// THE SHARED DIR HOLDS ONE UNIT PER WORKSPACE MEMBER, NOT ONLY `batten`
@@ -4007,39 +4011,38 @@ mod tests {
     /// Fails by: the switch cleaning `-p batten` alone, so the head binary
     /// prints the base arm's value.
     #[test]
-    fn switching_arms_drops_every_members_units() {
+    fn switching_arms_drops_every_members_units() -> Result<()> {
         if !cfg!(unix) {
-            return;
+            return Ok(());
         }
         let root = crate::scratch::scratch("perf-switch-members");
         let (base, head, shared) = (root.join("base"), root.join("head"), root.join("shared"));
-        two_member_tree(&head, "head");
-        two_member_tree(&base, "base");
+        two_member_tree(&head, "head")?;
+        two_member_tree(&base, "base")?;
         // OLDER THAN ANY OUTPUT THE BASE BUILD WRITES: back-dated rather than
         // waited for, so the case asserts the reuse and never a clock.
         for tree in [&head, &base] {
             for member in ["crates/facts/src/lib.rs", "crates/batten/src/main.rs"] {
                 let file = std::fs::File::options()
                     .write(true)
-                    .open(tree.join(member))
-                    .unwrap();
-                file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
-                    .unwrap();
+                    .open(tree.join(member))?;
+                file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))?;
             }
         }
-        build(&base, Some(&shared), "base", PAIR_PROFILE).unwrap();
-        assert!(build(&head, Some(&shared), "head", PAIR_PROFILE).unwrap());
+        build(&base, Some(&shared), "base", PAIR_PROFILE)?;
+        assert!(build(&head, Some(&shared), "head", PAIR_PROFILE)?);
         let binary = shared.join(PAIR_PROFILE).join("batten");
         #[expect(
             clippy::disallowed_types,
             reason = "stays: the case runs the binary the pair built, which is the fact under test"
         )]
-        let printed = std::process::Command::new(&binary).output().unwrap();
+        let printed = std::process::Command::new(&binary).output()?;
         assert_eq!(
             String::from_utf8_lossy(&printed.stdout).trim(),
             "head",
             "the head arm links its own members"
         );
+        Ok(())
     }
 
     /// CLOUD-2107: identical arms are a broken build only when this run built the
