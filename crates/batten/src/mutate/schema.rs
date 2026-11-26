@@ -9339,18 +9339,15 @@ impl Derived {
         }
     }
 
-    /// Remove every artifact this store's run neither read nor kept, and every
-    /// other version's directory beside it: the artifacts each derived from a
-    /// file's former bytes, by another build or another version of this code.
-    /// Called once a run has derived over the whole tree, so nothing the
-    /// current build reads is removed. Returns how many artifacts were kept
-    /// and removed. Best effort: what cannot be removed is left.
-    fn retain_touched(&self) -> (usize, usize) {
-        let touched = self
-            .touched
-            .lock()
-            .map(|held| held.clone())
-            .unwrap_or_default();
+    /// Remove every other version's directory beside this store's: what
+    /// another build or another version of this code derived, which the
+    /// current build never reads. Returns how many were removed. Best effort.
+    ///
+    /// BEFORE A RUN DERIVES, NEVER ONLY AFTER (CLOUD-2904): removed at the end
+    /// of the run, a new version's 2 GB were written beside the old ones'
+    /// 12.6 GB, and the reach run at add313832 filled the disk ("No space left
+    /// on device"), leaving 48 mutants uncovered and 9 cases red.
+    fn drop_other_versions(&self) -> usize {
         let mut removed = 0;
         if let Some(versions) = self
             .dir
@@ -9363,6 +9360,22 @@ impl Derived {
                 }
             }
         }
+        removed
+    }
+
+    /// Remove every artifact this store's run neither read nor kept, each
+    /// derived from a file's former bytes, and every other version's directory
+    /// ([`Derived::drop_other_versions`]). Called once a run has derived over
+    /// the whole tree, so nothing the current build reads is removed. Returns
+    /// how many artifacts were kept and removed. Best effort: what cannot be
+    /// removed is left.
+    fn retain_touched(&self) -> (usize, usize) {
+        let touched = self
+            .touched
+            .lock()
+            .map(|held| held.clone())
+            .unwrap_or_default();
+        let mut removed = self.drop_other_versions();
         let mut kept = 0;
         if let Ok(artifacts) = std::fs::read_dir(&self.dir) {
             for artifact in artifacts.flatten().map(|entry| entry.path()) {
@@ -12978,6 +12991,7 @@ fn reached(
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
     let (build, unprobed) = build_keys(root, ids.0, format)?;
     let derived = Derived::at(state, &build);
+    derived.drop_other_versions();
     let memo = DigestMemo::default();
     let recompute =
         |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
@@ -21141,6 +21155,9 @@ mod tests {
         let old = Derived::at(&state, "a former build");
         sweep(&old);
         let first = Derived::at(&state, "build");
+        assert_eq!(first.drop_other_versions(), 1, "the former build's version");
+        assert!(!old.dir.exists(), "removed before the run derives");
+        sweep(&old);
         sweep(&first);
         let whole = artifacts(&first);
         assert!(whole > 0, "a first run keeps what it derives");
