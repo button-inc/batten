@@ -3016,6 +3016,112 @@ fn overlay_reader_toy(name: &str, looked: &str) -> PathBuf {
     root
 }
 
+/// A toy crate that EMBEDS a library module outside the presets
+/// (`lib/r.rego`), read the way `policy::library_text` reads it: under the
+/// `overlay` feature the mutated copy at `$TOY_OVERLAY/lib/r.rego`, receipted,
+/// else the `include_str!`'d text. `rows` rows all name one case, which counts
+/// its runs into `$TOY_RUN_COUNTER`; the build script counts builds into
+/// `$TOY_BUILD_COUNTER`.
+fn embedded_library_toy(name: &str, rows: usize) -> PathBuf {
+    let root = toy(name);
+    write(
+        &root,
+        "Cargo.toml",
+        &format!("{TOY_MANIFEST}\n[features]\noverlay = []\n"),
+    );
+    write(&root, "build.rs", ALWAYS_STALE_BUILD);
+    let mut module = String::from("#MUTANT-SUITE tests/library.rs\n");
+    for row in 0..rows {
+        module.push_str(&format!(
+            "#MUTANT limit-moved-{row}|s/^limit := 10$/limit := {}/|library_limit_is_ten\n",
+            90 + row
+        ));
+    }
+    module.push_str("package batten.library\n\nlimit := 10\n");
+    write(&root, "lib/r.rego", &module);
+    write(
+        &root,
+        "src/lib.rs",
+        &format!(
+            "pub fn module() -> String {{\n\
+             \x20   #[cfg(feature = \"overlay\")]\n\
+             \x20   if let Ok(dir) = std::env::var(\"TOY_OVERLAY\") {{\n\
+             \x20       let copy = std::path::Path::new(&dir).join(\"lib/r.rego\");\n\
+             \x20       if let Ok(text) = std::fs::read_to_string(&copy) {{\n\
+             \x20           let mut receipt = copy.into_os_string();\n\
+             \x20           receipt.push({read:?});\n\
+             \x20           std::fs::write(receipt, \"\").expect(\"leave the receipt\");\n\
+             \x20           return text;\n\
+             \x20       }}\n\
+             \x20   }}\n\
+             \x20   include_str!(\"../lib/r.rego\").to_owned()\n\
+             }}\n",
+            read = batten::preset::OVERLAY_READ,
+        ),
+    );
+    let count = "if let Some(path) = std::env::var_os(\"TOY_RUN_COUNTER\") {\n\
+         \x20       use std::io::Write as _;\n\
+         \x20       let mut counter = std::fs::OpenOptions::new().create(true).append(true)\n\
+         \x20           .open(path).expect(\"open the counter\");\n\
+         \x20       writeln!(counter, \"ran\").expect(\"count the run\");\n\
+         \x20   }\n\
+         \x20   assert!(toy::module().contains(\"\\nlimit := 10\\n\"));";
+    write(
+        &root,
+        "tests/library.rs",
+        &format!(
+            "{}{}",
+            case("library_limit_is_ten", count),
+            case("library_other_case", "assert!(true);"),
+        ),
+    );
+    track(&root);
+    root
+}
+
+/// A SWEEP OF N ROWS OVER AN EMBEDDED LIBRARY BUILDS AT MOST TWICE AND RUNS
+/// EACH CASE'S UNMUTATED CONTROL ONCE (CLOUD-2253). The library is a build
+/// input, so before the overlay reached it every row rebuilt the crate twice
+/// (its mutant, then the clean binaries the next row reuses), and every row
+/// re-ran the same unmutated control: on #1276's 54 library rows, 108 rebuilds
+/// and 108 suite runs. Declared as an overlay root, the one build reads each
+/// row's mutated copy, and the control is keyed by case and unmutated tree.
+///
+/// Fails by: the library row rebuilt per row, a control re-run per row, or
+/// any row judged on the unmutated module (`every one caught` lost).
+#[test]
+fn an_embedded_library_sweep_builds_once_and_runs_each_control_once() {
+    const ROWS: usize = 3;
+    let root = embedded_library_toy("library-overlay", ROWS);
+    let counters = common::scratch("mutate-library-overlay-counters");
+    let (builds, runs) = (counters.join("builds"), counters.join("runs"));
+    let (code, out, err) = run_with(
+        &root,
+        "sweep",
+        "lib/r.rego",
+        &[
+            ("MUTANT_OVERLAY_ENV", Path::new("TOY_OVERLAY")),
+            ("MUTANT_OVERLAY_FEATURES", Path::new("overlay")),
+            ("MUTANT_OVERLAY_ROOTS", Path::new("lib")),
+            ("TOY_BUILD_COUNTER", &builds),
+            ("TOY_RUN_COUNTER", &runs),
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}{err}");
+    let count = |path: &Path| fs::read_to_string(path).unwrap_or_default().lines().count();
+    assert!(
+        count(&builds) <= 2,
+        "{} builds for {ROWS} embedded rows\n{err}",
+        count(&builds)
+    );
+    assert_eq!(
+        count(&runs),
+        1 + ROWS,
+        "one control, then one mutant per row\n{err}"
+    );
+}
+
 /// The sweep of [`overlay_reader_toy`]'s one row, with the overlay declared.
 fn overlay_sweep(root: &Path) -> (i32, String, String) {
     run_with(

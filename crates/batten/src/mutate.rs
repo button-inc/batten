@@ -1833,6 +1833,13 @@ pub struct Staged {
     dir: PathBuf,
     /// The path most recently corrupted, restored before the next row.
     dirty: Option<String>,
+    /// The digest of the unmutated tree this was staged from: every tracked
+    /// path and its working bytes ([`Staged::new`]).
+    tree: String,
+    /// Each unmutated control run this sweep, keyed by [`control_key`]
+    /// (CLOUD-2253): the control is a function of its case and the tree, never
+    /// of the row, so a case many rows name runs it once.
+    controls: std::collections::HashMap<String, Selection>,
 }
 
 impl Staged {
@@ -1851,6 +1858,7 @@ impl Staged {
         let tracked = crate::git::tracked_paths(root)
             .context("mutate: could not list the tracked tree to stage it")?;
         reconcile(&dir, &tracked)?;
+        let mut tree = blake3::Hasher::new();
         for path in &tracked {
             let from = root.join(path);
             // A tracked path can be absent from the working tree (deleted but
@@ -1859,6 +1867,13 @@ impl Staged {
             if !from.is_file() {
                 continue;
             }
+            // THE TREE'S DIGEST, read off the bytes the stage reads anyway: the
+            // unmutated tree every control runs against ([`control_key`]).
+            let bytes = crate::fsio::read(&from)
+                .with_context(|| format!("mutate: could not stage {path}"))?;
+            tree.update(path.as_bytes());
+            tree.update(&[0]);
+            tree.update(blake3::hash(&bytes).as_bytes());
             let to = dir.join(path);
             // COPIED ONLY WHERE THE BYTES DIFFER, and this is an economy with a
             // correctness argument rather than a shortcut. A declared suite can
@@ -1867,9 +1882,7 @@ impl Staged {
             // every sweep, which is what makes a Rust-tier gate affordable at
             // all. The staged bytes are still exactly the tracked bytes; the
             // only thing preserved is the timestamp of a file nothing changed.
-            if crate::fsio::read(&to)
-                .is_ok_and(|there| crate::fsio::read(&from).is_ok_and(|here| here == there))
-            {
+            if crate::fsio::read(&to).is_ok_and(|there| there == bytes) {
                 continue;
             }
             if let Some(parent) = to.parent() {
@@ -1878,7 +1891,12 @@ impl Staged {
             }
             std::fs::copy(&from, &to).with_context(|| format!("mutate: could not stage {path}"))?;
         }
-        let staged = Staged { dir, dirty: None };
+        let staged = Staged {
+            dir,
+            dirty: None,
+            tree: tree.finalize().to_hex().to_string(),
+            controls: std::collections::HashMap::new(),
+        };
         let tracked: Vec<String> = tracked.into_iter().collect();
         staged.make_a_repository(&tracked)?;
         Ok(staged)
@@ -2973,7 +2991,11 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
 ///   under [`Overlay::dir`], and the staged tree keeps the original;
 /// - `MUTANT_OVERLAY_ENV`: the variable that names [`Overlay::dir`] to the suite;
 /// - `MUTANT_OVERLAY_FEATURES`: the cargo features a suite is built with so it
-///   reads that copy.
+///   reads that copy;
+/// - `MUTANT_OVERLAY_ROOTS`, optional: further directories, space-separated,
+///   whose sources the suite reads through the overlay at their repository
+///   path (`<dir>/<source>`), for an embedded source outside the presets (the
+///   engine-default library, CLOUD-2253).
 ///
 /// FOR A SOURCE A BUILD EMBEDS. A file the crate `include_str!`s is a build
 /// input, so mutating it in the staged tree recompiled the crate twice per row
@@ -2983,6 +3005,8 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Overlay {
     root: String,
+    /// [`Overlay::path_of`]'s further roots, `MUTANT_OVERLAY_ROOTS`.
+    roots: Vec<String>,
     env: String,
     features: String,
     dir: PathBuf,
@@ -3006,6 +3030,12 @@ impl Overlay {
         };
         Some(Self {
             root: read("MUTANT_PRESETS")?,
+            roots: var("MUTANT_OVERLAY_ROOTS")
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(|root| root.trim_end_matches('/').to_owned())
+                .filter(|root| !root.is_empty())
+                .collect(),
             env: read("MUTANT_OVERLAY_ENV")?,
             features: read("MUTANT_OVERLAY_FEATURES")?,
             dir: target_dir(root).join("mutate-overlay"),
@@ -3043,14 +3073,26 @@ impl Overlay {
     }
 
     /// Where the mutated copy of `source` is written, or `None` for a source
-    /// outside [`Overlay::root`], which is mutated in place.
+    /// outside [`Overlay::root`] and every further root, which is mutated in
+    /// place. A preset's copy is at its path under the presets root, as
+    /// `PresetModule::text` spells it; a further root's at its whole repository
+    /// path, as `policy::library_text` does.
     #[must_use]
     pub fn path_of(&self, source: &str) -> Option<PathBuf> {
-        source
-            .strip_prefix(&self.root)
-            .and_then(|rest| rest.strip_prefix('/'))
-            .filter(|rest| !rest.is_empty())
+        let under = |root: &str| {
+            source
+                .strip_prefix(root)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .filter(|rest| !rest.is_empty())
+        };
+        under(&self.root)
             .map(|rest| self.dir.join(rest))
+            .or_else(|| {
+                self.roots
+                    .iter()
+                    .any(|root| under(root).is_some())
+                    .then(|| self.dir.join(source))
+            })
     }
 }
 
@@ -4312,7 +4354,21 @@ fn judge_row(
     // assertion that never holds, a fixture that never builds — is red either
     // way, and every mutation aimed at it reads as caught. Costs one extra
     // filtered run per row, which is what an anti-vacuity term is worth.
-    let clean = run_suite(staged, root, suite, row, prebuilt);
+    //
+    // ONCE PER CASE AND UNMUTATED TREE (CLOUD-2253): the restore above and the
+    // emptied overlay leave every row's control the same run, so a case many
+    // rows name is not re-run per row. Only a run that reported is kept; a
+    // could-not-look is the next row's to retry, as it was.
+    let control = control_key(root, staged, suite, row);
+    let clean = if let Some(held) = staged.controls.get(&control) {
+        *held
+    } else {
+        let ran = run_suite(staged, root, suite, row, prebuilt);
+        if ran.reach == Reach::Reported {
+            staged.controls.insert(control, ran);
+        }
+        ran
+    };
     // AND HOW FAR THE RUN GOT IS READ BEFORE EITHER (CLOUD-1860, CLOUD-2160),
     // for the same reason one rung up: a killed or errored run selects no case
     // and exits non-zero, so it satisfies both tests below while meaning
@@ -4398,6 +4454,26 @@ fn judge_row(
         });
     }
     Ok(Verdict::Caught)
+}
+
+/// The key of a row's unmutated control run (CLOUD-2253): its suite and case,
+/// over the tree it runs against. That tree is the staged one with every
+/// subject restored, so it is [`Staged::tree`] and the subject's bytes as
+/// restored from `root`, which a change under the sweep is keyed by too.
+fn control_key(root: &Path, staged: &Staged, suite: &Suite, row: &Row) -> String {
+    let subject = crate::fsio::read(root.join(&row.source)).unwrap_or_default();
+    let mut key = blake3::Hasher::new();
+    for field in [
+        staged.tree.as_bytes(),
+        format!("{suite:?}").as_bytes(),
+        row.want.as_bytes(),
+        row.source.as_bytes(),
+        blake3::hash(&subject).as_bytes(),
+    ] {
+        key.update(field);
+        key.update(&[0]);
+    }
+    key.finalize().to_hex().to_string()
 }
 
 /// Whether a `.rego` row's case is a `test_` rule the mutated module itself
@@ -6402,6 +6478,7 @@ mod tests {
     fn an_overlay_mirrors_only_the_sources_under_its_root() {
         let overlay = Overlay {
             root: String::from("crates/x/presets"),
+            roots: Vec::new(),
             env: String::from("X_OVERLAY"),
             features: String::from("overlay"),
             dir: PathBuf::from("/t/mutate-overlay"),
@@ -6413,6 +6490,22 @@ mod tests {
         assert_eq!(overlay.path_of("crates/x/presetsy/a.rego"), None);
         assert_eq!(overlay.path_of("crates/x/presets"), None);
         assert_eq!(overlay.path_of("policy/a.rego"), None);
+        // A FURTHER ROOT'S COPY IS AT ITS WHOLE REPOSITORY PATH (CLOUD-2253),
+        // the spelling `policy::library_text` reads.
+        let overlay = Overlay {
+            roots: vec![String::from("crates/x/library")],
+            ..overlay
+        };
+        assert_eq!(
+            overlay.path_of("crates/x/library/r.rego"),
+            Some(PathBuf::from("/t/mutate-overlay/crates/x/library/r.rego"))
+        );
+        assert_eq!(
+            overlay.path_of("crates/x/presets/git/a.rego"),
+            Some(PathBuf::from("/t/mutate-overlay/git/a.rego"))
+        );
+        assert_eq!(overlay.path_of("crates/x/libraryz/r.rego"), None);
+        assert_eq!(overlay.path_of("crates/x/library"), None);
     }
 
     /// Fails by: a pytest suite counted as declaring no case, so a filter that
@@ -6843,6 +6936,13 @@ mod tests {
         assert_eq!(overlay.root, "crates/x/presets");
         assert_eq!(overlay.env, "BATTEN_PRESET_OVERLAY");
         assert_eq!(overlay.feature_args(), ["--features", "preset-overlay"]);
+        assert!(overlay.roots.is_empty(), "further roots are optional");
+        let further = Overlay::declared_by(root, |name| match name {
+            "MUTANT_OVERLAY_ROOTS" => Some(String::from(" crates/x/library/  crates/y ")),
+            _ => vars("crates/x/presets")(name),
+        })
+        .expect("declared");
+        assert_eq!(further.roots, ["crates/x/library", "crates/y"]);
         assert!(
             Overlay::declared_by(root, vars("  ")).is_none(),
             "a blank one is unset"
@@ -6864,6 +6964,7 @@ mod tests {
         fs::create_dir_all(&dir).expect("the overlay directory");
         let overlay = Overlay {
             root: String::from("crates/x/presets"),
+            roots: Vec::new(),
             env: String::from("BATTEN_PRESET_OVERLAY"),
             features: String::from("preset-overlay"),
             dir: dir.clone(),
@@ -8346,6 +8447,8 @@ mod tests {
         let staged = Staged {
             dir: fixture("build-owed-staged"),
             dirty: None,
+            tree: String::new(),
+            controls: std::collections::HashMap::new(),
         };
         let names = [String::from("probe")];
         let said = |registry: &Registry, caught: &std::collections::HashSet<String>| {
