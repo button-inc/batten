@@ -192,6 +192,16 @@ impl Published {
         self.write_schema(&derived_schema());
     }
 
+    /// Bake `tag` as a release does: one commit records it in `install.lock`
+    /// beside a schema still declaring `key`, and a later commit drops the key
+    /// and lands a newer, key-free tag. So the recorded release and the newest
+    /// tag disagree, and only the recorded one sees the removal.
+    fn bake_then_remove(&self, key: &str, tag: &str, newer: &str) {
+        fs::write(self.root.join("install.lock"), format!("tag {tag}\n")).expect("the lock");
+        self.publish_then_remove(key, "x", tag);
+        self.publish("after the release", newer);
+    }
+
     fn baseline(&self) -> Option<String> {
         latest_release_tag(&self.root)
     }
@@ -410,32 +420,66 @@ fn this_repositorys_schema_has_lost_no_key_since_its_last_release() {
 #[test]
 fn latest_is_the_release_the_tree_records() {
     let fixture = Published::new("config-deprecations-recorded");
-    git_in(&fixture.root, &["tag", "v0.0.2"]);
-    fs::write(fixture.root.join("install.lock"), "tag v0.0.1\n").expect("the lock");
+    fixture.bake_then_remove("a_key_the_recorded_release_had", "v0.0.2", "v0.0.3");
     let (code, said) = deprecations(&fixture.root, "latest");
-    let (explicit_code, explicit) = deprecations(&fixture.root, "v0.0.1");
+    let (explicit_code, explicit) = deprecations(&fixture.root, "v0.0.2");
     assert_eq!((code, &said), (explicit_code, &explicit));
+    assert_eq!(code, 2, "the recorded release saw the removal: {said}");
     assert!(
-        said.contains("v0.0.1") && !said.contains("v0.0.2"),
+        said.contains("v0.0.2") && !said.contains("v0.0.3"),
         "the line names the recorded release: {said}"
     );
 }
 
-/// A recorded release this clone never fetched is could-not-look, naming the
-/// one fetch that brings it: never a usage refusal, and never a pass.
+/// THE SAME VERDICT IN A CLONE THAT HOLDS NO TAGS (CLOUD-2789). A container
+/// restarted without its startup fetch held a full history and no `v*` tag,
+/// and refused the gate the land passed. The recorded release is read at the
+/// commit that baked it, which every full clone holds.
+///
+/// Fails by: `latest` reading the release through its tag, so deleting the
+/// tags changes the answer.
+#[test]
+fn a_clone_without_its_tags_answers_as_one_with_them() {
+    let fixture = Published::new("config-deprecations-tagless");
+    fixture.bake_then_remove("a_key_the_recorded_release_had", "v0.0.2", "v0.0.3");
+    let tagged = deprecations(&fixture.root, "latest");
+    for tag in ["v0.0.1", "v0.0.2", "v0.0.3"] {
+        git_in(&fixture.root, &["tag", "-d", tag]);
+    }
+    assert_eq!(deprecations(&fixture.root, "latest"), tagged);
+}
+
+/// A recorded release no commit in the history records, or a history too
+/// shallow to walk, is could-not-look: never a usage refusal, and never a
+/// pass against some other release.
 ///
 /// Fails by: a missing baseline read as clean, refused as a usage error, or
 /// resolved to some other tag the clone holds.
 #[test]
 fn a_recorded_release_missing_from_the_clone_is_could_not_look() {
     let fixture = Published::new("config-deprecations-unfetched");
+    fixture.bake_then_remove("a_key_the_recorded_release_had", "v0.0.2", "v0.0.3");
+    let shallow = scratch("config-deprecations-shallow");
+    git_in(
+        &shallow,
+        &[
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            &format!("file://{}", fixture.root.display()),
+            ".",
+        ],
+    );
+    let (code, said) = deprecations(&shallow, "latest");
+    assert_eq!(code, 3, "a shallow history is could-not-look: {said}");
+    assert!(
+        said.contains("git fetch --unshallow"),
+        "names the deepening: {said}"
+    );
     fs::write(fixture.root.join("install.lock"), "tag v9.9.9\n").expect("the lock");
     let (code, said) = deprecations(&fixture.root, "latest");
-    assert_eq!(code, 3, "an unfetched baseline is could-not-look: {said}");
-    assert!(
-        said.contains("git fetch origin tag v9.9.9"),
-        "the answer names the fetch: {said}"
-    );
+    assert_eq!(code, 3, "an unrecorded baseline is could-not-look: {said}");
 }
 
 /// Where no lock records a release, `latest` is the newest tag by version

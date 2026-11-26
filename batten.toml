@@ -19087,19 +19087,6 @@ gloss = "this clone's commit path runs the gate, so a commit made here cannot by
 check = ["batten", "doctor", "gate"]
 repair = ["mise", "run", "session:git-hooks"]
 
-# THE RELEASE TAGS ARE IN THIS CLONE (CLOUD-2789). `config retire unnamed` asks
-# `config deprecations latest`, which compares this build's schema with the one
-# published at the release `install.lock` records, and reads that blob at its
-# tag. A container cloned without tags held none, so the gate answered
-# could-not-look there and passed where tags had been fetched: one commit, two
-# verdicts, by container. The verb is a read and fetches nothing (agents fetch,
-# gates decide), so the fetch is provisioning's, here, at session start.
-[[startup]]
-id = "release-tags-fetched"
-gloss = "this clone holds its release tags, so the schema gate reads the release the tree records"
-check = ["git", "describe", "--tags", "--abbrev=0", "--match", "v*"]
-repair = ["git", "fetch", "--quiet", "--tags", "origin"]
-
 # THE ENGINE THAT ADJUDICATES THIS TREE MUST HAVE BEEN BUILT FROM IT (CLOUD-1620).
 #
 # `mise.toml`'s env puts `target/release` ahead of `~/.local/bin`, deliberately:
