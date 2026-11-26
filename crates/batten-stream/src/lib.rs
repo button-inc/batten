@@ -184,20 +184,6 @@ impl Pumping {
         pumped
     }
 
-    /// Where the pump stands once its pipe's last writer has let go: ONE
-    /// blocking receive on its own result, with no clock (CLOUD-2789).
-    ///
-    /// For a caller that has ENDED every writer — a process group it led and
-    /// then ended — so EOF is the event this returns on. A writer left alive
-    /// makes this wait as long as it lives; a caller that cannot end its
-    /// writers asks [`Pumping::finished`] with its own bound instead.
-    #[must_use]
-    pub fn eof(&self) -> Pumped {
-        let pumped = self.done.recv().map_or(Pumped::Lost, Pumped::Finished);
-        self.join();
-        pumped
-    }
-
     /// Join the pump's thread: it sent its result or ended without one, so
     /// the join waits only for its exit. A panic's payload is already
     /// [`Pumped::Lost`].
@@ -297,8 +283,12 @@ mod tests {
         let buffer = Shared::new(Vec::new());
         let pumping = spawn_pump(&b"chunk"[..], vec![Box::new(buffer.clone())]);
         assert!(!pumping.joined(), "a running pump is not joined");
-        // The cursor ends at once, and its EOF is the event the call returns on.
-        assert!(matches!(pumping.eof(), Pumped::Finished(Ok(()))));
+        // The bound is never reached: the cursor ends at once, and the result
+        // arriving is the event the call returns on.
+        assert!(matches!(
+            pumping.finished(Duration::from_secs(3600)),
+            Pumped::Finished(Ok(()))
+        ));
         assert!(pumping.joined(), "the pump that reported is joined");
         assert!(
             buffer.into_inner().is_ok(),
@@ -421,48 +411,17 @@ mod tests {
         assert_eq!(failed.kind(), std::io::ErrorKind::BrokenPipe);
     }
 
-    /// Fails by: a spawned pump's result lost, or its sinks unwritten.
+    /// Fails by: a spawned pump's result lost, its sinks unwritten, or a
+    /// finished pump reported as still running when asked without waiting.
     #[test]
     fn a_spawned_pump_reports_eof_and_its_sinks_are_readable() {
         let seen = Shared::<Vec<u8>>::default();
         let pumping = spawn_pump(&b"hello"[..], vec![Box::new(seen.clone())]);
-        assert!(matches!(pumping.eof(), Pumped::Finished(Ok(()))));
-        assert_eq!(seen.bytes(), b"hello");
-    }
-
-    /// Fails by: a finished pump reported as still running when asked without
-    /// waiting. The result is SENT before the ask, so it is waiting in the
-    /// channel and no clock decides it (CLOUD-1288).
-    #[test]
-    fn a_result_already_sent_is_seen_without_waiting() {
-        let (pumping, report) = Pumping::held();
-        report.send(Ok(())).unwrap();
         assert!(matches!(
-            pumping.finished(Duration::ZERO),
+            pumping.finished(Duration::from_secs(10)),
             Pumped::Finished(Ok(()))
         ));
-    }
-
-    /// Fails by: `eof` answering before the pipe's last writer let go, or
-    /// answering anything but that EOF, or leaving the pump unjoined.
-    ///
-    /// The writer stands in for a grandchild holding a child's pipe: while it
-    /// lives the pump runs, and its end — the group end, for a caller that led
-    /// one — is the event `eof` returns on (CLOUD-2789).
-    #[test]
-    fn the_last_writer_letting_go_is_the_eof_the_pump_reports() {
-        let (read, mut holder) = std::io::pipe().unwrap();
-        let seen = Shared::<Vec<u8>>::default();
-        let pumping = spawn_pump(read, vec![Box::new(seen.clone())]);
-        holder.write_all(b"early").unwrap();
-        assert!(
-            matches!(pumping.finished(Duration::ZERO), Pumped::Running),
-            "a held pipe keeps its pump running"
-        );
-        drop(holder);
-        assert!(matches!(pumping.eof(), Pumped::Finished(Ok(()))));
-        assert!(pumping.joined(), "the pump that reported is joined");
-        assert_eq!(seen.bytes(), b"early");
+        assert_eq!(seen.bytes(), b"hello");
     }
 
     /// Fails by: a `write` that reports success while taking no bytes.
