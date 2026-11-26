@@ -4912,9 +4912,10 @@ run = "hk check --all --profile '!slow'"
 #     names itself, and `signing-posture-record` and `pkl` (`record validate
 #     config-validator`), which `verify:gated` writes before tier 1 so that
 #     `batten-check` never judges a stale record;
-#   - `reference-check`, `schema-check` and `skill-check`, narrow `it` lanes each
-#     compiling the `it` binary alone (≈200 s each, measured) to run cases
-#     `test:cargo` runs again in tier 3.
+# `reference-check`, `schema-check` and `skill-check` are not `check` steps at
+# all: narrow `it` lanes each compiling the `it` binary alone (≈200 s each,
+# measured) to run cases `test` runs whole, so they fire at the commit only and
+# neither this lap nor CI runs a case twice (CLOUD-2789, audit row C10).
 # `test` and `mutant:changed` are tier 3's, and `verify:ci-suite` skips every
 # other step, so the three spellings partition `hk check`'s steps:
 # `verify_chain.rs`'s `each_hk_step_runs_in_exactly_one_place_per_lap` refuses a
@@ -4922,7 +4923,7 @@ run = "hk check --all --profile '!slow'"
 [tasks."ci:checks"]
 description = "Every hk step no other tier of `verify` runs — its second tier"
 depends = ["pkl-package"]
-run = "hk check --all --skip-step test --skip-step mutant:changed --skip-step actionlint --skip-step cargo-fmt --skip-step memories-check --skip-step pkl-format --skip-step prettier --skip-step shellcheck --skip-step shfmt --skip-step taplo --skip-step taplo-format --skip-step policy-budget --skip-step policy-test --skip-step batten-check --skip-step signing-posture-record --skip-step pkl --skip-step reference-check --skip-step schema-check --skip-step skill-check"
+run = "hk check --all --skip-step test --skip-step mutant:changed --skip-step actionlint --skip-step cargo-fmt --skip-step memories-check --skip-step pkl-format --skip-step prettier --skip-step shellcheck --skip-step shfmt --skip-step taplo --skip-step taplo-format --skip-step policy-budget --skip-step policy-test --skip-step batten-check --skip-step signing-posture-record --skip-step pkl"
 
 [tasks.ci]
 description = "Everything CI runs"
@@ -5239,7 +5240,7 @@ run = [
 # a partition of `hk check`.
 [tasks."verify:ci-suite"]
 description = "The suite, through its keyed `ci-suite` step — invoked through `verify`'s third tier"
-env = { HK_SKIP_STEPS = "hk-version,mcp-timeout-budget,no-docs-tree,no-armed-ripcord,hook-profile-check,hk-contract-check,mutant-census,rules-drift,hooks-wiring-check,reference-check,token-bench-check,config-lint,renovate-config-validator,schema-check,sbom-check,install-check,release-tracking-check,lock-complete,policy-budget,skill-check,macos-link-check,ntia-check,shfmt,shellcheck,taplo,taplo-schema,taplo-format,taplo-format-schema,pkl,pkl-format,prettier,deno-fmt,engine-pin,rego,actionlint,cargo-fmt,cargo-clippy,signing-posture-record,batten-check,policy-test,memories-check" }
+env = { HK_SKIP_STEPS = "hk-version,mcp-timeout-budget,no-docs-tree,no-armed-ripcord,hook-profile-check,hk-contract-check,mutant-census,rules-drift,hooks-wiring-check,token-bench-check,config-lint,renovate-config-validator,sbom-check,install-check,release-tracking-check,lock-complete,policy-budget,macos-link-check,ntia-check,shfmt,shellcheck,taplo,taplo-schema,taplo-format,taplo-format-schema,pkl,pkl-format,prettier,deno-fmt,engine-pin,rego,actionlint,cargo-fmt,cargo-clippy,signing-posture-record,batten-check,policy-test,memories-check" }
 run = "{{vars.batten}} step run ci-suite -- mise run ci"
 
 [tasks."verify:ci-slow-needed"]
