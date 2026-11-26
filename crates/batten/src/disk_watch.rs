@@ -398,12 +398,18 @@ fn run(
         let timer = async {
             // THE CRATE'S ONE CLOCK (`crate::pr_watch::clock`), whose single
             // inventory row names this floor's bound: the band.
-            while !stop.is_raised() {
+            //
+            // ONE PERIOD AND ONE SAMPLE BEFORE THE STOP IS READ (CLOUD-2904):
+            // tested first, a run that ended inside the first period skipped
+            // both, so which functions a case ran was a race between its run
+            // and this thread's first turn. A sample after the stop collects
+            // nothing: [`Sampler::sample`] reads the halt before a pass.
+            loop {
                 crate::pr_watch::clock::pause_for(PERIOD).await;
+                sampler.sample();
                 if stop.is_raised() {
                     break;
                 }
-                sampler.sample();
             }
         };
         until_first(timer, events).await;
