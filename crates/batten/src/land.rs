@@ -3021,7 +3021,7 @@ fn stall_arm(root: &Path, stall: &Stall, seed: Option<Still>, arms: &Arms<'_>) {
                 return;
             }
         }
-        tick_of_beat = (tick_of_beat + 1) % ticks;
+        tick_of_beat = next_tick(tick_of_beat, ticks);
         crate::pr_watch::pause_until(tick.as_secs_f64(), arms.stop);
     }
 }
@@ -3029,6 +3029,13 @@ fn stall_arm(root: &Path, stall: &Stall, seed: Option<Still>, arms: &Arms<'_>) {
 /// The red slot's cadence: a file read, so cheap enough to ask each second
 /// (CLOUD-2253 C12).
 const RED_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The tick after `at` in a beat of `ticks`, wrapping to `0` where the next
+/// beat starts: the stall's progress is read on tick `0` alone, so once a beat
+/// and never once a red reading (CLOUD-2253 C12).
+const fn next_tick(at: u32, ticks: u32) -> u32 {
+    (at + 1) % ticks
+}
 
 /// How many `tick`s make one `beat`, never fewer than one, so the stall's
 /// progress is still read once a beat whatever the red cadence is.
@@ -5760,6 +5767,26 @@ mod lap_tests {
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// THE STALL'S PROGRESS IS READ ONCE A BEAT, NOT ONCE A RED READING: under a
+    /// four-second beat and the one-second red cadence, tick `0` comes round
+    /// every fourth tick and on no other, and a one-tick beat reads it every
+    /// tick (CLOUD-2253 C12).
+    ///
+    /// Fails by: the tick never advancing, so progress is read every red tick
+    /// and a gate stalls after `beats` seconds rather than `beats` beats
+    /// (CLOUD-2789).
+    #[test]
+    fn the_stalls_progress_is_read_once_a_beat() {
+        use super::{RED_EVERY, next_tick, ticks_per_beat};
+        let ticks = ticks_per_beat(std::time::Duration::from_secs(4), RED_EVERY);
+        assert_eq!(ticks, 4);
+        let read: Vec<u32> = std::iter::successors(Some(0), |&at| Some(next_tick(at, ticks)))
+            .take(9)
+            .collect();
+        assert_eq!(read, [0, 1, 2, 3, 0, 1, 2, 3, 0]);
+        assert_eq!(next_tick(0, 1), 0, "a one-tick beat reads every tick");
+    }
 
     #[cfg(test)]
     /// A HELD LAP ENDS ONLY ON A FINAL VERIFY (CLOUD-2783): green holds with

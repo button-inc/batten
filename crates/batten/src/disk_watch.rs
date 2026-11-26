@@ -719,6 +719,51 @@ mod tests {
         assert_eq!(sampler.settled.get(), 7, "where the pass left the volume");
     }
 
+    /// SETTLING STOPS THE RUNNING PASS AND RECORDS ITS ANSWER: a pass still
+    /// running when the watched run returns reports what it did by then, and
+    /// those lines are the watcher's, not lost with the receiver.
+    ///
+    /// The answer is sent before `settle` runs, so its `recv` returns at once:
+    /// the case waits on no clock and no thread.
+    ///
+    /// Fails by: `settle` doing nothing, so the stop is never raised and the
+    /// stopped pass's `disk-stopped` line never reaches the record (CLOUD-2789).
+    #[test]
+    fn settling_stops_the_running_pass_and_records_its_answer() {
+        let config: crate::config_model::Prune = match serde_json::from_str("{}") {
+            Ok(config) => config,
+            Err(why) => panic!("an empty table: {why}"),
+        };
+        let sampler = sampler_reading(&config, 7);
+        let (answer, answered) = std::sync::mpsc::channel();
+        sampler.pending.replace(Some(answered));
+        let stopped = crate::collect::Collected {
+            freed_bytes: 0,
+            units: 3,
+            free_after_mb: 0,
+            wall_ms: 0,
+            held: crate::collect::Held {
+                stopped: true,
+                ..crate::collect::Held::default()
+            },
+        };
+        assert!(answer.send(Some(stopped)).is_ok(), "the receiver is held");
+        assert!(!sampler.halt.is_raised(), "the stop starts lowered");
+        sampler.settle();
+        assert!(sampler.halt.is_raised(), "settling raises the stop");
+        assert!(sampler.pending.borrow().is_none(), "the pass is taken");
+        assert!(
+            sampler
+                .lines
+                .borrow()
+                .iter()
+                .any(|line| line == "disk-stopped 0 3"),
+            "the stopped pass's answer is recorded: {:?}",
+            sampler.lines.borrow()
+        );
+        assert_eq!(sampler.settled.get(), 7, "where the pass left the volume");
+    }
+
     /// Fails by: the floor's stop test inverted, so a watcher with no runtime
     /// never samples until it is stopped, and then never ends.
     #[test]

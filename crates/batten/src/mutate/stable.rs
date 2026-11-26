@@ -272,6 +272,37 @@ mod tests {
         assert!(!said.contains("timer"), "pointers, never a digest: {said}");
     }
 
+    /// A CASE THAT MOVED ON ONE SIDE ONLY HAS MOVED: one that ran an extra
+    /// function the second time, and dropped none, is as flaky as one that
+    /// traded a function for another. Fails by: the move counted as the
+    /// product of its sides, so a one-sided move reads as none (CLOUD-2789).
+    #[test]
+    fn a_case_that_moved_on_one_side_only_has_moved() {
+        let before = Witness::from([
+            (case("grew"), set(&["f"])),
+            (case("shrank"), set(&["f", "g"])),
+        ]);
+        let after = Witness::from([
+            (case("grew"), set(&["f", "g"])),
+            (case("shrank"), set(&["f"])),
+        ]);
+        assert_eq!(
+            moved(&before, &after),
+            vec![
+                Moved {
+                    case: case("grew"),
+                    before: 0,
+                    after: 1,
+                },
+                Moved {
+                    case: case("shrank"),
+                    before: 1,
+                    after: 0,
+                },
+            ]
+        );
+    }
+
     /// A case only one recording holds is not compared: one the second run did
     /// not record passing has the baseline's verdict, and one never witnessed
     /// has nothing to compare against. Fails by: a red or new case read as
