@@ -566,8 +566,8 @@ impl Drain {
         }
     }
 
-    /// Wait for EOF against what is LEFT of one shared [`PIPE_DRAIN_TIMEOUT`],
-    /// then take what arrived.
+    /// Wait for EOF against what is LEFT of one shared `budget` (production's
+    /// is [`PIPE_DRAIN_TIMEOUT`]), then take what arrived.
     ///
     /// Returns the bytes and whether the deadline was reached. A timeout is not
     /// an error: the child's exit code is still the caller's answer, and refusing
@@ -590,14 +590,11 @@ impl Drain {
     fn collect_remaining(
         self,
         started: std::time::Instant,
+        budget: Duration,
         stream: Stream,
         report: &mut dyn Write,
     ) -> Result<(Vec<u8>, capture::Spool)> {
-        self.collect_within(
-            PIPE_DRAIN_TIMEOUT.saturating_sub(started.elapsed()),
-            stream,
-            report,
-        )
+        self.collect_within(budget.saturating_sub(started.elapsed()), stream, report)
     }
 
     /// [`Self::collect`] with the deadline supplied.
@@ -2678,7 +2675,21 @@ fn dispatch(
     // received`, which is one answer; owning N groups at once would make it N,
     // and a supervisor that cannot say what it tore down is not one.
     let decision = GroupDecision::observe(wants_group(settings));
-    dispatch_decided(repo_root, bundle, settings, published, run, decision)
+    let decided = Decided {
+        group: decision,
+        drain: PIPE_DRAIN_TIMEOUT,
+    };
+    dispatch_decided(repo_root, bundle, settings, published, run, decided)
+}
+
+/// What [`dispatch`] settled before any command runs: whether Batten owns the
+/// group, and the pipe-drain budget a leaked writer may cost. Production
+/// carries [`PIPE_DRAIN_TIMEOUT`]; a case passes the budget its event needs,
+/// so no case waits a production bound out (CLOUD-2789).
+#[derive(Debug, Clone, Copy)]
+struct Decided {
+    group: GroupDecision,
+    drain: Duration,
 }
 
 /// Whether a run asks Batten to own its group: declared, and one job at a time.
@@ -2694,7 +2705,7 @@ fn dispatch_decided(
     settings: &ExecConfig,
     published: &[(String, String)],
     run: u64,
-    decision: GroupDecision,
+    decided: Decided,
 ) -> Result<Vec<Outcome>> {
     let jobs = settings.jobs.max(1);
     let mut done: Vec<Outcome> = Vec::with_capacity(bundle.len());
@@ -2709,7 +2720,7 @@ fn dispatch_decided(
             // spawns no thread it does not need — and so the ordinary case is not
             // paying for the bundle case.
             vec![run_one(
-                repo_root, run, first, wave[0], settings, published, decision,
+                repo_root, run, first, wave[0], settings, published, decided,
             )]
         } else {
             std::thread::scope(|scope| {
@@ -2725,7 +2736,7 @@ fn dispatch_decided(
                                 command,
                                 settings,
                                 published,
-                                decision,
+                                decided,
                             )
                         })
                     })
@@ -2765,8 +2776,9 @@ fn run_one(
     command: &[String],
     settings: &ExecConfig,
     published: &[(String, String)],
-    decision: GroupDecision,
+    decided: Decided,
 ) -> Result<Outcome> {
+    let decision = decided.group;
     let Some((program, args)) = command.split_first() else {
         return Err(UsageError::raise(
             "exec: no command given — write `batten exec -- <cmd> [args…]`",
@@ -2898,9 +2910,9 @@ fn run_one(
     }
     let drain_started = std::time::Instant::now();
     let (out_bytes, out_spool) =
-        out_drain.collect_remaining(drain_started, Stream::Stdout, &mut notices)?;
+        out_drain.collect_remaining(drain_started, decided.drain, Stream::Stdout, &mut notices)?;
     let (err_bytes, err_spool) =
-        err_drain.collect_remaining(drain_started, Stream::Stderr, &mut notices)?;
+        err_drain.collect_remaining(drain_started, decided.drain, Stream::Stderr, &mut notices)?;
 
     // Both streams are stored, including an empty one: zero bytes is the real
     // answer "the command said nothing", and it must be distinguishable from a run
@@ -4333,6 +4345,13 @@ mod tests {
     /// which is the harness's — `mise run` exports the marker and so declines.
     /// `each_decline_rule_refuses_on_its_own` holds the observation's rules.
     fn owned_run(root: &Path, script: &str) -> Result<Vec<Outcome>> {
+        owned_run_within(root, script, PIPE_DRAIN_TIMEOUT)
+    }
+
+    /// [`owned_run`] with the pipe-drain budget supplied: a case whose writer
+    /// outlives the run by construction passes `ZERO`, so the drain gives up
+    /// at once and no elapsed time decides anything (CLOUD-2789).
+    fn owned_run_within(root: &Path, script: &str, drain: Duration) -> Result<Vec<Outcome>> {
         let managed = ExecConfig {
             manage_process_group: true,
             ..ExecConfig::DEFAULT
@@ -4344,8 +4363,82 @@ mod tests {
             &managed,
             &unmarked(),
             next_run(),
-            GroupDecision::OWNED,
+            super::Decided {
+                group: GroupDecision::OWNED,
+                drain,
+            },
         )
+    }
+
+    /// A fifo a background job holds open for writing (`exec 3>`) for as long
+    /// as it lives. This case's end is read-only, so its read returns what the
+    /// job said, or EOF the moment the job is dead: the group's teardown is an
+    /// EVENT the case reads, never a hang a judge's cut has to end
+    /// (CLOUD-2789).
+    struct Life {
+        path: PathBuf,
+        file: std::fs::File,
+    }
+
+    impl Life {
+        fn at(path: PathBuf) -> Self {
+            let dir = path.parent().expect("a fifo inside the case's scratch");
+            let made = sh(
+                dir,
+                &format!("mkfifo '{}'", path.display()),
+                "",
+                Diagnostics::Keep,
+            );
+            assert_eq!(made, Some((0, String::new())), "make the fifo");
+            let file = read_end_now(&path);
+            Self { path, file }
+        }
+
+        /// The shell that takes this fifo's write end as fd 3 for the job's life.
+        fn hold(&self) -> String {
+            format!("exec 3>'{}'", self.path.display())
+        }
+
+        /// Everything the job said before its write end closed: `yes` from a
+        /// job that lived to say it, nothing from one the group's end killed.
+        fn said(self) -> String {
+            use std::io::Read as _;
+
+            let mut file = blocking(self.file);
+            let mut said = String::new();
+            file.read_to_string(&mut said).expect("read the fifo");
+            said.trim().to_owned()
+        }
+    }
+
+    /// Open `path`'s read end without waiting for a writer, so a job's
+    /// `exec 3>` finds a reader at once.
+    #[cfg(unix)]
+    fn read_end_now(path: &Path) -> std::fs::File {
+        use rustix::fs::{Mode, OFlags};
+        std::fs::File::from(
+            rustix::fs::open(path, OFlags::RDONLY | OFlags::NONBLOCK, Mode::empty())
+                .expect("open the fifo's read end"),
+        )
+    }
+
+    /// No fifos off unix; the cases that use one return first there.
+    #[cfg(not(unix))]
+    fn read_end_now(path: &Path) -> std::fs::File {
+        std::fs::File::open(path).expect("open the fifo's read end")
+    }
+
+    /// `file` with its reads blocking again, so EOF waits for the last writer.
+    #[cfg(unix)]
+    fn blocking(file: std::fs::File) -> std::fs::File {
+        rustix::fs::fcntl_setfl(&file, rustix::fs::OFlags::empty()).expect("clear O_NONBLOCK");
+        file
+    }
+
+    /// Off unix nothing was opened non-blocking.
+    #[cfg(not(unix))]
+    const fn blocking(file: std::fs::File) -> std::fs::File {
+        file
     }
 
     /// Fails by: an owned run not grouping its child, an opted-out one
@@ -4383,31 +4476,53 @@ mod tests {
     }
 
     /// Fails by: a CLEAN managed run tearing down what its child left
-    /// behind. Only an error or an unwind ends the group.
+    /// behind. Only an error, an unwind, or a member still holding a capture
+    /// pipe ends the group.
+    ///
+    /// DETERMINISTIC UNDER THE GROUP TEST INVERTED (`==` for `!=` in
+    /// `group_holds`, missed at 34c6e4d1f, then caught once in two runs): a
+    /// holder OUTSIDE the group (`setsid`) keeps the capture pipes open past
+    /// the run, so a non-member always holds one when the run asks, never only
+    /// this process's drain racing to EOF. The drain budget is `ZERO`, so the
+    /// outsider costs no clock, and the job's death is EOF on [`Life`], read
+    /// at once rather than waited out.
     #[test]
     fn a_clean_managed_run_leaves_its_group_alone() {
-        if !cfg!(unix) {
+        if !cfg!(target_os = "linux") {
             return;
         }
         let root = contained("exec-clean-leaves");
-        let alive = Fifo::at(root.join("alive"));
+        let left = Fifo::at(root.join("left"));
+        let hold = Fifo::at(root.join("hold"));
+        let up = Fifo::at(root.join("up"));
         let go = Fifo::at(root.join("go"));
-        // The job outlives the run by construction: it blocks reading `go`,
-        // which this case writes only once the run has returned. Should the
-        // case fail before then, dropping `go` closes its only writer and the
-        // read ends at EOF.
+        let life = Life::at(root.join("life"));
+        // The outsider leaves the group still holding the capture pipes and
+        // says so; the job stays in the group holding neither, takes its life
+        // line, and says so. Only then does the child exit.
         let script = format!(
-            "(read _ < '{go}'; {alive}) >/dev/null 2>&1 &",
+            "setsid sh -c \"{left_write}; read _ < '{hold}'\" &\n\
+             read _ < '{left}'\n\
+             ({life_hold}; {up_write}; read _ < '{go}'; echo yes >&3) >/dev/null 2>&1 &\n\
+             read _ < '{up}'",
+            left_write = left.write("out"),
+            hold = hold.path.display(),
+            left = left.path.display(),
+            life_hold = life.hold(),
+            up_write = up.write("up"),
             go = go.path.display(),
-            alive = alive.write("yes")
+            up = up.path.display(),
         );
-        let outcomes = owned_run(&root, &script).expect("the child exits clean");
+        let outcomes =
+            owned_run_within(&root, &script, Duration::ZERO).expect("the child exits clean");
+        hold.say("go");
+        go.say("go");
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].exit, 0);
-        go.say("go");
         assert_eq!(
-            alive.first("the background job outliving the clean run"),
-            "yes"
+            life.said(),
+            "yes",
+            "the group's job outlived a clean run only an outsider's pipe was open on"
         );
     }
 
@@ -4642,54 +4757,44 @@ mod tests {
         assert_eq!(outcomes[0].exit, 128 + TERM);
     }
 
-    /// CLOUD-2789: a capture pipe is held by the group only where a member
-    /// of it holds the pipe. This process holds the read end of every capture
-    /// pipe and is never in its child's group, and here a process outside the
-    /// group holds the write end too, so the drain is still open when the
-    /// clean run asks: only the group's own members may answer it.
+    /// CLOUD-2789: a capture pipe a MEMBER of the group still holds is the run
+    /// still running, so a clean exit ends the group. The job here keeps the
+    /// child's stdout and stderr open past the child's own exit.
     ///
-    /// Fails by: the group test inverted (`==` for `!=`, a mutant missed at
-    /// 34c6e4d1f), so this process reads as the holder and the clean run ends
-    /// the group its child meant to leave running: the job never says it
-    /// outlived the run, and the case hangs into the judge's cut.
+    /// Fails by: the clean path never ending the group (`group_holds` always
+    /// `false`, or its `&&` read as `||` the other way), so the member lives on
+    /// holding the pipe and says so on [`Life`] when this case lets it.
     ///
-    /// Through the managed run itself (`owned_run`), so no spawn of its own.
-    /// `/proc` is how a group is read, so off Linux the case returns at once;
-    /// `cfg!` rather than `#[cfg]` keeps it compiled, and counted, everywhere.
-    /// The holder outlives the run until this case lets it go, so the drain
-    /// waits out its budget ([`PIPE_DRAIN_TIMEOUT`]) on it: the price of no
-    /// clock deciding whether the holder was still there when the run asked.
+    /// Through the managed run itself (`owned_run_within`), so no spawn of its
+    /// own, and with a `ZERO` drain budget: the member is ended by the group's
+    /// teardown, not waited out. `/proc` is how a group is read, so off Linux
+    /// the case returns at once; `cfg!` keeps it compiled everywhere.
     #[test]
     fn only_a_member_of_the_group_holds_its_pipe() {
         if !cfg!(target_os = "linux") {
             return;
         }
         let root = contained("exec-member-holds");
-        let left = Fifo::at(root.join("left"));
-        let hold = Fifo::at(root.join("hold"));
+        let up = Fifo::at(root.join("up"));
         let go = Fifo::at(root.join("go"));
-        let alive = Fifo::at(root.join("alive"));
-        // The holder leaves the group (`setsid`) still holding the capture
-        // pipes, and says so before the child exits, so no member holds them
-        // when the run asks. The job stays in the group holding neither.
+        let life = Life::at(root.join("life"));
         let script = format!(
-            "setsid sh -c \"{left_write}; read _ < '{hold}'\" &\n\
-             read _ < '{left}'\n\
-             (read _ < '{go}'; {alive_write}) >/dev/null 2>&1 &",
-            left_write = left.write("out"),
-            hold = hold.path.display(),
-            left = left.path.display(),
+            "({life_hold}; {up_write}; read _ < '{go}'; echo yes >&3) &\n\
+             read _ < '{up}'",
+            life_hold = life.hold(),
+            up_write = up.write("up"),
             go = go.path.display(),
-            alive_write = alive.write("yes"),
+            up = up.path.display(),
         );
-        let outcomes = owned_run(&root, &script).expect("the child exits clean");
-        hold.say("go");
+        let outcomes =
+            owned_run_within(&root, &script, Duration::ZERO).expect("the child exits clean");
+        go.say("go");
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].exit, 0);
-        go.say("go");
         assert_eq!(
-            alive.first("the group's job outliving a run only an outsider held"),
-            "yes"
+            life.said(),
+            "",
+            "a member still holding the capture pipe was ended with the clean run"
         );
     }
 }
