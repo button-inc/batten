@@ -10061,10 +10061,18 @@ fn site_hasher(root: &std::path::Path, mutant: &Listed) -> Option<blake3::Hasher
     let function = mutant.function.as_ref()?;
     let span = function.span?;
     let text = source.get(offset(&source, span.start)?..offset(&source, span.end)?)?;
+    // THE SITE WITHIN THE FUNCTION, as an offset from the function's start, so
+    // a function moved whole keeps its key and a second site does not share it.
+    let site = offset(&source, mutant.span.start)?.checked_sub(offset(&source, span.start)?)?;
+    // THE FUNCTION AS A KEY READS CODE (CLOUD-2904): its keyed text, and the
+    // site as the keyed tokens before it. Keyed by its raw text, one `//`
+    // comment inside `adjudicate` re-keyed every mutant of it, judged them
+    // afresh, and re-recorded every case that ran it.
+    let (keyed, at) = keyed_site(text, site);
     let mut hasher = blake3::Hasher::new();
     for part in [
         mutant.file.as_str(),
-        text,
+        keyed.as_str(),
         mutant.genre.as_str(),
         mutant.replacement.as_str(),
         function.function_name.as_str(),
@@ -10072,10 +10080,7 @@ fn site_hasher(root: &std::path::Path, mutant: &Listed) -> Option<blake3::Hasher
         hasher.update(part.as_bytes());
         hasher.update(b"\x1f");
     }
-    // THE SITE WITHIN THE FUNCTION, as an offset from the function's start, so
-    // a function moved whole keeps its key and a second site does not share it.
-    let site = offset(&source, mutant.span.start)?.checked_sub(offset(&source, span.start)?)?;
-    hasher.update(site.to_string().as_bytes());
+    hasher.update(at.to_string().as_bytes());
     // A SWITCH WIDENED TO ITS CHAIN JUDGES ANOTHER PROGRAM than the one the
     // same text was judged as before (CLOUD-2911), so it keys apart: a verdict
     // or a case's outcome journaled under the narrower switch never stands
@@ -10085,6 +10090,21 @@ fn site_hasher(root: &std::path::Path, mutant: &Listed) -> Option<blake3::Hasher
         hasher.update(b"\x1fchain");
     }
     Some(hasher)
+}
+
+/// A function's `text` as a key reads it ([`keyed_text`]), and how many of its
+/// keyed tokens come before the byte `site` in it: where a site is, read past
+/// whitespace and comments.
+fn keyed_site(text: &str, site: usize) -> (String, usize) {
+    let parse = batten_facts::source::rust_parse(text, ra_ap_syntax::Edition::Edition2024);
+    let root = parse.tree().syntax().clone();
+    let at = root
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+        .filter(|token| !unkeyed_token(token))
+        .take_while(|token| usize::from(token.text_range().start()) < site)
+        .count();
+    (keyed_text(&root), at)
 }
 
 /// Package name to directory, from where the listing's mutants live.
@@ -15797,13 +15817,15 @@ mod tests {
             mutant.function.as_mut().unwrap().span = Some(whole);
             mutant
         };
+        // THE FUNCTION AND THE SITE AS A KEY READS THEM ([`keyed_site`]).
         let expected = |site: usize, chain: bool| {
+            let (keyed, at) = keyed_site(source.trim_end(), site);
             let mut hasher = blake3::Hasher::new();
-            for part in ["src/lib.rs", source.trim_end(), "BinaryOperator", "||", "f"] {
+            for part in ["src/lib.rs", keyed.as_str(), "BinaryOperator", "||", "f"] {
                 hasher.update(part.as_bytes());
                 hasher.update(b"\x1f");
             }
-            hasher.update(site.to_string().as_bytes());
+            hasher.update(at.to_string().as_bytes());
             if chain {
                 hasher.update(b"\x1fchain");
             }
@@ -16999,6 +17021,48 @@ mod tests {
         assert_eq!(site_key(&root, &moved), Some(key));
         let digests = case_digests(&root, &cases, &dirs, &none, &depends(&[]));
         assert_ne!(verdict_key(&root, &moved, &cases, &digests), Some(verdict));
+    }
+
+    /// A site's key reads its function as a key reads code (CLOUD-2904): a `//`
+    /// comment and a blank line inside the function, before the site, keep
+    /// the site's key; a statement added there moves it.
+    ///
+    /// Fails by: the function's raw text keyed, or the site's byte offset (the
+    /// T+1 measurement over 82e566618: one comment inside `adjudicate`
+    /// re-keyed every mutant of it, judged them afresh, and re-recorded every
+    /// case that ran it).
+    #[test]
+    fn a_comment_inside_a_function_keeps_its_sites_keys() {
+        let root = crate::scratch::scratch("schema-keys-comment");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let key_of = |source: &str, line: usize, end: usize| {
+            std::fs::write(root.join("src/lib.rs"), source).unwrap();
+            site_key(
+                &root,
+                &in_function(
+                    listed("BinaryOperator", "!=", (line, 7), (line, 9)),
+                    (1, 1),
+                    (end, 2),
+                ),
+            )
+            .unwrap()
+        };
+        let held = key_of("fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n", 2, 3);
+        let commented = key_of(
+            "fn f(a: u8, b: u8) -> bool {\n    // why it compares\n\n    a == b\n}\n",
+            4,
+            5,
+        );
+        assert_eq!(
+            commented, held,
+            "a comment and a blank line keep the site's key"
+        );
+        let changed = key_of(
+            "fn f(a: u8, b: u8) -> bool {\n    let _ = 0;\n    a == b\n}\n",
+            3,
+            4,
+        );
+        assert_ne!(changed, held, "a statement added moves it");
     }
 
     /// A case's digest moves with its own test and the helpers beside it,
