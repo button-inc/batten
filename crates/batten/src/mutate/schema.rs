@@ -3475,7 +3475,7 @@ fn engine_runtime(at: &std::path::Path, name: &std::ffi::OsStr) -> bool {
     prefixed(crate::step::TRACES)
         || prefixed(crate::step::LOCKS)
         || [
-            crate::RECEIPT_DIR,
+            crate::claim::RECEIPT_DIR,
             crate::record::KEYED_STORE,
             crate::record::JOURNAL_STORE,
             crate::record::RECEIPTS,
@@ -13803,7 +13803,7 @@ mod tests {
             format!("{}-abc", crate::step::LOCKS),
             format!("{}/fam/k", crate::record::KEYED_STORE),
             format!("{}/fam/s", crate::record::JOURNAL_STORE),
-            format!("{}/r", crate::RECEIPT_DIR),
+            format!("{}/r", crate::claim::RECEIPT_DIR),
             format!("{}/q", crate::record::RECEIPTS),
         ];
         for path in runtime

@@ -9413,8 +9413,7 @@ fn claim_payloads(repo: &Path, issue: Option<&str>) -> Result<Vec<claim::Issue>>
     values.iter().map(claim::Issue::parse).collect()
 }
 
-/// The out-of-tree receipt directory both halves of the claim protocol share.
-pub(crate) const RECEIPT_DIR: &str = "batten-receipts";
+use claim::RECEIPT_DIR;
 
 use clock::now_unix;
 use config::anchor_at;
