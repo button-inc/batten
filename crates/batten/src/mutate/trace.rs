@@ -633,7 +633,15 @@ pub(crate) fn await_trace(path: &Path) -> Option<String> {
             || closed.send(Some(())).is_ok(),
         );
     });
-    wait_whole(read, || woken.recv() == Ok(Some(())))
+    wait_whole(read, || woke_by_a_close(woken.recv()))
+}
+
+/// Whether a wake was a close: the grace is `None` and a channel every sender
+/// left is an error, and neither is one (CLOUD-2789). Apart from the channel so
+/// a case reads each wake on every target.
+#[cfg(any(target_os = "linux", test))]
+fn woke_by_a_close(wake: Result<Option<()>, std::sync::mpsc::RecvError>) -> bool {
+    wake == Ok(Some(()))
 }
 
 /// Pass each close event on until either side goes away: the watch's read
@@ -1038,6 +1046,20 @@ mod tests {
         assert_eq!(
             super::quoted_arg("a\\x41b\", 0"),
             Some((String::from("aAb"), ", 0"))
+        );
+    }
+
+    // Fails by: the grace or a channel every sender left read as a close, so
+    // the wait reads again for a trace that never finishes, or a close read as
+    // the end of the wait, so a trace closed twice is answered half-written
+    // (CLOUD-2789).
+    #[test]
+    fn only_a_close_is_a_close() {
+        assert!(super::woke_by_a_close(Ok(Some(()))));
+        assert!(!super::woke_by_a_close(Ok(None)), "the grace");
+        assert!(
+            !super::woke_by_a_close(Err(std::sync::mpsc::RecvError)),
+            "nothing more will close"
         );
     }
 

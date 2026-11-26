@@ -16504,10 +16504,7 @@ fn spend_the_matrix(
     let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
     // KEPT FOR THE WAIT ONLY WHEN THIS READY BUYS NOTHING (CLOUD-2253 A7): a
     // ready that fires starts runs this reading never saw.
-    keep_ready_reading(
-        read.filter(|_| spend == land::Spend::Nothing)
-            .map(|(_, raw)| (repo.clone(), head.clone(), raw)),
-    );
+    keep_ready_reading(ready_reading_kept(read, spend, &repo, &head));
     // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293), and
     // only when a ready will actually fire: a lap that readies nothing — the
     // pull request already ready, its run answered or on its way — buys no
@@ -16770,6 +16767,19 @@ fn retire_the_branch(
 /// the Wait, so it never outlives the lap that read it.
 static READY_READING: std::sync::Mutex<Option<(String, String, rest::Answer)>> =
     std::sync::Mutex::new(None);
+
+/// What Ready keeps for the Wait: its reading of `head` in `repo`, only when
+/// this ready buys `Nothing`, since a ready that fires starts runs the reading
+/// never saw (CLOUD-2253 A7).
+fn ready_reading_kept<V>(
+    read: Option<(V, rest::Answer)>,
+    spend: land::Spend,
+    repo: &str,
+    head: &str,
+) -> Option<(String, String, rest::Answer)> {
+    read.filter(|_| spend == land::Spend::Nothing)
+        .map(|(_, raw)| (repo.to_owned(), head.to_owned(), raw))
+}
 
 /// Keep `reading` for the next Wait over `sha` in `repo`, or clear the slot.
 fn keep_ready_reading(kept: Option<(String, String, rest::Answer)>) {
@@ -35149,6 +35159,34 @@ mod tests {
         super::keep_ready_reading(kept());
         super::keep_ready_reading(None);
         assert_eq!(super::take_ready_reading("o/r", "aaa"), None, "cleared");
+    }
+
+    /// Ready keeps its reading for the Wait only when the ready buys nothing
+    /// (CLOUD-2789).
+    ///
+    /// Fails by: a reading kept over a ready that fires, whose runs it never
+    /// saw, or none kept over one that buys nothing.
+    #[test]
+    fn ready_keeps_its_reading_only_when_it_buys_nothing() {
+        let raw = crate::rest::Answer {
+            status: 200,
+            etag: None,
+            poll_floor: None,
+            backoff: None,
+            body: String::from("{}"),
+            headers: std::collections::BTreeMap::new(),
+        };
+        let kept = |spend| super::ready_reading_kept(Some(((), raw.clone())), spend, "o/r", "aaa");
+        assert_eq!(
+            kept(crate::land::Spend::Nothing),
+            Some((String::from("o/r"), String::from("aaa"), raw.clone()))
+        );
+        assert_eq!(kept(crate::land::Spend::Ready), None);
+        assert_eq!(kept(crate::land::Spend::Refire), None);
+        assert_eq!(
+            super::ready_reading_kept::<()>(None, crate::land::Spend::Nothing, "o/r", "aaa"),
+            None
+        );
     }
     use super::*;
 

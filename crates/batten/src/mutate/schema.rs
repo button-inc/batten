@@ -7294,15 +7294,21 @@ pub fn record_reach(
     // or the sweep refuses ([`super::stable`]). A red case has its own verdict.
     let red = failed_records(&base);
     let after = super::stable::passing(&reach.executed, identity.probes, &red);
-    let compared = super::stable::judge(&base, &after)?;
-    if compared > 0 {
-        writeln!(
-            out,
-            "mutate schema: reach stable for {compared} case(s) recorded twice over identical inputs"
-        )?;
+    if let Some(line) = stable_line(super::stable::judge(&base, &after)?) {
+        writeln!(out, "{line}")?;
     }
     reach.tree = inputs;
     Ok((reach, passed))
+}
+
+/// What [`record_reach`] says of `compared` cases recorded twice over
+/// identical inputs: nothing where none was (CLOUD-2789).
+fn stable_line(compared: usize) -> Option<String> {
+    (compared > 0).then(|| {
+        format!(
+            "mutate schema: reach stable for {compared} case(s) recorded twice over identical inputs"
+        )
+    })
 }
 
 /// The file `record_reach` writes once a record is whole, holding the digest
@@ -7835,6 +7841,12 @@ enum Place<'p> {
 /// How far a path is followed through `use`s before it is called unknown.
 const RESOLVE_DEPTH: usize = 16;
 
+/// Whether `depth` is past [`RESOLVE_DEPTH`]: one predicate for every step of
+/// a resolution, so the bound is the same however a path nests.
+const fn past_resolve_depth(depth: usize) -> bool {
+    depth > RESOLVE_DEPTH
+}
+
 /// What a mention resolves against ([`resolve`]).
 struct Resolver<'r> {
     by_base: &'r std::collections::HashMap<&'r str, Vec<usize>>,
@@ -7914,7 +7926,7 @@ impl<'r> Resolver<'r> {
         if !after.contains(USE_BOUND) {
             return found;
         }
-        if depth > RESOLVE_DEPTH {
+        if past_resolve_depth(depth) {
             return Found::Unknown;
         }
         match self.use_target(id, segment) {
@@ -8109,7 +8121,7 @@ impl<'r> Resolver<'r> {
         start: String,
         depth: usize,
     ) -> Found {
-        if depth > RESOLVE_DEPTH {
+        if past_resolve_depth(depth) {
             return Found::Unknown;
         }
         let Some(candidates) = self
@@ -8187,7 +8199,7 @@ impl<'r> Resolver<'r> {
     /// segment what it resolves to there ([`Resolver::lookup`]), the first
     /// a workspace crate's root where nothing in scope is named so.
     fn path(&self, package: &'r str, module: &str, segments: &[&str], depth: usize) -> Place<'r> {
-        if depth > RESOLVE_DEPTH {
+        if past_resolve_depth(depth) {
             return Place::Unknown;
         }
         let mut at_package = package;
@@ -15812,6 +15824,134 @@ mod tests {
         assert_eq!(timed.red, &control, "the red cases kept");
     }
 
+    /// A reach recording says it was stable only over cases it compared
+    /// (CLOUD-2789).
+    ///
+    /// Fails by: a line for no case compared, or none for one.
+    #[test]
+    fn a_stable_reach_is_said_only_over_cases_compared() {
+        assert_eq!(stable_line(0), None);
+        assert_eq!(
+            stable_line(1).as_deref(),
+            Some("mutate schema: reach stable for 1 case(s) recorded twice over identical inputs")
+        );
+    }
+
+    /// A hand-back is keyed by pair only where its cases observe it and none is
+    /// red, and a `missed` run journals each case it ran passing under that
+    /// case's pair; nothing else a run says decides a pair (CLOUD-2789).
+    ///
+    /// Fails by: pairs kept for a hand-back its cases do not observe, or a
+    /// survivor's run journaling no pair, so each lap builds it again.
+    #[test]
+    fn a_handbacks_pairs_are_kept_and_journaled_only_where_they_decide() {
+        let base = crate::scratch::scratch("schema-handback-pairs");
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        std::fs::write(
+            base.join("src/lib.rs"),
+            "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n",
+        )
+        .unwrap();
+        let mutant = in_function(
+            listed("BinaryOperator", "!=", (2, 7), (2, 9)),
+            (1, 1),
+            (3, 2),
+        );
+        let (reach, seconds, cache, digests) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let (red, control) = (Red::new(), Control::new());
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &base,
+            mutants: &[],
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests: &digests,
+            store: &base,
+            red: &red,
+            control: &control,
+            reuse: None,
+            threads: None,
+        };
+        let (a, b) = (case("a"), case("b"));
+        let green: BTreeSet<Case> = [a.clone()].into();
+        let pairs = handback_pairs(&judging, &mutant, &green, (true, true));
+        let key = pair_key(&base, &mutant, &a, &digests).unwrap();
+        assert_eq!(pairs, [(a.clone(), key.clone())].into());
+        for (observed, clean) in [(false, true), (true, false), (false, false)] {
+            assert!(
+                handback_pairs(&judging, &mutant, &green, (observed, clean)).is_empty(),
+                "observed {observed}, clean {clean}"
+            );
+        }
+        let ran: BTreeSet<Case> = [a, b].into();
+        let output = base.join("out");
+        assert_eq!(
+            pair_lines(&pairs, &ran, ("missed", "m"), &output),
+            journal_line(Some(&key), PASSED, "m"),
+            "each case ran with a pair, passing"
+        );
+        assert_eq!(pair_lines(&pairs, &ran, ("timeout", "m"), &output), "");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A passing control's key is its case's and its digest's: two cases over
+    /// one digest key apart, an edit to what a case executed moves its key,
+    /// and a case with no digest has none (CLOUD-2789).
+    ///
+    /// Fails by: one key shared by every case, so a control journaled for one
+    /// is read back as every other's.
+    #[test]
+    fn a_controls_key_is_its_cases_and_its_digests() {
+        let base = std::path::Path::new("/w");
+        let (reach, seconds, cache) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let digests: std::collections::BTreeMap<Case, String> = [
+            (case("a"), String::from("d1")),
+            (case("b"), String::from("d1")),
+        ]
+        .into();
+        let moved: std::collections::BTreeMap<Case, String> =
+            [(case("a"), String::from("d2"))].into();
+        let (red, control) = (Red::new(), Control::new());
+        let judging = |digests| Judging {
+            work: base,
+            target: base,
+            scratch: base,
+            root: base,
+            mutants: &[],
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            digests,
+            store: base,
+            red: &red,
+            control: &control,
+            reuse: None,
+            threads: None,
+        };
+        let held = judging(&digests);
+        let a = control_key(&held, &case("a")).expect("a case with a digest has a key");
+        let b = control_key(&held, &case("b")).expect("and so does its sibling");
+        assert_ne!(a, b, "two cases over one digest");
+        assert_ne!(
+            Some(a),
+            control_key(&judging(&moved), &case("a")),
+            "an edit to what the case executed moves its key"
+        );
+        assert_eq!(control_key(&held, &case("c")), None, "no digest, no key");
+    }
+
     /// A checkout that moved during the sweep makes each hand-back not
     /// already journaled an `error`, and the call still answers, so the
     /// report of everything the schema judged is printed.
@@ -18079,6 +18219,17 @@ mod tests {
             run_filter(&odd, &most, false),
             None,
             "a name no filter spells"
+        );
+        // Under half by a hair: one of three is due, so twice it is still
+        // fewer than the listed (CLOUD-2789).
+        let three: BTreeSet<Case> = ["a::one", "a::two", "c::five"]
+            .into_iter()
+            .map(case)
+            .collect();
+        assert_eq!(
+            run_filter(&three, &finished, false).as_deref(),
+            Some("(binary_id(=batten::it) & test(=c::five))"),
+            "one due of three is filtered"
         );
     }
 
@@ -26885,6 +27036,23 @@ pub fn repo() -> u8 {{ scratch() }}
         );
     }
 
+    /// A file's crate root by its path (CLOUD-2927): a `src/bin` file's is
+    /// `src::bin`, a binary directory's under it is that directory, and any
+    /// other `src` file's is `src` however deep it sits (CLOUD-2789).
+    ///
+    /// Fails by: a `src/bin` file rooted at `src`, a binary directory rooted at
+    /// `src::bin`, or a deep `src` file rooted at its own directory.
+    #[test]
+    fn a_files_crate_root_is_read_from_its_path() {
+        assert_eq!(FileScope::of("crates/a/src/bin/tool.rs").root, "src::bin");
+        assert_eq!(
+            FileScope::of("crates/a/src/bin/tool/main.rs").root,
+            "src::bin::tool"
+        );
+        assert_eq!(FileScope::of("crates/a/src/x/y/leaf.rs").root, "src");
+        assert_eq!(FileScope::of("crates/a/tests/it/case.rs").root, "tests::it");
+    }
+
     /// The modules widened are exactly those holding an `include!` or a
     /// `#[path]` module, either one alone.
     ///
@@ -27016,6 +27184,134 @@ pub fn repo() -> u8 {{ scratch() }}
     }
 
     /// The probe id `source`'s rendering gives the function `name`.
+    /// A name a glob `use` brings in resolves to the glob's own definition: an
+    /// edit to it moves the case, and one to a namesake elsewhere does not
+    /// (CLOUD-2789).
+    ///
+    /// Fails by: every module's globs read as none, so the name resolves to
+    /// nothing and an edit to the definition it names moves no case.
+    #[test]
+    fn a_name_a_glob_brings_in_resolves_to_the_globs_definition() {
+        let glob = case("f");
+        let cases: BTreeSet<Case> = [glob.clone()].into();
+        let base = "mod a { pub const LIMIT: u8 = 1; }\n\
+                    mod b { pub const LIMIT: u8 = 2; }\n\
+                    mod c { use super::a::*; pub fn f() -> u8 { LIMIT } }\n";
+        let executed = [(glob.clone(), [probe_of(base, "f")].into())].into();
+        let held = source_digests(&cases, &executed, base);
+        let own = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 1", "LIMIT: u8 = 4"),
+        );
+        assert_ne!(
+            own[&glob], held[&glob],
+            "a's LIMIT is the one the glob brings in"
+        );
+        let other = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 2", "LIMIT: u8 = 3"),
+        );
+        assert_eq!(other[&glob], held[&glob], "b's is not");
+    }
+
+    /// A path through a chain of module aliases resolves up to
+    /// [`RESOLVE_DEPTH`] steps and is unknown past it (CLOUD-2789): 14 aliases
+    /// past the first it names `a`'s `LIMIT`, 15 past it a path no module says.
+    ///
+    /// Fails by: the bound taken a step early or never, or a step not
+    /// counted, so a cycle of aliases is followed forever.
+    #[test]
+    fn an_alias_chain_resolves_to_the_depth_bound_and_no_further() {
+        let wrapped = case("f");
+        let cases: BTreeSet<Case> = [wrapped.clone()].into();
+        let chain = |n: usize| {
+            let mut s = String::from(
+                "mod a { pub const LIMIT: u8 = 1; }\nmod b { pub const LIMIT: u8 = 2; }\n\
+                 mod m0 { pub use super::a as x; }\n",
+            );
+            for k in 1..=n {
+                s += &format!("mod m{k} {{ pub use super::m{}::x; }}\n", k - 1);
+            }
+            s + &format!("mod c {{ pub fn f() -> u8 {{ super::m{n}::x::LIMIT }} }}\n")
+        };
+        let resolved = |n: usize| {
+            let base = chain(n);
+            let executed = [(wrapped.clone(), [probe_of(&base, "f")].into())].into();
+            let held = source_digests(&cases, &executed, &base);
+            let other = source_digests(
+                &cases,
+                &executed,
+                &base.replace("LIMIT: u8 = 2", "LIMIT: u8 = 3"),
+            );
+            other[&wrapped] == held[&wrapped]
+        };
+        assert!(resolved(14), "14 aliases past the first names a's LIMIT");
+        assert!(!resolved(15), "15 is past the bound");
+    }
+
+    /// A cycle of `use`s is followed to the bound and ends, naming no
+    /// definition, never followed forever (CLOUD-2789).
+    ///
+    /// Fails by: a step through a `use` not counted toward the bound, so the
+    /// cycle recurses until the stack is gone.
+    #[test]
+    fn a_cycle_of_uses_ends() {
+        let wrapped = case("f");
+        let cases: BTreeSet<Case> = [wrapped.clone()].into();
+        let base = "mod b { pub const LIMIT: u8 = 2; }\n\
+                    mod p { pub use super::q::LIMIT; }\n\
+                    mod q { pub use super::p::LIMIT; }\n\
+                    mod c { use super::p::LIMIT; pub fn f() -> u8 { LIMIT } }\n";
+        let executed = [(wrapped.clone(), [probe_of(base, "f")].into())].into();
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 2", "LIMIT: u8 = 3"),
+        );
+        assert_eq!(
+            other[&wrapped], held[&wrapped],
+            "the cycle names no LIMIT, so b's is not reached"
+        );
+    }
+
+    /// A cycle of `use`s naming a type is followed through the owner of an
+    /// associated name to the depth bound and ends, never followed forever
+    /// (CLOUD-2789).
+    ///
+    /// Fails by: a step through a `use` binding not counted toward the
+    /// bound, so the owner's resolution recurses until the stack is gone.
+    #[test]
+    fn a_cycle_of_uses_naming_an_owner_ends() {
+        let wrapped = case("f");
+        let cases: BTreeSet<Case> = [wrapped.clone()].into();
+        let base = "mod a { pub struct S; impl S { pub fn go() -> u8 { 1 } } }\n\
+                    mod b { pub struct S; impl S { pub fn go() -> u8 { 2 } } }\n\
+                    mod p { pub use super::q::S; }\n\
+                    mod q { pub use super::p::S; }\n\
+                    mod c { use super::p::S; pub fn f() -> u8 { S::go() } }\n";
+        let executed = [(wrapped.clone(), [probe_of(base, "f")].into())].into();
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(&cases, &executed, &base.replace("{ 2 }", "{ 3 }"));
+        assert_eq!(
+            other[&wrapped], held[&wrapped],
+            "the cycle names no S, so b's is not reached"
+        );
+    }
+
+    /// The resolution bound is passed only past [`RESOLVE_DEPTH`], never at it
+    /// (CLOUD-2789).
+    ///
+    /// Fails by: the bound taken at its own depth, a step early.
+    #[test]
+    fn the_resolution_bound_is_passed_only_past_its_depth() {
+        assert!(!past_resolve_depth(0));
+        assert!(!past_resolve_depth(RESOLVE_DEPTH));
+        assert!(past_resolve_depth(RESOLVE_DEPTH + 1));
+    }
+
     fn probe_of(source: &str, name: &str) -> usize {
         render(source, &[], &BTreeSet::new(), Some(0))
             .fn_names
@@ -27084,6 +27380,40 @@ pub fn repo() -> u8 {{ scratch() }}
             .find(|key| key.starts_with(&format!("{ASSOCIATED}go")))
             .unwrap_or_else(|| panic!("go is keyed: {keys:?}"));
         assert!(member.contains(OWNED), "owned by T: {member:?}");
+    }
+
+    /// A macro passes names through only when its body holds none of a pasted
+    /// path, a scoping keyword or a call to a macro not known to pass them, each
+    /// alone refusing (CLOUD-2789).
+    ///
+    /// Fails by: the three causes joined so that a scoping keyword with no
+    /// unknown macro call beside it reads as passing.
+    #[test]
+    fn a_macro_passes_names_only_with_no_cause_against_it() {
+        let passes = |source: &str| {
+            let parse =
+                batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
+            let it = parse
+                .tree()
+                .syntax()
+                .descendants()
+                .find_map(ast::MacroRules::cast)
+                .expect("the premise: a macro_rules! item");
+            macro_passes(&it)
+        };
+        assert!(passes("macro_rules! m { ($x:expr) => { $x + 1 }; }\n"));
+        assert!(
+            !passes("macro_rules! m { ($x:ident) => { fn f() { use a; $x } }; }\n"),
+            "a scoping keyword alone"
+        );
+        assert!(
+            !passes("macro_rules! m { ($x:expr) => { other!($x) }; }\n"),
+            "an unknown macro call alone"
+        );
+        assert!(
+            passes("macro_rules! m { ($x:expr) => { vec![$x] }; }\n"),
+            "a std macro that passes names through"
+        );
     }
 
     /// CLOUD-2789: a name handed to a std macro that passes it through as
