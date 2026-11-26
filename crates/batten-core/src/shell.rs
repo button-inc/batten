@@ -2150,7 +2150,8 @@ mod tests {
     }
 
     /// Fails by: a heredoc in any one part of a compound — its condition, a
-    /// body, an arm, its own redirect — not seen (review M5).
+    /// body, an arm, a pipeline's stage, an and-or list's item, its own
+    /// redirect — not seen (review M5).
     #[test]
     fn a_heredoc_anywhere_in_a_compound_is_seen() {
         let opens = |text: &str| {
@@ -2162,6 +2163,8 @@ mod tests {
         let doc = "cat <<'EOF'\nx\nEOF\n";
         for text in [
             format!("{{ {doc}}}"),
+            "cat <<'EOF' | cat\nx\nEOF".to_owned(),
+            "cat <<'EOF' && :\nx\nEOF".to_owned(),
             "{ cat; } <<'EOF'\nx\nEOF".to_owned(),
             format!("( {doc})"),
             format!("while {doc}do :; done"),
