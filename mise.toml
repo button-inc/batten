@@ -2379,8 +2379,14 @@ description = "Gate: every declared board gate over one tracker payload set on s
 run = "{{vars.batten}} board sweep"
 
 [tasks.evaluator-io-record]
+# RECEIPTED ON THE RECORD'S ADDRESS (CLOUD-2789). The step cache was retired from
+# this task because a hit wrote no record, so a new claim's reader met silence.
+# The `evaluator-io-record` row keys `batten step record -- evaluator-io-probe`:
+# the file this branch and claim read and whether it is there. A hit therefore
+# stands for a record present at the address the module reads, written by a run
+# over the same tree; a re-claim or a lost record misses and writes it.
 description = "Effect: record whether the IO-free evaluator test goes red under `probe-evaluator-io`, for `test judge never`"
-run = "{{vars.batten}} record probe evaluator-io-probe --input test=no_evaluator_feature_admits_io -- cargo test --quiet -p batten --features probe-evaluator-io --test policy_modules no_evaluator_feature_admits_io -- --include-ignored"
+run = "{% if env.BATTEN_BIN %}{{vars.batten}} step run evaluator-io-record -- {% endif %}{{vars.batten}} record probe evaluator-io-probe --input test=no_evaluator_feature_admits_io -- cargo test --quiet -p batten --features probe-evaluator-io --test policy_modules no_evaluator_feature_admits_io -- --include-ignored"
 
 [tasks.transcript-corpus-record]
 description = "Effect: count this host's independent session transcripts against a threshold, for `corpus count thin`"
@@ -4587,7 +4593,7 @@ description = "The dist leg at the lap's cost: `dist` for this host with the dis
 # these, so they are scoped to the one leg that builds it rather than exported
 # to every step `verify:gated` runs.
 env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "256", CARGO_PROFILE_DIST_OPT_LEVEL = "0", CARGO_PROFILE_DIST_INCREMENTAL = "true" }
-run = "mise run dist {{vars.dist_host}} --build-tool cargo-dist"
+run = "{% if env.BATTEN_BIN %}{{vars.batten}} step run dist:lap -- {% endif %}mise run dist {{vars.dist_host}} --build-tool cargo-dist"
 
 [tasks."tree-clean"]
 #MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
