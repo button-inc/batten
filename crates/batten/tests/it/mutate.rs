@@ -3023,6 +3023,7 @@ fn overlay_reader_toy(name: &str, looked: &str) -> PathBuf {
 /// its runs into `$TOY_RUN_COUNTER`; the build script counts builds into
 /// `$TOY_BUILD_COUNTER`.
 fn embedded_library_toy(name: &str, rows: usize) -> PathBuf {
+    use std::fmt::Write as _;
     let root = toy(name);
     write(
         &root,
@@ -3032,10 +3033,12 @@ fn embedded_library_toy(name: &str, rows: usize) -> PathBuf {
     write(&root, "build.rs", ALWAYS_STALE_BUILD);
     let mut module = String::from("#MUTANT-SUITE tests/library.rs\n");
     for row in 0..rows {
-        module.push_str(&format!(
-            "#MUTANT limit-moved-{row}|s/^limit := 10$/limit := {}/|library_limit_is_ten\n",
+        writeln!(
+            module,
+            "#MUTANT limit-moved-{row}|s/^limit := 10$/limit := {}/|library_limit_is_ten",
             90 + row
-        ));
+        )
+        .expect("a String takes every write");
     }
     module.push_str("package batten.library\n\nlimit := 10\n");
     write(&root, "lib/r.rego", &module);
