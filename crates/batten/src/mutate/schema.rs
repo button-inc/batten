@@ -4860,6 +4860,36 @@ fn sealed_over(base: &std::path::Path, inputs: &str) -> bool {
     crate::fsio::read_to_string(base.join(SEALED)).is_ok_and(|held| held == inputs)
 }
 
+/// [`carry_forward`], or under CI (`ci`) every restored record cleared and
+/// nothing carried: what a run over exactly this tree sealed is resumed
+/// before this is asked ([`sealed_over`]).
+///
+/// CI IS NOT INCREMENTAL (CLOUD-2882, the owner's ruling "the landing
+/// process proves and CI verifies"): a carried record can read a mutant as a
+/// survivor and skips its case's baseline, so a CI shard judging over
+/// mirrored records verified nothing of its own.
+///
+/// # Errors
+///
+/// As [`carry_forward`], or the records cannot be cleared.
+fn carried_unless_ci(
+    base: &std::path::Path,
+    (inputs, ci): (&str, bool),
+    identity: &Identity<'_>,
+    carry: (&Recompute<'_>, Option<Over<'_>>),
+) -> anyhow::Result<(usize, usize)> {
+    if !ci {
+        return carry_forward(base, inputs, identity, carry);
+    }
+    match std::fs::remove_dir_all(base) {
+        Err(gone) if gone.kind() != std::io::ErrorKind::NotFound => return Err(gone.into()),
+        _ => {}
+    }
+    std::fs::create_dir_all(base)?;
+    crate::durable::replace(base.join(TREE), inputs)?;
+    Ok((0, 0))
+}
+
 /// The longest filterset one run is handed, in bytes. The kernel caps ONE
 /// argument at 128 KiB (`MAX_ARG_STRLEN`), and on #1276 the sites reached by
 /// nearly every case failed to start with `E2BIG`.
@@ -5858,7 +5888,12 @@ pub fn record_reach(
         reach.tree = inputs;
         return Ok((reach, true));
     }
-    let (carried, resumed) = carry_forward(&base, &inputs, identity, (recompute, over))?;
+    let (carried, resumed) = carried_unless_ci(
+        &base,
+        (&inputs, crate::step::under_ci()),
+        identity,
+        (recompute, over),
+    )?;
     write_listed(&base, identity)?;
     writeln!(
         out,
@@ -11085,6 +11120,58 @@ mod tests {
             "another tree's unsealed record is cleared"
         );
         assert_eq!(std::fs::read_to_string(base.join(TREE)).unwrap(), "tree-2");
+    }
+
+    /// CLOUD-2882: under CI a restored reach record is never carried: the
+    /// run records its own reach, and a record a local run would carry is
+    /// cleared.
+    ///
+    /// Fails by: a CI shard carrying mirrored records, which can read a
+    /// mutant as a survivor and skip its case's baseline.
+    #[test]
+    fn a_ci_run_carries_no_restored_reach_record() {
+        let carry = |label: &str, ci: bool| {
+            let base = crate::scratch::scratch(label);
+            record(
+                &base,
+                "kept",
+                "kept",
+                Some("0"),
+                &[(DEPENDS, "Dsame\nFfa\nSkey-0\nT2.5\n")],
+            );
+            std::fs::write(base.join(LISTED), "key-0\n").unwrap();
+            let probes = [String::from("fa")];
+            let sites = [Some(String::from("key-0"))];
+            let classic = BTreeSet::new();
+            let identity = Identity {
+                probes: &probes,
+                sites: &sites,
+                mutant_fns: &std::collections::BTreeMap::new(),
+                file_fns: &std::collections::BTreeMap::new(),
+                classic: &classic,
+            };
+            let recompute =
+                |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+                 _: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+                    executed
+                        .keys()
+                        .map(|case| (case.clone(), String::from("same")))
+                        .collect()
+                };
+            let counts =
+                carried_unless_ci(&base, ("tree-2", ci), &identity, (&recompute, None)).unwrap();
+            (counts, base.join("kept").exists())
+        };
+        assert_eq!(
+            carry("schema-ci-carry-local", false),
+            ((1, 0), true),
+            "a local run"
+        );
+        assert_eq!(
+            carry("schema-ci-carry-ci", true),
+            ((0, 0), false),
+            "under CI"
+        );
     }
 
     /// A sealed record is carried across a change when its functions still
