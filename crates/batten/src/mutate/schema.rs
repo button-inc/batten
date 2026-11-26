@@ -11281,18 +11281,96 @@ fn handback_verdict(
     }
 }
 
-/// The target a hand-back builds into: THE SCHEMA BUILD'S OWN, under the
-/// mirror `state` holds, with its arguments ([`cargo_dirs`]).
+/// The target a hand-back builds into: ITS OWN, beside the schema build's
+/// ([`schema_target`]) under the mirror `state` holds, with the same
+/// arguments ([`cargo_dirs`]) and seeded from it ([`seed_handback_target`]).
 ///
-/// NEVER A COLD TARGET OF ITS OWN (CLOUD-2253). The hand-back mirror built
-/// into `classic/target` with no arguments: every dependency again, with
-/// debug info, so its first build needed the declared 6,200 MB, and shards
-/// with 5,585-6,155 MB of headroom recorded nine `error` verdicts that were
-/// all caught when judged narrowed. The schema build's dependency units hash
-/// as a hand-back's do under the same arguments, so they are reused, and
-/// only the workspace crates the hand-back's path holds are built again.
+/// NEVER THE SCHEMA BUILD'S (CLOUD-2904). A hand-back builds the workspace
+/// from the `classic` mirror, whose units hash as the schema build's do, so
+/// in a shared target it wrote its own over them: the next schema build
+/// rebuilt every workspace crate (1,050 s against 286 s for the lap before,
+/// one comment edited), and a test binary it left there was built from
+/// `classic`, so the paths its cases read fell outside the tree and their
+/// reach recorded no reads.
+///
+/// NEVER A COLD TARGET EITHER (CLOUD-2253). The hand-back mirror built into
+/// `classic/target` with no arguments: every dependency again, with debug
+/// info, so its first build needed the declared 6,200 MB, and shards with
+/// 5,585-6,155 MB of headroom recorded nine `error` verdicts that were all
+/// caught when judged narrowed. Seeded from the schema build, its dependency
+/// units are reused, and only the workspace crates are built again.
 fn handback_target(state: &std::path::Path) -> std::path::PathBuf {
+    state.join("handback").join("target")
+}
+
+/// The schema build's target under the mirror `state` holds.
+fn schema_target(state: &std::path::Path) -> std::path::PathBuf {
     state.join("tree").join("target")
+}
+
+/// Seed the hand-back target `into` from the schema build's target `from`,
+/// once: every profile's units, so a hand-back reuses each one its build
+/// shares. Nothing when `into` is already a target or `from` is not one yet.
+/// Cargo's tag is written last, so a seed cut short is seeded again.
+///
+/// LINKED ONLY WHERE NOTHING WRITES IN PLACE: rustc writes each artifact under
+/// `deps/` as a new file and renames it over the old (measured: a rebuilt test
+/// binary and rlib each took a new inode, and a link to the old kept its
+/// bytes), so those cost no disk. A dep-info file, a fingerprint and a build
+/// script's output are written in place, so each is copied; linked, a
+/// hand-back's build would rewrite the schema build's. `incremental/` and
+/// `tmp/` are not seeded: neither is a unit.
+fn seed_handback_target(from: &std::path::Path, into: &std::path::Path) {
+    let tag = "CACHEDIR.TAG";
+    if into.join(tag).is_file() || !from.join(tag).is_file() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return;
+    };
+    for profile in entries.flatten().map(|entry| entry.path()) {
+        let Some(name) = profile.file_name() else {
+            continue;
+        };
+        if !profile.join(".fingerprint").is_dir() {
+            continue;
+        }
+        for (part, link) in [(".fingerprint", false), ("build", false), ("deps", true)] {
+            if seed_tree(&profile.join(part), &into.join(name).join(part), link).is_err() {
+                return;
+            }
+        }
+    }
+    if std::fs::create_dir_all(into).is_ok() {
+        let _ = std::fs::copy(from.join(tag), into.join(tag));
+    }
+}
+
+/// Copy the tree at `from` to `into`, each file a hard link when `link` and
+/// rustc writes it as a new file ([`seed_handback_target`]), a copy otherwise.
+fn seed_tree(from: &std::path::Path, into: &std::path::Path, link: bool) -> std::io::Result<()> {
+    if !from.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(into)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let (source, to) = (entry.path(), into.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            seed_tree(&source, &to, link)?;
+            continue;
+        }
+        if !kind.is_file() {
+            continue;
+        }
+        let written_in_place = source.extension().is_some_and(|ext| ext == "d");
+        let _ = std::fs::remove_file(&to);
+        if !(link && !written_in_place && std::fs::hard_link(&source, &to).is_ok()) {
+            std::fs::copy(&source, &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// Whether a hand-back's declared cold build fits the disk holding the mirror
@@ -11304,12 +11382,17 @@ fn handback_target(state: &std::path::Path) -> std::path::PathBuf {
 /// A cold mirror's build does not fit, or the disk's free space cannot be
 /// read: either way the build could only fail, so it is not run.
 fn handback_room(handback: &Handback<'_>, tree: &std::path::Path) -> anyhow::Result<()> {
+    // WARM FROM THE SCHEMA BUILD: its units are seeded into the hand-back's
+    // target before the first hand-back builds.
+    if let Some(state) = tree.parent() {
+        seed_handback_target(&schema_target(state), &handback_target(state));
+    }
     let Some((need_mb, floor_mb)) = handback.disk else {
         return Ok(());
     };
-    // THE COLD COST IS A COLD TARGET'S ALONE: a hand-back builds into the
-    // schema build's target ([`handback_target`]), warm once the schema has
-    // built, so it rebuilds only what its mutated crate's path holds. Charged
+    // THE COLD COST IS A COLD TARGET'S ALONE: a hand-back builds into its own
+    // target ([`handback_target`]), seeded from the schema build's once that
+    // has built, so it rebuilds only the workspace crates. Charged
     // on every run, a container with under ~10 GB free refused hand-backs
     // that would have built. Cargo tags a target directory it has built into.
     let built = tree.parent().map(handback_target);
@@ -11903,7 +11986,17 @@ fn cargo_dirs(target: &std::path::Path) -> Vec<String> {
 ///
 /// The repository state directory cannot be resolved.
 pub fn mirror_target(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    Ok(mirror_state(root)?.join("tree").join("target"))
+    Ok(schema_target(&mirror_state(root)?))
+}
+
+/// The schema mirror's hand-back build tree ([`handback_target`]): a cache
+/// the disk collector ranks beside [`mirror_target`], for the same reason.
+///
+/// # Errors
+///
+/// The repository state directory cannot be resolved.
+pub fn handback_mirror_target(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    Ok(handback_target(&mirror_state(root)?))
 }
 
 /// Every one of `mutants` built and reached in one schema build of the
@@ -15402,8 +15495,8 @@ mod tests {
         // ITS OWN STATE, so the mirror is not inside the tree it copies.
         let state = crate::scratch::scratch(&format!("{name}-state"));
         if warm {
-            // THE SCHEMA BUILD'S TARGET, which a hand-back builds into.
-            let target = handback_target(&state);
+            // THE SCHEMA BUILD'S TARGET, which a hand-back's is seeded from.
+            let target = schema_target(&state);
             std::fs::create_dir_all(&target).unwrap();
             std::fs::write(
                 target.join("CACHEDIR.TAG"),
@@ -15475,6 +15568,94 @@ mod tests {
         // (CLOUD-2253): a census's five hand-back errors left no cause.
         assert_eq!(verdicts, [(0, Verdict::Error)], "{said}");
         assert!(said.contains("errors kept under"), "{said}");
+    }
+
+    /// A hand-back builds into a target of its own, seeded from the schema
+    /// build's, and nothing its build writes reaches the schema build's: a
+    /// unit rustc rebuilds, a dep-info file or a fingerprint rewritten in
+    /// place. Incremental state and fixtures are not seeded.
+    ///
+    /// Fails by: the hand-back building into the schema build's target, where
+    /// its `classic` units overwrote the schema build's (the next schema build
+    /// rebuilt every workspace crate, 1,050 s against 286 s, and a test binary
+    /// built from `classic` recorded no reads); or a file cargo writes in place
+    /// seeded as a link, so the hand-back's build rewrote the schema build's.
+    #[test]
+    fn a_handback_never_writes_the_schema_builds_target() {
+        let state = crate::scratch::scratch("schema-handback-seed");
+        let (schema, own) = (schema_target(&state), handback_target(&state));
+        assert!(
+            !own.starts_with(&schema) && !schema.starts_with(&own),
+            "a hand-back builds into a target of its own"
+        );
+        let file = |dir: &std::path::Path, name: &str, text: &str| {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        file(
+            &schema,
+            "CACHEDIR.TAG",
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        );
+        for name in [
+            "debug/deps/libdep-1.rlib",
+            "debug/deps/libdep-1.d",
+            "debug/deps/libwork-2.rlib",
+            "debug/.fingerprint/dep-1/lib-dep",
+            "debug/build/dep-3/output",
+            "debug/incremental/work-2/s-1/query-cache.bin",
+            "tmp/fixture/target/x",
+        ] {
+            file(&schema, name, "the schema build's");
+        }
+        seed_handback_target(&schema, &own);
+        assert!(
+            own.join("CACHEDIR.TAG").is_file(),
+            "the seeded target is warm"
+        );
+        for name in [
+            "debug/deps/libdep-1.rlib",
+            "debug/deps/libdep-1.d",
+            "debug/.fingerprint/dep-1/lib-dep",
+            "debug/build/dep-3/output",
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(own.join(name)).unwrap(),
+                "the schema build's",
+                "{name} is seeded"
+            );
+        }
+        assert!(
+            !own.join("debug/incremental").exists(),
+            "no incremental state"
+        );
+        assert!(!own.join("tmp").exists(), "no fixture");
+        // THE HAND-BACK'S BUILD: rustc replaces a unit it rebuilds, and cargo
+        // writes dep-info, fingerprints and a build script's output in place.
+        let unit = own.join("debug/deps/libwork-2.rlib");
+        std::fs::remove_file(&unit).unwrap();
+        std::fs::write(&unit, "built from classic").unwrap();
+        for name in [
+            "debug/deps/libdep-1.d",
+            "debug/.fingerprint/dep-1/lib-dep",
+            "debug/build/dep-3/output",
+        ] {
+            std::fs::write(own.join(name), "built from classic").unwrap();
+        }
+        for name in [
+            "debug/deps/libdep-1.rlib",
+            "debug/deps/libdep-1.d",
+            "debug/deps/libwork-2.rlib",
+            "debug/.fingerprint/dep-1/lib-dep",
+            "debug/build/dep-3/output",
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(schema.join(name)).unwrap(),
+                "the schema build's",
+                "{name} is the schema build's still"
+            );
+        }
     }
 
     /// A hand-back's run is listed from its target's own line and nothing
