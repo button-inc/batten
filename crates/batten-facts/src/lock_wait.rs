@@ -377,9 +377,35 @@ pub fn try_acquire(file: File, mode: Mode) -> std::io::Result<Option<Held>> {
     Ok(attempt(&guard.file, mode)?.then_some(guard))
 }
 
-/// Wait for the lock, `true` once taken, `false` on the stop.
-#[cfg(target_os = "linux")]
+/// Wait for the lock, `true` once taken, `false` on the stop. ONE function on
+/// every target, so a Linux run judges the decision every platform makes; only
+/// the close-event wait, which exists only on Linux, is behind `cfg`.
 fn wait(
+    file: &File,
+    path: &Path,
+    mode: Mode,
+    stop: Option<&Stop>,
+    parked: &mut dyn FnMut(),
+) -> std::io::Result<bool> {
+    // THE BINARY WAITS IN THE KERNEL. A close event is not a release (module
+    // docs, "release"), and a holder that is not a `Held` — cargo, to the
+    // collector's waits on its lock files — never announces one, so its waiter
+    // can miss the release and park for good. A helper blocked in `flock` sees
+    // every release. Only a process with no spawner (a library, a test harness,
+    // whose holders are its own `Held`s) waits on close events, and only on
+    // Linux: elsewhere there is none to wait on, so it is the named refusal.
+    match installed() {
+        Ok(spawn) => wait_with_helper(file, path, mode, stop, &spawn, &mut |_| parked()),
+        #[cfg(target_os = "linux")]
+        Err(_) => wait_on_close(file, path, mode, stop, parked),
+        #[cfg(not(target_os = "linux"))]
+        Err(none) => Err(none),
+    }
+}
+
+/// [`wait`] with no spawner on Linux: on the holder's close and the stop.
+#[cfg(target_os = "linux")]
+fn wait_on_close(
     file: &File,
     path: &Path,
     mode: Mode,
@@ -388,16 +414,6 @@ fn wait(
 ) -> std::io::Result<bool> {
     use rustix::event::{PollFd, PollFlags};
     use rustix::fs::inotify;
-
-    // THE BINARY WAITS IN THE KERNEL. A close event is not a release (module
-    // docs, "release"), and a holder that is not a `Held` — cargo, to the
-    // collector's waits on its lock files — never announces one, so its waiter
-    // can miss the release and park for good. A helper blocked in `flock` sees
-    // every release. Only a process with no spawner (a library, a test harness,
-    // whose holders are its own `Held`s) waits on close events below.
-    if let Ok(spawn) = installed() {
-        return wait_with_helper(file, path, mode, stop, &spawn, &mut |_| parked());
-    }
 
     let watch = inotify::init(inotify::CreateFlags::CLOEXEC)?;
     inotify::add_watch(
@@ -438,20 +454,6 @@ fn wait(
             rustix::io::read(&watch, &mut events)?;
         }
     }
-}
-
-/// Off Linux: wait through helper processes ([`wait_with_helper`]) started
-/// by the spawner the binary installed ([`install`]).
-#[cfg(not(target_os = "linux"))]
-fn wait(
-    file: &File,
-    path: &Path,
-    mode: Mode,
-    stop: Option<&Stop>,
-    parked: &mut dyn FnMut(),
-) -> std::io::Result<bool> {
-    let spawn = installed()?;
-    wait_with_helper(file, path, mode, stop, &spawn, &mut |_| parked())
 }
 
 /// The argv marker a helper is re-entered on: `batten __lock-wait <mode> <path>`.
