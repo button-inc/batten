@@ -7102,6 +7102,9 @@ struct Resolver<'r> {
     /// The lookups under way, by name, package and module: one met again is
     /// a glob whose own path needs itself, which brings in nothing.
     active: std::cell::RefCell<BTreeSet<(String, String, String)>>,
+    /// What each impl's own mentions of its name resolve to, by impl id
+    /// ([`Resolver::impl_of`]).
+    impls: std::cell::RefCell<std::collections::HashMap<usize, Vec<Found>>>,
 }
 
 impl<'r> Resolver<'r> {
@@ -7123,7 +7126,62 @@ impl<'r> Resolver<'r> {
             globs,
             crates,
             active: std::cell::RefCell::default(),
+            impls: std::cell::RefCell::default(),
         }
+    }
+
+    /// What `mention` names ([`Resolver::lookup`]), from where it is made and
+    /// through the path it is written with.
+    fn named(&self, mention: &str) -> Found {
+        let base = key_base(mention);
+        match written(mention) {
+            None => Found::Unknown,
+            Some((package, module, None)) => {
+                self.lookup(mention, base, package, module.to_owned(), 0)
+            }
+            Some((package, module, Some(raw))) => {
+                let segments: Vec<&str> = raw.split("::").collect();
+                match self.path(package, module, &segments, 0) {
+                    Place::Module(at_package, at) => self.lookup(mention, base, at_package, at, 0),
+                    Place::Nothing => Found::Nothing,
+                    Place::Unknown => Found::Unknown,
+                }
+            }
+        }
+    }
+
+    /// Whether the impl `id` is for what a mention `named`, or may be: what
+    /// its own mentions of the name it is keyed under resolve to, from where
+    /// it is written, is the same, the same definition or the same nothing of
+    /// the workspace (an impl of `String` for a mention of `String`), or is
+    /// unknown. An impl with no home, or naming it nowhere a path says, may
+    /// be anyone's.
+    ///
+    /// AN IMPL IS ITS SELF TYPE'S (CLOUD-2927): keyed by spelling, an edit to
+    /// `impl Schema` in one module re-keyed every case naming any `Schema`.
+    fn impl_of(&self, id: usize, named: Found) -> bool {
+        let definition = self.definitions[id];
+        if home_of(definition).is_none() {
+            return true;
+        }
+        let cached = self.impls.borrow().get(&id).cloned();
+        let found = cached.unwrap_or_else(|| {
+            let base = key_base(definition);
+            let found: Vec<Found> = self
+                .mentions
+                .get(definition)
+                .into_iter()
+                .flatten()
+                .filter(|mention| key_base(mention) == base)
+                .map(|mention| self.named(mention))
+                .collect();
+            self.impls.borrow_mut().insert(id, found.clone());
+            found
+        });
+        found.is_empty()
+            || found
+                .iter()
+                .any(|own| *own == Found::Unknown || *own == named)
     }
 
     /// The definition `base` names in `module` of `package`, visible from
@@ -7335,10 +7393,11 @@ impl<'r> Resolver<'r> {
 }
 
 /// The definitions `mention` is keyed on and the ones a walk follows from
-/// it: the ONE its path names ([`Resolver::lookup`]), keyed with every impl
-/// it sees and followed alone; none but those impls where it names nothing
-/// of the workspace; else every definition it sees, followed as
-/// [`followed`] says (owner ruling 2026-11-24).
+/// it: the ONE its path names ([`Resolver::lookup`]), keyed with the impls
+/// that may be its ([`Resolver::impl_of`]) and followed alone; none but the
+/// impls no path places where it names nothing of the workspace; else every
+/// definition it sees, followed as [`followed`] says (owner ruling
+/// 2026-11-24).
 fn resolve(mention: &str, resolver: &Resolver<'_>) -> (Vec<usize>, Vec<usize>) {
     let base = key_base(mention);
     let visible: Vec<usize> = resolver
@@ -7349,25 +7408,16 @@ fn resolve(mention: &str, resolver: &Resolver<'_>) -> (Vec<usize>, Vec<usize>) {
         .copied()
         .filter(|id| visible_from(mention, resolver.definitions[*id]))
         .collect();
-    let found = match written(mention) {
-        None => Found::Unknown,
-        Some((package, module, None)) => {
-            resolver.lookup(mention, base, package, module.to_owned(), 0)
-        }
-        Some((package, module, Some(raw))) => {
-            let segments: Vec<&str> = raw.split("::").collect();
-            match resolver.path(package, module, &segments, 0) {
-                Place::Module(at_package, at) => resolver.lookup(mention, base, at_package, at, 0),
-                Place::Nothing => Found::Nothing,
-                Place::Unknown => Found::Unknown,
-            }
-        }
-    };
+    let found = resolver.named(mention);
     let impls = |keep: Option<usize>| -> Vec<usize> {
         visible
             .iter()
             .copied()
-            .filter(|id| Some(*id) == keep || resolver.definitions[*id].ends_with(IMPL_DEFINED))
+            .filter(|id| {
+                Some(*id) == keep
+                    || (resolver.definitions[*id].ends_with(IMPL_DEFINED)
+                        && resolver.impl_of(*id, keep.map_or(Found::Nothing, Found::One)))
+            })
             .collect()
     };
     match found {
@@ -16757,6 +16807,42 @@ mod tests {
             free[&by_type], held[&by_type],
             "Holder::SCHEMA names no free SCHEMA"
         );
+    }
+
+    /// CLOUD-2927 (d): an impl is keyed for the type it is written for, as a
+    /// path resolves its self type: an edit to `b::Schema`'s impl moves no
+    /// case naming `a::Schema`, and one to `a::Schema`'s does.
+    ///
+    /// Fails by: every impl of a name keyed by spelling (the first edit moves
+    /// `f`), or an impl dropped where its self type is the one named (the
+    /// second does not).
+    #[test]
+    fn an_impl_is_keyed_for_the_type_its_self_type_names() {
+        let named = case("f");
+        let cases: BTreeSet<Case> = [named.clone()].into();
+        let executed = [(named.clone(), [0].into())].into();
+        let base = "mod a { pub struct Schema; impl Schema {} }\n\
+                    mod b { pub struct Schema; impl Schema {} }\n\
+                    mod c { use super::a::Schema; pub fn f(s: Schema) -> u8 { 0 } }\n";
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(
+            &cases,
+            &executed,
+            &base.replace(
+                "mod b { pub struct Schema; impl Schema {} }",
+                "mod b { pub struct Schema; impl<'x> Schema {} }",
+            ),
+        );
+        assert_eq!(other[&named], held[&named], "b's impl is b::Schema's");
+        let own = source_digests(
+            &cases,
+            &executed,
+            &base.replace(
+                "mod a { pub struct Schema; impl Schema {} }",
+                "mod a { pub struct Schema; impl<'x> Schema {} }",
+            ),
+        );
+        assert_ne!(own[&named], held[&named], "a's impl is the Schema f names");
     }
 
     /// CLOUD-2927 (b): a mention no path narrows to one definition is keyed on
