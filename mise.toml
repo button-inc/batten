@@ -430,7 +430,13 @@ _.path = ["target/release"]
 # rather than failing. Not on Windows, where the probe's shell is not `sh`.
 # The tree's own build by its path first: `exec` does not see `_.path`, so a
 # bare `batten` reached the installed engine, which predated the wrapper.
-RUSTC_WRAPPER = "{% if os() != 'windows' %}{{ exec(command='{ ' ~ config_root ~ '/target/release/batten rustc --batten-wrapper-probe || batten rustc --batten-wrapper-probe; } 2>/dev/null || true') | trim }}{% endif %}"
+# `BATTEN_BIN` BEFORE BOTH (CLOUD-2789): the engine `verify:gated` built from
+# this tree, so the wrapper honours `BATTEN_DISK_WATCHED`. A release build or a
+# PATH engine older than that skip collected under disk pressure inside a step's
+# traced build, and its reads of `batten.toml` and `.gitignore` refused
+# `darwin-link`'s, `lint:clippy`'s and `cross-check`'s records
+# (`tests/it/rustc_wrapper_engine.rs`).
+RUSTC_WRAPPER = "{% if os() != 'windows' %}{{ exec(command='{ ' ~ env.BATTEN_BIN | default(value='false') ~ ' rustc --batten-wrapper-probe || ' ~ config_root ~ '/target/release/batten rustc --batten-wrapper-probe || batten rustc --batten-wrapper-probe; } 2>/dev/null || true') | trim }}{% endif %}"
 # The checks that carry a verdict about THIS repository, named exactly as GitHub
 # names their check-runs (the matrix leg's suffix included). Shared by `ci-wait`
 # ("is this SHA green?") and `land`'s `graded_runs` ("does this SHA carry an
