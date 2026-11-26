@@ -397,6 +397,63 @@ pub fn validity(
     current_main: &str,
     git_dir: &str,
 ) -> Validity {
+    judged(receipt, expected, head, current_main, Some(git_dir), None)
+}
+
+/// What a statement binds besides its subject: the policy and the governing
+/// surface at the subject commit (CLOUD-1544).
+///
+/// The two facts a PUBLISHED receipt is judged on in place of the checkout that
+/// minted it. Resolved by the caller from the commit, exactly as
+/// [`run_record`] resolves them when it mints, so the two cannot come to
+/// disagree about what a commit binds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bound {
+    /// Lowercase hex SHA-256 of `batten.toml` at the subject commit.
+    pub policy_digest: String,
+    /// [`crate::epoch::compute`] at the subject commit.
+    pub config_epoch: String,
+}
+
+/// The validity of a PUBLISHED receipt (CLOUD-1544): one pulled from the state
+/// repository rather than minted in this checkout.
+///
+/// **The git-dir conjunct is dropped, and only for this class.** A published
+/// receipt was minted in another container by construction, so [`validity`]'s
+/// "taken here" arm would refuse every one of them and the transport would be an
+/// archive, not a cache. In its place the receipt is held to what its statement
+/// already binds: the subject commit (as [`validity`] does), the trunk it was
+/// current against (as [`validity`] does), and — the two comparisons [`validity`]
+/// never makes — the policy digest and config epoch, against `bound` as resolved
+/// for HEAD here. A receipt minted under another policy or another governing
+/// surface is `Missing`: it attests a different question, and "run it" is the
+/// remedy.
+///
+/// A locally minted receipt never reaches this arm: it lives in the canonical
+/// store, and [`run_status`] reads the published store only where that one
+/// answered `Missing`.
+#[must_use]
+pub fn published_validity(
+    receipt: Option<&Statement>,
+    expected: &str,
+    head: &str,
+    current_main: &str,
+    bound: &Bound,
+) -> Validity {
+    judged(receipt, expected, head, current_main, None, Some(bound))
+}
+
+/// The one predicate both arms share: `git_dir` is the local arm's conjunct and
+/// `bound` the published arm's, so neither can drift from the other on the
+/// subject, the trunk, the check name or the conclusion.
+fn judged(
+    receipt: Option<&Statement>,
+    expected: &str,
+    head: &str,
+    current_main: &str,
+    git_dir: Option<&str>,
+    bound: Option<&Bound>,
+) -> Validity {
     let Some(receipt) = receipt else {
         return Validity::Missing;
     };
@@ -419,7 +476,15 @@ pub fn validity(
     if receipt.predicate.check != expected || receipt.predicate.conclusion != CONCLUSION_PASS {
         return Validity::Refuted;
     }
-    if receipt.predicate.recorded_git_dir != git_dir {
+    if let Some(git_dir) = git_dir
+        && receipt.predicate.recorded_git_dir != git_dir
+    {
+        return Validity::Missing;
+    }
+    if let Some(bound) = bound
+        && (receipt.predicate.policy_digest.sha256 != bound.policy_digest
+            || receipt.predicate.config_epoch != bound.config_epoch)
+    {
         return Validity::Missing;
     }
     if subject.digest.git_commit != head {
@@ -534,13 +599,50 @@ fn judged_base(facts: &RepoFacts) -> String {
         .unwrap_or_else(|| facts.main.clone())
 }
 
-/// A head-keyed check's verdict over its canonical receipt, else over the slot
-/// filed for this (head, trunk) pair (CLOUD-2253 A3).
+/// The directory, under the canonical receipt store, that receipts pulled from
+/// the state repository are materialised into (CLOUD-1544).
+///
+/// **The stamp is the location.** A pulled statement is byte-identical to the
+/// one its producer minted, so nothing inside it can say "published" without
+/// changing every reader's bytes; where it lives says it instead. A subdirectory,
+/// as `overrides/` is, so every reader that lists the store's top-level files
+/// reads exactly what it read before.
+pub const PUBLISHED_DIR: &str = "published";
+
+/// Where a published receipt for `check` is materialised.
+fn published_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
+    let fingerprint = identity::scope_fingerprint(check, RECEIPT_SCOPE_KEY);
+    Ok(state::repo_state_dir(Path::new(repo_root))?
+        .join("receipts")
+        .join(PUBLISHED_DIR)
+        .join(format!("{}.json", fingerprint.to_hex())))
+}
+
+/// The [`Bound`] HEAD carries here, resolved as [`run_record`] resolves it.
+fn head_bound() -> Result<Bound> {
+    let policy = git::show(Path::new("."), "HEAD", crate::config_model::CONFIG_FILE)
+        .map_err(|_| {
+            UsageError::raise(
+                "batten.toml is not committed at HEAD, so there is no policy to digest",
+            )
+        })?
+        .into_bytes();
+    Ok(Bound {
+        policy_digest: hex_sha256(&policy),
+        config_epoch: crate::epoch::compute(Path::new("."), Some("HEAD"))?,
+    })
+}
+
+/// A head-keyed check's verdict over THIS checkout's stores: the canonical
+/// receipt, else the slot filed for this (head, trunk) pair (CLOUD-2253 A3).
 ///
 /// THE SLOT ANSWERS ONLY A YES. The canonical receipt is the most recent and
 /// says why a miss is a miss — another head, another trunk — so a missing or
 /// stale slot leaves its verdict standing.
-fn head_validity(facts: &RepoFacts, check: &str) -> Validity {
+///
+/// The mediated path reads this half only: it computes no config epoch, so the
+/// published fallback below stays off the hot path.
+fn local_head_validity(facts: &RepoFacts, check: &str) -> Validity {
     let canonical = receipt_path(&facts.repo_root, check)
         .ok()
         .and_then(|path| load_statement(&path));
@@ -567,6 +669,29 @@ fn head_validity(facts: &RepoFacts, check: &str) -> Validity {
         Validity::Valid => Validity::Valid,
         _ => verdict,
     }
+}
+
+/// `head`-keyed validity: this checkout's stores first, the published one where
+/// they answered `Missing` (CLOUD-1544).
+///
+/// Only `Missing` falls through. Every other local verdict is a statement about a
+/// receipt THIS checkout minted, and a published one must not paper over a
+/// stale or refuted local reading.
+fn head_validity(facts: &RepoFacts, check: &str) -> Result<Validity> {
+    let local = local_head_validity(facts, check);
+    if local != Validity::Missing {
+        return Ok(local);
+    }
+    let Some(published) = load_statement(&published_path(&facts.repo_root, check)?) else {
+        return Ok(local);
+    };
+    Ok(published_validity(
+        Some(&published),
+        check,
+        &facts.head,
+        &facts.main,
+        &head_bound()?,
+    ))
 }
 
 /// File `statement` under its (head, base) slot, and keep the newest
@@ -987,7 +1112,7 @@ pub(crate) fn verdicts(
                     None
                 };
                 let verdict = match key {
-                    ReceiptKey::Head => head_validity(&facts, check),
+                    ReceiptKey::Head => local_head_validity(&facts, check),
                     // `None` above is could-not-look for this check: allow it.
                     ReceiptKey::Branch => {
                         branch.as_ref().map_or(Validity::Valid, |(branch, own)| {
@@ -1430,7 +1555,9 @@ pub fn head_receipt_valid(check: &str) -> bool {
     let Ok(facts) = repo_facts() else {
         return false;
     };
-    head_validity(&facts, check) == Validity::Valid
+    // Through the published fallback (CLOUD-1544): a lifecycle reader, never
+    // the mediated path, so the epoch it may compute is off the hot path.
+    head_validity(&facts, check).is_ok_and(|verdict| verdict == Validity::Valid)
 }
 
 fn load_statement(path: &Path) -> Option<Statement> {
@@ -1961,7 +2088,7 @@ pub fn run_status(
                 None => ("-".to_owned(), Validity::Missing),
             }
         }
-        ReceiptKey::Head => (facts.head.clone(), head_validity(&facts, check)),
+        ReceiptKey::Head => (facts.head.clone(), head_validity(&facts, check)?),
         ReceiptKey::Branch => {
             let Some((branch, own)) = branch_facts(&facts.main) else {
                 return Err(anyhow::anyhow!(
@@ -2204,7 +2331,9 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
     let required = verified_by(&authority)?;
     let mut unverified = Vec::new();
     for check in &required {
-        let verdict = head_validity(&facts, check);
+        // The published fallback too (CLOUD-1544), so a head a sibling container
+        // verified and published reads verified here.
+        let verdict = head_validity(&facts, check)?;
         if verdict != Validity::Valid {
             unverified.push((check.clone(), verdict));
         }
