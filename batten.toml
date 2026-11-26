@@ -20628,6 +20628,9 @@ tools = [
 # are therefore this declaration: the whole tree, the base the changed set is
 # taken against (`MUTANT_CHANGED_SINCE`, the same override the task reads), the
 # environment that widens or shards it, and the toolchain that builds and judges.
+# Not `cargo mutants --version`: the hand-back runner is not a cargo subcommand
+# here, a line that answers nothing keys nothing, and the engine that judges is
+# built from the tree the first input already keys.
 [[step]]
 id = "mutant-changed"
 inputs = ["."]
@@ -20637,7 +20640,6 @@ tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
   ["cargo", "nextest", "--version"],
-  ["cargo", "mutants", "--version"],
   ["batten", "step", "base", "--ref", "origin/main", "--ref-env", "MUTANT_CHANGED_SINCE", "--", "."],
 ]
 
