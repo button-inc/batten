@@ -434,10 +434,10 @@ mod rules_drift;
 mod run_arg_shape;
 mod run_shape;
 mod run_shape_guard_door;
-mod rustc_wrapper_engine;
 mod runner_verdict;
 mod rust_paths_check;
 mod rust_row_references;
+mod rustc_wrapper_engine;
 #[cfg(unix)]
 mod sbom_binary;
 mod sbom_inventory;
