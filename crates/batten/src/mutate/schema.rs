@@ -7140,6 +7140,15 @@ fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
     Ok(sealed)
 }
 
+/// Remove `target`'s scratch parent, `tmp/`, before a recording pass: absent
+/// is empty, and anything else that stops it fails the pass.
+fn empty_scratch_parent(target: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(target.join("tmp")) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
 /// Run the suite once on the schema build with no mutant active, recording
 /// which sites each case reaches; a case whose record [`carry_forward`] kept
 /// is skipped by the recorder, so a lap re-runs only what its change touched.
@@ -7227,12 +7236,7 @@ pub fn record_reach(
     // or an earlier pass left was an input one recording saw and the next did
     // not, and 310 cases moved three functions on the full double recording.
     let suite = || -> anyhow::Result<bool> {
-        match std::fs::remove_dir_all(target.join("tmp")) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                return Err(error.into());
-            }
-            _ => {}
-        }
+        empty_scratch_parent(target)?;
         let shown = Shown::originals(root, work, rendered)?;
         let ran = super::spawn_suite(
             work,
@@ -26245,5 +26249,305 @@ pub fn repo() -> u8 {{ scratch() }}
         assert!(!state.join("errors").exists());
         assert!(!state.join(JUDGE_TEMP).exists());
         assert!(state.is_dir(), "the state itself stays");
+    }
+
+    /// The probe id `source`'s rendering gives the function `name`.
+    fn probe_of(source: &str, name: &str) -> usize {
+        render(source, &[], &BTreeSet::new(), Some(0))
+            .fn_names
+            .iter()
+            .position(|probed| probed == name)
+            .unwrap_or_else(|| panic!("{name} is probed"))
+    }
+
+    /// CLOUD-2789: a crate root's path is the module a `crate::` path starts
+    /// from: a `src/bin` binary's `src::bin`, or its own directory there, and
+    /// a test, example or bench crate held in a directory of its own.
+    ///
+    /// Fails by: `src/bin` unrecognised as a binary's root (`!=` for `==` in
+    /// the guard), or a directory under `tests/` read as its parent's crate
+    /// (the guard read `false`): mutants missed at 34c6e4d1f, so `crate::x`
+    /// in such a file resolved under `src` or `tests`.
+    #[test]
+    fn a_crate_roots_path_is_its_binary_or_test_directory() {
+        for (file, root) in [
+            ("crates/p/src/m.rs", "src"),
+            ("crates/p/src/bin/tool.rs", "src::bin"),
+            ("crates/p/src/bin/tool/main.rs", "src::bin::tool"),
+            ("crates/p/tests/it/main.rs", "tests::it"),
+            ("crates/p/examples/demo/main.rs", "examples::demo"),
+            ("crates/p/tests/flat.rs", "tests"),
+        ] {
+            assert_eq!(FileScope::of(file).root, root, "{file}");
+        }
+    }
+
+    /// CLOUD-2789: a block's label is its rank among the item-holding blocks
+    /// of the item it sits in, so two such blocks in one function are two
+    /// scopes.
+    ///
+    /// Fails by: the block compared unequal to itself (a mutant missed at
+    /// 34c6e4d1f), so the second block is ranked first and the two share one
+    /// scope.
+    #[test]
+    fn each_item_holding_block_is_ranked_in_its_item() {
+        let root = parsed("fn f() { { use a::x; } { use b::y; } }\n");
+        let labels: Vec<String> = root
+            .descendants()
+            .filter(holds_items)
+            .map(|block| block_label(&block))
+            .collect();
+        assert_eq!(labels, ["#f0", "#f1"]);
+    }
+
+    /// CLOUD-2789: an impl's members are keyed with their owner, the self
+    /// type the impl is written for, as a member keyed alone is.
+    ///
+    /// Fails by: the impl's own arm dropped (a mutant missed at 34c6e4d1f),
+    /// so an impl's member names carry no owner and `U::go` reaches `T`'s.
+    #[test]
+    fn an_impls_members_are_keyed_with_their_owner() {
+        let place = FileScope::of("crates/p/src/m.rs");
+        let root = parsed("struct T;\nimpl T { fn go() {} }\n");
+        let it = root
+            .descendants()
+            .filter_map(ast::Item::cast)
+            .find(|item| matches!(item, ast::Item::Impl(_)))
+            .expect("the impl");
+        let keys = definitions(&it, &place, &BTreeSet::new());
+        let member = keys
+            .iter()
+            .find(|key| key.starts_with(&format!("{ASSOCIATED}go")))
+            .unwrap_or_else(|| panic!("go is keyed: {keys:?}"));
+        assert!(member.contains(OWNED), "owned by T: {member:?}");
+    }
+
+    /// CLOUD-2789: a name handed to a std macro that passes it through as
+    /// written (`vec!`) resolves where it is called, as a bare name there does.
+    ///
+    /// Fails by: [`PASSED_AS_WRITTEN`] unread (its guard read `false`, a mutant
+    /// missed at 34c6e4d1f), so `vec!`'s tokens read as an unknown macro's and
+    /// an edit to `b::LIMIT` moves the case handing `a::LIMIT` to it.
+    #[test]
+    fn a_name_a_std_macro_passes_through_resolves_where_it_is_called() {
+        let wrapped = case("f");
+        let cases: BTreeSet<Case> = [wrapped.clone()].into();
+        let base = "mod a { pub const LIMIT: u8 = 1; }\n\
+                    mod b { pub const LIMIT: u8 = 2; }\n\
+                    mod c { use super::a::LIMIT; pub fn f() -> u8 { vec![LIMIT][0] } }\n";
+        let executed = [(wrapped.clone(), [probe_of(base, "f")].into())].into();
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 2", "LIMIT: u8 = 3"),
+        );
+        assert_eq!(
+            other[&wrapped], held[&wrapped],
+            "vec! puts LIMIT where c imports a's"
+        );
+        let own = source_digests(
+            &cases,
+            &executed,
+            &base.replace("LIMIT: u8 = 1", "LIMIT: u8 = 4"),
+        );
+        assert_ne!(own[&wrapped], held[&wrapped], "a::LIMIT is the one named");
+    }
+
+    /// CLOUD-2789: a module's definition is seen from its own package alone,
+    /// however its module path matches.
+    ///
+    /// Fails by: the package test joined with `||` (a mutant missed at
+    /// 34c6e4d1f), so another package's same-named module sees it.
+    #[test]
+    fn a_modules_definition_is_seen_from_its_package_only() {
+        let definition = format!("helper{DEFINED_IN}batten{DEFINED_IN}m");
+        let from = |package: &str| format!("helper{MENTIONED_IN}{package}{MENTIONED_IN}m::n");
+        assert!(visible_from(&from("batten"), &definition));
+        assert!(!visible_from(&from("batten_core"), &definition));
+    }
+
+    /// CLOUD-2789: a case's passing control is read back from the journal
+    /// under its digest, with the seconds it was journaled with.
+    ///
+    /// Fails by: the journaled control never read (a mutant missed at
+    /// 34c6e4d1f), so every control is run again on every lap.
+    #[test]
+    fn a_journaled_control_is_read_back_by_its_digest() {
+        let base = std::path::Path::new("/w");
+        let mutants = [listed("BinaryOperator", "!=", (2, 7), (2, 9))];
+        let passed = case("quick");
+        let (reach, seconds) = (
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        );
+        let digests: std::collections::BTreeMap<Case, String> =
+            [(passed.clone(), String::from("d1"))].into();
+        let empty = std::collections::BTreeMap::new();
+        let (red, control) = (Red::new(), Control::new());
+        let judging = |cache| Judging {
+            work: base,
+            target: base,
+            scratch: base,
+            root: base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache,
+            digests: &digests,
+            store: base,
+            red: &red,
+            control: &control,
+            reuse: None,
+            threads: None,
+        };
+        let key = control_key(&judging(&empty), &passed).expect("a digest keys it");
+        let cache = [(key, format!("{CONTROLLED}2.5"))].into();
+        assert_eq!(journaled_control(&judging(&cache), &passed), Some(2.5));
+        assert_eq!(journaled_control(&judging(&empty), &passed), None);
+    }
+
+    /// CLOUD-2789: emptying the scratch parent before a recording pass fails
+    /// on anything but its absence.
+    ///
+    /// Fails by: every error ignored (a mutant missed at 34c6e4d1f), so a
+    /// parent that could not be emptied leaves a stopped run's state as an
+    /// input the next pass sees.
+    #[test]
+    fn emptying_the_scratch_parent_fails_on_all_but_absence() {
+        let target = crate::scratch::scratch("schema-scratch-parent");
+        empty_scratch_parent(&target).expect("an absent parent is empty");
+        std::fs::create_dir_all(target.join("tmp/left")).unwrap();
+        empty_scratch_parent(&target).expect("a present one is emptied");
+        assert!(!target.join("tmp").exists());
+        std::fs::write(target.join("tmp"), "a file").unwrap();
+        assert!(
+            empty_scratch_parent(&target).is_err(),
+            "a parent that is no directory is not emptied"
+        );
+    }
+
+    /// CLOUD-2789: a path through a module resolves its qualified owner, so
+    /// `super::a::T::K` names `a::T`'s `K` alone.
+    ///
+    /// Fails by: the module a qualifier resolves to dropped (a mutant missed
+    /// at 34c6e4d1f), so every `K` is keyed and an edit to `b::T::K` moves
+    /// the case naming `a::T::K`.
+    #[test]
+    fn a_qualified_owner_resolves_through_its_modules() {
+        let calls = case("g");
+        let cases: BTreeSet<Case> = [calls.clone()].into();
+        let base = "mod a { pub struct T; impl T { pub const K: u8 = 1; } }\n\
+                    mod b { pub struct T; impl T { pub const K: u8 = 2; } }\n\
+                    mod c { pub fn g() -> u8 { super::a::T::K } }\n";
+        let executed = [(calls.clone(), [probe_of(base, "g")].into())].into();
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(&cases, &executed, &base.replace("K: u8 = 2", "K: u8 = 3"));
+        assert_eq!(other[&calls], held[&calls], "b::T::K is not named");
+        let own = source_digests(&cases, &executed, &base.replace("K: u8 = 1", "K: u8 = 4"));
+        assert_ne!(own[&calls], held[&calls], "a::T::K is");
+    }
+
+    /// CLOUD-2789: a `use` of a module its path does not hold names nothing,
+    /// so a path through it reaches no workspace definition.
+    ///
+    /// Fails by: the `Nothing` arm dropped (a mutant uncovered at 34c6e4d1f),
+    /// so the path is unknown and every `K` is keyed for it.
+    #[test]
+    fn a_use_of_a_module_its_path_lacks_names_nothing() {
+        let calls = case("g");
+        let cases: BTreeSet<Case> = [calls.clone()].into();
+        let base = "mod a {}\n\
+                    mod b { pub mod gone { pub const K: u8 = 2; } }\n\
+                    mod c { use super::a::gone; pub fn g() -> u8 { gone::K } }\n";
+        let executed = [(calls.clone(), [probe_of(base, "g")].into())].into();
+        let held = source_digests(&cases, &executed, base);
+        let other = source_digests(&cases, &executed, &base.replace("K: u8 = 2", "K: u8 = 3"));
+        assert_eq!(other[&calls], held[&calls], "b::gone::K is not named");
+        let own = source_digests(
+            &cases,
+            &executed,
+            &base.replace("gone::K }", "gone::K + 1 }"),
+        );
+        assert_ne!(own[&calls], held[&calls], "g's own body is");
+    }
+
+    /// CLOUD-2789: a site is placed by the keyed tokens before it, whitespace
+    /// and comments skipped.
+    ///
+    /// Fails by: the tokens counted from the wrong side of the site (a mutant
+    /// missed at 34c6e4d1f), so every site of a function shares one place.
+    #[test]
+    fn a_site_is_placed_by_the_keyed_tokens_before_it() {
+        let text = "fn f() { a /* c */ + b }";
+        let plus = text.find('+').unwrap();
+        let (keyed, at) = keyed_site(text, plus);
+        assert_eq!(at, 6, "fn f ( ) {{ a: {keyed}");
+        assert_eq!(keyed_site(text, 0).1, 0);
+    }
+
+    /// CLOUD-2789: a hand-back's cause is kept under the state's `errors/`,
+    /// and that directory is what the report names.
+    ///
+    /// Fails by: the directory answered empty (a mutant missed at 34c6e4d1f),
+    /// so the report points at nothing.
+    #[test]
+    fn a_handback_error_is_kept_where_it_is_named() {
+        let state = crate::scratch::scratch("schema-handback-kept");
+        let kept = keep_handback_error(&state, 7, "why\n", &state.join("absent"));
+        assert_eq!(kept, state.join("errors"));
+        assert_eq!(
+            std::fs::read_to_string(kept.join("handback-7.log")).unwrap(),
+            "why\n"
+        );
+    }
+
+    /// CLOUD-2789: a case with no text of its own (a macro's test) reads its
+    /// crate whole; its kept entry holds while the crate does, so a warm
+    /// sweep derives it no more, and an edit anywhere in the crate moves it.
+    ///
+    /// Fails by: the whole read dropped from the entry (a mutant missed at
+    /// 34c6e4d1f), so its kept entry never holds and every warm sweep derives
+    /// it again.
+    #[test]
+    fn a_case_that_read_its_crate_whole_holds_while_the_crate_does() {
+        let root = crate::scratch::scratch("schema-case-memo-whole");
+        let state = crate::scratch::scratch("schema-case-memo-whole-state");
+        let write = |path: &str, text: &str| {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        };
+        write("src/lib.rs", "pub fn f() {}\n");
+        write("tests/it/main.rs", "mod a;\n");
+        write("tests/it/a.rs", "made!(generated);\n");
+        let t = (String::from("a::generated"), String::from("fix::it"));
+        let cases: BTreeSet<Case> = [t.clone()].into();
+        let executed = [(t.clone(), [0].into())].into();
+        let dirs = [(String::from("fix"), String::new())].into();
+        let probes = [String::from("f")];
+        let sweep = |store: Option<&Derived>| {
+            let before = case_derivations();
+            let digests = case_digests(
+                &root,
+                &cases,
+                &dirs,
+                &executed,
+                &Depends {
+                    derived: store,
+                    ..depends(&probes)
+                },
+            );
+            (digests, case_derivations() - before)
+        };
+        let (first, cold) = sweep(Some(&Derived::at(&state, "build")));
+        assert_eq!(cold, 1, "a cold sweep derives it");
+        let (warm, derived_warm) = sweep(Some(&Derived::at(&state, "build")));
+        assert_eq!(derived_warm, 0, "a warm sweep takes its kept entry");
+        assert_eq!(warm, first);
+        write("tests/it/a.rs", "made!(generated);\nmade!(other);\n");
+        let (edited, derived_edited) = sweep(Some(&Derived::at(&state, "build")));
+        assert_eq!(derived_edited, 1, "the crate it read whole moved");
+        assert_ne!(edited[&t], first[&t]);
     }
 }
