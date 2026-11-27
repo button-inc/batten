@@ -3254,11 +3254,25 @@ mod dependency_key_tests {
             .remove(&case)
             .flatten()
             .expect("the case's selection digest");
+        // AND THE RECORD NAMES WHO SEALED IT (CLOUD-2904, 23719d843): one naming
+        // none is never carried, so it is no held case either.
         let depends: String = std::iter::once(String::from("Dd\n"))
             .chain(functions.iter().map(|function| format!("F{function}\n")))
+            .chain(std::iter::once(String::from(
+                "Pfrom fixture fixture-engine fixture-tree fixture-run\n",
+            )))
             .collect();
         for (file, text) in [
-            ("tested", format!("{}\t{tested}", format.key())),
+            // WITH ITS PROVENANCE, as every stored selection line now names one
+            // (CLOUD-2904, 4f452ca4b): a line naming none is never stood on, so
+            // the held case read as no case at all.
+            (
+                "tested",
+                format!(
+                    "{}\t{tested}\tfrom seal_tested fixture-engine fixture-tree fixture-run",
+                    format.key()
+                ),
+            ),
             ("depends", depends),
             ("case", String::from("tests::kept\tfix")),
             ("done", String::from("0")),
