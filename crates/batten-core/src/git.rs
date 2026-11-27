@@ -9558,14 +9558,19 @@ mod tests {
     /// ban's one permitted site needs a `disallowed_methods` waiver, which
     /// `waiver add refused` refuses to let rise.
     ///
-    /// Fails by: a module other than `git.rs` naming `WalkBuilder` or building
-    /// an `ignore::Walk`.
+    /// Fails by: a module other than `git.rs`, source or test, naming
+    /// `WalkBuilder` or building an `ignore::Walk`.
     #[test]
     fn walker_is_the_one_walk_constructor() {
         let builder = ["Walk", "Builder"].concat();
         let default_walk = ["ignore::", "Walk::new"].concat();
         let mut named = Vec::new();
-        for (path, source) in workspace_sources("src") {
+        // TESTS TOO: the `clippy.toml` ban this replaced covered every target,
+        // and a case's fixture walk reads its checkout's exclude the same way.
+        let sources = workspace_sources("src")
+            .into_iter()
+            .chain(workspace_sources("tests"));
+        for (path, source) in sources {
             if is_own_module(&path, "git.rs") {
                 continue;
             }
@@ -9827,46 +9832,6 @@ mod tests {
                 "{}: reaches gix directly; the git backend belongs to {GIT_MODULES:?} \
                  and a fourth module is a decision to record beside that list \
                  (CLOUD-718, widened by CLOUD-1274)",
-                path.display()
-            );
-        }
-    }
-
-    /// D3 (CLOUD-2904), the rule that keeps cause #1 from coming back: every
-    /// tree walk is built by [`walker`], which reads no enclosing repository's
-    /// `info/exclude`. `clippy.toml` denies `ignore::WalkBuilder::new` at every
-    /// other site, and this holds the ban and the one site it allows.
-    ///
-    /// Fails by: the ban dropped from `clippy.toml`, or a walk built directly
-    /// anywhere in the workspace but [`walker`] — whose default `git_exclude`
-    /// loads the exclude of every repository above its root, so a fixture under
-    /// a checkout's `target/` read that checkout's `.git` (2,112 cases).
-    #[test]
-    fn every_tree_walk_is_built_by_the_one_walker() {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("the workspace root");
-        let clippy =
-            crate::fsio::read_to_string(workspace.join("clippy.toml")).expect("clippy.toml");
-        assert!(
-            clippy.contains("path = \"ignore::WalkBuilder::new\""),
-            "clippy.toml denies building a walk outside `git::walker`"
-        );
-        let built = ["WalkBuilder", "::new("].concat();
-        for (path, source) in workspace_sources("src") {
-            if is_own_module(&path, "git.rs") {
-                assert_eq!(
-                    source.matches(&built).count(),
-                    1,
-                    "git.rs builds a walk once, in `walker`"
-                );
-                continue;
-            }
-            assert!(
-                !source.contains(&built),
-                "{}: builds a tree walk directly; build it with `git::walker`, which reads no \
-                 enclosing repository's exclude (CLOUD-2904)",
                 path.display()
             );
         }
