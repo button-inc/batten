@@ -3800,6 +3800,7 @@ normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from pull" -l advisory -d 'Say one line and exit 0 whatever the state repository answered (the session-start route)'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from pull" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from pull" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from pull" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'

@@ -3594,7 +3594,16 @@ expression: stdout_of(&output)
           "about": "Pull this branch's published receipts from the state repository into this checkout",
           "effect": "write",
           "data_channel": false,
-          "flags": [],
+          "flags": [
+            {
+              "name": "advisory",
+              "short": null,
+              "long": "advisory",
+              "takes_value": false,
+              "positional": false,
+              "help": "Say one line and exit 0 whatever the state repository answered (the session-start route)"
+            }
+          ],
           "subcommands": []
         },
         {
