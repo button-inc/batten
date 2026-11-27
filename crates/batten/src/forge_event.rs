@@ -789,6 +789,17 @@ fn fill_word(word: &str, slug: Option<&Slug>) -> Option<String> {
     Some(filled)
 }
 
+/// The document a declared tool answers over `wiring`, or `None` where the
+/// server refused the call or could not be reached.
+///
+/// The tool is named BY ITS METHOD: [`crate::mcp::dispatch`] builds the
+/// `tools/call` request itself, so handing it that word asks the server for a
+/// tool of that name, which no server serves.
+fn read_tool(wiring: &crate::mcp::Wiring, method: &str, arguments: &Value) -> Option<Value> {
+    let result = crate::mcp::dispatch(wiring, method, arguments).ok()?;
+    Some(crate::mcp::payload(&result).value)
+}
+
 fn read_document(source: &crate::rest::Source, input: &RoundInput<'_>) -> Option<Value> {
     use crate::rest::SourceKind::{Command, Mcp};
     match source.kind {
@@ -800,9 +811,7 @@ fn read_document(source: &crate::rest::Source, input: &RoundInput<'_>) -> Option
                 source.arguments.as_str()
             };
             let arguments = crate::unsubscribe::fill_arguments(template, 0, "", input.slug)?;
-            let params = serde_json::json!({"name": source.method, "arguments": arguments});
-            let result = crate::mcp::dispatch(&wiring, "tools/call", &params).ok()?;
-            Some(crate::mcp::payload(&result).value)
+            read_tool(&wiring, &source.method, &arguments)
         }
         Command => {
             let argv = source
@@ -997,5 +1006,47 @@ mod tests {
         assert!(read_cursor(&dir.join("absent")).unwrap().is_none());
         assert!(read_ring(&dir).is_err());
         assert!(read_cursor(&dir).is_err());
+    }
+
+    /// Fails by: the source's tool reaching the server under any name but its
+    /// own method, so the server answers "tool not found" and the round reads
+    /// as absent.
+    #[test]
+    fn a_source_s_tool_is_asked_for_by_its_method() {
+        crate::fetch::stand_in(Box::new(|calls: &[crate::fetch::Call<'_>]| {
+            Ok(calls
+                .iter()
+                .map(|call| {
+                    let request: Value =
+                        serde_json::from_slice(call.body.unwrap_or_default()).unwrap_or_default();
+                    let (status, body) = match request.get("method").and_then(Value::as_str) {
+                        Some("initialize") => (200, r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
+                        Some("notifications/initialized") => (202, ""),
+                        _ if request["params"]["name"] == "list_events" => (
+                            200,
+                            r#"{"jsonrpc":"2.0","id":2,"result":{"events":[1]}}"#,
+                        ),
+                        // What a server answers a tool it does not serve.
+                        _ => (
+                            200,
+                            r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"tool not found"}}"#,
+                        ),
+                    };
+                    crate::fetch::Response {
+                        status,
+                        body: body.as_bytes().to_vec(),
+                        headers: Vec::new(),
+                    }
+                })
+                .collect())
+        }));
+        let wiring = crate::mcp::Wiring {
+            source: "s".to_owned(),
+            endpoint: "https://mcp.invalid/mcp".to_owned(),
+            headers: Vec::new(),
+            credential: None,
+        };
+        let document = read_tool(&wiring, "list_events", &json!({})).expect("the tool answers");
+        assert_eq!(document["events"], json!([1]));
     }
 }
