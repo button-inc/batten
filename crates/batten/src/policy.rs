@@ -650,7 +650,14 @@ impl Bundle {
         };
         let mut keys = BTreeSet::new();
         for module in described {
-            for rule in &module.rules {
+            // A `test_` rule is never queried by an enforce, and its `with input
+            // as {...}` rebinding read as a bare `input` and made 79 of 106 tree
+            // rows `Opaque` (CLOUD-2329).
+            for rule in module
+                .rules
+                .iter()
+                .filter(|rule| !rule.name.starts_with("test_"))
+            {
                 for path in &rule.input_paths {
                     let Some(rest) = path.strip_prefix("tree.") else {
                         return Reads::Opaque;
@@ -9191,6 +9198,26 @@ test_b_fires if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation
         ] {
             assert_eq!(reads_of(body), Reads::Opaque, "{body}");
         }
+    }
+
+    #[test]
+    fn a_test_rules_with_input_is_not_a_read_of_the_enforced_rules() {
+        // CLOUD-2329: 79 of the 106 tree policy rows read as `Opaque` only because
+        // their own `test_` cases rebind `input` with `with input as {...}`. An
+        // enforce never queries a `test_` rule, so its rebinding is no read.
+        let module = format!(
+            "{}\ntest_fires if {{\n\tcount(violation) == 1 with input as {{\"tree\": {{\"documents\": {{}}}}}}\n}}\n",
+            reading("\tinput.tree.documents != null")
+        );
+        assert_eq!(
+            bundle_of("row", &[("policy/r.rego", &module)]).tree_reads(),
+            known(&["documents"])
+        );
+        // The same `with` in a rule an enforce DOES evaluate stays opaque.
+        assert_eq!(
+            reads_of("\tcount(input.tree.documents) == 0 with input as {}"),
+            Reads::Opaque
+        );
     }
 
     #[test]
