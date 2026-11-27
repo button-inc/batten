@@ -13689,17 +13689,31 @@ pub fn dependency_index(
             .enumerate()
             .map(|(offset, span)| (first + offset, span))
             .collect();
-        read_gates_and_includes(&mut index, &source, &file, &spans);
+        read_gates_and_includes(
+            &mut index,
+            (&source, &file),
+            &spans,
+            !format.features.is_empty(),
+        );
     }
     Ok(index)
 }
 
-/// Record each feature gate and each include in `source` against its owner.
+/// Record each include in `source` against its owner, and each feature gate
+/// where the sweep chose a feature (`chosen`).
+///
+/// A GATE IS KNOWN WHERE THE SWEEP CHOSE NO FEATURE (CLOUD-2904): the suite
+/// chooses none either (`resume::builds_as_swept` selects nothing for one that
+/// does), every manifest is in the build key (`resume::build_digest`), and a
+/// gate's `cfg` is in its owner's digest, so it decides the same in the build
+/// that recorded and the build that runs. Read as unknown regardless, five
+/// `seam` and `preset-overlay` gates left 161 of 300 sampled sealed cases of
+/// lap 26's store unselectable.
 fn read_gates_and_includes(
     index: &mut DependencyIndex,
-    source: &str,
-    file: &str,
+    (source, file): (&str, &str),
     spans: &[(usize, Range<usize>)],
+    chosen: bool,
 ) {
     let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
     let root = parse.tree().syntax().clone();
@@ -13733,7 +13747,7 @@ fn read_gates_and_includes(
     {
         let text = token.text();
         if GATES.contains(&text) {
-            if names_a_feature(&token) {
+            if chosen && names_a_feature(&token) {
                 match owner_of(&token, spans) {
                     Owner::Probe(id) => {
                         index.gated_probes.insert(id);
