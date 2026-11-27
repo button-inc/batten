@@ -25,7 +25,7 @@
 #   MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
 # schemas:
 #   - input: schema["policy-call.schema"]
-package batten.claude_code_cloud.state_repo
+package batten.claude_code_state
 
 import rego.v1
 
