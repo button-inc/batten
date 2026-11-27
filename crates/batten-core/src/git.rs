@@ -1252,6 +1252,29 @@ fn rel_to_slash(rel: &Path) -> String {
         .join("/")
 }
 
+/// A tree walk over `root`, and the only way this workspace builds one: the
+/// `ignore` crate's defaults, with its `git_exclude` off.
+///
+/// THE ONE CONSTRUCTOR (D3, CLOUD-2904), because the default is the defect.
+/// `git_exclude` loads the `info/exclude` of every repository above `root`, so a
+/// walk over a fixture under a checkout's `target/` read that checkout's `.git`
+/// — 2,112 cases of one suite — and a walk over a linked worktree nested in the
+/// main checkout read the main checkout's. Where those rules cannot decide a
+/// path (`parents(false)`), the read is waste; where they can, a per-clone file
+/// is shaping a walk, which `git_global(false)` refuses for the same reason. A
+/// walk that honours its OWN repository's exclude adds it ([`tree_files`]).
+/// `clippy.toml` denies `ignore::WalkBuilder::new` everywhere else.
+#[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "stays: this IS the one constructor the ban routes every walk through"
+)]
+pub fn walker(root: &Path) -> ignore::WalkBuilder {
+    let mut walk = ignore::WalkBuilder::new(root);
+    walk.git_exclude(false);
+    walk
+}
+
 /// The `info/exclude` of the repository whose root `root` is, or `None` where
 /// `root` is not a repository's root or that repository has none. Read from
 /// `root`'s own `.git` alone — a directory, or a linked worktree's `gitdir:`
@@ -1336,7 +1359,7 @@ fn own_exclude(root: &Path) -> Option<PathBuf> {
 /// An I/O failure while walking propagates as an internal error (→ exit `3`).
 pub fn tree_files(root: &Path) -> anyhow::Result<Vec<String>> {
     let root = root.to_path_buf();
-    let mut walker = ignore::WalkBuilder::new(&root);
+    let mut walker = walker(&root);
     walker
         // Dotfiles are ordinary policy input here; see the doc comment.
         .hidden(false)
@@ -1348,15 +1371,11 @@ pub fn tree_files(root: &Path) -> anyhow::Result<Vec<String>> {
         // a gate whose file set varies per workstation is not one gate.
         .git_global(false)
         .git_ignore(true)
-        // THE ROOT'S OWN EXCLUDE, AND NO ENCLOSING ONE (D3, CLOUD-2904). The
-        // walker's `git_exclude` loads the exclude of every repository above
-        // the root as well, and under `parents(false)` none of those rules
-        // decides a path: it is a read of a checkout this walk is not about,
-        // and it made every fixture under a checkout's `target/` read that
-        // checkout's `.git`. Handed back instead as an explicit ignore rooted
-        // at the root, the walker's lowest-precedence source, below every
-        // `.gitignore`, which is git's own order for `info/exclude`.
-        .git_exclude(false)
+        // THE ROOT'S OWN EXCLUDE, AND NO ENCLOSING ONE (D3, CLOUD-2904):
+        // [`walker`] reads none, and this walk hands its own back as an
+        // explicit ignore rooted at the root, the walker's lowest-precedence
+        // source, below every `.gitignore`, which is git's own order for
+        // `info/exclude`.
         .parents(false)
         // One filesystem: a walk that follows a mount out of the repository is
         // measuring somebody else's disk.
@@ -9776,6 +9795,46 @@ mod tests {
                 "{}: reaches gix directly; the git backend belongs to {GIT_MODULES:?} \
                  and a fourth module is a decision to record beside that list \
                  (CLOUD-718, widened by CLOUD-1274)",
+                path.display()
+            );
+        }
+    }
+
+    /// D3 (CLOUD-2904), the rule that keeps cause #1 from coming back: every
+    /// tree walk is built by [`walker`], which reads no enclosing repository's
+    /// `info/exclude`. `clippy.toml` denies `ignore::WalkBuilder::new` at every
+    /// other site, and this holds the ban and the one site it allows.
+    ///
+    /// Fails by: the ban dropped from `clippy.toml`, or a walk built directly
+    /// anywhere in the workspace but [`walker`] — whose default `git_exclude`
+    /// loads the exclude of every repository above its root, so a fixture under
+    /// a checkout's `target/` read that checkout's `.git` (2,112 cases).
+    #[test]
+    fn every_tree_walk_is_built_by_the_one_walker() {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("the workspace root");
+        let clippy =
+            crate::fsio::read_to_string(workspace.join("clippy.toml")).expect("clippy.toml");
+        assert!(
+            clippy.contains("path = \"ignore::WalkBuilder::new\""),
+            "clippy.toml denies building a walk outside `git::walker`"
+        );
+        let built = ["WalkBuilder", "::new("].concat();
+        for (path, source) in workspace_sources("src") {
+            if is_own_module(&path, "git.rs") {
+                assert_eq!(
+                    source.matches(&built).count(),
+                    1,
+                    "git.rs builds a walk once, in `walker`"
+                );
+                continue;
+            }
+            assert!(
+                !source.contains(&built),
+                "{}: builds a tree walk directly; build it with `git::walker`, which reads no \
+                 enclosing repository's exclude (CLOUD-2904)",
                 path.display()
             );
         }

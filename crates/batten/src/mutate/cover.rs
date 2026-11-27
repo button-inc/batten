@@ -133,7 +133,7 @@ fn digest_one(digest: &mut blake3::Hasher, path: &str, bytes: &[u8]) {
 fn checkout_files(root: &Path) -> Result<Vec<String>> {
     let mut paths: BTreeSet<String> = crate::git::tracked_paths(root)?.into_iter().collect();
     paths.extend(crate::git::changed_paths(root)?);
-    for entry in ignore::WalkBuilder::new(root)
+    for entry in crate::git::walker(root)
         .standard_filters(false)
         .follow_links(true)
         .filter_entry(|entry| {

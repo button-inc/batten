@@ -3211,11 +3211,7 @@ fn custom_root_sources(root: &std::path::Path, dir: &str) -> BTreeSet<String> {
             .parent()
             .map_or_else(String::new, |parent| parent.to_string_lossy().into_owned());
         let walk = root.join(dir).join(&parent);
-        for entry in ignore::WalkBuilder::new(&walk)
-            .hidden(false)
-            .build()
-            .flatten()
-        {
+        for entry in crate::git::walker(&walk).hidden(false).build().flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "rs")
                 && let Ok(relative) = path.strip_prefix(root)
@@ -3657,11 +3653,7 @@ fn package_sources(root: &std::path::Path, mutants: &[Listed]) -> BTreeSet<Strin
     let mut sources: BTreeSet<String> = mutants.iter().map(|m| m.file.clone()).collect();
     for dir in package_dirs(mutants).values() {
         let src = root.join(dir).join("src");
-        for entry in ignore::WalkBuilder::new(&src)
-            .hidden(false)
-            .build()
-            .flatten()
-        {
+        for entry in crate::git::walker(&src).hidden(false).build().flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "rs")
                 && let Ok(relative) = path.strip_prefix(root)
@@ -7553,7 +7545,7 @@ fn resource_id(resources: &std::collections::BTreeMap<String, String>, path: &st
 ///
 /// A file the walk found cannot be read ([`hash_file`]).
 pub fn tree_digest(work: &std::path::Path) -> anyhow::Result<String> {
-    let mut files: Vec<std::path::PathBuf> = ignore::WalkBuilder::new(work)
+    let mut files: Vec<std::path::PathBuf> = crate::git::walker(work)
         .standard_filters(false)
         // THE ROOT'S BUILD OUTPUT AND HISTORY ONLY (round 4 #11): a source
         // directory named `target` deeper down is the tree's.
@@ -10111,7 +10103,7 @@ fn crate_sources(
         ]
     };
     for walked in walks {
-        for entry in ignore::WalkBuilder::new(root.join(&walked))
+        for entry in crate::git::walker(root.join(&walked))
             .hidden(false)
             .build()
             .flatten()
@@ -12756,7 +12748,7 @@ fn built_outputs(
         outs.sort();
         let mut hasher = blake3::Hasher::new();
         for out in outs {
-            let mut files: Vec<std::path::PathBuf> = ignore::WalkBuilder::new(&out)
+            let mut files: Vec<std::path::PathBuf> = crate::git::walker(&out)
                 .standard_filters(false)
                 .build()
                 .flatten()
@@ -13627,7 +13619,7 @@ fn tree_rust_files(root: &std::path::Path) -> anyhow::Result<Vec<String>> {
             .filter(|path| is_rust(path) && root.join(path).is_file())
             .collect());
     }
-    let mut files: Vec<String> = ignore::WalkBuilder::new(root)
+    let mut files: Vec<String> = crate::git::walker(root)
         .standard_filters(false)
         // THE ROOT'S BUILD OUTPUT AND HISTORY ONLY (round 4 #11): a source
         // directory named `target` deeper down is the tree's.
