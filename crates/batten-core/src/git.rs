@@ -9837,6 +9837,106 @@ mod tests {
         }
     }
 
+    /// The functions that are handed a path and still discover a repository
+    /// from the working directory, `file::function`, sorted. A RATCHET, NOT AN
+    /// ALLOWANCE (D3, CLOUD-2904): each is judged and moved to its explicit
+    /// root, and [`no_function_handed_a_root_discovers_from_the_cwd`] fails on
+    /// one missing from it and on one listed that no longer does.
+    const CWD_DISCOVERY_RATCHET: &[&str] = &[
+        "crates/batten/src/doctor.rs::diagnose_mediator",
+        "crates/batten/src/land.rs::append",
+        "crates/batten/src/land.rs::read_red_head",
+        "crates/batten/src/land.rs::record_red_head",
+        "crates/batten/src/lib.rs::claim_base",
+        "crates/batten/src/lib.rs::gather_evidence",
+        "crates/batten/src/lib.rs::lease_config",
+        "crates/batten/src/lib.rs::register_transcript_detectors",
+        "crates/batten/src/lib.rs::run_perf_latency",
+        "crates/batten/src/record.rs::store",
+        "crates/batten/src/step.rs::lint_trace",
+        "crates/batten/src/step.rs::run_step",
+        "crates/batten/src/unsubscribe.rs::drop_subscription",
+    ];
+
+    /// D3 (CLOUD-2904), the rule for the lib-cwd cause: a function handed a
+    /// path does not discover from `Path::new(".")`. A verb starting from the
+    /// working directory is the binary's own contract; a function that has a
+    /// root in hand and asks the cwd anyway answers about whichever checkout
+    /// the process stands in — `exec::run_one` passed `"."` to the program
+    /// pin with `repo_root` beside it, and every library case that ran a
+    /// program read the checkout holding the build.
+    ///
+    /// Fails by: a new such function, or a listed one that stopped (the list
+    /// only shrinks).
+    #[test]
+    fn no_function_handed_a_root_discovers_from_the_cwd() {
+        use ra_ap_syntax::{AstNode as _, ast, ast::HasAttrs as _, ast::HasName as _};
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("the workspace root");
+        let test_only = |node: &ra_ap_syntax::SyntaxNode| {
+            node.ancestors().filter_map(ast::Item::cast).any(|item| {
+                item.attrs().any(|attr| {
+                    let text: String = attr
+                        .syntax()
+                        .text()
+                        .to_string()
+                        .split_whitespace()
+                        .collect();
+                    text == "#[cfg(test)]" || text == "#[test]"
+                })
+            })
+        };
+        let mut found = std::collections::BTreeSet::new();
+        for (path, source) in workspace_sources("src") {
+            let relative = path
+                .strip_prefix(workspace)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let root =
+                batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024)
+                    .syntax_node();
+            for function in root.descendants().filter_map(ast::Fn::cast) {
+                if test_only(function.syntax()) {
+                    continue;
+                }
+                let handed = function.param_list().is_some_and(|params| {
+                    params.params().any(|param| {
+                        param
+                            .ty()
+                            .is_some_and(|ty| ty.syntax().text().to_string().contains("Path"))
+                    })
+                });
+                let asks_cwd = function.body().is_some_and(|body| {
+                    let text: String = body
+                        .syntax()
+                        .text()
+                        .to_string()
+                        .split_whitespace()
+                        .collect();
+                    text.contains("Path::new(\".\")")
+                });
+                if handed
+                    && asks_cwd
+                    && let Some(name) = function.name()
+                {
+                    found.insert(format!("{relative}::{name}"));
+                }
+            }
+        }
+        let listed: std::collections::BTreeSet<String> = CWD_DISCOVERY_RATCHET
+            .iter()
+            .map(|entry| (*entry).to_owned())
+            .collect();
+        assert_eq!(
+            found, listed,
+            "a function handed a path discovers from the working directory; pass it the root it \
+             was handed (CLOUD-2904), or, for one that stopped, drop it from the ratchet"
+        );
+    }
+
     #[test]
     fn every_declared_git_module_exists_and_reaches_gix() {
         // ANTI-VACUITY, both directions. A name in the list that no file carries
