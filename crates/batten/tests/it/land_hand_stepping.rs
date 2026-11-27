@@ -77,7 +77,9 @@ const ROW: &str = "patch run loose";
 
 /// The repository root, whose committed `batten.toml` is the policy under test.
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // THE COMMITTED TREE IN A REPOSITORY OF ITS OWN (CLOUD-2904), never the
+    // checkout, whose HEAD, refs and receipts are not what these cases are about.
+    crate::common::committed_repo().to_path_buf()
 }
 
 /// A Claude Code `PreToolUse` envelope carrying a shell command.

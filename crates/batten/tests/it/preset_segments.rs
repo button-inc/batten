@@ -37,7 +37,9 @@ use std::path::PathBuf;
 use common::{run_with_stdin, stderr};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // THE COMMITTED TREE IN A REPOSITORY OF ITS OWN (CLOUD-2904), never the
+    // checkout, whose HEAD, refs and receipts are not what these cases are about.
+    common::committed_repo().to_path_buf()
 }
 
 fn payload(command: &str) -> String {
