@@ -590,7 +590,7 @@ fn a_first_sighting_carries_the_rows_reason_and_both_labels() {
 
 /// A live class carrying `doc`, over the real load-time validator (CLOUD-2143).
 fn documented(why: Option<&str>, act: &[&str]) -> batten::config_model::DeclaredVerdict {
-    let mut class = batten::config_check::verdict::vendored()
+    let mut class = batten::verdict::registry::vendored()
         .into_iter()
         .find(|class| class.id == "tool run loose")
         .expect("a vendored class to dress");
@@ -1159,8 +1159,8 @@ fn a_second_row_of_a_shared_class_still_gets_its_definition() {
 /// moving a class in or out of the family touches neither side.
 #[test]
 fn every_class_routed_only_into_a_protected_path_is_admissible() {
-    use batten::config_check::verdict::vendored;
     use batten::preset_catalog::RouteKind;
+    use batten::verdict::registry::vendored;
     use batten::verdict::routed_only_into_protection;
     let starter = batten::config::parse(batten::init::STARTER, batten::config_model::CONFIG_FILE)
         .expect("the starter parses");

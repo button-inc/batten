@@ -148,7 +148,7 @@ fn git_routes() -> Vec<(String, String)> {
             }
         }
     }
-    for verdict in batten::config_check::verdict::vendored() {
+    for verdict in batten::verdict::registry::vendored() {
         for route in &verdict.routes {
             if route.kind == batten::preset_catalog::RouteKind::Command
                 && route.target.starts_with("git ")

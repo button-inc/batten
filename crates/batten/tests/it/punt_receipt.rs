@@ -354,7 +354,7 @@ fn the_class_declares_the_route_that_makes_the_wedge_escapable() {
     // the two must travel together. This one stays because it localises the
     // failure: green here and red there says the registry is fine and the boundary
     // is not, which is a different repair from the route having been dropped.
-    let entry = batten::config_check::verdict::vendored()
+    let entry = batten::verdict::registry::vendored()
         .into_iter()
         .find(|entry| entry.id == "receipt read other")
         .expect("the class is vendored");

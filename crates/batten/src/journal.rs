@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 use crate::findings::{
     Disposition, FINDINGS_SCHEMA, FINDINGS_SCHEMA_MIN, FindingRecord, Observation, Presentation,
 };
-use crate::identity::Fingerprint;
+use batten_facts::identity::Fingerprint;
 
 /// The journal layout's own version, independent of the record schema.
 pub const JOURNAL_SCHEMA: u32 = 1;
@@ -150,7 +150,7 @@ fn mint_generation(store_dir: &Path, bump: u64) -> String {
         store_dir.display(),
         std::process::id()
     );
-    crate::identity::store_fingerprint(&[&seed]).to_hex()
+    batten_facts::identity::store_fingerprint(&[&seed]).to_hex()
 }
 
 /// How a binary may use this store.
@@ -201,7 +201,7 @@ fn format_path(store_dir: &Path) -> PathBuf {
 /// Returns an error when the journal directory cannot be created or written.
 pub fn open(store_dir: &Path) -> Result<Access> {
     let path = format_path(store_dir);
-    let format = match crate::fsio::read_to_string(&path) {
+    let format = match batten_fsio::read_to_string(&path) {
         Ok(text) => serde_json::from_str::<Format>(&text)
             .with_context(|| format!("read the store format {}", path.display()))?,
         Err(_) if legacy_records_exist(store_dir) => Format {
@@ -239,7 +239,7 @@ fn write_format(store_dir: &Path, format: &Format) -> Result<()> {
         .with_context(|| format!("create the journal directory {}", dir.display()))?;
     let json = serde_json::to_string_pretty(format)?;
     let temp = dir.join(format!("{FORMAT_FILE}.{}.tmp", std::process::id()));
-    crate::durable::replace(&temp, format!("{json}\n"))
+    batten_facts::durable::replace(&temp, format!("{json}\n"))
         .with_context(|| format!("write the store format {}", temp.display()))?;
     std::fs::rename(&temp, format_path(store_dir))
         .with_context(|| format!("publish the store format in {}", dir.display()))?;
@@ -433,7 +433,7 @@ pub fn append(store_dir: &Path, shard: &str, entry: &Entry) -> Result<()> {
 /// Read through [`crate::cache::now`], whose clock a case can pin, so the case
 /// can hold this conversion to the reading (CLOUD-2509).
 fn now_nanos() -> u64 {
-    u64::try_from(crate::cache::now().as_nanos()).unwrap_or(u64::MAX)
+    u64::try_from(batten_facts::cache::now().as_nanos()).unwrap_or(u64::MAX)
 }
 
 /// Append one already-encoded line to a shard, durably.
@@ -461,7 +461,7 @@ pub fn append_line(store_dir: &Path, shard: &str, line: &str) -> Result<()> {
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create the shard directory {}", dir.display()))?;
     let path = dir.join(format!("{shard}.jsonl"));
-    crate::durable::append(&path, line)
+    batten_facts::durable::append(&path, line)
         .with_context(|| format!("append to the shard {}", path.display()))
 }
 
@@ -485,7 +485,7 @@ pub fn append_line_healing(store_dir: &Path, shard: &str, line: &str) -> Result<
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create the shard directory {}", dir.display()))?;
     let path = dir.join(format!("{shard}.jsonl"));
-    crate::durable::append_whole_lines(&path, line)
+    batten_facts::durable::append_whole_lines(&path, line)
         .with_context(|| format!("append to the shard {}", path.display()))
 }
 
@@ -546,7 +546,7 @@ pub fn fold_lines(store_dir: &Path) -> Fold {
 
     let mut all = Vec::new();
     for path in paths {
-        let Ok(text) = crate::fsio::read_to_string(&path) else {
+        let Ok(text) = batten_fsio::read_to_string(&path) else {
             return Fold::Unreadable(path);
         };
         // Only terminated lines. `split('\n')` then dropping the tail is what
@@ -574,7 +574,7 @@ pub fn fold_lines(store_dir: &Path) -> Fold {
 /// invocation and never collect them.
 #[must_use]
 pub fn shard_id(worktree: &Path) -> String {
-    crate::identity::store_fingerprint(&[&worktree.display().to_string()]).to_hex()
+    batten_facts::identity::store_fingerprint(&[&worktree.display().to_string()]).to_hex()
 }
 
 /// What a merge did.
@@ -611,7 +611,7 @@ fn read_shards(store_dir: &Path) -> Result<Vec<Entry>> {
 
     let mut all = Vec::new();
     for path in paths {
-        let text = crate::fsio::read_to_string(&path)
+        let text = batten_fsio::read_to_string(&path)
             .with_context(|| format!("read the shard {}", path.display()))?;
         // A torn trailing line is dropped rather than failing the merge: the
         // writer will re-append it, and refusing to merge every other shard over
@@ -847,7 +847,7 @@ fn read_past_marks(
             continue;
         }
         let path = shards_dir(store_dir).join(name);
-        let bytes = crate::fsio::read(&path)
+        let bytes = batten_fsio::read(&path)
             .with_context(|| format!("read the shard {}", path.display()))?;
         let start = usize::try_from(from).unwrap_or(usize::MAX).min(bytes.len());
         let tail = &bytes[start..];
@@ -873,7 +873,7 @@ fn pending_path(store_dir: &Path) -> PathBuf {
 
 /// The entries still waiting for their record; absent or unreadable is none.
 fn read_pending(store_dir: &Path) -> Vec<Entry> {
-    crate::fsio::read_to_string(pending_path(store_dir)).map_or_else(
+    batten_fsio::read_to_string(pending_path(store_dir)).map_or_else(
         |_| Vec::new(),
         |text| {
             text.lines()
@@ -899,7 +899,7 @@ fn write_pending(store_dir: &Path, pending: &[Entry]) -> Result<()> {
         body.push('\n');
     }
     let temp = journal_dir(store_dir).join(format!("{PENDING_FILE}.{}.tmp", std::process::id()));
-    crate::durable::replace(&temp, body)
+    batten_facts::durable::replace(&temp, body)
         .with_context(|| format!("write the pending entries {}", temp.display()))?;
     std::fs::rename(&temp, &path)
         .with_context(|| format!("publish the pending entries {}", path.display()))?;
@@ -920,7 +920,7 @@ fn write_merged(store_dir: &Path, entries: &[Entry]) -> Result<()> {
         body.push_str(&serde_json::to_string(entry)?);
         body.push('\n');
     }
-    crate::durable::replace(&temp, body)
+    batten_facts::durable::replace(&temp, body)
         .with_context(|| format!("write the merged log {}", temp.display()))?;
     std::fs::rename(&temp, merged_path(store_dir))
         .with_context(|| format!("publish the merged log in {}", dir.display()))?;
@@ -982,7 +982,7 @@ impl Drain {
 /// first-drain case), and an unparseable line is skipped the same way a torn
 /// shard line is. There is no failure a caller could act on differently.
 fn read_merged(store_dir: &Path) -> Vec<Entry> {
-    let Ok(text) = crate::fsio::read_to_string(merged_path(store_dir)) else {
+    let Ok(text) = batten_fsio::read_to_string(merged_path(store_dir)) else {
         return Vec::new();
     };
     text.lines()
@@ -1094,7 +1094,7 @@ pub fn migrate(store_dir: &Path) -> Result<Migrated> {
     let format = match open(store_dir)? {
         Access::Writable(format) => format,
         Access::DegradedReadOnly { reason, .. } => {
-            return Err(crate::error::UsageError::raise(reason));
+            return Err(batten_facts::error::UsageError::raise(reason));
         }
     };
     let from = format.findings_schema;
@@ -1184,8 +1184,10 @@ mod tests {
     use super::*;
     #[cfg(test)]
     use crate::findings::{Context, FINDINGS_SCHEMA, Instance, NotShown, Observation};
-    use crate::identity::{FindingKind, SpanNormalization, StoredIdentity, code_fingerprint};
-    use crate::severity::{AdvisoryTier, RuleSeverity};
+    use batten_core::severity::{AdvisoryTier, RuleSeverity};
+    use batten_facts::identity::{
+        FindingKind, SpanNormalization, StoredIdentity, code_fingerprint,
+    };
 
     fn store(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -1248,11 +1250,14 @@ mod tests {
     fn the_stamp_is_the_readings_nanoseconds() {
         let epoch = std::time::UNIX_EPOCH;
         assert_eq!(
-            crate::cache::clock::at(epoch + std::time::Duration::from_nanos(4_200), now_nanos),
+            batten_facts::cache::clock::at(
+                epoch + std::time::Duration::from_nanos(4_200),
+                now_nanos
+            ),
             4_200
         );
         let beyond = epoch + std::time::Duration::from_secs(u64::MAX / 1_000_000_000 + 1);
-        assert_eq!(crate::cache::clock::at(beyond, now_nanos), u64::MAX);
+        assert_eq!(batten_facts::cache::clock::at(beyond, now_nanos), u64::MAX);
     }
 
     #[test]
@@ -1322,11 +1327,11 @@ mod tests {
             .map(|entry| entry.path())
             .find(|path| path.extension().is_some_and(|ext| ext == "json"))
             .expect("the record file");
-        let marked = format!("{}\n", crate::fsio::read_to_string(&path).unwrap());
+        let marked = format!("{}\n", batten_fsio::read_to_string(&path).unwrap());
         std::fs::write(&path, &marked).unwrap();
         merge(&dir).unwrap();
         assert_eq!(
-            crate::fsio::read_to_string(&path).unwrap(),
+            batten_fsio::read_to_string(&path).unwrap(),
             marked,
             "a merge whose fold changed nothing must not rewrite the record"
         );
@@ -1798,14 +1803,14 @@ mod tests {
         append(&dir, "shard-a", &entry_for("TODO", Disposition::Acted)).unwrap();
         merge(&dir).unwrap();
         let merged = merged_path(&dir);
-        let marked = format!("{}\n", crate::fsio::read_to_string(&merged).unwrap());
+        let marked = format!("{}\n", batten_fsio::read_to_string(&merged).unwrap());
         std::fs::write(&merged, &marked).unwrap();
         assert!(matches!(
             merge(&dir).unwrap(),
             Merge::Merged { applied: 0, .. }
         ));
         assert_eq!(
-            crate::fsio::read_to_string(&merged).unwrap(),
+            batten_fsio::read_to_string(&merged).unwrap(),
             marked,
             "a merge with nothing new must not rewrite the merged log"
         );
@@ -1857,7 +1862,7 @@ mod tests {
             }
             let landed = (
                 crate::findings::load_all(&dir).unwrap(),
-                crate::fsio::read_to_string(merged_path(&dir)).unwrap(),
+                batten_fsio::read_to_string(merged_path(&dir)).unwrap(),
             );
             let _ = std::fs::remove_dir_all(&dir);
             landed

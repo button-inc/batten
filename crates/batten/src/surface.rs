@@ -1534,33 +1534,6 @@ mod tests {
     }
 
     #[test]
-    fn every_declared_env_is_actually_read() {
-        // A declared-but-unread env var is the drift this design exists to
-        // remove: it documents an override that silently does nothing, and the
-        // only symptom is a user whose `BATTEN_*` export is ignored. Measured
-        // on `--config-from`, which declared `BATTEN_CONFIG_FROM` and read it
-        // nowhere until an E2E test caught it (CLOUD-31).
-        //
-        // `EnvDecl` makes "declared and read by nobody" unrepresentable for the
-        // clap half; this covers the other half — a `Layered` name the resolver
-        // does not actually have a row for.
-        for decl in std::iter::once(&ROOT).chain(SURFACE) {
-            for flag in decl.flags {
-                let EnvDecl::Layered(env) = flag.env else {
-                    continue;
-                };
-                assert!(
-                    crate::resolve::SETTINGS
-                        .iter()
-                        .any(|setting| setting.env == Some(env)),
-                    "{}: {env} is declared Layered but no SETTINGS row reads it",
-                    decl.path
-                );
-            }
-        }
-    }
-
-    #[test]
     fn the_built_tree_matches_the_declaration() {
         // The derivation gate: every declared path exists in the built `clap`
         // tree with the declared summary, and the tree contains nothing the

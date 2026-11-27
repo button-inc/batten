@@ -136,7 +136,7 @@ fn sessions_dir(store_dir: &Path) -> PathBuf {
 /// host's opaque string, and letting it name a file would hand a host control of
 /// this crate's path layout — length, separators and all.
 fn record_path(store_dir: &Path, session: &str) -> PathBuf {
-    let name = crate::identity::store_fingerprint(&["session", session]).to_hex();
+    let name = batten_facts::identity::store_fingerprint(&["session", session]).to_hex();
     sessions_dir(store_dir).join(format!("{name}.json"))
 }
 
@@ -256,7 +256,7 @@ impl SessionRecord {
 /// is its own root, with no cursor", which re-syncs — the safe direction, since a
 /// half-read cursor would skip findings.
 fn read_record(path: &Path) -> Option<SessionRecord> {
-    let text = crate::fsio::read_to_string(path).ok()?;
+    let text = batten_fsio::read_to_string(path).ok()?;
     let record: SessionRecord = serde_json::from_str(&text).ok()?;
     (record.schema == SESSION_SCHEMA).then_some(record)
 }
@@ -275,7 +275,7 @@ fn write_record(store_dir: &Path, record: &SessionRecord) -> Result<()> {
             .unwrap_or("session"),
         std::process::id()
     ));
-    crate::durable::replace(&temp, format!("{json}\n"))
+    batten_facts::durable::replace(&temp, format!("{json}\n"))
         .with_context(|| format!("write the session record {}", temp.display()))?;
     std::fs::rename(&temp, &path)
         .with_context(|| format!("publish the session record in {}", dir.display()))?;
@@ -371,7 +371,7 @@ impl Root {
     /// somebody else's string, and a pointer is what output owes (rule 4).
     #[must_use]
     pub fn short(&self) -> String {
-        let hex = crate::identity::store_fingerprint(&["session", &self.key]).to_hex();
+        let hex = batten_facts::identity::store_fingerprint(&["session", &self.key]).to_hex();
         hex.get(..8).unwrap_or(&hex).to_owned()
     }
 }

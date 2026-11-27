@@ -708,7 +708,7 @@ fn the_generator_is_a_write_and_the_gate_is_a_read() {
 /// artifact rather than quoting either plan (non-negotiable rule 4).
 #[test]
 fn the_refusal_is_a_declared_class_with_a_route() {
-    let registry = batten::config_check::verdict::vendored();
+    let registry = batten::verdict::registry::vendored();
     let token = batten::error::Native::PlanReadStale.id();
     let row = registry
         .iter()

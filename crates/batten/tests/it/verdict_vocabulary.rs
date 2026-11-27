@@ -373,7 +373,7 @@ fn every_vendored_and_declared_doc_is_within_160_o200k_tokens() {
         .collect();
     over.sort();
     assert!(over.is_empty(), "first sightings over 160 tokens: {over:?}");
-    let vendored: std::collections::BTreeSet<String> = batten::config_check::verdict::vendored()
+    let vendored: std::collections::BTreeSet<String> = batten::verdict::registry::vendored()
         .into_iter()
         .map(|class| class.id)
         .collect();

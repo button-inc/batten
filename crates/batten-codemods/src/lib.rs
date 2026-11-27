@@ -16,6 +16,7 @@ pub mod fix;
 use std::collections::BTreeMap;
 
 use batten::codemod::{self, CouldNotLook, Edition};
+use batten::crate_cut::{self, Alias};
 use batten::item_index;
 
 /// One named migration.
@@ -127,6 +128,12 @@ pub const TREE_RECIPES: &[TreeRecipe] = &[
         apply: split_inline_modules,
     },
     TreeRecipe {
+        name: "respell-root-aliases",
+        summary: "a path through a `pub use batten_x::m` at `batten`'s root, in a module a cut moves, names `batten_x` directly, so the cut is not refused (CLOUD-2800 step 0)",
+        skip: &["mutation_markers.rs"],
+        apply: respell_root_aliases,
+    },
+    TreeRecipe {
         name: "impl-to-extension-trait",
         summary: "an inherent impl in a higher layer than its type becomes that layer's extension trait, so behaviour stays above the vocabulary (CLOUD-2793)",
         skip: &["mutation_markers.rs"],
@@ -141,6 +148,62 @@ fn split_inline_modules(
     _manifests: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     batten::module_graph::split_inline_modules(files)
+}
+
+/// The modules CLOUD-2800 cuts into `batten-report`: the output contract,
+/// and the two modules `refusal` reaches outside it.
+pub const REPORT_SET: &[&str] = &[
+    "findings", "verdict", "journal", "output", "emission", "session", "render", "refusal",
+    "budget", "redirect",
+];
+
+/// `respell-root-aliases` over `crates/batten/src`: each file of a module in
+/// [`REPORT_SET`] has its `crate::m…` paths through a root alias respelled at
+/// the alias's target, read from `lib.rs`'s own `pub use` lines. `error` is a
+/// module holding `pub use batten_facts::error::*` and one test-only alias, so
+/// it is an alias to `batten_facts::error` for every name but `Denial`, which
+/// the compiler names if a moved file spells it.
+fn respell_root_aliases(
+    files: &BTreeMap<String, String>,
+    _manifests: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    const SRC: &str = "crates/batten/src/";
+    let Some(lib) = files.get(&format!("{SRC}lib.rs")) else {
+        return BTreeMap::new();
+    };
+    let mut aliases: BTreeMap<&str, Alias<'_>> = root_aliases(lib);
+    aliases.insert("error", Alias::Module("batten_facts"));
+    files
+        .iter()
+        .filter(|(path, _)| {
+            path.strip_prefix(SRC).is_some_and(|rest| {
+                REPORT_SET.iter().any(|module| {
+                    rest == format!("{module}.rs") || rest.starts_with(&format!("{module}/"))
+                })
+            })
+        })
+        .filter_map(|(path, text)| {
+            let (edited, _) = crate_cut::respell_aliases(text, "crate", &aliases)?;
+            (edited != *text).then(|| (path.clone(), edited))
+        })
+        .collect()
+}
+
+/// Each `pub use batten_x::m;` and `pub use batten_x as m;` line of a crate
+/// root, by the name it binds.
+fn root_aliases(lib: &str) -> BTreeMap<&str, Alias<'_>> {
+    lib.lines()
+        .filter_map(|line| line.strip_prefix("pub use ")?.strip_suffix(';'))
+        .filter_map(|body| {
+            if let Some((krate, name)) = body.split_once(" as ") {
+                Some((name, Alias::Crate(krate)))
+            } else {
+                let (krate, name) = body.split_once("::")?;
+                (!name.contains("::") && !name.contains('{')).then_some((name, Alias::Module(krate)))
+            }
+        })
+        .filter(|(_, alias)| matches!(alias, Alias::Module(k) | Alias::Crate(k) if k.starts_with("batten_")))
+        .collect()
 }
 
 /// `impl-to-extension-trait` over every package `manifests` declares: each

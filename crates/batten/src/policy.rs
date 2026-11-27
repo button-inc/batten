@@ -3985,7 +3985,7 @@ fn collidable_tokens(verdicts: &[crate::config_model::DeclaredVerdict]) -> BTree
     // the VENDORED PRESETS — the third is the one that bites: `trunk push
     // forced` is a preset's class, and a set built from the first two refuses
     // a name the collapse arm requires.
-    let vendored = crate::config_check::preset::verdict_rows();
+    let vendored = crate::verdict::registry::verdict_rows();
     verdicts
         .iter()
         .filter(|entry| !entry.retired())
@@ -4238,7 +4238,7 @@ pub fn registry_for(
     verdicts: &[crate::config_model::DeclaredVerdict],
 ) -> Result<Vec<crate::config_model::DeclaredVerdict>> {
     let mut registry = verdicts.to_vec();
-    for entry in crate::config_check::verdict::vendored() {
+    for entry in crate::verdict::registry::vendored() {
         registry.retain(|row| row.id != entry.id);
         registry.push(entry);
     }
@@ -4257,7 +4257,7 @@ pub fn registry_for(
 ///
 /// A [`UsageError`] (exit `1`) naming every colliding token.
 fn check_no_vendored_collision(verdicts: &[crate::config_model::DeclaredVerdict]) -> Result<()> {
-    let vendored: BTreeSet<String> = crate::config_check::verdict::vendored()
+    let vendored: BTreeSet<String> = crate::verdict::registry::vendored()
         .into_iter()
         .map(|entry| entry.id)
         .collect();
@@ -8180,7 +8180,7 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
         let tokens = collidable_tokens(&[live, retired]);
         assert!(tokens.contains("x y z") && !tokens.contains("old y z"));
         assert!(tokens.contains(native));
-        let vendored = crate::config_check::preset::verdict_rows()
+        let vendored = crate::verdict::registry::verdict_rows()
             .into_iter()
             .next()
             .expect("a vendored class");

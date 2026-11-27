@@ -1011,7 +1011,7 @@ mod tests {
             fields,
             expected.iter().map(|(field, _)| *field).collect::<Vec<_>>()
         );
-        let registry = crate::config_check::verdict::vendored();
+        let registry = crate::verdict::registry::vendored();
         for (finding, (field, class)) in found.iter().zip(expected) {
             assert_eq!(finding.verdict, class, "{field}");
             let line = finding.line();
