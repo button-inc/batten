@@ -21115,6 +21115,87 @@ fn install_pending_for(
     }))
 }
 
+/// Whether the state repository is unattached to this session (CLOUD-2939):
+/// [`facts::Fact::StateRepo`].
+///
+/// INERT UNLESS ASKED: no pre-tool call, an opt-out declared
+/// (`[receipt] state_repo_optional`), no module on the call, or
+/// [`session::STATE_REPO_ENV`] unset, and nothing is probed.
+fn state_repo_for(policy: &hook::Policy, envelope: &hook::Envelope) -> Option<serde_json::Value> {
+    if envelope.event != crate::config_model::Event::PreTool
+        || policy.state_repo_optional
+        || !policy.reads_pinned(envelope)
+    {
+        return None;
+    }
+    let value = std::env::var(session::STATE_REPO_ENV).ok()?;
+    let root = hook_authority_root();
+    let git_dir = session_setup::git_dir_of(root)?;
+    let origin = git::remotes(root)
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    state_repo_hold(
+        &git_dir,
+        &value,
+        origin.as_deref(),
+        now_unix(),
+        land::receipts::access,
+    )
+}
+
+/// The record [`state_repo_for`] keeps under the git dir: `granted`, or
+/// `refused <status> <epoch>`.
+const STATE_REPO_RECORD: &str = "batten-state-repo";
+
+/// Seconds a refusal stands before the next call re-probes it.
+const STATE_REPO_REPROBE: u64 = 5;
+
+/// [`state_repo_for`] with its clock and probe passed in.
+///
+/// A `granted` record answers with no probe: access once seen is not re-asked
+/// on every call. A refusal re-probes once it is [`STATE_REPO_REPROBE`] old,
+/// so the hold lifts with no command once the attach lands. An unknown answer
+/// holds nothing and records nothing: could-not-look is not a refusal.
+fn state_repo_hold(
+    git_dir: &Path,
+    value: &str,
+    origin: Option<&str>,
+    now: u64,
+    probe: impl Fn(&str) -> land::receipts::Access,
+) -> Option<serde_json::Value> {
+    let held = |status: u16| serde_json::json!({ "state": "unattached", "status": status, "repository": value.trim() });
+    let record = git_dir.join(STATE_REPO_RECORD);
+    let recorded = crate::fsio::read_to_string(&record).unwrap_or_default();
+    let mut words = recorded.split_whitespace();
+    match (words.next(), words.next(), words.next()) {
+        (Some("granted"), None, None) => return None,
+        (Some("refused"), Some(status), Some(at)) => {
+            if let (Ok(status), Ok(at)) = (status.parse::<u16>(), at.parse::<u64>())
+                && now.saturating_sub(at) < STATE_REPO_REPROBE
+            {
+                return Some(held(status));
+            }
+        }
+        _ => {}
+    }
+    let land::receipts::Remote::At(remote) = land::receipts::state_remote(Some(value), origin)
+    else {
+        return None;
+    };
+    match probe(&remote) {
+        land::receipts::Access::Granted => {
+            let _ = crate::durable::replace(&record, "granted\n");
+            None
+        }
+        land::receipts::Access::Refused(status) => {
+            let _ = crate::durable::replace(&record, format!("refused {status} {now}\n"));
+            Some(held(status))
+        }
+        land::receipts::Access::Unknown => None,
+    }
+}
+
 /// The command words a POSIX shell, bash or zsh runs itself, never from `PATH`
 /// (CLOUD-2840). No install provides one, so none is ever pending; most have no
 /// file on `PATH` at all, so resolving them would hold `cd /x && …` on `cd`.
@@ -21163,6 +21244,7 @@ struct CallFacts {
     singleton: Option<(String, String)>,
     land_live: Option<String>,
     install_pending: Option<serde_json::Value>,
+    state_repo: Option<serde_json::Value>,
     lap_held: Option<Vec<serde_json::Value>>,
     unread_history: facts::Look<Vec<String>>,
     dispatch: facts::Look<brief::Report>,
@@ -21191,6 +21273,7 @@ fn call_facts(
         singleton,
         land_live,
         install_pending: install_pending_for(policy, envelope, harness),
+        state_repo: state_repo_for(policy, envelope),
         lap_held,
         unread_history: unread_history(envelope),
         dispatch: dispatch_facts(envelope),
@@ -21797,6 +21880,7 @@ fn dispatch_envelope(
         singleton: &call.singleton,
         land_live: &call.land_live,
         install_pending: &call.install_pending,
+        state_repo: &call.state_repo,
         lap_held: &call.lap_held,
         discards: &call.discards,
         unread_history: &call.unread_history,
@@ -35057,6 +35141,62 @@ mod tests {
             super::moved_past(Some("v2"), &super::land::Pushed::Raced),
             None
         );
+    }
+
+    /// AN UNATTACHED STATE REPOSITORY HOLDS UNTIL IT IS ATTACHED (CLOUD-2939):
+    /// a refusal holds, names the status and the repository, and is answered
+    /// from its record inside the re-probe window; a `200` after it lifts the
+    /// hold with no command; a granted record is never re-probed; an unknown
+    /// answer holds nothing.
+    ///
+    /// Fails by: a refusal not held, a re-probe on every call, a hold that
+    /// outlives a `200`, a grant re-asked, or could-not-look read as refused.
+    #[test]
+    fn an_unattached_state_repo_holds_until_a_probe_answers_200() {
+        use crate::land::receipts::Access;
+        use std::cell::Cell;
+        let git_dir = crate::scratch::scratch("state-repo-hold");
+        let origin = Some("https://github.com/acme/app.git");
+        let asked = Cell::new(0);
+        let answer = Cell::new(Access::Refused(404));
+        let probe = |_: &str| {
+            asked.set(asked.get() + 1);
+            answer.get()
+        };
+        let held = super::state_repo_hold(&git_dir, "acme/state", origin, 100, probe);
+        assert_eq!(
+            held,
+            Some(
+                serde_json::json!({"state": "unattached", "status": 404, "repository": "acme/state"})
+            )
+        );
+        assert_eq!(asked.get(), 1);
+        assert!(super::state_repo_hold(&git_dir, "acme/state", origin, 102, probe).is_some());
+        assert_eq!(
+            asked.get(),
+            1,
+            "a refusal inside the window is answered from its record"
+        );
+        answer.set(Access::Granted);
+        assert_eq!(
+            super::state_repo_hold(&git_dir, "acme/state", origin, 106, probe),
+            None
+        );
+        assert_eq!(asked.get(), 2);
+        assert_eq!(
+            super::state_repo_hold(&git_dir, "acme/state", origin, 900, probe),
+            None
+        );
+        assert_eq!(asked.get(), 2, "a granted record is not re-probed");
+
+        let unknown = crate::scratch::scratch("state-repo-unknown");
+        assert_eq!(
+            super::state_repo_hold(&unknown, "acme/state", origin, 100, |_: &str| {
+                Access::Unknown
+            }),
+            None
+        );
+        assert!(!unknown.join(super::STATE_REPO_RECORD).exists());
     }
 
     /// A LAP'S OWN GATE IS NEVER HELD BY THAT LAP (CLOUD-2783): a holder is

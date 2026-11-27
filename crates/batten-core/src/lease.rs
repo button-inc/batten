@@ -223,6 +223,33 @@ fn base64_of(raw: &str) -> String {
 /// transport failure — all could-not-look (exit `3`), never a verdict about the
 /// lease. A lease gate that could not read the lease has not judged it.
 pub fn advertise(remote: &str, service: Service) -> Result<Advertisement> {
+    let response = discovery(remote, service)?;
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "lease: ref discovery answered {} rather than 200",
+            response.status
+        ));
+    }
+    parse_advertisement(&response.body, service)
+}
+
+/// The status `remote` answers ref discovery for `service` with, and nothing
+/// else (CLOUD-2939): whether this session may read the repository at all,
+/// asked as the carry asks it, so the answer is the one the carry would get.
+/// `200` is access, and 401, 403 and 404 are each a remote this session cannot
+/// read (GitHub answers 404 for a private repository it will not name).
+///
+/// # Errors
+///
+/// A transport failure, which is could-not-look and never an answer about
+/// access: a remote that did not answer has not said the session lacks it.
+pub fn discovery_status(remote: &str, service: Service) -> Result<u16> {
+    Ok(discovery(remote, service)?.status)
+}
+
+/// One ref-discovery exchange with `remote` for `service`: the answer as the
+/// transport returned it, whatever its status.
+fn discovery(remote: &str, service: Service) -> Result<fetch::Response> {
     let url = format!(
         "{}/info/refs?service={}",
         remote.trim_end_matches('/'),
@@ -237,16 +264,10 @@ pub fn advertise(remote: &str, service: Service) -> Result<Advertisement> {
         delete: false,
         credentials: &[],
     }])?;
-    let response = responses
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))?;
-    if response.status != 200 {
-        return Err(anyhow::anyhow!(
-            "lease: ref discovery answered {} rather than 200",
-            response.status
-        ));
-    }
-    parse_advertisement(&response.body, service)
+    responses
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))
 }
 
 /// Parse a smart-HTTP advertisement body.
