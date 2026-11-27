@@ -21,7 +21,14 @@
 # So this rule decides the one thing neither of its siblings can: whether the
 # DIFF widens the inventory. It reads `input.tree["base-delta"]`, which is what
 # lets a module decide a CHANGE rather than a state (CLOUD-1059), and it refuses
-# an added spawn escape and an added placement alike.
+# an added placement.
+#
+# THE ESCAPE CLAUSE IS RETIRED (CLOUD-2778). It compared a file's added lines as
+# a set, so a second escape whose lint line repeated one already there read as
+# no change, and the counted repair that followed it was still text. `spawn
+# count ahead`, a `counts = "lint_escapes"` ratchet over every package's source,
+# counts the escapes off the parsed tree against `origin/main`, so this module
+# keeps the placement clause and the could-not-look arms.
 #
 # FAIL CLOSED, WITH NO `bypass_env` AND NO OVERRIDE ROUTE. That is deliberate and
 # it follows `shell edit refused`'s precedent, which declares one route with
@@ -31,14 +38,10 @@
 #
 # WHAT IT DOES NOT CLAIM. It cannot tell a justified spawn from an unjustified
 # one — that is a judgement, and non-negotiable rule 3 forbids a gate resolving
-# to one. It decides a byte question: did this change add a spawn escape, or add
-# a placement admitting one. Both are answerable from the delta, and both were
-# unanswered until now.
+# to one. It decides a byte question: did this change add a placement admitting
+# a spawn. That is answerable from the delta, and was unanswered until now.
 #
-#MUTANT spawn-escape-unread|s@patterns\[escape_pattern\]@patterns[placement_pattern]@|an_added_spawn_escape_is_refused
-#MUTANT placement-widening-unread|s@patterns\[placement_pattern\]@patterns[escape_pattern]@|an_added_spawn_placement_is_refused
-#MUTANT escape-indent-is-identity|s@\["base-lines"\]\[path\]; trim_space(l) == trim_space(line)@["base-lines"][path]; l == line@|an_escape_reindented_in_place_is_clean
-#MUTANT engine-source-one-crate|s@^\tparts\[0\] == "crates"$@\tstartswith(path, "crates/batten/src/")@|an_added_spawn_escape_in_another_crate_is_refused
+#MUTANT placement-widening-unread|s@patterns\[placement_pattern\]@patterns["spawn-placement-unread"]@|an_added_spawn_placement_is_refused
 #MUTANT-SUITE crates/batten/tests/it/spawn_widening.rs
 
 # METADATA
@@ -69,30 +72,7 @@ delta := d if {
 # `.claude/rules/policy-modules.md` is the authority and the reason is measured
 # there: one concept was spelled 19 different ways across 17 shell programs
 # before the registry existed.
-escape_pattern := "clippy-lint-escape"
-
-# THE ONE EXEMPTION, and it is a pattern rather than a clause for the reason the
-# registry exists: "the lints a `mod tests` waives" is a concept with one
-# spelling, and a second copy of that list here would drift from the row.
-#
-# A `#[cfg(test)] mod tests` lives inside `crates/batten/src/**`, so the path
-# exclusion that keeps `crates/batten/tests/**` out cannot reach it. Measured:
-# without this the module refused three files for opening their test module the
-# way every file in the crate opens its test module.
-idiom_pattern := "clippy-test-idiom"
-
 placement_pattern := "spawn-placement-entry"
-
-# A line that escapes a lint, and is not the test-module idiom.
-#
-# THE SECOND CONJUNCT IS NARROW BY CONSTRUCTION, because the exempt set is three
-# named lints in a `[[pattern]]` row rather than a shape. `too_many_arguments`
-# and `cast_precision_loss` are still refused, and both were added by the branch
-# that prompted this rule without anybody counting them.
-escapes(line) if {
-	regex.match(data.batten.patterns[escape_pattern], line)
-	not regex.match(data.batten.patterns[idiom_pattern], line)
-}
 
 # The module whose set says which files may spawn. Named once: it is the SUBJECT
 # of the second clause, and a second spelling is a second answer to "which file
@@ -142,19 +122,10 @@ added_lines(path) := added if {
 	added := {line | some line in input.tree.lines[path]}
 }
 
-# ---------------------------------------------------------------------------
-# A: an added spawn escape.
-# ---------------------------------------------------------------------------
-
-# ENGINE SOURCE ONLY, and `tests/**` is excluded by construction rather than by
-# an exemption somebody has to remember. A test module writing
-# `#![allow(clippy::expect_used)]` is the idiom every suite in this crate already
-# uses — panicking loudly is how a test fails — so a rule firing on those would
-# be switched off within a day, which is the failure mode that ends gates.
-#
-# EVERY PACKAGE'S SOURCE, read from the path rather than a list of crates
-# (#1276): `crates/<crate>/src/**`. A prefix naming one crate stopped counting
-# every module the split moved while the row's globs still listed them.
+# ENGINE SOURCE, every package's: `crates/<crate>/src/**` (#1276), read from the
+# path rather than a list of crates. Only the could-not-look arm below reads it
+# now that the escape clause is retired (CLOUD-2778); `tests/**` is excluded by
+# construction.
 engine_source(path) if {
 	parts := split(path, "/")
 	count(parts) > 3
@@ -163,75 +134,13 @@ engine_source(path) if {
 	endswith(path, ".rs")
 }
 
-violation contains {
-	"rule": "spawn add other",
-	"verdict": "spawn write refused",
-	"subjects": [{"path": path}],
-} if {
-	some path in object.keys(input.tree.lines)
-	engine_source(path)
-	some line in added_lines(path)
-	escapes(line)
-	net_growth(line) > 0
-}
-
-# THE SAME LINE, REPEATED IN ITS OWN FILE (CLOUD-2778). `added_lines` is a set,
-# so a second escape whose lint line matches one the file already carries byte
-# for byte (every `clippy::disallowed_types,` does) read as no change. Counted
-# instead: the file holds more of the line than its base did, and the changed
-# engine sources hold more in total, so the inventory grew.
-violation contains {
-	"rule": "spawn add other",
-	"verdict": "spawn write refused",
-	"subjects": [{"path": path}],
-} if {
-	some path, base_lines in delta["base-lines"]
-	engine_source(path)
-	head_lines = input.tree.lines[path]
-	some line in {l | some l in head_lines}
-	escapes(line)
-	count([l | some l in head_lines; l == line]) > count([l | some l in base_lines; l == line])
-	net_growth(line) > 0
-}
-
-# HOW MANY MORE TIMES `line` APPEARS across the changed engine sources than in
-# their base (#1276). `added_lines` is a set difference within ONE file, so it
-# already reads a move between functions as no change; a move between FILES read
-# as an addition, and #1276's move of the process adapter from `exec.rs` to
-# `capture.rs`, which shrank the inventory, was refused as a new escape.
-#
-# COUNTED, NOT SET-COMPARED: an escape line's text repeats (every
-# `clippy::disallowed_types,` is the same line), so the file losing one still
-# holds others and a set test sees nothing removed. Only narrows the clause
-# above: a line it did not already find is never reached.
-net_growth(line) := growth if {
-	edited := [path |
-		some path, _ in delta["base-lines"]
-		engine_source(path)
-		input.tree.lines[path]
-	]
-	added := [path |
-		some path in delta.added
-		engine_source(path)
-		not delta["base-lines"][path]
-	]
-
-	# INDENTATION IS NOT IDENTITY (#1276): the same escape moved from a closure
-	# to a module changes its leading space and nothing else, so each side is
-	# counted over trimmed text. A copy or a repeat still grows the trimmed count.
-	head := sum([n | some path in array.concat(edited, added); n := count([l | some l in input.tree.lines[path]; trim_space(l) == trim_space(line)])])
-	base := sum([n | some path in edited; n := count([l | some l in delta["base-lines"][path]; trim_space(l) == trim_space(line)])])
-	growth := head - base
-}
-
 # ---------------------------------------------------------------------------
 # B: an added placement.
 # ---------------------------------------------------------------------------
 #
-# THE HALF THAT ACTUALLY FIRED. Clause A refuses a spawn in a module nobody
-# placed; `spawn-adapters` then refuses the same thing from the other side. Both
-# are answered by one edit — add the module to the set — and that edit is what
-# nothing read. It is a two-word line with a paragraph of justification in a
+# THE HALF THAT ACTUALLY FIRED. `spawn-adapters` refuses a spawn in a module
+# nobody placed, and that refusal is answered by one edit — add the module to the
+# set — and that edit is what nothing read. It is a two-word line with a paragraph of justification in a
 # comment, which reads to a reviewer exactly like the considered decision it may
 # or may not be.
 
@@ -284,18 +193,7 @@ violation contains {
 # declared none would pass for the wrong reason: `data.batten.patterns[id]` would
 # be undefined, the body would not hold, and every deny case would read as clean.
 
-vocabulary := {"patterns": {
-	"clippy-lint-escape": `^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::[a-z_]+`,
-	# THE EXEMPTION'S OWN PATTERN, and omitting it made every case here read the
-	# engine-source arm as absent. `idiom_pattern` names this id, so a vocabulary
-	# without it leaves `data.batten.patterns["clippy-test-idiom"]` undefined —
-	# Rego reads undefined as does-not-hold, the exemption never fires, and the
-	# deny cases pass for the wrong reason while the allow case that needs it has
-	# nothing to assert. Copied byte-for-byte from `batten.toml`'s row, which is
-	# what the consumer actually supplies. Found in review.
-	"clippy-test-idiom": `^\s*(?:#!?\[\s*(?:expect|allow)\(\s*)?clippy::(?:expect_used|unwrap_used|panic)\b`,
-	"spawn-placement-entry": `^\s*"[a-z_]+",\s*$`,
-}}
+vocabulary := {"patterns": {"spawn-placement-entry": `^\s*"[a-z_]+",\s*$`}}
 
 tree(lines, base) := object.union(vocabulary, {"tree": {
 	"lines": lines,
@@ -309,72 +207,7 @@ tree(lines, base) := object.union(vocabulary, {"tree": {
 	},
 }})
 
-# THE CASE THE RULE EXISTS FOR, half one.
-test_an_added_spawn_escape_is_refused if {
-	some v in violation with input as tree(
-		{"crates/batten/src/thing.rs": ["fn a() {}", "    clippy::disallowed_types,"]},
-		{"crates/batten/src/thing.rs": ["fn a() {}"]},
-	)
-	v.verdict == "spawn write refused"
-}
-
-# The attribute written on one line reaches the same refusal. Both spellings are
-# in this crate, and a pattern anchored on only the continuation form would miss
-# every single-line one.
-test_an_escape_moved_between_engine_files_is_clean if {
-	count(violation) == 0 with input as tree(
-		{
-			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,"],
-			"crates/batten/src/capture.rs": ["fn b() {}", "    clippy::disallowed_types,"],
-		},
-		{
-			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,", "    clippy::disallowed_types,"],
-			"crates/batten/src/capture.rs": ["fn b() {}"],
-		},
-	)
-}
-
-# THE SAME ESCAPE RE-INDENTED IS NOT A NEW ONE (#1276): measured on
-# `pr_watch.rs`, where the crate's one `disallowed_methods` exemption moved from
-# a closure to the `clock` module and read as an added escape.
-test_an_escape_reindented_in_place_is_clean if {
-	count(violation) == 0 with input as tree(
-		{"crates/batten/src/pr_watch.rs": ["fn a() {}", "    clippy::disallowed_methods,"]},
-		{"crates/batten/src/pr_watch.rs": ["fn a() {}", "            clippy::disallowed_methods,"]},
-	)
-}
-
-test_an_escape_copied_to_another_file_is_refused if {
-	some v in violation with input as tree(
-		{
-			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,"],
-			"crates/batten/src/capture.rs": ["fn b() {}", "    clippy::disallowed_types,"],
-		},
-		{
-			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,"],
-			"crates/batten/src/capture.rs": ["fn b() {}"],
-		},
-	)
-	v.verdict == "spawn write refused"
-}
-
-test_a_repeated_escape_line_in_its_own_file_is_refused if {
-	some v in violation with input as tree(
-		{"crates/batten/src/thing.rs": ["    clippy::disallowed_types,", "fn a() {}", "    clippy::disallowed_types,"]},
-		{"crates/batten/src/thing.rs": ["    clippy::disallowed_types,", "fn a() {}"]},
-	)
-	v.verdict == "spawn write refused"
-}
-
-test_a_single_line_escape_is_refused_too if {
-	some v in violation with input as tree(
-		{"crates/batten/src/thing.rs": ["#[expect(clippy::disallowed_types)]"]},
-		{"crates/batten/src/thing.rs": []},
-	)
-	v.verdict == "spawn write refused"
-}
-
-# THE CASE THAT ACTUALLY FIRED, half two.
+# THE CASE THAT ACTUALLY FIRED, and since CLOUD-2778 the module's one clause.
 test_an_added_spawn_placement_is_refused if {
 	some v in violation with input as tree(
 		{"policy/spawn-adapters.rego": ["adapters := {", `	"exec",`, `	"main_watch",`]},
@@ -409,82 +242,13 @@ test_removing_a_placement_is_clean if {
 	)
 }
 
-# A TEST MODULE'S OWN ESCAPE IS NOT THIS RULE'S BUSINESS. Every suite in this
-# crate opens with one, because panicking loudly is how a test fails — and a rule
-# firing on those is a rule that gets switched off.
-test_a_test_modules_escape_is_not_refused if {
+# AN ADDED ESCAPE IS THE RATCHET'S, NOT THIS MODULE'S (CLOUD-2778). `spawn count
+# ahead` counts escapes off the parsed tree; a clause here would be a second,
+# text-based authority over the same inventory.
+test_an_added_escape_is_not_this_modules_to_refuse if {
 	count(violation) == 0 with input as tree(
-		{"crates/batten/tests/it/thing.rs": ["#![allow(clippy::expect_used)]"]},
-		{"crates/batten/tests/it/thing.rs": []},
-	)
-}
-
-# THE IDIOM EXEMPTION UNDER `src/`, WHICH IS THE ARM THE PATH EXCLUSION CANNOT
-# REACH. A `#[cfg(test)] mod tests` lives inside `crates/batten/src/**`, so the
-# case above — which is under `tests/` — passes on the path alone and says
-# nothing about `idiom_pattern`. Measured before the exemption existed: three
-# files were refused for opening their test module the way every file in the
-# crate opens its test module.
-#
-# It is also the case that would have caught the vocabulary gap this file's
-# `vocabulary` comment records: with `clippy-test-idiom` undefined the exemption
-# never fires, and NOTHING above notices, because every other case here is a deny
-# whose refusal an absent exemption only makes more certain.
-test_the_test_module_idiom_is_exempt_under_src_too if {
-	count(violation) == 0 with input as tree(
-		{"crates/batten/src/thing.rs": ["#[allow(clippy::expect_used)]"]},
-		{"crates/batten/src/thing.rs": []},
-	)
-}
-
-# AND THE EXEMPTION IS THREE NAMED LINTS, never a shape. `too_many_arguments` is
-# an escape and stays refused — without this the case above reads as "any added
-# `clippy::` line under `src/` is fine", which is the rule switched off.
-test_a_lint_outside_the_idiom_set_is_still_refused if {
-	count(violation) == 1 with input as tree(
-		{"crates/batten/src/thing.rs": ["#[allow(clippy::too_many_arguments)]"]},
-		{"crates/batten/src/thing.rs": []},
-	)
-}
-
-# EVERY PACKAGE'S SOURCE (#1276). The crate split moved half the engine into
-# sibling packages, and a prefix naming one crate stopped counting an escape in
-# any of them while the row's globs still listed them.
-test_an_added_escape_in_another_crates_source_is_refused if {
-	count(violation) == 1 with input as tree(
-		{"crates/batten-base/src/thing.rs": ["fn a() {}", "    clippy::disallowed_types,"]},
-		{"crates/batten-base/src/thing.rs": ["fn a() {}"]},
-	)
-}
-
-test_another_crates_suite_is_out_of_scope if {
-	count(violation) == 0 with input as tree(
-		{"crates/batten-core/tests/thing.rs": ["#![allow(clippy::too_many_arguments)]"]},
-		{"crates/batten-core/tests/thing.rs": []},
-	)
-}
-
-# An escape MOVED between crates is no growth: the split's own shape.
-test_an_escape_moved_into_another_crate_is_clean if {
-	count(violation) == 0 with input as tree(
-		{
-			"crates/batten/src/exec.rs": ["fn a() {}"],
-			"crates/batten-core/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,"],
-		},
-		{
-			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,"],
-			"crates/batten-core/src/exec.rs": ["fn a() {}"],
-		},
-	)
-}
-
-# PROSE NAMING A LINT IS NOT AN ESCAPE. This module's own siblings discuss
-# `clippy::disallowed_types` at length in doc comments, and a rule reading those
-# as escapes would refuse every commit that explains itself.
-test_a_doc_comment_naming_a_lint_is_not_an_escape if {
-	count(violation) == 0 with input as tree(
-		{"crates/batten/src/thing.rs": ["/// `clippy::disallowed_types` refuses this.", "// clippy::expect_used is banned"]},
-		{"crates/batten/src/thing.rs": []},
+		{"crates/batten/src/thing.rs": ["fn a() {}", "    clippy::disallowed_types,"]},
+		{"crates/batten/src/thing.rs": ["fn a() {}"]},
 	)
 }
 

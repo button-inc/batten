@@ -70,3 +70,17 @@ test_a_call_that_is_not_a_dispatch_raises_nothing if {
 		"facts": {"dispatch-brief": null},
 	}
 }
+
+# A compound shell line is not a dispatch either: the engine computes the fact
+# for `create_session` and `send_message` alone, so a chained command carries
+# none and raises nothing (CLOUD-857's compound shape).
+test_a_compound_shell_line_raises_nothing if {
+	count(violation) == 0 with input as {
+		"call": {
+			"event": "pre-tool", "tool": "Bash",
+			"command": "git status && git log -1",
+			"segments": [{"words": ["git", "status"], "terminator": "&&"}, {"words": ["git", "log", "-1"]}],
+		},
+		"facts": {"dispatch-brief": null},
+	}
+}

@@ -439,56 +439,6 @@ fn a_session_read_is_preapproved_in_plan_mode() {
     assert_granted_by(&read, "call read now");
 }
 
-/// The committed rows plus the row enabling `claude-code-dispatch`, the preset
-/// `dispatch brief refused` ships in (CLOUD-2858).
-///
-/// A FIXTURE ROW UNTIL THE PIN CARRIES THE PRESET: a release that does not ship
-/// `claude-code-dispatch` refuses a row naming it, so the committed config
-/// enables it with the pin bump that brings it, as `claude-code-plan`'s row was
-/// (2ef6df8b).
-fn dispatch_root() -> PathBuf {
-    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    ROOT.get_or_init(|| {
-        let dir = common::committed_fixture_with_substitution(&format!(
-            "preapprove-dispatch-{}",
-            std::process::id()
-        ));
-        let config = dir.join("batten.toml");
-        let mut text = std::fs::read_to_string(&config).expect("read the fixture config");
-        text.push_str(
-            "\n[[rule]]\nid = \"dispatch brief refused\"\nno_fix_reason = \"class 3 (a call \
-             rewrite): the subject is a tool call refused before it runs\"\nkind = \"policy\"\n\
-             scope = \"mediated_call\"\npreset = \"claude-code-dispatch\"\nseverity = \"deny\"\n",
-        );
-        std::fs::write(&config, text).expect("write the fixture config");
-        common::git_in(&dir, &["commit", "-qam", "enable the dispatch preset"]);
-        dir
-    })
-    .clone()
-}
-
-/// Every document the hook put on stdout in [`dispatch_root`], parsed.
-fn dispatch_documents(payload: &str) -> Vec<serde_json::Value> {
-    let outcome = common::stdin_run(
-        &mut common::batten(),
-        &dispatch_root(),
-        &["adjudicate", "--harness", "claude-code"],
-        payload,
-    );
-    parsed(&outcome)
-}
-
-/// [`verdict`] in [`dispatch_root`].
-fn dispatch_verdict(payload: &str) -> Option<(String, String)> {
-    dispatch_documents(payload).iter().find_map(|document| {
-        let inner = document.get("hookSpecificOutput")?;
-        Some((
-            inner.get("permissionDecision")?.as_str()?.to_owned(),
-            inner.get("permissionDecisionReason")?.as_str()?.to_owned(),
-        ))
-    })
-}
-
 /// A dispatch message that passes `batten lint brief`: every section the
 /// schema requires, and a fenced command under `check`. `marker` is a word no
 /// refusal may carry, so a case can assert no byte of the message reaches one.
@@ -518,9 +468,9 @@ fn dispatch_at(event: &str, mode: &str, message: &str) -> String {
 fn a_linted_dispatch_is_granted_without_approval() {
     let message = linted_brief("granted-c2858");
     let (decision, reason) =
-        dispatch_verdict(&dispatch_at("PreToolUse", "default", &message)).unwrap_or_default();
+        verdict(&dispatch_at("PreToolUse", "default", &message)).unwrap_or_default();
     assert_eq!(decision, "allow", "a linted dispatch is granted: {reason}");
-    let answered = dispatch_documents(&dispatch_at("PermissionRequest", "default", &message));
+    let answered = documents(&dispatch_at("PermissionRequest", "default", &message));
     assert!(
         answered
             .iter()
@@ -539,7 +489,7 @@ fn an_unlinted_dispatch_is_refused_with_its_findings() {
     let message = linted_brief(marker);
     let unlinted = &message[..message.find("## check").expect("the check section")];
     let (decision, reason) =
-        dispatch_verdict(&dispatch_at("PreToolUse", "default", unlinted)).unwrap_or_default();
+        verdict(&dispatch_at("PreToolUse", "default", unlinted)).unwrap_or_default();
     assert_eq!(
         decision, "deny",
         "an unlinted dispatch is refused: {reason}"
@@ -555,7 +505,7 @@ fn an_unlinted_dispatch_is_refused_with_its_findings() {
 /// Plan mode keeps refusing a dispatch, a passing brief included.
 #[test]
 fn a_dispatch_in_plan_mode_is_refused() {
-    let (decision, reason) = dispatch_verdict(&dispatch_at(
+    let (decision, reason) = verdict(&dispatch_at(
         "PreToolUse",
         "plan",
         &linted_brief("plan-c2858"),

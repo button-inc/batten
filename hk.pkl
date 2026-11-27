@@ -1171,17 +1171,16 @@ hooks {
       // by one ratchet (CLOUD-2821): a worse metric or a record looser than the
       // tree is refused, and `mise run modules-ratchet` tightens it.
       //
-      // `slow` UNTIL THE PIN CARRIES THE VERB. A commit step runs the pinned
-      // released binary and compiles nothing (the 10 ms / 100 ms hook budget), and
-      // v0.0.220 has no `modules ratchet`, so the only engine that could run it
-      // here is the tree's own, through `cargo run`: a compile on every commit.
-      // Landing still runs it (`verify` reaches the `slow` profile). Plan step 14,
-      // the bump to v0.0.221, puts this back in the default set as
-      // `batten modules ratchet --record modules.lock --check` on the pinned binary.
+      // ON THE PINNED BINARY, IN THE DEFAULT SET (plan step 14). A commit step
+      // runs the pinned released binary and compiles nothing (the 10 ms / 100 ms
+      // hook budget). It sat in `slow` while the pin was v0.0.220, which has no
+      // `modules ratchet`, so the only engine that could run it was the tree's
+      // own through `cargo run`. v0.0.221 carries the verb, so the commit that
+      // moves a module is the one refused, and `modules-ratchet:check` stays the
+      // lap's tree-engine run of the same record.
       ["module-census-pinned"] {
-        profiles = List("slow")
         glob = List("crates/**/src/**/*.rs", "modules.lock")
-        check = "env MISE_TASK_TIMINGS=0 mise run -q modules-ratchet:check"
+        check = "batten modules ratchet --record modules.lock --check"
       }
       // A conflict marker is refused at the commit, not first in the slow lap
       // (CLOUD-2813): a merge commit carried six into `skills/profile/SKILL.md`

@@ -17,7 +17,7 @@ fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
         "id": "spawn count ahead",
         "kind": "ratchet",
-        "glob": "crates/batten/src/**/*.rs",
+        "glob": "crates/*/src/**/*.rs",
         "counts": "lint_escapes",
         "pattern": "clippy::disallowed_types",
         "direction": "non_increasing",
