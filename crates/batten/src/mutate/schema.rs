@@ -14698,8 +14698,45 @@ mod tests {
         );
     }
 
-    /// Fails by: a case whose code is feature-gated selected (the sweep's
-    /// features are not the suite's), a function it ran that is gone keyed
+    /// A GATE RESOLVES AS IT WAS SWEPT WHERE THE SWEEP CHOSE NO FEATURE
+    /// (CLOUD-2904): the suite chooses none either ([`super::resume`]'s
+    /// `builds_as_swept`), every manifest is in its build key, and a gated
+    /// function's `cfg` is in its own digest, so the gate decides the same in
+    /// both builds. Measured on lap 26's store: 161 of 300 sampled sealed
+    /// cases were unselectable on five `seam`/`preset-overlay` gates.
+    ///
+    /// Fails by: a gated function left unknown under a sweep that chose no
+    /// feature, or its gate's edit leaving the key standing.
+    #[test]
+    fn a_gate_is_known_where_the_sweep_chose_no_feature() {
+        let none = std::collections::BTreeMap::new();
+        let ran = ["run", "helper", "checks"];
+        let gated =
+            "pub fn run() -> u8 {\n    #[cfg(feature = \"x\")]\n    let _ = 0;\n    helper()\n}\n";
+        let (root, format) = selection_tree(
+            "schema-select-gate-unchosen",
+            &SELECTED.replace("pub fn run() -> u8 { helper() }\n", gated),
+            "",
+        );
+        let held = selection(&root, &format, &ran, Some(&[]), &none)
+            .expect("a gate the sweep chose nothing for is known");
+        std::fs::write(
+            root.join("src/lib.rs"),
+            SELECTED.replace(
+                "pub fn run() -> u8 { helper() }\n",
+                &gated.replace("feature = \"x\"", "feature = \"y\""),
+            ),
+        )
+        .unwrap();
+        assert_ne!(
+            selection(&root, &format, &ran, Some(&[]), &none).as_deref(),
+            Some(held.as_str()),
+            "a gate's edit moves the key"
+        );
+    }
+
+    /// Fails by: a case whose code is feature-gated selected under a sweep
+    /// that chose a feature (its features are not the suite's), a function it ran that is gone keyed
     /// as if present, or an ungated case left unknown.
     #[test]
     fn a_feature_gate_or_a_vanished_function_is_unknown() {
@@ -14707,21 +14744,23 @@ mod tests {
         let ran = ["run", "helper", "checks"];
         let gated =
             "pub fn run() -> u8 {\n    #[cfg(feature = \"x\")]\n    let _ = 0;\n    helper()\n}\n";
-        let (root, format) = selection_tree(
+        let (root, mut format) = selection_tree(
             "schema-select-gate",
             &SELECTED.replace("pub fn run() -> u8 { helper() }\n", gated),
             "",
         );
+        format.features = vec![String::from("x")];
         assert_eq!(
             selection(&root, &format, &ran, Some(&[]), &none),
             None,
             "a gated function"
         );
-        let (root, format) = selection_tree(
+        let (root, mut format) = selection_tree(
             "schema-select-gated-item",
             SELECTED,
             "#[cfg(not(feature = \"x\"))]\npub const LIMIT: u8 = 1;\n",
         );
+        format.features = vec![String::from("x")];
         let index = dependency_index(&root, &format).unwrap();
         assert!(index.gated_names.contains("LIMIT"), "a gated item");
         assert!(
@@ -27513,6 +27552,7 @@ pub fn repo() -> u8 {{ scratch() }}
             "pub fn a() {}\npub fn b() {\n    #[cfg(feature = \"x\")]\n    let _ = 0;\n}\n",
         );
         format.probed.insert(String::from("src/more.rs"));
+        format.features = vec![String::from("x")];
         let index = dependency_index(&root, &format).unwrap();
         assert_eq!(
             index.gated_probes, index.own_names["b"],
