@@ -1493,7 +1493,15 @@ fn lexically_normal(path: &Path) -> std::path::PathBuf {
 /// resolve, a git that will not answer — each resolves to "not judgeable", the
 /// fail-open posture CLOUD-312 §5 preserves end to end.
 pub(crate) fn judgeable(path: &str) -> bool {
-    let Ok(root) = crate::git::repo_root(Path::new(".")) else {
+    judgeable_in(Path::new("."), path)
+}
+
+/// [`judgeable`], for `path` read relative to `dir` rather than to this
+/// process's working directory — the one a case drives against a fixture
+/// repository, so its answer is about that fixture and never about whichever
+/// checkout the suite happens to run in (CLOUD-2904).
+fn judgeable_in(dir: &Path, path: &str) -> bool {
+    let Ok(root) = crate::git::repo_root(dir) else {
         return false;
     };
     // `absolute` rather than `canonicalize`: the file need not exist yet, which
@@ -1515,7 +1523,7 @@ pub(crate) fn judgeable(path: &str) -> bool {
     // over-denying claim gate is the false-positive rate that gets a guard
     // switched off.
     let Ok(absolute) =
-        std::path::absolute(Path::new(path)).map(|absolute| lexically_normal(&absolute))
+        std::path::absolute(dir.join(path)).map(|absolute| lexically_normal(&absolute))
     else {
         return false;
     };
@@ -1531,7 +1539,7 @@ pub(crate) fn judgeable(path: &str) -> bool {
     let Some(target) = absolute.to_str() else {
         return false;
     };
-    !crate::git::check_ignore(Path::new("."), target).unwrap_or(true)
+    !crate::git::check_ignore(dir, target).unwrap_or(true)
 }
 
 /// Load a statement, failing closed: an unreadable, unparseable, or
@@ -3515,14 +3523,23 @@ mod tests {
     /// or ignored. The case runs in the crate directory, inside this checkout.
     #[test]
     fn only_a_path_of_the_work_in_this_tree_is_judgeable() {
-        assert!(judgeable("Cargo.toml"));
+        // A FIXTURE REPOSITORY, never the checkout the suite runs in (CLOUD-2904):
+        // read from a linked worktree, the checkout's root is the MAIN one, so
+        // the same assertions failed there and passed in the main checkout.
+        let repo = crate::scratch::scratch("receipt-judgeable");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        std::fs::write(repo.join(".gitignore"), "/target\n").expect("ignore");
+        std::fs::create_dir_all(repo.join("crate")).expect("crate");
+        std::fs::write(repo.join("crate/Cargo.toml"), "").expect("manifest");
+        let at = repo.join("crate");
+        assert!(judgeable_in(&at, "Cargo.toml"));
         assert!(
-            judgeable("src/no-such-new-file.rs"),
+            judgeable_in(&at, "src/no-such-new-file.rs"),
             "a new file is the work"
         );
-        assert!(!judgeable("../../.git/HEAD"));
-        assert!(!judgeable("../../../outside-the-repository.md"));
-        assert!(!judgeable("../../target/debug/anything"), "ignored");
+        assert!(!judgeable_in(&at, "../.git/HEAD"));
+        assert!(!judgeable_in(&at, "../../outside-the-repository.md"));
+        assert!(!judgeable_in(&at, "../target/debug/anything"), "ignored");
     }
 
     /// A range from HEAD to itself is empty, whatever the checkout.
