@@ -516,7 +516,7 @@ fn output_is_pointer_only() {
 fn the_committed_workflows_and_manifest_agree() {
     // The two self-consumption cases the retiring suite kept, in one run.
     let output = common::run(
-        &common::committed_repo().to_path_buf(),
+        common::committed_repo(),
         &["check", "--rule", "tool pin wrong"],
     );
     assert_eq!(

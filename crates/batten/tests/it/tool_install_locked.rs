@@ -1028,10 +1028,7 @@ fn a_root_without_tools_still_needs_the_lock() {
 /// `session:install`'s env and redden this case.
 #[test]
 fn the_committed_tree_installs_locked_everywhere() {
-    let out = run(
-        &common::committed_repo().to_path_buf(),
-        &["check", "--rule", RULE],
-    );
+    let out = run(common::committed_repo(), &["check", "--rule", RULE]);
     assert_eq!(
         out.status.code(),
         Some(0),

@@ -342,7 +342,7 @@ fn an_unparseable_config_refuses_without_inventing_a_table() {
 /// thirteen new classes are thirteen new ways to refuse a config that was fine.
 #[test]
 fn the_committed_authority_still_loads() {
-    let output = common::run(&common::committed_repo().to_path_buf(), &["config", "show"]);
+    let output = common::run(common::committed_repo(), &["config", "show"]);
     assert_eq!(
         output.status.code(),
         Some(0),

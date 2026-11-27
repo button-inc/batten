@@ -230,7 +230,7 @@ fn a_manifest_with_no_verify_task_cannot_be_judged_and_says_so() {
 #[test]
 fn the_repos_real_manifest_and_workflows_are_clean_today() {
     let output = common::run(
-        &common::committed_repo().to_path_buf(),
+        common::committed_repo(),
         &["check", "--rule", "gate report silent"],
     );
     assert_eq!(
