@@ -767,6 +767,15 @@ scope = "mediated_call"
 module = "policy/agent-spawn.rego"
 severity = "deny"
 
+# CLOUD-2949. A dispatch runs the model and effort the owner set.
+[[rule]]
+id = "call open wrong"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/dispatch-tier.rego"
+severity = "deny"
+
 [[rule]]
 id = "job watch loose"
 kind = "shape"
@@ -14529,6 +14538,23 @@ done by the session itself. Subagents are for read-only search and design \
 id = "module read first"
 kind = "document"
 target = "policy/agent-spawn.rego"
+
+# CLOUD-2949: a dispatch outside the owner's model and effort.
+[[verdict]]
+id = "call open wrong"
+gloss = "a dispatch names a model or effort its owner did not set, or names none"
+class = """
+A session this repository opens runs the model family and the effort its owner \
+set. A `create_session` call that names another model, another effort, or omits \
+either is refused, because an omitted model inherits the dispatcher's. The \
+subject names which argument is wrong. Name both as the module allows and send \
+the call again.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/dispatch-tier.rego"
 
 [[verdict]]
 id = "hook skip unseen"

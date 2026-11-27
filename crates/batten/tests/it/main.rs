@@ -161,6 +161,7 @@ mod derived_facts;
 mod design_audit;
 mod dev_profile;
 mod digest_major_agreement;
+mod dispatch_tier;
 mod dist;
 mod doctor;
 mod doctor_session;
