@@ -27,7 +27,9 @@ use std::path::{Path, PathBuf};
 use common::{StateHome as _, run_with_stdin, stdout};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // THE COMMITTED TREE IN A REPOSITORY OF ITS OWN (CLOUD-2904), never the
+    // checkout, whose HEAD, refs and receipts are not what these cases are about.
+    common::committed_repo().to_path_buf()
 }
 
 fn shell(mode: &str, command: &str) -> String {
