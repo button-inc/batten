@@ -1118,6 +1118,47 @@ fn refuse_fall_through_at(cwd: &Path) {
     );
 }
 
+/// A fixture repository carrying a copy of every committed file outside
+/// `crates/`, committed once and with `origin/main` pinned at that commit: the
+/// committed tree, as a case about it reads it, in a repository of its own.
+///
+/// THE MOVE OFF THE REAL ROOT (D3, CLOUD-2904). A case about the committed
+/// configuration ran the binary at the checkout itself, so its result read that
+/// checkout's HEAD, refs and receipts as well as the files it was about. The
+/// files are listed by [`batten::git::tree_files`], which reads no `.git`, and
+/// copied as files. One per process, built on first use.
+pub(crate) fn committed_repo() -> &'static Path {
+    static REPO: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    REPO.get_or_init(|| {
+        let dir = scratch_repo(&format!("committed-{}", std::process::id()));
+        let root = at_root(".");
+        for relative in batten::git::tree_files(&root).expect("the committed tree is walkable") {
+            if relative.starts_with("crates/") {
+                continue;
+            }
+            let (from, to) = (root.join(&relative), dir.join(&relative));
+            fs::create_dir_all(to.parent().expect("a file has a parent")).expect("parent");
+            // A LINK STAYS A LINK, as git checks one out: `CLAUDE.md` names
+            // `AGENTS.md`, and a copy of its target would be another file.
+            let link = fs::symlink_metadata(&from).is_ok_and(|meta| meta.file_type().is_symlink());
+            #[cfg(unix)]
+            if link {
+                let target = fs::read_link(&from).expect("read a committed link");
+                std::os::unix::fs::symlink(target, &to).expect("recreate a committed link");
+                continue;
+            }
+            if link && from.is_dir() {
+                continue;
+            }
+            fs::copy(&from, &to).unwrap_or_else(|error| panic!("copy {relative}: {error}"));
+        }
+        git_in(&dir, &["add", "-A"]);
+        git_in(&dir, &["commit", "-q", "-m", "the committed tree"]);
+        pin_origin_main(&dir);
+        dir
+    })
+}
+
 /// The cases that still spawn the binary inside the checkout, one name a line,
 /// sorted: [`refuse_in_checkout`] refuses every other case.
 ///
