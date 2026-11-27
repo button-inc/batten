@@ -9843,16 +9843,6 @@ mod tests {
     /// root, and [`no_function_handed_a_root_discovers_from_the_cwd`] fails on
     /// one missing from it and on one listed that no longer does.
     const CWD_DISCOVERY_RATCHET: &[&str] = &[
-        "crates/batten/src/doctor.rs::diagnose_mediator",
-        "crates/batten/src/land.rs::append",
-        "crates/batten/src/land.rs::read_red_head",
-        "crates/batten/src/land.rs::record_red_head",
-        "crates/batten/src/lib.rs::claim_base",
-        "crates/batten/src/lib.rs::gather_evidence",
-        "crates/batten/src/lib.rs::lease_config",
-        "crates/batten/src/lib.rs::register_transcript_detectors",
-        "crates/batten/src/lib.rs::run_perf_latency",
-        "crates/batten/src/record.rs::store",
         "crates/batten/src/step.rs::lint_trace",
         "crates/batten/src/step.rs::run_step",
         "crates/batten/src/unsubscribe.rs::drop_subscription",
@@ -9910,13 +9900,24 @@ mod tests {
                     })
                 });
                 let asks_cwd = function.body().is_some_and(|body| {
+                    // CODE, NOT PROSE: a comment naming `Path::new(".")` asks
+                    // nothing, and `parent().unwrap_or(Path::new("."))` is a
+                    // bare file name's directory, not a discovery.
                     let text: String = body
                         .syntax()
-                        .text()
-                        .to_string()
-                        .split_whitespace()
+                        .descendants_with_tokens()
+                        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+                        .filter(|token| token.kind() != ra_ap_syntax::SyntaxKind::COMMENT)
+                        .flat_map(|token| {
+                            token
+                                .text()
+                                .split_whitespace()
+                                .map(str::to_owned)
+                                .collect::<Vec<_>>()
+                        })
                         .collect();
-                    text.contains("Path::new(\".\")")
+                    text.replace("unwrap_or(Path::new(\".\"))", "")
+                        .contains("Path::new(\".\")")
                 });
                 if handed
                     && asks_cwd
