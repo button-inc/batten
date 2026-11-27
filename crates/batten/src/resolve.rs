@@ -781,6 +781,12 @@ pub struct Resolved {
     /// convention — there is no raise-only reading of "match more things".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<crate::config_model::Commit>,
+    /// `[receipt] state_repo_optional` (CLOUD-2939), as the authority states it.
+    /// Not layered: it lets a session proceed without the shared store, a
+    /// lowering, which house style §8's raise-only rule does not admit from a
+    /// local file.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub state_repo_optional: bool,
     /// The bot lane (CLOUD-1295), as the authority states it. Not layered, for
     /// the reason the neighbours above are not: a local file able to reach this
     /// table could add a login to `bots` or a path to `owned_manifests`, and
@@ -1827,6 +1833,10 @@ fn assemble(
         transcript: repo.transcript.clone(),
         attribution: repo.attribution.clone(),
         commit: repo.commit.clone(),
+        state_repo_optional: repo
+            .receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.state_repo_optional),
         bot_lane: repo.bot_lane.clone(),
         census: repo.census.clone(),
         judge: repo.judge.clone(),

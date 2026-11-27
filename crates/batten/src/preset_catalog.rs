@@ -967,9 +967,12 @@ than its producer, which writes whole or removes, and reads the same way.",
     // live assignment (`PATH=./bin ls`), a program spelled with a path outside
     // the system directories, an assigning reader onto a sensitive name, and a
     // gawk directive, all of which 0.1.0 granted.
+    // VERSION 2.0.0, a major bump (refuses what it admitted): a session whose
+    // `BATTEN_STATE_REPO` answers 401/403/404 is held but for a read and the
+    // host's attach call until it can read it (CLOUD-2939).
     Manifest {
         name: "claude-code-cloud",
-        version: semver::Version::new(1, 0, 0),
+        version: semver::Version::new(2, 0, 0),
         suggested: true,
         install: None,
         modules: &[
@@ -1016,6 +1019,14 @@ than its producer, which writes whole or removes, and reads the same way.",
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
+                pointer: "<preset:claude-code-cloud>/state-repo-is-attached.rego",
+                embedded_source: include_str!(
+                    "policy/presets/claude-code-cloud/state-repo-is-attached.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
                 pointer: "<preset:claude-code-cloud>/write-is-preapproved.rego",
                 embedded_source: include_str!(
                     "policy/presets/claude-code-cloud/write-is-preapproved.rego"
@@ -1054,6 +1065,22 @@ than its producer, which writes whole or removes, and reads the same way.",
             },
         ],
         verdicts: &[
+            VendoredVerdict {
+                id: "lease carry blocked",
+                gloss: "the session cannot read its state repository, so no receipt carries",
+                class: "`BATTEN_STATE_REPO` names the repository a land pulls proved receipts from \
+and publishes its own to (CLOUD-1544). Ref discovery answered 401, 403 or 404, so this session \
+has no access to it: every carry would answer the same, and each lap recomputes what another \
+container already proved. The first subject names the repository and the status. Every call but \
+a read, the notification read, an MCP read and the attach is held. Attach the repository to this \
+session with push access; the next call re-probes, and a `200` lifts the hold with no command. A \
+repository that may run without its state repository declares `[receipt] state_repo_optional`.",
+                routes: &[run(
+                    "lease add first",
+                    "attach the state repository to this session: `add_repo` with access push",
+                )],
+                applicability: Applicability::Advice,
+            },
             VendoredVerdict {
                 id: "plan write refused",
                 gloss: "a call that is not a read was made while the host is in plan mode",
