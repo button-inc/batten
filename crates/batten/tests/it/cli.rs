@@ -2351,7 +2351,7 @@ fn a_class_still_explains_when_the_config_cannot_be_read() {
 /// unknown name is named on stderr after the rest still print.
 #[test]
 fn policy_explain_answers_a_rule_a_class_and_a_native() {
-    let root = common::at_root("");
+    let root = common::committed_repo().to_path_buf();
     let names = ["cargo run loose", "tool run loose", "program-unknown"];
     let mut args = vec!["policy", "explain"];
     args.extend(names);
@@ -2408,7 +2408,7 @@ fn policy_explain_answers_a_rule_a_class_and_a_native() {
 /// the sweep on #1276 found unguarded.
 #[test]
 fn a_modules_finding_id_explains_as_the_row_that_binds_it() {
-    let root = common::at_root(".");
+    let root = common::committed_repo().to_path_buf();
     let explained = batten_with(&root, &["policy", "explain", "test cover unseen"], &[]);
     let out = String::from_utf8_lossy(&explained.stdout);
     assert_eq!(explained.status.code(), Some(0), "{out}");
@@ -3557,7 +3557,7 @@ fn the_committed_protected_paths_fire_on_a_mutating_verb() {
     // Over whichever set is committed today: the owner's three classes while it is
     // declared, and the asked ledger the narrower set always guards while it is
     // switched off — never a return that passes over nothing (CLOUD-2059).
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = common::committed_repo().to_path_buf();
     let commands: &[&str] = if common::committed_protected_declared() {
         &[
             "rm .serena/memories/core.md",
@@ -4050,7 +4050,7 @@ const MANIFEST_ARTIFACTS: &[&str] = &["one.txt", "two.txt", "three.txt", "four.t
 
 #[test]
 fn the_committed_shape_rules_fire_on_every_banned_shape() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = common::committed_repo().to_path_buf();
     // THE ARM IS READ OFF THE ROW, never written into the case — the same
     // discipline `census_gaps` already applies to the SITE, and for the same
     // reason: a case naming its own arm would keep passing after the authority
@@ -4186,7 +4186,7 @@ fn the_bare_cargo_refusal_names_the_sanctioned_route() {
     // row's whole point is that the program is fine and the route is not — so a
     // refusal that did not name the route would read as "cargo is banned" and
     // send its reader looking for a way around rather than through.
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = common::committed_repo().to_path_buf();
     let output = run_hook_in(&root, "exit-code", &claude_payload("cargo test -p batten"));
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -4394,7 +4394,7 @@ fn the_census_check_refuses_a_case_naming_no_row() {
 /// does not have today.
 #[test]
 fn the_committed_policy_gates_ready_on_receipts_rather_than_banning_it() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = common::committed_repo().to_path_buf();
     let output = run_hook_in(&root, "exit-code", &claude_payload("gh pr ready 42"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     match output.status.code() {
@@ -12198,7 +12198,6 @@ fn a_byte_range_without_an_encoding_is_a_pointer_rather_than_the_payload() {
 fn run_payload_field(name: &str, payload: &str) -> Output {
     let mut command = batten();
     command
-        .current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
         .args([
             "payload",
             "field",
@@ -14075,7 +14074,7 @@ fn a_rule_selection_accepts_every_spelling_of_a_declared_id() {
         "branch_write_unsafe",
     ] {
         let output = batten()
-            .current_dir(common::at_root("."))
+            .current_dir(common::committed_repo().to_path_buf())
             .args(["check", "--rule", spelling])
             .streamed_output()
             .expect("run batten check");
@@ -14132,7 +14131,7 @@ scope = "tree"
 #[test]
 fn a_misspelled_rule_is_still_refused_under_the_spelling_it_was_given() {
     let output = batten()
-        .current_dir(common::at_root("."))
+        .current_dir(common::committed_repo().to_path_buf())
         .args(["check", "--rule", "branch-write-unsaef"])
         .streamed_output()
         .expect("run batten check");
