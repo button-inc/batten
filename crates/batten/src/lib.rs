@@ -5033,6 +5033,10 @@ fn run_session(
         }
     };
     let dir = session_watch::state_dir(&repo)?;
+    // THE INVENTORY IS WRITTEN HERE WHATEVER THE CACHE DID: the cache makes its
+    // own directory only when it keeps a page, so a watch that kept none found
+    // no `session-watch/` to write into and exited 3 (CLOUD-2826, measured live).
+    std::fs::create_dir_all(&dir)?;
     let cache = session_watch::Cache::new(dir.join("cache"));
     let mut source = session_watch::Mcp::new(wiring);
     let mut watch = session_watch::Watch::new(sessions.clone());
