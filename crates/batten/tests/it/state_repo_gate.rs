@@ -26,12 +26,10 @@ fn bench(name: &str, extra: &str) -> PathBuf {
         .git()
         .base_commit()
         .build();
-    let added = std::process::Command::new("git")
-        .args(["remote", "add", "origin", "https://github.com/acme/app.git"])
-        .current_dir(&dir)
-        .status()
-        .expect("git runs");
-    assert!(added.success());
+    common::git_in(
+        &dir,
+        &["remote", "add", "origin", "https://github.com/acme/app.git"],
+    );
     dir
 }
 
