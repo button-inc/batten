@@ -15276,6 +15276,41 @@ mod tests {
     }
 
     /// An identity with no probes, no sites and nothing handed back.
+    /// EVERY STORED RECORD CARRIES ITS PROVENANCE (CLOUD-2904, owner ruling
+    /// b1f42a48): a sealed reach record names the writer that sealed it, the
+    /// engine, the tree it was made on ([`OVER`]) and the run, and a record
+    /// naming none is never carried.
+    ///
+    /// Fails by: a [`DEPENDS`] record with no provenance line (every record of
+    /// lap 26's store), or one without it read back as a record.
+    #[test]
+    fn a_sealed_record_names_who_sealed_it_and_one_naming_none_is_never_carried() {
+        let dir = crate::scratch::scratch("schema-depends-from");
+        std::fs::write(dir.join("case"), "tests::checks\tfix").unwrap();
+        std::fs::write(dir.join(OVER), "t7").unwrap();
+        std::fs::write(dir.join(DONE), "0").unwrap();
+        seal_dir(&dir, "d1", None, None, None, &no_identity()).unwrap();
+        let record = std::fs::read_to_string(dir.join(DEPENDS)).unwrap();
+        let from = record
+            .lines()
+            .find_map(|line| line.strip_prefix('P'))
+            .unwrap_or_else(|| panic!("no provenance line: {record}"));
+        let words: Vec<&str> = from.split(' ').collect();
+        assert_eq!(words.len(), 5, "{record}");
+        assert_eq!(words[0], "from", "{record}");
+        assert!(!words[1].is_empty() && !words[2].is_empty(), "{record}");
+        assert_eq!(words[3], "t7", "the tree the record was made on");
+        assert!(
+            words[4].starts_with(&format!("{}@", std::process::id())),
+            "the run: {record}"
+        );
+        assert!(carried(&record).is_some(), "a record naming who sealed it");
+        assert!(
+            carried("Dd1\n").is_none(),
+            "a record naming no provenance is never carried"
+        );
+    }
+
     fn no_identity() -> Identity<'static> {
         static FNS: std::collections::BTreeMap<u32, String> = std::collections::BTreeMap::new();
         static FILE_FNS: std::collections::BTreeMap<u32, BTreeSet<String>> =
