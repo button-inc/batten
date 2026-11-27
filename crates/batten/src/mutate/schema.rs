@@ -15227,7 +15227,12 @@ mod tests {
             "a digest read in another format is that format's"
         );
         assert_eq!(Format::load(&base, &format.key()), Some(format.clone()));
-        assert_eq!(sealed_cases(&base).len(), 3, "every record is sealed");
+        assert_eq!(
+            sealed_cases(&base).len(),
+            2,
+            "every record the carry took a digest for is sealed; the foreign line \
+             names no provenance and is never stood on"
+        );
     }
 
     /// CI confirms independently (CLOUD-2850): under `ci` no journaled
