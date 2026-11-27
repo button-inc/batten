@@ -88,9 +88,25 @@ pub struct Inventory {
     pub handoff: bool,
     /// Whether a `user` event followed the latest handoff.
     pub prompted: bool,
+    /// The newest event among `assistant`, `result` and `rate_limit_event`,
+    /// by kind; a reduction cached before this field reads `None` (CLOUD-2951).
+    #[serde(default)]
+    pub newest: Option<String>,
+    /// That newest event's `rate_limit_info.status`, where it was a
+    /// `rate_limit_event`.
+    #[serde(default)]
+    pub limit: Option<String>,
 }
 
 impl Inventory {
+    /// Whether the newest turn-bearing event is a wake-up the usage limit
+    /// refused, with no turn after it.
+    #[must_use]
+    pub fn stalled(&self) -> bool {
+        self.newest.as_deref() == Some("rate_limit_event")
+            && self.limit.as_deref() == Some("rejected")
+    }
+
     /// The launched ids no notification has answered.
     #[must_use]
     pub fn open(&self) -> Vec<&str> {
@@ -114,6 +130,17 @@ impl Inventory {
                 // `prompted`, and the handoff that follows resets it, so only a
                 // `user` event AFTER the latest handoff survives to be read.
                 "user" => self.prompted = true,
+                "assistant" | "result" => {
+                    self.newest = Some(kind.to_owned());
+                    self.limit = None;
+                }
+                "rate_limit_event" => {
+                    self.newest = Some(kind.to_owned());
+                    self.limit = inner
+                        .pointer("/rate_limit_info/status")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                }
                 _ => {}
             }
         }
@@ -176,7 +203,8 @@ fn exit_code(summary: &str) -> Option<i64> {
 pub struct Row {
     /// The session id.
     pub id: String,
-    /// `session_status`: `SESSION_STATUS_RUNNING`, `…_IDLE`, `…_ARCHIVED`.
+    /// `session_status`: `SESSION_STATUS_RUNNING`, `…_IDLE`, `…_ARCHIVED`,
+    /// `…_REQUIRES_ACTION`.
     pub status: String,
     /// `connection_status`, where the list carries it.
     pub connection: Option<String>,
@@ -216,6 +244,10 @@ pub enum State {
     Unstarted,
     /// Idle with nothing open.
     Done,
+    /// Waiting on its owner's answer: the row is `REQUIRES_ACTION`.
+    Blocked,
+    /// Its newest wake-up was refused by the usage limit, and no turn followed.
+    Stalled,
     /// Disconnected, or archived with tasks that will never notify.
     Dead,
 }
@@ -229,6 +261,8 @@ impl State {
             Self::Waiting => "waiting",
             Self::Unstarted => "unstarted",
             Self::Done => "done",
+            Self::Blocked => "blocked",
+            Self::Stalled => "stalled",
             Self::Dead => "dead",
         }
     }
@@ -242,6 +276,12 @@ pub fn state(row: &Row, inventory: &Inventory) -> State {
     }
     if row.is("RUNNING") {
         return State::Working;
+    }
+    if row.is("REQUIRES_ACTION") {
+        return State::Blocked;
+    }
+    if inventory.stalled() {
+        return State::Stalled;
     }
     if inventory.handoff && !inventory.prompted {
         return State::Unstarted;
@@ -475,9 +515,12 @@ pub enum Ending {
     /// Nothing to watch: no unarchived child, or none of the named sessions.
     /// A statement about the invocation, since waiting on it would never end.
     Nothing,
-    /// A child is done and none is dead or unstarted.
+    /// A child is done and none is blocked, dead or unstarted.
     Done,
-    /// A child is dead, or unstarted across [`UNSTARTED_POLLS`] polls.
+    /// A child waits on its owner's answer and none is dead.
+    Blocked,
+    /// A child is dead or stalled, or unstarted across [`UNSTARTED_POLLS`]
+    /// polls.
     Dead,
 }
 
@@ -487,7 +530,21 @@ pub enum Ending {
 pub struct Watch {
     /// The sessions named on the command line; empty watches the children.
     pub named: Vec<String>,
+    /// The seen ring of endings already dispatched: a child whose
+    /// [`ending_key`] it holds does not end the watch again (CLOUD-2951).
+    pub ring: Option<PathBuf>,
     streaks: BTreeMap<String, u32>,
+}
+
+/// The ending `report` reaches at unstarted streak `streak`, if any.
+fn reached(report: &Report, streak: u32) -> Option<Ending> {
+    match report.state {
+        State::Dead | State::Stalled => Some(Ending::Dead),
+        State::Unstarted if streak >= UNSTARTED_POLLS => Some(Ending::Dead),
+        State::Blocked => Some(Ending::Blocked),
+        State::Done => Some(Ending::Done),
+        _ => None,
+    }
 }
 
 impl Watch {
@@ -496,6 +553,7 @@ impl Watch {
     pub fn new(named: Vec<String>) -> Self {
         Self {
             named,
+            ring: None,
             streaks: BTreeMap::new(),
         }
     }
@@ -523,6 +581,7 @@ impl Watch {
             return Some((reports, Some(Ending::Nothing)));
         }
         let mut ending = None;
+        let mut live = false;
         for report in &reports {
             let streak = self.streaks.entry(report.session.clone()).or_default();
             *streak = if report.state == State::Unstarted {
@@ -530,15 +589,27 @@ impl Watch {
             } else {
                 0
             };
-            let reached = match report.state {
-                State::Dead => Some(Ending::Dead),
-                State::Unstarted if *streak >= UNSTARTED_POLLS => Some(Ending::Dead),
-                State::Done => Some(Ending::Done),
-                _ => None,
-            };
+            let reached = reached(report, *streak);
+            if reached.is_some() && self.reported(report) {
+                continue;
+            }
+            live = true;
             ending = ending.max(reached);
         }
+        // Every child's ending already reported: none left that could end the
+        // watch, which waiting on would never change.
+        if !live {
+            ending = Some(Ending::Nothing);
+        }
         Some((reports, ending))
+    }
+
+    /// Whether `report`'s ending is already in the seen ring. A ring that will
+    /// not read holds nothing, so the ending is reported again, never lost.
+    fn reported(&self, report: &Report) -> bool {
+        self.ring.as_deref().is_some_and(|ring| {
+            crate::forge_event::unseen(ring, &ending_key(report)).is_ok_and(|unseen| !unseen)
+        })
     }
 
     /// Whether `report`'s child reached an ending on the last poll: done, dead,
@@ -547,7 +618,7 @@ impl Watch {
     #[must_use]
     pub fn ended(&self, report: &Report) -> bool {
         match report.state {
-            State::Done | State::Dead => true,
+            State::Done | State::Dead | State::Blocked | State::Stalled => true,
             State::Unstarted => self
                 .streaks
                 .get(&report.session)
@@ -674,7 +745,8 @@ pub fn page_of_result(result: &Value) -> Option<Page> {
 }
 
 /// The hook event a child's ending dispatches (CLOUD-2826): `session.done`,
-/// `session.dead` or `session.unstarted`, on [`crate::config_model::Event::ChildSession`].
+/// `session.dead`, `session.unstarted`, `session.blocked` or
+/// `session.stalled`, on [`crate::config_model::Event::ChildSession`].
 ///
 /// A `[[hook.handler]]` row on `child-session` selects it by that name through
 /// its `matcher`, as a `forge` row selects `pull_request.opened`. The input is
@@ -989,6 +1061,113 @@ mod tests {
         cache.store("session_01-ab", &inventory);
         assert_eq!(cache.load("session_01-ab"), Some(inventory));
         assert_eq!(cache.load("../escape"), None);
+    }
+
+    /// A session row with `status`.
+    fn row(status: &str) -> Row {
+        Row {
+            id: String::from("child"),
+            status: format!("SESSION_STATUS_{status}"),
+            connection: None,
+        }
+    }
+
+    /// Fails by: a child waiting on its owner's answer read as `done`, so the
+    /// dispatcher takes a question for a finish (CLOUD-2951).
+    #[test]
+    fn a_child_waiting_on_its_owner_is_blocked_and_never_done() {
+        let nothing = Inventory::default();
+        assert_eq!(state(&row("REQUIRES_ACTION"), &nothing), State::Blocked);
+        assert_eq!(state(&row("IDLE"), &nothing), State::Done);
+        let report = Report {
+            session: String::from("child"),
+            state: State::Blocked,
+            inventory: nothing,
+        };
+        assert_eq!(reached(&report, 0), Some(Ending::Blocked));
+        assert!(Watch::new(Vec::new()).ended(&report));
+        assert!(Ending::Blocked > Ending::Done);
+        assert!(Ending::Dead > Ending::Blocked);
+    }
+
+    /// Fails by: a child whose wake-up the usage limit refused read as
+    /// `waiting` while it can never wake (CLOUD-2951).
+    #[test]
+    fn a_refused_wake_with_no_turn_after_it_is_stalled() {
+        let started = serde_json::json!({"system": {"subtype": STARTED, "task_id": "t1"}});
+        let turn = serde_json::json!({"assistant": {}});
+        let refused = serde_json::json!({"created_at":"2026-11-27T22:50:53Z","rate_limit_event":{"uuid":"e6238898","internal_anthropic_catchall":{"rate_limit_info":{"rateLimitType":"five_hour","status":"rejected","resetsAt":1_795_821_600_u64},"session_id":"c5f20df5"}}});
+        let allowed = serde_json::json!({"rate_limit_event":{"internal_anthropic_catchall":{"rate_limit_info":{"status":"allowed"}}}});
+        let idle = row("IDLE");
+        let folded = |events: &[Value]| {
+            let mut inventory = Inventory::default();
+            inventory.fold(events);
+            inventory
+        };
+        let stalled = folded(&[started.clone(), turn.clone(), refused.clone()]);
+        assert_eq!(stalled.open().len(), 1);
+        assert_eq!(state(&idle, &stalled), State::Stalled);
+        let report = Report {
+            session: String::from("child"),
+            state: State::Stalled,
+            inventory: stalled.clone(),
+        };
+        assert_eq!(reached(&report, 0), Some(Ending::Dead));
+        assert!(Watch::new(Vec::new()).ended(&report));
+        let answered = folded(&[started.clone(), turn.clone(), refused, turn.clone()]);
+        assert_eq!(state(&idle, &answered), State::Waiting);
+        let let_through = folded(&[started, turn, allowed]);
+        assert_eq!(state(&idle, &let_through), State::Waiting);
+        let mut old = serde_json::to_value(&stalled).unwrap();
+        let fields = old.as_object_mut().unwrap();
+        fields.retain(|key, _| {
+            ["cursor", "launched", "exited", "handoff", "prompted"].contains(&key.as_str())
+        });
+        let cached: Inventory = serde_json::from_value(old).unwrap();
+        assert_eq!(state(&idle, &cached), State::Waiting);
+    }
+
+    /// Two children: one idle and done, one running.
+    struct DoneAndBusy;
+
+    impl Source for DoneAndBusy {
+        fn sessions(&mut self, _after: Option<&str>) -> Option<Page> {
+            Some(Page {
+                items: vec![
+                    serde_json::json!({"id": "done", "session_status": "IDLE"}),
+                    serde_json::json!({"id": "busy", "session_status": "RUNNING"}),
+                ],
+                ..Page::default()
+            })
+        }
+
+        fn events(&mut self, _: &str, _: Option<&str>, _: Option<&str>) -> Option<Page> {
+            Some(Page {
+                items: vec![serde_json::json!({"id": "e1", "user": {}})],
+                last_id: Some(String::from("e1")),
+                ..Page::default()
+            })
+        }
+    }
+
+    /// Fails by: a child whose ending was already dispatched ending every
+    /// later watch at once, so the dispatcher never hears the others
+    /// (CLOUD-2951).
+    #[test]
+    fn an_ending_already_reported_does_not_end_the_watch_again() {
+        let dir = crate::scratch::scratch("session-watch-reported");
+        let cache = Cache::new(dir.join("cache"));
+        let ring = dir.join("seen");
+        let mut fresh = Watch::new(Vec::new());
+        fresh.ring = Some(ring.clone());
+        let (reports, ending) = fresh.poll(&mut DoneAndBusy, &cache).unwrap();
+        assert_eq!(ending, Some(Ending::Done));
+        let done = reports.iter().find(|r| r.session == "done").unwrap();
+        crate::forge_event::remember(&ring, &ending_key(done)).unwrap();
+        let mut again = Watch::new(Vec::new());
+        again.ring = Some(ring);
+        let (_, ending) = again.poll(&mut DoneAndBusy, &cache).unwrap();
+        assert_eq!(ending, None);
     }
 
     /// Fails by: the capture's inventory emptied of its reports, or the data

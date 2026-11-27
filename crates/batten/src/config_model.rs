@@ -7778,8 +7778,8 @@ pub enum Event {
     /// something that already happened, as on `post-tool`.
     Forge,
     /// A child session this one dispatched reached an end (CLOUD-2826):
-    /// `session.done`, `session.dead` or `session.unstarted`, from
-    /// `batten session watch`. A harness-provider lifecycle source
+    /// `session.done`, `session.dead`, `session.unstarted`, `session.blocked`
+    /// or `session.stalled`, from `batten session watch`. A harness-provider lifecycle source
     /// (CLOUD-1728's taxonomy) no host emits, so, like [`Event::Forge`], no
     /// wiring registers it. Appended for the discriminant reason above.
     ChildSession,
