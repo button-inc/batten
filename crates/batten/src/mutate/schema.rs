@@ -14965,6 +14965,65 @@ mod tests {
         );
     }
 
+    /// EVERY STORED KEY CARRIES ITS PROVENANCE (CLOUD-2904, owner ruling
+    /// b1f42a48): a selection digest says which writer took it, with which
+    /// engine, over which tree, in which run, and a digest that says none is
+    /// never stood on.
+    ///
+    /// Fails by: a [`TESTED`] line naming no writer, engine, tree or run (the
+    /// 11,659 digests of lap 26's store, traceable to nothing but their file
+    /// time), or a line without provenance selected.
+    #[test]
+    fn a_selection_digest_names_who_took_it_and_one_naming_none_is_never_used() {
+        use std::fmt::Write as _;
+        let (root, format) = selection_tree("schema-tested-from", SELECTED, "");
+        let index = dependency_index(&root, &format).unwrap();
+        let base = crate::scratch::scratch("schema-tested-from-base");
+        std::fs::write(base.join(TREE), "t1").unwrap();
+        let mut functions = String::from("D-\n");
+        for name in ["run", "helper", "checks"] {
+            for digest in index.digests_of(name) {
+                let _ = writeln!(functions, "F{digest}");
+            }
+        }
+        let dir = base.join("made");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("case"), "tests::checks\tfix").unwrap();
+        std::fs::write(dir.join(OVER), "t1").unwrap();
+        std::fs::write(dir.join(DONE), "0").unwrap();
+        std::fs::write(dir.join(READ), "").unwrap();
+        std::fs::write(dir.join(DEPENDS), &functions).unwrap();
+        let ids: std::collections::BTreeMap<String, String> =
+            [(String::from("src/lib.rs"), String::from("id-1"))].into();
+        assert_eq!(seal_tested(&base, &root, &ids, &format).unwrap().0, 1);
+        let line = std::fs::read_to_string(dir.join(TESTED)).unwrap();
+        let fields: Vec<&str> = line.trim_end().split('\t').collect();
+        assert_eq!(fields.len(), 3, "key, digest and provenance: {line}");
+        let words: Vec<&str> = fields[2].split(' ').collect();
+        assert_eq!(words.len(), 5, "{line}");
+        assert_eq!(&words[..2], &["from", "seal_tested"], "{line}");
+        assert!(!words[2].is_empty(), "the engine: {line}");
+        assert_eq!(
+            words[3],
+            tree_ids_digest(&ids),
+            "the tree it was taken over"
+        );
+        assert!(
+            words[4].starts_with(&format!("{}@", std::process::id())),
+            "the run: {line}"
+        );
+        assert_eq!(
+            sealed_cases(&base).len(),
+            1,
+            "a digest that says who took it"
+        );
+        std::fs::write(dir.join(TESTED), format!("{}\t{}", fields[0], fields[1])).unwrap();
+        assert!(
+            sealed_cases(&base).is_empty(),
+            "a digest naming no provenance is never stood on"
+        );
+    }
+
     /// Fails by: a sweep that carries every record leaving one without a
     /// selection digest (selection never backfilled, so `test:cargo` selects
     /// nothing until a record is re-recorded), a digest other than the one the
