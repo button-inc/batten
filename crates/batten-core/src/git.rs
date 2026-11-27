@@ -1262,13 +1262,14 @@ fn rel_to_slash(rel: &Path) -> String {
 /// — 2,112 cases of one suite — and a walk over a linked worktree nested in the
 /// main checkout read the main checkout's. And the root's own is per-clone state
 /// shaping a walk, which `git_global(false)` refuses for the same reason, so no
-/// walk reads one. `clippy.toml` denies `ignore::WalkBuilder::new` everywhere
-/// else.
+/// walk reads one.
+///
+/// CONFINED BY A CLOSED LIST, NOT A WAIVED BAN (CLOUD-2789):
+/// `walker_is_the_one_walk_constructor` refuses any other workspace source
+/// naming the builder at all. A `clippy.toml` ban needs this one site to carry
+/// a `disallowed_methods` waiver, and `waiver add refused` holds that count
+/// non-increasing, because a ban you can waive at will is not a ban.
 #[must_use]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "stays: this IS the one constructor the ban routes every walk through, `tree_files` among them"
-)]
 pub fn walker(root: &Path) -> ignore::WalkBuilder {
     let mut walk = ignore::WalkBuilder::new(root);
     walk.git_exclude(false);
@@ -9543,6 +9544,40 @@ mod tests {
     /// Whether `path` is this crate's own `src/<name>`.
     fn is_own_module(path: &Path, name: &str) -> bool {
         path == Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name)
+    }
+
+    /// EVERY TREE WALK IS BUILT BY [`super::walker`] (D3, CLOUD-2904): the
+    /// `ignore` crate's default walk loads the `info/exclude` of every
+    /// repository above its root, so a walk built anywhere else reads per-clone
+    /// state into a gate's file set. Refusing the builder's NAME outside this
+    /// module is stricter than banning its constructor: an alias still has to
+    /// name the type it aliases, and `ignore::Walk::new` (the other default
+    /// walk) is refused beside it.
+    ///
+    /// A closed list rather than a `clippy.toml` ban (CLOUD-2789), because the
+    /// ban's one permitted site needs a `disallowed_methods` waiver, which
+    /// `waiver add refused` refuses to let rise.
+    ///
+    /// Fails by: a module other than `git.rs` naming `WalkBuilder` or building
+    /// an `ignore::Walk`.
+    #[test]
+    fn walker_is_the_one_walk_constructor() {
+        let builder = ["Walk", "Builder"].concat();
+        let default_walk = ["ignore::", "Walk::new"].concat();
+        let mut named = Vec::new();
+        for (path, source) in workspace_sources("src") {
+            if is_own_module(&path, "git.rs") {
+                continue;
+            }
+            if source.contains(&builder) || source.contains(&default_walk) {
+                named.push(path.display().to_string());
+            }
+        }
+        assert!(
+            named.is_empty(),
+            "a tree walk is built outside `git::walker`, which reads every enclosing \
+             info/exclude (CLOUD-2904): {named:?}"
+        );
     }
 
     // `no_ancestry_decides_merged_ness` MOVED HERE (CLOUD-756), and the property
