@@ -557,7 +557,11 @@ mod tests {
     /// A declared target is answered verbatim, whatever the repository says.
     #[test]
     fn a_declared_land_target_is_verbatim() {
-        let declared = land_target(Path::new("."), Some("refs/heads/trunk")).unwrap();
+        let declared = land_target(
+            &crate::fixture_root::fixture_root("a_declared_land_target_is_verbatim"),
+            Some("refs/heads/trunk"),
+        )
+        .unwrap();
         assert_eq!(declared.as_deref(), Some("refs/heads/trunk"));
     }
 

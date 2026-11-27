@@ -861,8 +861,14 @@ mod tests {
             ("landed".to_owned(), "HEAD".to_owned()),
             ("done".to_owned(), "Done".to_owned()),
         ]);
-        let err = super::done(&inputs, std::path::Path::new("."), r#"[{"id":"A-1"}]"#)
-            .expect_err("no status");
+        let err = super::done(
+            &inputs,
+            &crate::fixture_root::fixture_root(
+                "a_done_payload_lacking_its_status_is_not_a_tracker_payload",
+            ),
+            r#"[{"id":"A-1"}]"#,
+        )
+        .expect_err("no status");
         assert!(format!("{err:#}").contains("need id and status"), "{err:#}");
     }
 

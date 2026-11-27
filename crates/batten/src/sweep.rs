@@ -378,7 +378,9 @@ mod tests {
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let code = run(
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "a_refusing_gates_report_is_forwarded_whole_and_summarised",
+            ),
             &[refusing, quiet],
             "[]",
             1,

@@ -2846,7 +2846,13 @@ mod tests {
         // different facts about the world.
         let empty = McpConfig::default();
         assert_eq!(
-            wiring(&empty, Path::new("."), "anything"),
+            wiring(
+                &empty,
+                &crate::fixture_root::fixture_root(
+                    "an_undeclared_source_set_and_an_unmatched_server_answer_differently"
+                ),
+                "anything"
+            ),
             Err(Unresolved::Undeclared)
         );
 
@@ -2861,7 +2867,13 @@ mod tests {
             credential: None,
         });
         assert_eq!(
-            wiring(&declared, Path::new("."), "anything"),
+            wiring(
+                &declared,
+                &crate::fixture_root::fixture_root(
+                    "an_undeclared_source_set_and_an_unmatched_server_answer_differently"
+                ),
+                "anything"
+            ),
             Err(Unresolved::NotFound {
                 tried: vec!["nowhere".to_owned()]
             })
@@ -3187,7 +3199,11 @@ mod tests {
     /// otherwise than [`wiring`] does.
     #[test]
     fn a_server_answers_without_its_helper_being_run() {
-        assert!(!answers(&McpConfig::default(), Path::new("."), "srv"));
+        assert!(!answers(
+            &McpConfig::default(),
+            &crate::fixture_root::fixture_root("a_server_answers_without_its_helper_being_run"),
+            "srv"
+        ));
         let dir = scratch("answers-no-helper");
         let ran = dir.join("ran");
         std::fs::write(
@@ -3225,7 +3241,10 @@ mod tests {
         let mut source = source_with(None);
         source.root = Some("PATH".to_owned());
         assert_eq!(
-            resolved_path(&source, Path::new(".")),
+            resolved_path(
+                &source,
+                &crate::fixture_root::fixture_root("a_set_root_resolves_the_path_beneath_it")
+            ),
             Ok(Some(std::path::PathBuf::from(path).join("w.json")))
         );
     }

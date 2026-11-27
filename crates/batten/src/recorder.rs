@@ -777,7 +777,9 @@ mod outcome_tests {
                 input,
                 result,
                 branch: Some("work"),
-                root: Path::new("."),
+                root: &crate::fixture_root::fixture_root(
+                    "a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not",
+                ),
                 patterns: &patterns,
                 programs: &programs,
                 grammar: None,
@@ -794,7 +796,9 @@ mod outcome_tests {
             input: &selected,
             result: &empty,
             branch: Some("work"),
-            root: Path::new("."),
+            root: &crate::fixture_root::fixture_root(
+                "a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not",
+            ),
             patterns: &patterns,
             programs: &programs,
             grammar: None,
@@ -810,7 +814,9 @@ mod outcome_tests {
             input: &unselected,
             result: &empty,
             branch: Some("work"),
-            root: Path::new("."),
+            root: &crate::fixture_root::fixture_root(
+                "a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not",
+            ),
             patterns: &patterns,
             programs: &programs,
             grammar: None,
@@ -827,7 +833,9 @@ mod outcome_tests {
             input: &selected,
             result: &answered,
             branch: Some("work"),
-            root: Path::new("."),
+            root: &crate::fixture_root::fixture_root(
+                "a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not",
+            ),
             patterns: &patterns,
             programs: &programs,
             grammar: None,
@@ -860,7 +868,7 @@ mod outcome_tests {
             input: &input,
             result,
             branch: Some("work"),
-            root: Path::new("."),
+            root: &crate::fixture_root::fixture_root("a_backgrounded_result_is_not_recorded"),
             patterns: &patterns,
             programs: &programs,
             grammar: None,
@@ -947,7 +955,7 @@ mod outcome_tests {
         let patterns = BTreeMap::new();
         let input = serde_json::json!({"ids": ["A", "B"]});
         let result = serde_json::json!({"id": "R"});
-        let root = Path::new(".");
+        let root = &crate::fixture_root::fixture_root("evaluate_and_read_back_answer_exactly");
         let context = context_over(&input, &result, &programs, &patterns, root);
         assert_eq!(
             evaluate(&Value::Literal("k".to_owned()), &context),
@@ -1001,7 +1009,15 @@ mod outcome_tests {
         let patterns = BTreeMap::new();
         let input = serde_json::json!({});
         let result = serde_json::json!({});
-        let context = context_over(&input, &result, &programs, &patterns, Path::new("."));
+        let context = context_over(
+            &input,
+            &result,
+            &programs,
+            &patterns,
+            &crate::fixture_root::fixture_root(
+                "a_column_renders_its_tokens_after_every_set_operation",
+            ),
+        );
         let mut col = column(Value::Literal("a b c d".to_owned()));
         col.minus = Some(Value::Literal("b".to_owned()));
         col.without = Some(Value::Literal("c".to_owned()));
@@ -1117,7 +1133,15 @@ mod outcome_tests {
         let patterns = BTreeMap::new();
         let input = serde_json::json!({});
         let result = serde_json::json!({});
-        let context = context_over(&input, &result, &programs, &patterns, Path::new("."));
+        let context = context_over(
+            &input,
+            &result,
+            &programs,
+            &patterns,
+            &crate::fixture_root::fixture_root(
+                "already_recorded_needs_every_named_column_on_one_line",
+            ),
+        );
         let recorded = Recorded {
             matches: [
                 (0, Value::Literal("issue".to_owned())),
