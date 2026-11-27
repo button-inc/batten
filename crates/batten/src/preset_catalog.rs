@@ -2694,6 +2694,40 @@ confirm with `batten lint brief`",
         }],
         patterns: &[],
     },
+    // CLOUD-2939, ITS OWN PRESET: the claude-code-cloud row's id is its class
+    // token, and a row id spelled as a class must be that class's sole raiser,
+    // so a second verdict there refused this repository's config at load.
+    Manifest {
+        name: "claude-code-state",
+        version: semver::Version::new(0, 0, 1),
+        suggested: true,
+        install: None,
+        modules: &[PresetModule {
+            scope: RuleScope::MediatedCall,
+            provider: None,
+            pointer: "<preset:claude-code-state>/state-repo-is-attached.rego",
+            embedded_source: include_str!(
+                "policy/presets/claude-code-state/state-repo-is-attached.rego"
+            ),
+        }],
+        verdicts: &[VendoredVerdict {
+            id: "lease carry blocked",
+            gloss: "the session cannot read its state repository, so no receipt carries",
+            class: "`BATTEN_STATE_REPO` names the repository a land pulls proved receipts from \
+and publishes its own to (CLOUD-1544). Ref discovery answered 401, 403 or 404, so this session \
+has no access to it: every carry would answer the same, and each lap recomputes what another \
+container already proved. The first subject names the repository and the status. Every call but \
+a read, the notification read, an MCP read and the attach is held. Attach the repository to this \
+session with push access; the next call re-probes, and a `200` lifts the hold with no command. A \
+repository that may run without its state repository declares `[receipt] state_repo_optional`.",
+            routes: &[run(
+                "lease add first",
+                "attach the state repository to this session: `add_repo` with access push",
+            )],
+            applicability: Applicability::Advice,
+        }],
+        patterns: &[],
+    },
 ];
 
 /// Every vendored preset's name, in a stable order.

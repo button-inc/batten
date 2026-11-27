@@ -282,7 +282,7 @@ fn selected_repo_with(name: &str, source: &str) -> std::path::PathBuf {
     let resources = schema::resource_ids(&repo).expect("the fixture's content ids");
     assert_eq!(
         schema::seal_tested(&base, &repo, &resources, &format).expect("seal"),
-        3,
+        (3, 3),
         "every recorded case takes a selection digest"
     );
     repo
@@ -780,6 +780,100 @@ fn a_step_run_with_no_sweep_seeds_the_next_heads_selection() {
             counts(&log),
             [1, 2, 1, 1],
             "the edit to `beta` reruns the case that reached it alone\n{err}"
+        );
+    } else {
+        assert_eq!(
+            counts(&log),
+            [2, 2, 2, 2],
+            "untraced, every case keys on the whole tree, so any edit reruns it\n{err}"
+        );
+    }
+}
+
+/// The mutant step a lap runs after its suite, in the foreground over `repo`'s
+/// change since `base`: the reach seed's variable unset, so this is the lap's
+/// own sweep, its reach run's cases counted under `log`.
+fn lap_sweep(repo: &std::path::Path, base: &str, log: &std::path::Path) -> (bool, String) {
+    let output = common::batten()
+        .args(["mutate", "cargo"])
+        .current_dir(repo)
+        .env("MUTANT_RUNNERS", "cargo-mutants=**/*.rs")
+        .env("MUTANT_CHANGED_SINCE", base)
+        .env("MUTANT_JOB_DISK_MB", "6200")
+        .env("MUTANT_JOB_MEMORY_MB", "4000")
+        .env("MUTANT_JUDGE_MEMORY_MB", "1")
+        .env("FIXTURE_LOG", log)
+        .env_remove(batten::mutate::resume::SEED_ENV)
+        .env_remove(batten::mutate::WHOLE_TREE)
+        .env_remove("CI")
+        .streamed_output()
+        .expect("run batten");
+    let mut said = String::from_utf8_lossy(&output.stdout).into_owned();
+    said.push_str(&common::stderr(&output));
+    (output.status.success(), said)
+}
+
+/// THE LAP'S OWN MUTANT STEP IS THE ONE PRODUCER (CLOUD-2789): a suite run at
+/// one head, then that lap's sweep over the same tree, and the next head's run
+/// holds every case the edit cannot reach, with no reach seed ever run. A lap
+/// holds the land singleton throughout, so no seed can start beside it.
+///
+/// Fails by: the sweep sealing reach records but keying none of the passes
+/// the suite left over that tree, so the next head reruns each held case once
+/// to earn the pass (measured on #1276: `test:cargo` about 30 minutes after a
+/// one-line rename).
+///
+/// TRACED OR NOT, BY THE HOST ([`common::traced`]), as the seed case above: a
+/// suite run under `step run`'s tracer records its cases untraced, each keyed
+/// on the whole tree, so there the edit reruns all four.
+#[test]
+fn a_laps_own_sweep_keys_the_next_heads_selection() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = seedable_repo("step-sweep-next", SELECTED);
+    let log = common::scratch("step-sweep-next-log");
+    hold(&repo, "land", std::process::id());
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    common::write(
+        &repo,
+        "src/lib.rs",
+        &SELECTED.replace(
+            "pub fn gamma() -> u8 { helper::three() }",
+            "pub fn gamma() -> u8 { helper::three() + 0 }",
+        ),
+    );
+    common::git_in(&repo, &["commit", "-qam", "the lap's change"]);
+    let (passed, err) = seeding_step(&repo, &log, false);
+    assert!(passed, "{err}");
+    assert_eq!(counts(&log), [1, 1, 1, 1], "{err}");
+    // ITS VERDICT IS NOT THE SUBJECT: `+ 0` leaves `+` for `-` equivalent, so
+    // the sweep reports one survivor; what it sealed is a pass of each case,
+    // never of a mutant, and that is what the next head reads.
+    let (_, said) = lap_sweep(
+        &repo,
+        base.trim(),
+        &common::scratch("step-sweep-next-sweep"),
+    );
+    assert!(
+        !singleton(&repo, "reach-seed").exists(),
+        "no seed ran: the lap's sweep is the producer\n{said}"
+    );
+    common::write(
+        &repo,
+        "src/lib.rs",
+        &SELECTED
+            .replace(
+                "pub fn gamma() -> u8 { helper::three() }",
+                "pub fn gamma() -> u8 { helper::three() + 0 }",
+            )
+            .replace("pub fn beta() -> u8 { 2 }", "pub fn beta() -> u8 { 1 + 1 }"),
+    );
+    let (passed, err) = seeding_step(&repo, &log, false);
+    assert!(passed, "{err}");
+    if common::traced() {
+        assert_eq!(
+            counts(&log),
+            [1, 2, 1, 1],
+            "the edit to `beta` reruns the case that reached it alone\n{said}\n{err}"
         );
     } else {
         assert_eq!(

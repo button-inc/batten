@@ -6838,6 +6838,17 @@ scope = "mediated_call"
 preset = "claude-code-cloud"
 severity = "deny"
 
+# CLOUD-2939, consumer #1 first. A session that cannot read BATTEN_STATE_REPO
+# carries no receipt, so every lap recomputes what another container proved; it is
+# held but for a read and the host's attach until a probe answers 200.
+[[rule]]
+id = "lease carry blocked"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call held before it runs, so nothing persists for a command to repair; the refusal's route names the attach"
+kind = "policy"
+scope = "mediated_call"
+preset = "claude-code-state"
+severity = "deny"
+
 # CLOUD-1028, and consumer #1 eating the same food again. The practice is that a
 # program this project's pin provides is reached through the pin; the incident
 # behind it is this repository's own, and the fact the preset reads is resolved

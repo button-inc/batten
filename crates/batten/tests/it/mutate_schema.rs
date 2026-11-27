@@ -1126,3 +1126,447 @@ fn every_handed_back_survivor_is_listed_and_counted_once() {
         "and the shards' counts sum to the whole's"
     );
 }
+
+/// What a killed sweep had made durable at the kill: the reach records done
+/// passing, the passing controls and the verdicts its journal held.
+#[derive(Debug, Default)]
+struct AtKill {
+    finished: usize,
+    controls: usize,
+    verdicts: usize,
+}
+
+/// [`AtKill`] read from the mirror state of `repo`'s sweeps.
+fn at_kill(repo: &std::path::Path) -> AtKill {
+    let target = batten::mutate::schema::mirror_target(repo).expect("the mirror's target");
+    let state = target
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the mirror state");
+    let finished = std::fs::read_dir(state.join("reach"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| {
+            std::fs::read_to_string(entry.path().join("done")).is_ok_and(|code| code == "0")
+        })
+        .count();
+    let journal = std::fs::read_to_string(state.join("verdicts")).unwrap_or_default();
+    let field = |line: &str| line.split('\t').nth(1).unwrap_or_default().to_owned();
+    let controls = journal
+        .lines()
+        .filter(|line| field(line).starts_with("control:"))
+        .count();
+    // BY MUTANT, NEVER BY LINE: a kill pair is journaled beside its verdict.
+    let verdicts = journal
+        .lines()
+        .filter(|line| {
+            matches!(
+                field(line).as_str(),
+                "caught" | "missed" | "uncovered" | "timeout"
+            )
+        })
+        .filter_map(|line| line.split('\t').nth(2))
+        .collect::<std::collections::BTreeSet<&str>>()
+        .len();
+    AtKill {
+        finished,
+        controls,
+        verdicts,
+    }
+}
+
+/// `line` with every ANSI escape sequence removed.
+fn uncoloured(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for end in chars.by_ref() {
+                if end.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Every process below `pid`, read from `/proc`, deepest last.
+fn descendants(pid: i32) -> Vec<i32> {
+    let parent_of = |of: i32| -> Option<i32> {
+        let stat = std::fs::read_to_string(format!("/proc/{of}/stat")).ok()?;
+        let after = stat.rsplit_once(')')?.1;
+        after.split_whitespace().nth(1)?.parse().ok()
+    };
+    let all: Vec<i32> = std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+        .collect();
+    let mut found = vec![pid];
+    let mut at = 0;
+    while at < found.len() {
+        let here = found[at];
+        found.extend(all.iter().filter(|child| parent_of(**child) == Some(here)));
+        at += 1;
+    }
+    found.remove(0);
+    found
+}
+
+/// The schema sweep over `file` in `repo`, `SIGKILL`ed with every process
+/// below it, as a worker restart kills them, on the first line holding `at`
+/// once a line holding `after` has been said (at once where `after` is
+/// empty): whether the kill landed, and everything said until then.
+///
+/// NO CLOCK: the kill is the event a stage says, never a delay.
+fn sweep_killed_on(
+    repo: &std::path::Path,
+    file: &str,
+    (after, at): (&str, &str),
+) -> (bool, String) {
+    let mut armed = after.is_empty();
+    sweep_killed_when(repo, file, |line| {
+        let now = armed && line.contains(at);
+        armed |= !after.is_empty() && line.contains(after);
+        now
+    })
+}
+
+/// [`sweep_killed_on`], killed on the first line `kill` answers true for,
+/// each line handed to it in the order said.
+fn sweep_killed_when(
+    repo: &std::path::Path,
+    file: &str,
+    mut kill: impl FnMut(&str) -> bool,
+) -> (bool, String) {
+    use std::io::BufRead as _;
+    let mut command = common::batten();
+    command
+        .args(["__mutate-schema", file, "2"])
+        .current_dir(repo)
+        .env_remove("CI")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("spawn the sweep");
+    let pid = i32::try_from(child.id()).expect("a pid");
+    let (send, lines) = std::sync::mpsc::channel::<String>();
+    let streams: Vec<Box<dyn std::io::Read + Send>> = vec![
+        Box::new(child.stdout.take().expect("its stdout")),
+        Box::new(child.stderr.take().expect("its stderr")),
+    ];
+    let pumps: Vec<std::thread::JoinHandle<()>> = streams
+        .into_iter()
+        .map(|stream| {
+            let send = send.clone();
+            std::thread::spawn(move || {
+                for line in std::io::BufReader::new(stream)
+                    .lines()
+                    .map_while(Result::ok)
+                {
+                    if send.send(line).is_err() {
+                        break;
+                    }
+                }
+            })
+        })
+        .collect();
+    drop(send);
+    let (mut said, mut killed) = (String::new(), false);
+    for line in lines {
+        // NEXTEST COLOURS ITS CASE LINES: matched on the text, escapes off.
+        let line = uncoloured(&line);
+        said.push_str(&line);
+        said.push('\n');
+        if !killed && kill(&line) {
+            // EVERY PROCESS BELOW IT, STOPPED FIRST: a run that sets its own
+            // group is no less killed by a restart.
+            let mut tree = descendants(pid);
+            tree.insert(0, pid);
+            // UNIX ONLY, INSIDE THE BODY: `rustix` is a `cfg(unix)` dependency,
+            // and every case calling this returns early off Linux.
+            #[cfg(unix)]
+            {
+                for each in &tree {
+                    if let Some(target) = rustix::process::Pid::from_raw(*each) {
+                        let _ =
+                            rustix::process::kill_process(target, rustix::process::Signal::STOP);
+                    }
+                }
+                for each in &tree {
+                    if let Some(target) = rustix::process::Pid::from_raw(*each) {
+                        let _ =
+                            rustix::process::kill_process(target, rustix::process::Signal::KILL);
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            drop(tree);
+            killed = true;
+        }
+    }
+    let _ = child.wait();
+    for pump in pumps {
+        let _ = pump.join();
+    }
+    (killed, said)
+}
+
+/// The fixture sweep of [`seeded`], one case at a time so a kill lands at one
+/// case, killed at `point` and relaunched: what it had made durable at the
+/// kill, and what the relaunch said.
+fn killed_and_relaunched(name: &str, point: (&str, &str)) -> (AtKill, String) {
+    let (repo, file) = one_case_at_a_time(name);
+    let (killed, before) = sweep_killed_on(&repo, &file, point);
+    assert!(killed, "the sweep never said {point:?}:\n{before}");
+    let durable = at_kill(&repo);
+    (durable, relaunched(&repo, &file))
+}
+
+/// [`seeded`] under `name`, its cases run one at a time so a kill lands at
+/// one case, and its listing.
+fn one_case_at_a_time(name: &str) -> (std::path::PathBuf, String) {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let _ = common::scratch_state_root();
+    let repo = seeded(name);
+    let config = std::fs::read_to_string(repo.join(".config/nextest.toml")).expect("the config");
+    common::write(
+        &repo,
+        ".config/nextest.toml",
+        &format!("[profile.default]\ntest-threads = 1\n\n{config}"),
+    );
+    common::git_in(&repo, &["commit", "-qam", "one case at a time"]);
+    let file = listing(&format!("{name}-listing"));
+    (repo, file)
+}
+
+/// The fixture sweep over `file` in `repo`, run to its end: what it said,
+/// once its exit and verdicts are checked.
+fn relaunched(repo: &std::path::Path, file: &str) -> String {
+    let output = common::batten()
+        .args(["__mutate-schema", file, "2"])
+        .current_dir(repo)
+        .env_remove("CI")
+        .streamed_output()
+        .expect("relaunch the sweep");
+    let said = common::stdout(&output);
+    let err = common::stderr(&output);
+    assert_eq!(output.status.code(), Some(2), "{said}\n{err}");
+    assert!(
+        said.contains(COUNTS),
+        "the relaunch's verdicts: {said}\n{err}"
+    );
+    said
+}
+
+/// The number before `after` in the line of `said` that holds `holding`.
+fn count_in(said: &str, holding: &str, after: &str) -> Option<usize> {
+    let line = said.lines().find(|line| line.contains(holding))?;
+    line.split(after)
+        .nth(1)?
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// What a relaunch redid, read from its own lines: no finished reach record
+/// recorded again, no passing control run again, and no verdict judged again.
+fn assert_nothing_finished_redone(durable: &AtKill, said: &str) {
+    if let Some(before) = count_in(said, "reach runs", "case(s), ") {
+        assert!(
+            before >= durable.finished,
+            "{durable:?}: the relaunch held fewer finished cases than the kill left\n{said}"
+        );
+    }
+    // A CONTROL JOURNALED BEFORE THE KILL IS NEVER RUN AGAIN: where the killed
+    // run had controlled every case it recorded, the relaunch controls none.
+    let ran = count_in(said, "control ran", "control ran ").unwrap_or(0);
+    if durable.finished > 0 && durable.controls >= durable.finished {
+        assert_eq!(
+            ran, 0,
+            "{durable:?}: a control journaled before the kill ran again\n{said}"
+        );
+    }
+    let reused = count_in(said, "mutate schema: reused", "reused ").unwrap_or(0);
+    assert!(
+        reused >= durable.verdicts,
+        "{durable:?}: a verdict journaled before the kill was judged again\n{said}"
+    );
+}
+
+/// CRASH-ONLY (CLOUD-2904): a sweep killed once its build is done, every
+/// process at once as a worker restart kills them, relaunches to a build that
+/// knows what the killed one found and the same verdicts.
+///
+/// Fails by: the build's discoveries lost with the kill, so the relaunch's
+/// first build refuses the unviable mutant again.
+#[test]
+fn a_sweep_killed_after_its_build_rebuilds_nothing_it_found() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (durable, said) =
+        killed_and_relaunched("mutate-crash-build", ("", "stage build outputs took"));
+    assert!(
+        said.contains("1 unviable, 1 handed back and 0 unprobed file(s) known from earlier runs"),
+        "{said}"
+    );
+    assert_nothing_finished_redone(&durable, &said);
+}
+
+/// CRASH-ONLY (CLOUD-2904): a sweep killed mid-reach, behind its first
+/// finished case, relaunches keeping that case: sealed or counted finished,
+/// never recorded again.
+///
+/// Fails by: a finished record lost to the kill, or left unsealed and
+/// recorded again by the relaunch.
+#[test]
+fn a_sweep_killed_mid_reach_records_no_finished_case_again() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (durable, said) = killed_and_relaunched("mutate-crash-reach", ("reach runs", "PASS ["));
+    assert!(
+        durable.finished >= 1,
+        "a case finished before the kill: {durable:?}"
+    );
+    assert_nothing_finished_redone(&durable, &said);
+}
+
+/// CRASH-ONLY (CLOUD-2904): a sweep killed once reach is sealed relaunches
+/// to a reach that starts no case.
+///
+/// Fails by: a sealed reach run again on the relaunch.
+#[test]
+fn a_sweep_killed_after_reach_starts_no_case_again() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (durable, said) =
+        killed_and_relaunched("mutate-crash-sealed", ("", "stage reach seal took"));
+    assert!(
+        !said.contains("reach runs") || said.contains("reach runs 0 of"),
+        "{said}"
+    );
+    assert_nothing_finished_redone(&durable, &said);
+}
+
+/// CRASH-ONLY (CLOUD-2904): a sweep killed once its control has run, and so
+/// while it judges, relaunches to a control of no case and judges no
+/// mutant again whose verdict it had journaled.
+///
+/// Fails by: the control's passes journaled only at the end of the sweep, or
+/// a journaled verdict judged again.
+#[test]
+fn a_sweep_killed_while_judging_controls_nothing_and_rejudges_nothing() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (durable, said) = killed_and_relaunched("mutate-crash-judge", ("", "stage control took"));
+    assert!(
+        durable.controls >= 1,
+        "the control was journaled: {durable:?}"
+    );
+    assert!(
+        said.contains("control ran 0 of the"),
+        "every case's passing control was journaled: {said}"
+    );
+    assert_nothing_finished_redone(&durable, &said);
+}
+
+/// CRASH-ONLY (CLOUD-2904): a sweep killed once every mutant is judged, and
+/// a null lap over a finished sweep, relaunch to reuse every verdict, control
+/// no case, start no reach case, and take the packed build as built.
+///
+/// Fails by: any finished unit redone on a relaunch that changed nothing.
+#[test]
+fn a_sweep_killed_after_judging_or_run_again_redoes_nothing() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (durable, said) = killed_and_relaunched("mutate-crash-judged", ("", "stage judging took"));
+    assert!(
+        durable.verdicts == 5,
+        "every verdict was journaled: {durable:?}"
+    );
+    for line in [
+        "reused 5 of 5 verdict(s)",
+        "control ran 0 of the 0 case(s) still to judge",
+        // NOTHING DERIVED AGAIN BEFORE IT JUDGES (CLOUD-2904): a finished
+        // run's unsealable records and untakeable selection digests were
+        // derived again on every relaunch, 837 s and 790 s on #1276.
+        ", 0 tried",
+    ] {
+        assert!(said.contains(line), "{line:?} in {said}");
+    }
+    assert!(
+        !said.contains("leftovers derived"),
+        "no leftovers derived again: {said}"
+    );
+    assert!(
+        !said.contains("reach runs") || said.contains("reach runs 0 of"),
+        "{said}"
+    );
+    assert_nothing_finished_redone(&durable, &said);
+}
+
+/// CRASH-ONLY, CONVERGING (CLOUD-2904): a reach killed again and again, each
+/// time just after a case it had not finished before finishes, keeps every
+/// finished case: each relaunch holds more finished than the one before, and
+/// the last starts only what no kill left finished.
+///
+/// Fails by: a finished case lost to a kill, or recorded again by the next
+/// run, so the finished count stalls and repeated preemptions never converge
+/// (a looping lap preempting a seed that never finished).
+#[test]
+fn a_reach_killed_again_and_again_converges() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (repo, file) = one_case_at_a_time("mutate-crash-converge");
+    let mut finished_before = Vec::new();
+    for _ in 0..2 {
+        let mut held: Option<usize> = None;
+        let mut passed = 0;
+        let (killed, said) = sweep_killed_when(&repo, &file, |line| {
+            if held.is_none() {
+                held = count_in(line, "reach runs", "case(s), ");
+                return false;
+            }
+            if line.contains("PASS [") {
+                passed += 1;
+            }
+            // THE FIRST CASE NO EARLIER RUN FINISHED: the finished ones run
+            // first, in name order, and pass at once.
+            held.is_some_and(|held| passed > held)
+        });
+        assert!(
+            killed,
+            "the reach passed a case it had not finished: {said}"
+        );
+        finished_before.push(held.expect("the reach line"));
+    }
+    assert!(
+        finished_before.windows(2).all(|pair| pair[1] > pair[0]),
+        "each relaunch holds more finished cases: {finished_before:?}"
+    );
+    let said = relaunched(&repo, &file);
+    let (Some(starts), Some(listed), Some(held)) = (
+        count_in(&said, "reach runs", "reach runs "),
+        count_in(&said, "reach runs", " of "),
+        count_in(&said, "reach runs", "case(s), "),
+    ) else {
+        panic!("the last relaunch's reach line: {said}");
+    };
+    assert!(held > *finished_before.last().unwrap(), "{said}");
+    assert_eq!(
+        starts,
+        listed - held,
+        "only what no kill left finished: {said}"
+    );
+}

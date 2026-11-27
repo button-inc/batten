@@ -1229,6 +1229,14 @@ pub struct Receipt {
     /// it, which is how one false premise became two.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verified_by: Vec<String>,
+    /// Let a session with `BATTEN_STATE_REPO` set but no access to that
+    /// repository proceed unattached (CLOUD-2939). Without it, a set variable
+    /// means the session is meant to share the branch's receipts, so a session
+    /// that cannot read the state repository is held until it is attached; with
+    /// it, the session runs every step from its own receipts and says so. A
+    /// developer without access is never blocked: this is their route.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub state_repo_optional: bool,
 }
 
 /// The `[ready]` table: the refinement gate's consumer-set thresholds.
