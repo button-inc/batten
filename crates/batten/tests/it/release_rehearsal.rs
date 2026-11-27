@@ -130,6 +130,11 @@ fn the_release_rules_are_clean_one_release_ahead() {
     );
     let scratch = common::scratch_repo("release-rehearsal");
     copy_tracked(&root, &scratch);
+    // COMMITTED, AS THE CHECKOUT'S TREE IS (CLOUD-2904): the scratch is a
+    // repository of its own, so the copy is its HEAD and the release move below
+    // is the working change a release head makes over it.
+    common::git_in(&scratch, &["add", "-A"]);
+    common::git_in(&scratch, &["commit", "-q", "-m", "the committed tree"]);
     let next = move_to_next_release(&scratch);
     let scan = rules::run_static_over(
         &selected,
