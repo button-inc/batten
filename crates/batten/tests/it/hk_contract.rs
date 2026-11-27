@@ -233,6 +233,39 @@ fn resolved_commit_time_commands() -> Vec<(String, String)> {
     commands
 }
 
+/// THE PUSH JUDGES WHO MADE EACH COMMIT, NOT ONLY ITS SUBJECT (CLOUD-2789):
+/// `git rebase` replays commits through the sequencer, which runs no
+/// `commit-msg`, so dab29c3d reached the remote with a denied committer and was
+/// refused only by a landing lap. The `pre-push` hook runs the attribution
+/// verb `commit-attribution` runs, over the same range its subjects step reads.
+///
+/// Fails by: the step dropped, run over a narrower range than the subjects (a
+/// commit the push carries left unjudged), or spelled as a second check rather
+/// than the verb (`attribution.rs`'s cases judge that verb, a copy they never run).
+#[test]
+fn the_push_judges_the_attribution_of_every_commit_it_judges_the_subject_of() {
+    let config = resolved_hk();
+    let steps = config["hooks"]["pre-push"]["steps"]
+        .as_object()
+        .expect("hk.pkl resolves a `pre-push` hook with steps");
+    let check = |name: &str| {
+        steps
+            .get(name)
+            .and_then(|step| step.get("check"))
+            .and_then(command_text)
+            .unwrap_or_else(|| panic!("`pre-push` runs `{name}`: {steps:?}"))
+    };
+    let subjects = check("commit-subjects");
+    let range = subjects
+        .strip_prefix("batten commit check ")
+        .expect("the subjects step is `batten commit check <range>`");
+    assert_eq!(
+        check("commit-attribution"),
+        format!("batten attribution check {range}"),
+        "the attribution verb, over the range the subjects are judged in"
+    );
+}
+
 /// One resolved step command as a single line: a string as written, or an
 /// `argv` joined by spaces.
 fn command_text(spec: &serde_json::Value) -> Option<String> {
