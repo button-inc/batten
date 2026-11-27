@@ -1,7 +1,7 @@
 //! A dispatched session runs the model and effort its owner set (CLOUD-2949).
 //!
 //! `policy/dispatch-tier.rego` refuses a `create_session` call whose `model` is
-//! outside the Opus family or whose `effort` is not `low`, and an absent argument
+//! not the alias `opus` or whose `effort` is not `low`, and an absent argument
 //! like a wrong one. Every case asserts both sides: a suite that only checked the
 //! deny would pass on a module that refuses every call.
 
@@ -69,7 +69,7 @@ fn verdict(repo: &Path, tool: &str, input: &str) -> Option<i32> {
     .code()
 }
 
-/// Fails by: `model-unread`, which stops reading the model and admits Fable.
+/// Fails by: `model-unread`, which stops reading the model and admits any.
 #[test]
 fn a_dispatch_on_another_model_or_none_is_refused() {
     let repo = repo("dispatch-tier-model");
@@ -77,10 +77,10 @@ fn a_dispatch_on_another_model_or_none_is_refused() {
         verdict(
             &repo,
             CREATE,
-            r#"{"prompt":"p","model":"claude-fable-5-2","effort":"low"}"#
+            r#"{"prompt":"p","model":"other","effort":"low"}"#
         ),
         Some(2),
-        "another model family is refused"
+        "a model other than the alias is refused"
     );
     assert_eq!(
         verdict(&repo, CREATE, r#"{"prompt":"p","effort":"low"}"#),
@@ -124,30 +124,6 @@ fn a_dispatch_at_another_effort_or_none_is_refused() {
         ),
         Some(0),
         "opus at low effort is admitted"
-    );
-}
-
-/// Fails by: `family-prefix-dropped`, which refuses an exact Opus id.
-#[test]
-fn an_opus_dispatch_at_low_effort_is_not_refused() {
-    let repo = repo("dispatch-tier-admit");
-    assert_eq!(
-        verdict(
-            &repo,
-            CREATE,
-            r#"{"prompt":"p","model":"opus","effort":"low"}"#
-        ),
-        Some(0),
-        "the family alias is admitted"
-    );
-    assert_eq!(
-        verdict(
-            &repo,
-            CREATE,
-            r#"{"prompt":"p","model":"claude-opus-5-5","effort":"low"}"#
-        ),
-        Some(0),
-        "an exact id in the family is admitted"
     );
 }
 

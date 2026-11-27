@@ -18,7 +18,6 @@
 #MUTANT-SUITE crates/batten/tests/it/dispatch_tier.rs
 #MUTANT model-unread|s@^\tnot allowed_model$@\tfalse@|a_dispatch_on_another_model_or_none_is_refused
 #MUTANT effort-unread|s@^\tnot allowed_effort$@\tfalse@|a_dispatch_at_another_effort_or_none_is_refused
-#MUTANT family-prefix-dropped|s@^\tstartswith(model, "claude-opus-")$@\tfalse@|an_opus_dispatch_at_low_effort_is_not_refused
 #MUTANT every-call-judged|s@^\tendswith(input.call.tool, "__create_session")$@\ttrue@|a_call_that_opens_no_session_is_not_judged
 
 # METADATA
@@ -46,12 +45,9 @@ model := object.get(input.call.arguments, "model", "")
 
 effort := object.get(input.call.arguments, "effort", "")
 
-# The family alias, or an exact id in the family.
+# The family alias and nothing else: an exact model id is refused, so a
+# dispatch has one spelling, the one this module names.
 allowed_model if model == "opus"
-
-allowed_model if {
-	startswith(model, "claude-opus-")
-}
 
 allowed_effort if effort == "low"
 
@@ -81,11 +77,10 @@ open(arguments) := {"call": {
 
 test_an_opus_dispatch_at_low_effort_raises_nothing if {
 	count(violation) == 0 with input as open({"model": "opus", "effort": "low"})
-	count(violation) == 0 with input as open({"model": "claude-opus-5-5", "effort": "low"})
 }
 
 test_another_model_is_refused_by_name if {
-	found := violation with input as open({"model": "claude-fable-5-2", "effort": "low"})
+	found := violation with input as open({"model": "other", "effort": "low"})
 	found == {{"rule": "call open wrong", "verdict": "call open wrong", "subjects": [{"artifact": "model"}]}}
 }
 

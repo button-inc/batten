@@ -381,7 +381,7 @@ impl Dispatch {
         envelope(
             mode,
             "mcp__Claude_Code_Remote__create_session",
-            &serde_json::json!({ "prompt": prompt }),
+            &serde_json::json!({ "prompt": prompt, "model": "opus", "effort": "low" }),
         )
     }
 }
