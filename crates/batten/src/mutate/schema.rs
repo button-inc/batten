@@ -21195,8 +21195,8 @@ mod tests {
         let state = crate::scratch::scratch("schema-reached-said");
         let derived = Derived::at(&state, "build");
         std::fs::create_dir_all(&derived.dir).unwrap();
-        let stale = derived.dir.join("unread");
-        std::fs::write(&stale, "a former file's").unwrap();
+        let unread = derived.dir.join("unread");
+        std::fs::write(&unread, "a former file's").unwrap();
         let mut said = Vec::new();
         reached_said(
             &Reach::default(),
@@ -21219,7 +21219,7 @@ mod tests {
             lines[2],
             "mutate schema: derived store kept 0 artifact(s), removed 1"
         );
-        assert!(!stale.exists(), "what the run never read is removed");
+        assert!(!unread.exists(), "what the run never read is removed");
     }
 
     /// A hand-back's run names every other mutant it judged, once each, and
