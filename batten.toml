@@ -12088,6 +12088,7 @@ gates = [
   "claude-code-cloud",
   "claude-code-plan",
   "claude-code-dispatch",
+  "claude-code-state",
   "awk-regex",
   "cap-drift",
   "cfg-gated-test",
