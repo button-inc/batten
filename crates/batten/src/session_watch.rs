@@ -268,12 +268,23 @@ pub struct Page {
 
 impl Page {
     /// The page a toolbox answer carries, or `None` where it carries none.
+    ///
+    /// AN ANSWERED PAGE WITH NO ROWS OMITS `data`. The toolbox answers such a
+    /// page as its `ccr` body with the cursors alone, so a `ccr` body naming no
+    /// `data` is an empty page that WAS read. Could-not-look stays what it
+    /// was: no `ccr` body and no `data`, or a `data` that is not a list.
     #[must_use]
     pub fn of(document: &Value) -> Option<Self> {
-        let body = document.get("ccr").unwrap_or(document);
+        let answered = document.get("ccr");
+        let body = answered.unwrap_or(document);
         let text = |name: &str| body.get(name).and_then(Value::as_str).map(str::to_owned);
+        let items = match (body.get("data"), answered) {
+            (Some(data), _) => data.as_array()?.clone(),
+            (None, Some(_)) => Vec::new(),
+            (None, None) => return None,
+        };
         Some(Self {
-            items: body.get("data")?.as_array()?.clone(),
+            items,
             first_id: text("first_id"),
             last_id: text("last_id"),
             has_more: body
@@ -612,8 +623,7 @@ impl Mcp {
     /// decides is in that function and the two argument builders, which the
     /// suite drives over recorded answers; this wrapper is the transport alone.
     fn call(&self, method: &str, arguments: &Value) -> Option<Page> {
-        let params = serde_json::json!({"name": method, "arguments": arguments});
-        let result = crate::mcp::dispatch(&self.wiring, "tools/call", &params).ok()?;
+        let result = crate::mcp::dispatch(&self.wiring, method, arguments).ok()?;
         page_of_result(&result)
     }
 }
@@ -871,6 +881,21 @@ mod tests {
         assert_eq!(document["ccr"]["data"], serde_json::json!([]));
     }
 
+    /// Fails by: a page the toolbox answered with no rows read as a page it
+    /// could not read. The toolbox omits `data` on such a page (measured
+    /// 2026-11-27: `{"ccr":{"first_id":…,"last_id":…}}`), and a result that
+    /// carries no `ccr` body at all is still could-not-look.
+    #[test]
+    fn a_page_answered_with_no_rows_is_empty_and_not_unread() {
+        let empty = serde_json::json!({"ccr": {"first_id": "a", "last_id": "b"}});
+        let page = Page::of(&empty).expect("an answered page with no rows is a page");
+        assert!(page.items.is_empty());
+        assert_eq!(page.first_id.as_deref(), Some("a"));
+        assert!(!page.has_more);
+        assert_eq!(Page::of(&serde_json::json!({"content": []})), None);
+        assert_eq!(Page::of(&serde_json::json!({"ccr": {"data": "x"}})), None);
+    }
+
     /// Fails by: the toolbox's session list answered without dispatching it.
     #[test]
     fn the_toolbox_lists_sessions_over_its_wiring() {
@@ -883,9 +908,14 @@ mod tests {
                     let (status, body) = match request.get("method").and_then(Value::as_str) {
                         Some("initialize") => (200, r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
                         Some("notifications/initialized") => (202, ""),
-                        _ => (
+                        _ if request["params"]["name"] == "list_sessions" => (
                             200,
                             r#"{"jsonrpc":"2.0","id":2,"result":{"ccr":{"data":[{"id":"s1"}],"has_more":false}}}"#,
+                        ),
+                        // What the toolbox answers a tool it does not serve.
+                        _ => (
+                            200,
+                            r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"tool not found"}}"#,
                         ),
                     };
                     crate::fetch::Response {
@@ -918,9 +948,14 @@ mod tests {
                     let (status, body) = match request.get("method").and_then(Value::as_str) {
                         Some("initialize") => (200, r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
                         Some("notifications/initialized") => (202, ""),
-                        _ => (
+                        _ if request["params"]["name"] == "list_events" => (
                             200,
                             r#"{"jsonrpc":"2.0","id":2,"result":{"ccr":{"data":[{"id":"e1"},{"id":"e2"}],"has_more":false}}}"#,
+                        ),
+                        // What the toolbox answers a tool it does not serve.
+                        _ => (
+                            200,
+                            r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"tool not found"}}"#,
                         ),
                     };
                     crate::fetch::Response {
