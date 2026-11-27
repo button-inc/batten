@@ -421,8 +421,18 @@ fn a_recorded_answer_decodes_to_its_page_and_a_failed_one_to_could_not_look() {
     let failed =
         serde_json::json!({"isError": true, "content": [{"type": "text", "text": "denied"}]});
     assert_eq!(page_of_result(&failed), None);
+    // A `ccr` body naming no `data` is a page answered with no rows, which is
+    // what the toolbox sends for one (measured 2026-11-27, a children listing of
+    // a session with none: `{"ccr":{"first_id":…,"last_id":…}}`). Only a `data`
+    // that is not a list stays could-not-look.
+    assert!(
+        page_of_result(&serde_json::json!({"ccr": {"note": "no data"}}))
+            .expect("an answered page with no rows")
+            .items
+            .is_empty()
+    );
     assert_eq!(
-        page_of_result(&serde_json::json!({"ccr": {"note": "no data"}})),
+        page_of_result(&serde_json::json!({"ccr": {"data": "x"}})),
         None
     );
 }
