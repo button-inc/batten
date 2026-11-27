@@ -1618,7 +1618,8 @@
             "red-head",
             "git",
             "claude-code-plan",
-            "claude-code-dispatch"
+            "claude-code-dispatch",
+            "claude-code-state"
           ]
         },
         "produces": {
