@@ -12706,7 +12706,7 @@ fn build_outputs(
 
 /// What each package's build script wrote, by content: every file under its
 /// `OUT_DIR`s in `target`, keyed as that package's [`built_target`].
-fn built_outputs(
+pub fn built_outputs(
     target: &std::path::Path,
     packages: &std::collections::BTreeMap<String, String>,
 ) -> std::collections::BTreeMap<String, String> {
@@ -13899,7 +13899,8 @@ fn selection_digest(
     let mut probes: BTreeSet<usize> = ids.clone();
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"tc1\x1f");
-    hasher.update(base?.as_bytes());
+    let Some(base) = base else { eprintln!("WHY\tbase-none\t{}", case.0); return None; };
+    hasher.update(base.as_bytes());
     let mut includes: BTreeSet<String> = BTreeSet::new();
     let mut include = |held: Option<&Option<BTreeSet<String>>>| match held {
         Some(None) => false,
@@ -13911,6 +13912,7 @@ fn selection_digest(
     };
     for name in reached {
         if index.gated_names.contains(name) || !include(index.name_includes.get(name)) {
+            eprintln!("WHY\tname-{}\t{}\t{name}", if index.gated_names.contains(name) {"gated"} else {"include?"}, case.0);
             return None;
         }
         // A SAME-NAMED FUNCTION BY ITS TOKENS, NEVER ITS TEXT (CLOUD-2904): by
@@ -13930,6 +13932,7 @@ fn selection_digest(
     }
     for id in &probes {
         if index.gated_probes.contains(id) || !include(index.probe_includes.get(id)) {
+            eprintln!("WHY\tprobe-{}\t{}\t{}", if index.gated_probes.contains(id) {"gated"} else {"include?"}, case.0, index.probes.get(*id).map_or("", String::as_str));
             return None;
         }
     }
