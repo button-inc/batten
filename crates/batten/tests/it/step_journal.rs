@@ -282,7 +282,7 @@ fn selected_repo_with(name: &str, source: &str) -> std::path::PathBuf {
     let resources = schema::resource_ids(&repo).expect("the fixture's content ids");
     assert_eq!(
         schema::seal_tested(&base, &repo, &resources, &format).expect("seal"),
-        3,
+        (3, 3),
         "every recorded case takes a selection digest"
     );
     repo
