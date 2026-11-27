@@ -175,6 +175,7 @@ const PRESET_SCOPES: &[(&str, &[bool])] = &[
     ("claude-code-cloud", &[false]),
     ("claude-code-plan", &[false]),
     ("claude-code-dispatch", &[false]),
+    ("claude-code-state", &[false]),
     ("ci-signal", &[true]),
     ("supply-chain", &[true]),
     ("tracker-hygiene", &[true]),
