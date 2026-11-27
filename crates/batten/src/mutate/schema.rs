@@ -15213,12 +15213,12 @@ mod tests {
         .expect("the live tree gives the case a digest");
         let key = format.key();
         for dir in ["bare", "stale"] {
-            let line = std::fs::read_to_string(base.join(dir).join(TESTED)).unwrap();
+            let stored = std::fs::read_to_string(base.join(dir).join(TESTED)).unwrap();
             assert!(
-                read_tested(&line).is_some_and(|(read_in, digest, from)| read_in == key
+                read_tested(&stored).is_some_and(|(read_in, digest, from)| read_in == key
                     && digest == live
                     && from.is_some_and(|from| from.writer == "retest_carried")),
-                "{dir}: {line}"
+                "{dir}: {stored}"
             );
         }
         assert_eq!(
