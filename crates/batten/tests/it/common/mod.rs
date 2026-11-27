@@ -137,6 +137,10 @@ fn run_scratch() -> &'static Path {
         reap_finished(&parent, &run);
         let dir = parent.join(&run);
         fs::create_dir_all(&dir).expect("create this run's scratch");
+        // THE IN-PROCESS DOOR (CLOUD-2904): a library call over a fixture here
+        // that is not a repository panics rather than reading the checkout
+        // around it, as a spawn there is refused ([`Batten`]).
+        batten::testing::fence_discovery(&dir);
         (dir, held)
     })
     .0

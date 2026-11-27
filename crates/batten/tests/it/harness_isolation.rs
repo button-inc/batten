@@ -26,7 +26,12 @@ fn falls_through(dir: &Path) -> bool {
     // The resolver's own spelling, never a bare `canonicalize`: on Windows that
     // answers verbatim and no plain root starts with it (CLOUD-2059).
     let scratch = batten::git::canonical(&common::target_tmp());
-    batten::git::worktree_root(dir).is_ok_and(|owner| !owner.starts_with(&scratch))
+    // THE FENCE ANSWERS FIRST (CLOUD-2904): this suite fences discovery at its
+    // scratch root, so resolving a directory that falls through panics, and
+    // that panic is the same answer as an owner outside the scratch root.
+    std::panic::catch_unwind(|| batten::git::worktree_root(dir)).map_or(true, |owner| {
+        owner.is_ok_and(|owner| !owner.starts_with(&scratch))
+    })
 }
 
 /// The binary's door refuses a spawn in a bare scratch directory exactly when it

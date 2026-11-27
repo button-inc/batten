@@ -33,6 +33,52 @@ pub fn contain_state(data_dir: &Path) {
     let _ = CONTAINED.set(data_dir.to_path_buf());
 }
 
+/// The scratch root a test fenced discovery at ([`fence_discovery`]).
+static FENCED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Refuse, from now on, any repository discovery in this process that starts
+/// under `scratch_root` and finds a repository outside it (D3, CLOUD-2904).
+///
+/// THE IN-PROCESS HALF OF THE SPAWN DOOR ([`falls_through`]). A fixture under
+/// the build's scratch root that is not a repository discovers the checkout
+/// holding the build, so a library call over it read that checkout's HEAD, refs
+/// and receipts — 221 cases of one suite read its `batten-receipts` — while the
+/// case believed it judged its fixture. The spawn door refuses a binary started
+/// there; nothing refused the case's own calls. Set once per process (nextest
+/// runs each case in its own), first value wins, and like [`contain_state`] it
+/// reads no environment variable and the binary never calls it.
+#[doc(hidden)]
+pub fn fence_discovery(scratch_root: &Path) {
+    let root = scratch_root
+        .canonicalize()
+        .unwrap_or_else(|_| scratch_root.to_path_buf());
+    let _ = FENCED.set(root);
+}
+
+/// Panic where discovery from `start` found `git_dir` across the fence a test
+/// set ([`fence_discovery`]); nothing where no test set one.
+///
+/// # Panics
+///
+/// When `start` is under the fenced scratch root and `git_dir` is not: the case
+/// is reading a repository it did not make, and the panic names the fixture to
+/// make one of.
+pub(crate) fn refuse_fall_through(start: &Path, git_dir: &Path) {
+    if let Some(root) = FENCED.get()
+        && start.starts_with(root)
+        && !git_dir.starts_with(root)
+    {
+        panic!(
+            "discovery from {} falls through to {}, a repository this case did not make: \
+             make the fixture a repository (`common::init_repo`, `Fixture::git`), or put a \
+             fixture whose subject is \"not a repository\" in `common::scratch_outside_tree` \
+             (CLOUD-2904)",
+            start.display(),
+            git_dir.display()
+        );
+    }
+}
+
 /// The contained data directory, if a test set one.
 ///
 /// ONE SUITE FOR EVERY ROW IN THIS FILE: `mutate` judges a row under the
@@ -110,8 +156,11 @@ pub fn falls_through(cwd: &Path, scratch_root: &Path) -> bool {
     // plain root `worktree_root` returns: that read every owned fixture as
     // falling through and refused 2,614 cases on the Windows leg (CLOUD-2059).
     let scratch = crate::git::canonical(scratch_root);
-    let resolved = crate::git::worktree_root(cwd);
-    resolved.is_ok_and(|owner| !owner.starts_with(&scratch))
+    // THE FENCE ANSWERS FIRST where a case set one ([`fence_discovery`]): a
+    // resolve that falls through it panics, which is this function's `true`.
+    std::panic::catch_unwind(|| crate::git::worktree_root(cwd)).map_or(true, |resolved| {
+        resolved.is_ok_and(|owner| !owner.starts_with(&scratch))
+    })
 }
 
 /// What one source file's assertions do with the clock.
@@ -664,6 +713,39 @@ mod tests {
         std::fs::create_dir_all(dir.join("tmp/fixture/sub")).expect("create the tree");
         crate::gitwrite::init_on_main(&dir).expect("the enclosing checkout");
         dir
+    }
+
+    /// D3 (CLOUD-2904), the rule for the fall-through cause: once a case fences
+    /// discovery at its scratch root, a library call over a fixture there that
+    /// is not a repository is refused rather than answered about the checkout
+    /// around it, while a fixture repository, and a start outside the fence,
+    /// still open.
+    ///
+    /// Fails by: discovery from a bare fixture answering with the enclosing
+    /// checkout (221 cases of one suite read its receipts that way), or the
+    /// fence refusing an owned fixture or a start it does not enclose.
+    #[test]
+    fn a_discovery_falling_through_the_fence_is_refused() {
+        let checkout = checkout("fence");
+        let scratch = checkout.join("tmp");
+        fence_discovery(&scratch);
+        let bare = scratch.join("fixture").join("sub");
+        let refused = std::panic::catch_unwind(|| crate::git::repo_root(&bare)).is_err();
+        assert!(
+            refused,
+            "a bare fixture under the fence reads the checkout around it"
+        );
+        let owned = scratch.join("owned");
+        std::fs::create_dir_all(&owned).expect("owned");
+        crate::gitwrite::init_on_main(&owned).expect("the fixture's own repository");
+        assert!(
+            crate::git::repo_root(&owned).is_ok(),
+            "an owned fixture opens"
+        );
+        assert!(
+            crate::git::repo_root(&checkout).is_ok(),
+            "outside the fence opens"
+        );
     }
 
     /// Fails by: an unnamed requirement inside the resolver's own body counted,
