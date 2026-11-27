@@ -381,6 +381,7 @@ impl Dispatch {
         envelope(
             mode,
             "mcp__Claude_Code_Remote__create_session",
+            // `policy/dispatch-tier.rego` refuses any other model or effort.
             &serde_json::json!({ "prompt": prompt, "model": "opus", "effort": "low" }),
         )
     }
