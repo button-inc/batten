@@ -9947,8 +9947,6 @@ mod tests {
         "crates/batten-core/src/lease.rs::fetched_objects_land_in_the_odb_and_the_ref_moves",
         "crates/batten-core/src/state.rs::a_relative_anchor_names_the_store_its_absolute_spelling_does",
         "crates/batten/src/lib.rs::a_relative_root_is_resolved_before_the_manifest_is_compared",
-        "crates/batten/src/receipt.rs::a_range_from_head_to_itself_counts_nothing",
-        "crates/batten/src/receipt.rs::the_agent_sourced_subject_is_resolved_from_the_checkout",
     ];
 
     /// D3 (CLOUD-2904), the rule's test half: a lib case runs against its own
