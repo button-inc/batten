@@ -89,7 +89,7 @@ fn the_verb_is_declared_and_is_not_on_the_read_only_allowlist() {
     // `read` here would widen it silently. The spec is the authority a consumer
     // reads, which is why this asserts over the emitted spec rather than over
     // `SURFACE` — a consumer never sees the constant.
-    let spec = run(Path::new("."), &["spec", "--format", "json"]);
+    let spec = run(common::case_fixture(), &["spec", "--format", "json"]);
     assert!(spec.status.success(), "the spec renders");
     let rendered = stdout(&spec);
     let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("the spec is JSON");
@@ -124,7 +124,7 @@ fn the_verb_names_no_harness_which_is_the_whole_portability_claim() {
     // that claim in the one place a reader would check it, so its ABSENCE is the
     // assertion — and it is asserted rather than reviewed, because a flag added
     // later would arrive quietly.
-    let help = run(Path::new("."), &["mcp", "call", "--help"]);
+    let help = run(common::case_fixture(), &["mcp", "call", "--help"]);
     let rendered = format!("{}{}", stdout(&help), stderr(&help));
     assert!(
         !rendered.contains("--harness"),
@@ -134,7 +134,7 @@ fn the_verb_names_no_harness_which_is_the_whole_portability_claim() {
     // And the roster it must NOT be narrower than: every harness the generator
     // knows still reaches one unconditional dispatch path. Asserted by showing
     // the generator has a roster at all and that this verb is blind to it.
-    let harnesses = run(Path::new("."), &["generate", "hooks", "--help"]);
+    let harnesses = run(common::case_fixture(), &["generate", "hooks", "--help"]);
     let roster = format!("{}{}", stdout(&harnesses), stderr(&harnesses));
     assert!(
         roster.contains("claude-code"),
@@ -461,7 +461,7 @@ fn a_well_formed_table_loads_which_is_what_makes_the_refusals_above_discriminate
     // actually runs against. `at_root` rather than `.`: a test's cwd is the CRATE
     // directory, which carries no `batten.toml`, so the relative form asserted
     // "no config found" and would have passed over any table at all.
-    let here = run(&at_root("."), &["config", "lint"]);
+    let here = run(common::committed_repo(), &["config", "lint"]);
     assert!(
         here.status.success(),
         "the committed `[mcp]` table must load: {}",
