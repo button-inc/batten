@@ -155,3 +155,25 @@ fn a_declared_opt_out_holds_nothing() {
     let said = edit(&dir, Some("acme/state"));
     assert!(!held(&said), "{said}");
 }
+
+/// Fails by: a shell read held — mutant `shell-read-held` — so a held session
+/// cannot look at its tree before it attaches; or a redirect read as a read.
+#[test]
+fn a_shell_read_is_admitted_while_held() {
+    let dir = bench("state-repo-shell-read", "");
+    record(&dir, "401");
+    let read = call(
+        &dir,
+        "Bash",
+        &serde_json::json!({"command": "cat batten.toml"}),
+        Some("acme/state"),
+    );
+    assert!(!held(&read), "{read}");
+    let write = call(
+        &dir,
+        "Bash",
+        &serde_json::json!({"command": "cat batten.toml > copy.toml"}),
+        Some("acme/state"),
+    );
+    assert!(held(&write), "{write}");
+}
