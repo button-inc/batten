@@ -657,7 +657,7 @@ fn every_remedy_the_gate_prints_is_admitted_in_its_state() {
 #[test]
 fn the_committed_config_names_the_dispatch_and_the_wait() {
     let said = common::run(
-        &common::committed_repo().to_path_buf(),
+        common::committed_repo(),
         &["policy", "explain", "tool install pending"],
     );
     let text = format!("{}{}", common::stdout(&said), common::stderr(&said));

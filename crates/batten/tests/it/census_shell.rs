@@ -638,10 +638,7 @@ fn this_repositorys_ban_reads_the_census_declaration() {
 /// exempt file it names is one the ban exempts.
 #[test]
 fn this_repositorys_own_census_answers() {
-    let output = common::run(
-        &common::committed_repo().to_path_buf(),
-        &["census", "shell", "-J"],
-    );
+    let output = common::run(common::committed_repo(), &["census", "shell", "-J"]);
     assert_eq!(
         output.status.code(),
         Some(0),

@@ -232,7 +232,7 @@ fn output_is_pointer_only() {
 fn the_committed_filter_honours_every_probe() {
     // The self-consumption case the retiring suite opened on.
     let output = common::run(
-        &common::committed_repo().to_path_buf(),
+        common::committed_repo(),
         &["check", "--rule", "path list partial"],
     );
     assert_eq!(

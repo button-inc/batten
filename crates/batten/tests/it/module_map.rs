@@ -199,7 +199,7 @@ fn the_repositorys_own_map_is_complete() {
     // The self-consumption case the retiring suite ended on: the claim
     // `rules/rust.md` makes about the map is checkable rather than asserted.
     let output = common::run(
-        &common::committed_repo().to_path_buf(),
+        common::committed_repo(),
         &["check", "--rule", "memory cover partial"],
     );
     assert_eq!(
