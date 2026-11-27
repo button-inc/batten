@@ -1219,10 +1219,20 @@ hooks {
   // no `commit-msg` hook, so a `Revert "…"` subject reached `verify` unjudged
   // (b67a1ae6). The push is the last local point every commit passes, whatever
   // made it, so the subjects of the whole branch are judged there.
+  //
+  // AND WHO MADE THEM (CLOUD-2789): `git rebase` replays commits through the
+  // sequencer too, so a commit stamped with a denied identity or a vendor
+  // signature reached the remote and was refused only by a landing lap's
+  // `commit-attribution` (dab29c3d, committer `Claude <noreply@…>`). The same
+  // verb that step runs judges the same range here, author and committer,
+  // signature and trailers, so the push refuses it naming the commit.
   ["pre-push"] {
     steps {
       ["commit-subjects"] {
         check = "batten commit check origin/main..HEAD"
+      }
+      ["commit-attribution"] {
+        check = "batten attribution check origin/main..HEAD"
       }
     }
   }

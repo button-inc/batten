@@ -382,6 +382,28 @@ fn message_mode_refuses_the_identity_git_is_about_to_stamp() {
     assert_eq!(stdout(&out), "commit own refused pending author\n");
 }
 
+/// THE COMMITTER ALONE (CLOUD-2789): a container reset leaves `user.name` unset,
+/// and git then stamps whatever the environment names, which is how dab29c3d
+/// carried a denied committer under a correct author. The commit-time check
+/// refuses it before the commit exists.
+///
+/// Fails by: message mode judging the author git would stamp and not the
+/// committer, so a clean author carries a denied committer through.
+#[test]
+fn message_mode_refuses_a_denied_committer_under_a_clean_author() {
+    let dir = fixture("attribution-message-committer");
+    write(&dir, "msg", "fix(x): a change\n");
+    let out = batten()
+        .args(["attribution", "check", "--message", "msg"])
+        .current_dir(&dir)
+        .env("GIT_COMMITTER_NAME", "Vendorbot")
+        .env("GIT_COMMITTER_EMAIL", "bot@no-reply.example")
+        .streamed_output()
+        .expect("run batten");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(stdout(&out), "commit own refused pending committer\n");
+}
+
 #[test]
 fn message_mode_passes_a_clean_pending_message() {
     let dir = fixture("attribution-message-clean");
