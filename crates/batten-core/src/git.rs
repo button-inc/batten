@@ -1268,7 +1268,7 @@ fn rel_to_slash(rel: &Path) -> String {
 #[must_use]
 #[expect(
     clippy::disallowed_methods,
-    reason = "stays: this IS the one constructor the ban routes every walk through"
+    reason = "stays: this IS the one constructor the ban routes every walk through, `tree_files` among them"
 )]
 pub fn walker(root: &Path) -> ignore::WalkBuilder {
     let mut walk = ignore::WalkBuilder::new(root);
@@ -7346,19 +7346,14 @@ mod tests {
     /// so an unreadable trap shows nothing. Read is observed by access time
     /// instead: each exclude is stamped with an access time older than its
     /// modification, which a read on a `relatime` or `strictatime` mount moves.
-    /// The root's OWN exclude is the control — it must be read — so a mount that
-    /// never moves access times leaves this case blind and it says so, rather
-    /// than passing on an instrument that could not see.
+    /// The root's OWN exclude is the control — it must be read — so on Linux a
+    /// blind instrument fails rather than passing on a read it could not see.
     ///
     /// Fails by: the walker loading the parents' excludes, which made every
     /// fixture under a checkout's `target/` read that checkout's `.git` — 2,112
     /// of the 2,407 cases the reach recorder found reading it — though under
     /// `parents(false)` the parents' rules never decide a path.
     #[test]
-    #[expect(
-        clippy::print_stderr,
-        reason = "a mount that moves no access time leaves this case blind, and a blind pass says so on the case's own captured stderr rather than reading as a pass that saw"
-    )]
     fn an_enclosing_repositorys_exclude_is_never_read() {
         let stale = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
         let stamp = |path: &Path| {
@@ -7400,14 +7395,16 @@ mod tests {
                 vec![String::from("kept.txt")]
             );
         }
-        if !read(&own) {
-            eprintln!("note: this mount moves no access time, so no read is visible here");
-            return;
+        // LINUX'S DEFAULT MOUNT MOVES IT (`relatime`), so there a blind instrument
+        // is a failure, never a pass; elsewhere the access time is not this
+        // case's to rely on and only the walk's answer above is asserted.
+        if cfg!(target_os = "linux") {
+            assert!(read(&own), "the control: the root's own exclude is read");
+            assert!(
+                !read(&enclosing),
+                "the enclosing repository's exclude was read"
+            );
         }
-        assert!(
-            !read(&enclosing),
-            "the enclosing repository's exclude was read"
-        );
     }
 
     /// The root's OWN `info/exclude` still hides what it names, as git's

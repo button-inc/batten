@@ -421,7 +421,7 @@ const RENOVATE: &str = r#"{
 "#;
 
 fn sound(name: &str) -> PathBuf {
-    let root = common::scratch(&format!("ci-parity-{name}"));
+    let root = common::scratch_repo(&format!("ci-parity-{name}"));
     common::write(&root, ".github/workflows/ci.yml", WORKFLOW);
     common::write(&root, ".github/workflows/land.yml", LANDER);
     common::write(&root, "mise.toml", MANIFEST);
@@ -461,7 +461,7 @@ fn this_repository_is_clean_today() {
     // reason `findings_declared_by` states; the scratch name is this case's own,
     // because nextest runs each case in its own process and a shared name is a
     // wipe under another process's read.
-    let only = common::scratch("ci-parity-vocabulary-real-tree");
+    let only = common::scratch_repo("ci-parity-vocabulary-real-tree");
     install_module(&only);
     let found = findings_declared_by(&root, &only);
     assert!(
@@ -1639,7 +1639,7 @@ fn a_prefix_named_only_in_a_job_condition_is_not_a_scope() {
 
 #[test]
 fn a_tree_with_no_verify_task_is_not_this_rows_business() {
-    let root = common::scratch("ci-parity-absent");
+    let root = common::scratch_repo("ci-parity-absent");
     install_module(&root);
     assert!(
         findings(&root).is_empty(),

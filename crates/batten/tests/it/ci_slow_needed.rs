@@ -205,7 +205,7 @@ fn row() -> Rule {
 
 /// A scratch tree carrying a config and the committed module.
 fn tree(name: &str, config: &str) -> PathBuf {
-    let root = common::scratch(&format!("ci-slow-inert-{name}"));
+    let root = common::scratch_repo(&format!("ci-slow-inert-{name}"));
     common::write(&root, "batten.toml", config);
     let source = common::at_root("policy/ci-slow-inert.rego")
         .canonicalize()

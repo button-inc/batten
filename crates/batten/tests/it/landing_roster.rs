@@ -62,7 +62,7 @@ jobs:
 /// `body` is `None` — which is what makes the declared glob match nothing, so
 /// the path reaches neither `lines` nor `missing`.
 fn repo(name: &str, body: Option<&str>) -> PathBuf {
-    let root = common::scratch(name);
+    let root = common::scratch_repo(name);
     let dir = root.join(".github/workflows");
     fs::create_dir_all(&dir).expect("scratch workflow dir");
     // A SIBLING WORKFLOW IS ALWAYS PRESENT, because the real tree always has 27

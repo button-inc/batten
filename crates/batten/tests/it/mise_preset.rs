@@ -73,7 +73,7 @@ fn row() -> Rule {
 /// in-repo module there is nothing to copy into the fixture. That is also what
 /// makes this tier the only place the vendored bytes are exercised at all.
 fn tree(name: &str, pins: &str, workflow: &str) -> PathBuf {
-    let root = common::scratch(&format!("mise-preset-{name}"));
+    let root = common::scratch_repo(&format!("mise-preset-{name}"));
     common::write(&root, "batten.toml", pins);
     common::write(&root, ".github/workflows/ci.yml", workflow);
     root
@@ -180,7 +180,7 @@ fn a_drifted_version_in_this_repository_is_refused() {
     let real = common::at_root(".")
         .canonicalize()
         .expect("this checkout is where the manifest says it is");
-    let root = common::scratch("mise-preset-real-drift");
+    let root = common::scratch_repo("mise-preset-real-drift");
     let pins = std::fs::read_to_string(real.join("batten.toml")).expect("the committed authority");
     common::write(&root, "batten.toml", &pins);
 

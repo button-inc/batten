@@ -297,7 +297,7 @@ fn patterns() -> Vec<batten::pattern::NamedPattern> {
 /// A tree carrying the two workflows (either may be absent) and the committed
 /// module. A sibling workflow is always present so the glob always matches.
 fn tree(name: &str, release: Option<&str>, backfill: Option<&str>) -> PathBuf {
-    let root = common::scratch(&format!("release-tracking-{name}"));
+    let root = common::scratch_repo(&format!("release-tracking-{name}"));
     common::write(&root, ".github/workflows/ci.yml", "jobs:\n  ci:\n");
     if let Some(body) = release {
         common::write(&root, RELEASE, body);
