@@ -759,6 +759,26 @@
           ],
           "type": "object"
         },
+        "state-repo": {
+          "description": "Fact::StateRepo (CLOUD-2939). Null unless BATTEN_STATE_REPO is set, the config does not declare `[receipt] state_repo_optional`, and ref discovery on the state repository answered 401, 403 or 404: then `state` is `unattached`, `status` that answer and `repository` the variable's value. Never a transport failure, which is could-not-look and holds nothing.",
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "unattached"
+              ]
+            },
+            "status": {
+              "type": "integer"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "stop": {
           "description": "Fact::Stop -- the end-of-turn facts."
         },
