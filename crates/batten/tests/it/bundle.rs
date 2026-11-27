@@ -327,11 +327,12 @@ fn has_flock() -> bool {
 /// The live spool's three paths for one stream of one command.
 fn spool_paths(home: &Path, stream: &str, pid: u32, index: usize) -> (PathBuf, PathBuf, PathBuf) {
     // DERIVED, NOT FOUND (CLOUD-2789): the repo-name segment is the one the
-    // engine derives from the directory it runs in, which is this process's,
-    // so the path is known before the engine has created any of it — which is
-    // what lets a case wait on its creation instead of searching for it.
-    let here = std::env::current_dir().expect("the case's own directory");
-    let root = batten::git::repo_root(&here).expect("the case runs inside a repository");
+    // engine derives from the directory it runs in — the case's own fixture
+    // ([`common::case_fixture`]), never the checkout (CLOUD-2904) — so the path
+    // is known before the engine has created any of it, which is what lets a
+    // case wait on its creation instead of searching for it.
+    let root =
+        batten::git::repo_root(common::case_fixture()).expect("the case's fixture is a repository");
     let live = home
         .join("data")
         .join(env!("CARGO_PKG_NAME"))
