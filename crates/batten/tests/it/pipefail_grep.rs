@@ -189,7 +189,7 @@ fn q_after_the_separator_is_a_pattern_not_a_flag() {
 #[test]
 fn this_repos_own_programs_pass_today() {
     let output = common::run(
-        &common::at_root(""),
+        &common::committed_repo().to_path_buf(),
         &["check", "--rule", "spawn read broken"],
     );
     assert_eq!(

@@ -189,7 +189,7 @@ fn the_output_is_a_pointer_and_never_the_rustdoc() {
 fn the_verb_is_declared_and_reachable() {
     // The seam the retirement rests on: `mise run semver` now invokes this, so a
     // verb that does not parse is a required CI check that cannot run at all.
-    let root = common::at_root(".");
+    let root = common::committed_repo().to_path_buf();
     let output = common::run(&root, &["semver", "--help"]);
     assert_eq!(output.status.code(), Some(0));
     let text = String::from_utf8_lossy(&output.stdout);

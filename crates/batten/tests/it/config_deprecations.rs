@@ -384,7 +384,7 @@ fn this_repositorys_schema_has_lost_no_key_since_its_last_release() {
     // none, and the honest answer there is could-not-look rather than a pass over a
     // comparison nobody made. Both arms are asserted, so this cannot report green
     // by having compared nothing.
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = common::committed_repo().to_path_buf();
     match latest_release_tag(&root) {
         Some(against) => {
             let (code, said) = deprecations(&root, &against);

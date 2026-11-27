@@ -560,7 +560,7 @@ fn every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step() {
 /// drifted contract, and the two are deliberately different codes.
 #[test]
 fn the_committed_contract_is_the_one_the_binary_derives() {
-    let root = common::at_root(".");
+    let root = common::committed_repo_whole().to_path_buf();
     let output = common::run(&root, &["hk", "drift"]);
     assert_eq!(
         code(&output),
@@ -588,7 +588,7 @@ fn the_committed_contract_is_the_one_the_binary_derives() {
 /// leak into every other case in the binary.
 #[test]
 fn a_caller_suppressing_steps_does_not_drift_the_contract() {
-    let root = common::at_root(".");
+    let root = common::committed_repo_whole().to_path_buf();
     let output = common::batten()
         .args(["hk", "drift"])
         .current_dir(&root)
@@ -696,7 +696,7 @@ fn tracked_entries(dir: &Path) -> Vec<String> {
 /// effect moved would keep compiling.
 #[test]
 fn the_generator_is_a_write_and_the_gate_is_a_read() {
-    let root = common::at_root(".");
+    let root = common::committed_repo().to_path_buf();
     let output = common::run(&root, &["spec", "--format", "json"]);
     let spec: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("the spec is one JSON document");

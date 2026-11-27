@@ -301,7 +301,7 @@ fn this_workspaces_own_crypto_crates_agree() {
     // The claim the old manifest comment got wrong, checked rather than
     // asserted.
     let output = common::run(
-        &common::at_root(""),
+        &common::committed_repo().to_path_buf(),
         &["check", "--rule", "version read wrong"],
     );
     assert_eq!(
