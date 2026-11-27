@@ -128,7 +128,7 @@ fn the_release_rules_are_clean_one_release_ahead() {
         "the selection carries the row that held v0.0.217: {:?}",
         selected.iter().map(|rule| &rule.id).collect::<Vec<_>>()
     );
-    let scratch = common::scratch("release-rehearsal");
+    let scratch = common::scratch_repo("release-rehearsal");
     copy_tracked(&root, &scratch);
     let next = move_to_next_release(&scratch);
     let scan = rules::run_static_over(

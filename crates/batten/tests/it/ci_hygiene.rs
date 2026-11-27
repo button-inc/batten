@@ -69,7 +69,7 @@ fn row() -> Rule {
 /// in-repo module there is nothing to copy into the fixture. That is also what
 /// makes this tier the only place the vendored bytes are exercised at all.
 fn tree(name: &str, workflow: &str) -> PathBuf {
-    let root = common::scratch(&format!("ci-hygiene-{name}"));
+    let root = common::scratch_repo(&format!("ci-hygiene-{name}"));
     common::write(&root, ".github/workflows/ci.yml", workflow);
     root
 }
@@ -474,7 +474,7 @@ fn two_workflows_sharing_a_cron_are_refused() {
     // A cron SEQUENCE under `schedule:`, across TWO documents — the only case
     // here whose predicate spans files, so it also says the engine hands the
     // module every declared document at once rather than one at a time.
-    let root = common::scratch("ci-hygiene-cron");
+    let root = common::scratch_repo("ci-hygiene-cron");
     for (name, group) in [("a", "alpha"), ("b", "beta")] {
         common::write(
             &root,
@@ -505,7 +505,7 @@ jobs:
 fn a_staggered_pair_is_clean() {
     // The discriminating half: without it, a rule that flagged every schedule
     // would pass the case above and look identical to one that compares.
-    let root = common::scratch("ci-hygiene-cron-ok");
+    let root = common::scratch_repo("ci-hygiene-cron-ok");
     for (name, group, cron) in [("a", "alpha", "0 3 * * *"), ("b", "beta", "30 3 * * *")] {
         common::write(
             &root,
@@ -681,7 +681,7 @@ jobs:
 
 #[test]
 fn a_tree_with_no_workflow_is_not_this_presets_business() {
-    let root = common::scratch("ci-hygiene-absent");
+    let root = common::scratch_repo("ci-hygiene-absent");
     assert!(
         findings(&root).is_empty(),
         "absent is not-applicable, never a finding: {:?}",

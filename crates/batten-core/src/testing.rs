@@ -49,10 +49,7 @@ static FENCED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 /// reads no environment variable and the binary never calls it.
 #[doc(hidden)]
 pub fn fence_discovery(scratch_root: &Path) {
-    let root = scratch_root
-        .canonicalize()
-        .unwrap_or_else(|_| scratch_root.to_path_buf());
-    let _ = FENCED.set(root);
+    let _ = FENCED.set(crate::git::canonical(scratch_root));
 }
 
 /// Panic where discovery from `start` found `git_dir` across the fence a test

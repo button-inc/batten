@@ -79,7 +79,7 @@ fn install_module(root: &Path, module: &str) {
 }
 
 fn scratch_for(name: &str, module: &str) -> PathBuf {
-    let root = common::scratch(&format!("frontmatter-gates-{name}"));
+    let root = common::scratch_repo(&format!("frontmatter-gates-{name}"));
     install_module(&root, module);
     root
 }
@@ -322,7 +322,7 @@ fn this_repository_is_clean_today() {
         (skill_row(), "policy/skill-frontmatter-complete.rego"),
     ] {
         let id = row.id.clone();
-        let only = common::scratch(&format!("frontmatter-gates-vocabulary-{id}"));
+        let only = common::scratch_repo(&format!("frontmatter-gates-vocabulary-{id}"));
         install_module(&only, module);
         assert_eq!(
             findings_for(&root, row, &only),

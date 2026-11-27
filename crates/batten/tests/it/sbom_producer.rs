@@ -191,7 +191,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        let dir = common::scratch(&format!("sbom-producer-{name}"));
+        let dir = common::scratch_repo(&format!("sbom-producer-{name}"));
         let repo = dir.join("repo");
         common::write(
             &repo,
@@ -1075,7 +1075,7 @@ fn patterns() -> Vec<batten::pattern::NamedPattern> {
 
 /// `(verdict, line)` for every finding over a table carrying `rows`.
 fn judged(name: &str, rows: &[&str]) -> Vec<(String, Option<usize>)> {
-    let root = common::scratch(&format!("sbom-actions-{name}"));
+    let root = common::scratch_repo(&format!("sbom-actions-{name}"));
     common::write(&root, TABLE, &format!("{}\n", rows.join("\n")));
     fs::create_dir_all(root.join("policy")).expect("scratch policy dir");
     fs::copy(

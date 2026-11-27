@@ -25,7 +25,7 @@ use batten::rules;
 const LOOSE: &str = "spawn bind loose";
 
 fn repo(name: &str, path: &str, source: &[&str]) -> PathBuf {
-    let root = common::scratch(name);
+    let root = common::scratch_repo(name);
     let subject = root.join(path);
     fs::create_dir_all(subject.parent().expect("a parent")).expect("scratch parent");
     let mut text = source.join("\n");

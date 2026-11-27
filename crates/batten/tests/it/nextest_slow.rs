@@ -66,7 +66,7 @@ const RAISED_BODY: &str =
 /// A fixture tree carrying a runner config with `body`, or none at all when
 /// `body` is `None`.
 fn repo(name: &str, body: Option<&str>) -> PathBuf {
-    let root = common::scratch(name);
+    let root = common::scratch_repo(name);
     fs::create_dir_all(root.join(".config")).expect("scratch config dir");
     if let Some(body) = body {
         fs::write(root.join(CONFIG), body).expect("write the runner config");
