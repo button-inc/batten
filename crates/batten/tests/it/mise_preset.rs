@@ -177,9 +177,13 @@ fn a_drifted_version_in_this_repository_is_refused() {
     // keep passing over a row that never reads the consumer's. This one copies
     // the real checkout's workflows and real pin table, moves ONE version, and
     // requires the finding.
-    let real = common::at_root(".")
-        .canonicalize()
-        .expect("this checkout is where the manifest says it is");
+    //
+    // THE REAL FILES COME FROM THE COMMITTED-TREE FIXTURE (owner, 2026-11-27,
+    // CLOUD-2904): the committed `batten.toml` and workflow, never the live
+    // checkout's working copy. The drift is written into a repository of the
+    // case's own, because the committed fixture is shared by every case in
+    // this process and must not be edited.
+    let real = common::committed_repo();
     let root = common::scratch_repo("mise-preset-real-drift");
     let pins = std::fs::read_to_string(real.join("batten.toml")).expect("the committed authority");
     common::write(&root, "batten.toml", &pins);
