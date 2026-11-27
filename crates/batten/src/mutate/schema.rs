@@ -14985,11 +14985,11 @@ mod tests {
         std::fs::write(dir.join(DEPENDS), &functions).unwrap();
         let none = std::collections::BTreeMap::new();
         assert_eq!(seal_tested(&base, &root, &none, &format).unwrap().0, 0);
+        let line = std::fs::read_to_string(dir.join(TESTED)).unwrap();
         assert!(
-            std::fs::read_to_string(dir.join(TESTED))
-                .unwrap()
-                .ends_with(&format!("\t{UNTAKEN}")),
-            "tried, with nothing to take"
+            read_tested(&line).is_some_and(|(_, digest, from)| digest == UNTAKEN
+                && from.is_some_and(|from| from.writer == "seal_tested")),
+            "tried, with nothing to take: {line}"
         );
         assert!(sealed_cases(&base).is_empty(), "no selection stands on it");
         let before = batten_facts::source::parses();
@@ -15203,12 +15203,14 @@ mod tests {
         .next()
         .flatten()
         .expect("the live tree gives the case a digest");
-        let want = format!("{}\t{live}", format.key());
-        for (dir, held) in [("bare", &want), ("stale", &want)] {
-            assert_eq!(
-                std::fs::read_to_string(base.join(dir).join(TESTED)).unwrap(),
-                *held,
-                "{dir}"
+        let key = format.key();
+        for dir in ["bare", "stale"] {
+            let line = std::fs::read_to_string(base.join(dir).join(TESTED)).unwrap();
+            assert!(
+                read_tested(&line).is_some_and(|(read_in, digest, from)| read_in == key
+                    && digest == live
+                    && from.is_some_and(|from| from.writer == "retest_carried")),
+                "{dir}: {line}"
             );
         }
         assert_eq!(
