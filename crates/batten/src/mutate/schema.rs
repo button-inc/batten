@@ -11219,22 +11219,21 @@ fn report(
     Ok(if failed { 2 } else { 0 })
 }
 
-/// The key a mutant is sharded by: its site key ([`site_key`]), or its
-/// listing name with every `:line:col` removed when it has none. NEVER ITS
-/// LISTING POSITION (CLOUD-2904): one mutant listed earlier moved every later
-/// one to another shard, each shard imports only its own journal, and a
-/// 32-shard census rerun found 2 of ~290 judged mutants in their old shard.
-fn shard_key(mutant: &Listed, site_key: Option<&str>) -> String {
-    site_key.map_or_else(|| position_free(&mutant.name), str::to_owned)
+/// The key a mutant is sharded by: its listing name with every `:line:col`
+/// removed, so its file, function and mutation. NEVER ITS LISTING POSITION
+/// (CLOUD-2904): one mutant listed earlier moved every later one to another
+/// shard, each shard imports only its own journal, and a 32-shard census
+/// rerun found 2 of ~290 judged mutants in their old shard. NOR ITS SITE KEY
+/// (CLOUD-2904 loop d): that hashes the function's body, so editing one
+/// function moved its mutants to another shard and the shard that owed the
+/// re-run never saw it. The body belongs in the verdict key, never here.
+fn shard_key(mutant: &Listed) -> String {
+    position_free(&mutant.name)
 }
 
-/// Each listed mutant's [`shard_key`], by id, beside its `site_keys`.
-fn shard_keys(mutants: &[Listed], site_keys: &[Option<String>]) -> Vec<String> {
-    mutants
-        .iter()
-        .zip(site_keys)
-        .map(|(mutant, key)| shard_key(mutant, key.as_deref()))
-        .collect()
+/// Each listed mutant's [`shard_key`], by id.
+fn shard_keys(mutants: &[Listed]) -> Vec<String> {
+    mutants.iter().map(shard_key).collect()
 }
 
 /// `name` without its `:line:col` positions, which move whenever a line is
@@ -12460,7 +12459,7 @@ pub fn sweep(
         return reach_sealed(out, &reach);
     }
     let (todo, classic, unviable) = scope.slice(
-        &shard_keys(mutants, &site_keys),
+        &shard_keys(mutants),
         judged_by_switch(mutants.len(), &unviable, &classic)?,
         &classic,
         &unviable,
@@ -18350,12 +18349,8 @@ mod tests {
 
     /// Each listed mutant's [`shard_key`], taken one at a time: what
     /// [`shard_keys`] must answer over the whole listing (CLOUD-2789).
-    fn shard_key_each(listing: &[Listed], site_keys: &[Option<String>]) -> Vec<String> {
-        listing
-            .iter()
-            .zip(site_keys)
-            .map(|(m, s)| shard_key(m, s.as_deref()))
-            .collect()
+    fn shard_key_each(listing: &[Listed]) -> Vec<String> {
+        listing.iter().map(shard_key).collect()
     }
 
     /// T4 (CLOUD-2904): a mutant keeps its shard when another is listed
@@ -18425,13 +18420,11 @@ mod tests {
         let shards = |listing: &[Listed]| {
             // THROUGH `shard_keys`, the slice's own caller's spelling, so a
             // listing whose keys came back empty is a case that fails here.
-            let site_keys: Vec<Option<String>> =
-                listing.iter().map(|m| site_key(&root, m)).collect();
-            let keys = shard_keys(listing, &site_keys);
+            let keys = shard_keys(listing);
             // EACH MUTANT ITS OWN KEY (CLOUD-2789): one shared key repeated
             // keeps every mutant in one shard through an insert, so neither
             // the count nor the slices tell it from the real keys.
-            assert_eq!(keys, shard_key_each(listing, &site_keys), "each its own");
+            assert_eq!(keys, shard_key_each(listing), "each its own");
             let ids: Vec<u32> = (0..u32::try_from(listing.len()).unwrap()).collect();
             let mut shard_of: std::collections::BTreeMap<String, usize> =
                 std::collections::BTreeMap::new();
@@ -18490,9 +18483,27 @@ mod tests {
             ..listed("FnValue", "0", (1, 1), (1, 2))
         };
         let mutants = [named("src/a.rs:1:1: x"), named("src/b.rs:2:2: y")];
+        assert_eq!(shard_keys(&mutants), ["src/a.rs: x", "src/b.rs: y"]);
+    }
+
+    /// Fails by: a shard key that moves when the mutated function's body
+    /// changes (CLOUD-2904 loop d). The site key hashes the body, so one
+    /// edited function left its slice with probability (n-1)/n and the loop
+    /// could never show the one re-run its edit owes.
+    #[test]
+    fn a_mutant_keeps_its_shard_when_its_function_body_changes() {
+        let named = Listed {
+            name: String::from("src/a.rs:3:9: replace > with == in f"),
+            ..listed("FnValue", "0", (3, 9), (3, 10))
+        };
+        let edited = Listed {
+            name: String::from("src/a.rs:4:9: replace > with == in f"),
+            ..named.clone()
+        };
         assert_eq!(
-            shard_keys(&mutants, &[Some(String::from("site")), None]),
-            ["site", "src/b.rs: y"]
+            shard_keys(std::slice::from_ref(&named)),
+            shard_keys(std::slice::from_ref(&edited)),
+            "an edited body keeps the mutant's shard"
         );
     }
 
