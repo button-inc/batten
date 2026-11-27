@@ -6911,6 +6911,14 @@ pub fn seal_reach(
         )?;
     }
     write_listed(base, identity)?;
+    // NO LEFTOVERS ONCE SEALED (CLOUD-2904): every record this run left
+    // unsealed has no digest, and over the same context never will. Kept, the
+    // context made the next sweep's [`seal_leftovers`] derive each of them
+    // again and seal none: 837 s on #1276 before anything else ran.
+    match std::fs::remove_file(base.join(CONTEXT)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+        _ => {}
+    }
     // THE TREE IS SEALED ONLY BY A WHOLE PASS: a seal over the same tree skips
     // the suite, which after a failed baseline would skip the refusal too. Each
     // passing case's `depends` is written either way, which is what carries.
@@ -7100,7 +7108,13 @@ impl SealContext {
 ///
 /// As [`seal_leftovers`], or the line cannot be written.
 fn keep_leftovers(state: &std::path::Path, out: &mut dyn std::io::Write) -> anyhow::Result<()> {
-    let leftovers = seal_leftovers(&state.join("reach"))?;
+    let (leftovers, derived) = seal_leftovers(&state.join("reach"))?;
+    // WHAT IT DERIVED, SAID WHERE IT DERIVED ANY (CLOUD-2904): a null
+    // relaunch derives none and says nothing, and this count, never the
+    // stage's seconds, is how a gate sees one that did.
+    if derived > 0 {
+        crate::mutate::progress!(out, "mutate schema: leftovers derived {derived} case(s)")?;
+    }
     if leftovers > 0 {
         crate::mutate::progress!(
             out,
@@ -7111,7 +7125,8 @@ fn keep_leftovers(state: &std::path::Path, out: &mut dyn std::io::Write) -> anyh
 }
 
 /// Seal every finished, passing record under `base` that a stopped run left
-/// unsealed, with the context that run wrote; the count sealed. No context, no
+/// unsealed, with the context that run wrote; the count sealed, and the count
+/// derived to seal them. No context, no
 /// leftovers. Run before the sweep re-copies `pristine/`, the snapshot the
 /// context's `root` names, so each digest is the one the stopped run's own
 /// end-of-run seal would have written. Idempotent: a crash in here reruns it.
@@ -7119,16 +7134,16 @@ fn keep_leftovers(state: &std::path::Path, out: &mut dyn std::io::Write) -> anyh
 /// # Errors
 ///
 /// The context does not parse, or a record cannot be read or written.
-fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
+fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<(usize, usize)> {
     let Ok(text) = crate::fsio::read_to_string(base.join(CONTEXT)) else {
-        return Ok(0);
+        return Ok((0, 0));
     };
     let context: SealContext = serde_json::from_str(&text)?;
     // SEALED OVER THE TREE IT NAMES OR NOT AT ALL (CLOUD-2904): a digest
     // taken over a snapshot another run has since replaced keys the record to
     // a tree it never ran on.
     if context.snapshot.is_none() || context.snapshot != tree_digest(&context.root).ok() {
-        return Ok(0);
+        return Ok((0, 0));
     }
     let identity = context.identity();
     // AND ONLY A RECORD MADE OVER THAT TREE (round 4 #11): one an earlier
@@ -7147,7 +7162,7 @@ fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
         }
     }
     if dirs.is_empty() {
-        return Ok(0);
+        return Ok((0, 0));
     }
     let reach = collect_dirs(dirs.clone(), &identity)?;
     let mut executed = reach.executed.clone();
@@ -7201,7 +7216,7 @@ fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
     if let Some(format) = &context.format {
         seal_tested(base, &context.root, &context.resources, format)?;
     }
-    Ok(sealed)
+    Ok((sealed, dirs.len()))
 }
 
 /// Remove `target`'s scratch parent, `tmp/`, before a recording pass: absent
@@ -13158,9 +13173,9 @@ fn reached(
     // THE SELECTION DIGEST IS AN ECONOMY: one that cannot be taken leaves each
     // record to the suite's build key, and never fails the sweep.
     match seal_tested(&base, root, ids.0, format) {
-        Ok(taken) => crate::mutate::progress!(
+        Ok((taken, tried)) => crate::mutate::progress!(
             out,
-            "mutate schema: selection digest taken for {taken} case(s)"
+            "mutate schema: selection digest taken for {taken} case(s), {tried} tried"
         )?,
         Err(why) => {
             crate::mutate::progress!(out, "mutate schema: no selection digest taken: {why:#}")?;
@@ -13306,6 +13321,11 @@ fn case_seconds(state: &std::path::Path) -> anyhow::Result<std::collections::BTr
 /// ([`seal_tested`]): the [`Format`]'s key, a tab, and the digest
 /// [`test_digests`] gave over the tree the case was recorded on.
 const TESTED: &str = "tested";
+
+/// The digest [`TESTED`] holds for a record no selection digest can be taken
+/// for: tried, with nothing to take ([`seal_tested`]). No selection stands on
+/// it ([`sealed_cases`]).
+const UNTAKEN: &str = "-";
 
 /// The file a case's record holds from its first moment: the reach
 /// directory's [`TREE`] as it read when the case was recorded, so a seal
@@ -13972,6 +13992,9 @@ pub fn sealed_cases(base: &std::path::Path) -> Vec<Sealed> {
         let Some((format, tested)) = tested.trim_end().split_once('\t') else {
             continue;
         };
+        if tested == UNTAKEN {
+            continue;
+        }
         let (Some(record), Some(case), true) = (
             read(DEPENDS).and_then(|text| carried(&text)),
             kept_case(&dir),
@@ -14011,9 +14034,9 @@ pub fn seal_tested(
     root: &std::path::Path,
     resources: &std::collections::BTreeMap<String, String>,
     format: &Format,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<(usize, usize)> {
     let Ok(over) = crate::fsio::read_to_string(base.join(TREE)) else {
-        return Ok(0);
+        return Ok((0, 0));
     };
     let mut todo: Vec<(std::path::PathBuf, Case, Ran)> = Vec::new();
     for entry in std::fs::read_dir(base)? {
@@ -14039,7 +14062,7 @@ pub fn seal_tested(
         todo.push((dir, case, (record.functions, touched)));
     }
     if todo.is_empty() {
-        return Ok(0);
+        return Ok((0, 0));
     }
     let key = format.store(base)?;
     let index = dependency_index(root, format)?;
@@ -14050,12 +14073,21 @@ pub fn seal_tested(
     let digests = test_digests(root, &index, &format.dirs, &cases, resources);
     let mut sealed = 0;
     for (dir, case, _) in &todo {
-        if let Some(Some(digest)) = digests.get(case) {
-            crate::durable::replace(dir.join(TESTED), format!("{key}\t{digest}"))?;
+        // TRIED ONCE OVER ITS TREE (CLOUD-2904): a record no digest can be
+        // taken for was left unmarked and taken again on every sweep, the
+        // index built again with it: 790 s on #1276 for 1,823 of ~11,900.
+        // Its tree (`OVER`) and record are what the digest is taken from, so
+        // while they stand it has none to take.
+        let digest = digests.get(case).cloned().flatten();
+        crate::durable::replace(
+            dir.join(TESTED),
+            format!("{key}\t{}", digest.as_deref().unwrap_or(UNTAKEN)),
+        )?;
+        if digest.is_some() {
             sealed += 1;
         }
     }
-    Ok(sealed)
+    Ok((sealed, todo.len()))
 }
 
 #[cfg(test)]
@@ -14769,6 +14801,53 @@ mod tests {
         );
     }
 
+    /// A record no selection digest can be taken for is tried once over its
+    /// tree: marked, read by no selection, and not taken again.
+    ///
+    /// Fails by: the record left unmarked, so every sweep built the index and
+    /// took it again (790 s on #1276, for 1,823 of ~11,900 records), or the
+    /// marker read as a digest a selection could stand on.
+    #[test]
+    fn a_record_with_no_selection_digest_is_tried_once() {
+        use std::fmt::Write as _;
+        let wrapped = "macro_rules! held { ($p:literal) => { include_str!($p) }; }\n\
+            pub fn run() -> u8 { u8::from(!held!(\"../tpl.txt\").is_empty()) }\n\
+            #[cfg(test)]\nmod tests {\n    #[test]\n    fn checks() { assert_eq!(super::run(), 1); }\n}\n";
+        let (root, format) = selection_tree("schema-seal-untaken", wrapped, "");
+        let index = dependency_index(&root, &format).unwrap();
+        let base = crate::scratch::scratch("schema-seal-untaken-base");
+        std::fs::write(base.join(TREE), "t1").unwrap();
+        let mut functions = String::from("D-\n");
+        for name in ["run", "checks"] {
+            for digest in index.digests_of(name) {
+                let _ = writeln!(functions, "F{digest}");
+            }
+        }
+        let dir = base.join("made");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("case"), "tests::checks\tfix").unwrap();
+        std::fs::write(dir.join(OVER), "t1").unwrap();
+        std::fs::write(dir.join(DONE), "0").unwrap();
+        std::fs::write(dir.join(READ), "").unwrap();
+        std::fs::write(dir.join(DEPENDS), &functions).unwrap();
+        let none = std::collections::BTreeMap::new();
+        assert_eq!(seal_tested(&base, &root, &none, &format).unwrap().0, 0);
+        assert!(
+            std::fs::read_to_string(dir.join(TESTED))
+                .unwrap()
+                .ends_with(&format!("\t{UNTAKEN}")),
+            "tried, with nothing to take"
+        );
+        assert!(sealed_cases(&base).is_empty(), "no selection stands on it");
+        let before = batten_facts::source::parses();
+        assert_eq!(seal_tested(&base, &root, &none, &format).unwrap().0, 0);
+        assert_eq!(
+            batten_facts::source::parses() - before,
+            0,
+            "not taken again: no index built"
+        );
+    }
+
     /// Fails by: a record made on another tree given a selection digest (a
     /// carried record compared with a head its functions were not read on), a
     /// failed or unsealed one given one, or a sealed one not read back.
@@ -14802,7 +14881,7 @@ mod tests {
             }
         }
         let none = std::collections::BTreeMap::new();
-        assert_eq!(seal_tested(&base, &root, &none, &format).unwrap(), 1);
+        assert_eq!(seal_tested(&base, &root, &none, &format).unwrap().0, 1);
         for (dir, tested) in [
             ("made", true),
             ("carried", false),
@@ -14827,7 +14906,7 @@ mod tests {
             "the digest a seal took is the one the same tree gives"
         );
         assert_eq!(
-            seal_tested(&base, &root, &none, &format).unwrap(),
+            seal_tested(&base, &root, &none, &format).unwrap().0,
             0,
             "taken once"
         );
@@ -15234,6 +15313,39 @@ mod tests {
         assert_eq!(reach.seconds.get(&kept), Some(&2.5));
     }
 
+    /// A sealed run leaves no context: whatever it left unsealed has no
+    /// digest to take, so the next sweep finds no leftovers to derive again.
+    ///
+    /// Fails by: the context kept past the seal, so every sweep's
+    /// `seal_leftovers` derived the records a finished run could not seal,
+    /// and sealed none (837 s on #1276, before anything else ran).
+    #[test]
+    fn a_sealed_run_leaves_no_leftovers_to_seal_again() {
+        let base = crate::scratch::scratch("schema-seal-retires-context");
+        record(&base, "ran", "ran", Some("0"), &[("100", "f0\n")]);
+        std::fs::write(base.join(CONTEXT), "{}").unwrap();
+        let probes = [String::from("fa")];
+        let identity = Identity {
+            probes: &probes,
+            sites: &[],
+            mutant_fns: &std::collections::BTreeMap::new(),
+            file_fns: &std::collections::BTreeMap::new(),
+            classic: &BTreeSet::new(),
+        };
+        let reach = collect_reach(&base, &identity).unwrap();
+        seal_reach(
+            &base,
+            &reach,
+            &std::collections::BTreeMap::new(),
+            &identity,
+            &std::collections::BTreeMap::new(),
+            true,
+        )
+        .unwrap();
+        assert!(!base.join(CONTEXT).exists(), "the seal retired its context");
+        assert_eq!(seal_leftovers(&base).unwrap().0, 0, "no leftovers");
+    }
+
     /// A mutant the recording rendering did not switch (handed back, or
     /// unviable) is never listed, since no case could reach it: once a later
     /// rendering switches it, every record that ran its function is new to it
@@ -15483,7 +15595,7 @@ mod tests {
         }
         let bare = crate::scratch::scratch("schema-seal-case-bare");
         record(&bare, "one", "one", Some("0"), &[("100", "0\nf1\n")]);
-        assert_eq!(seal_leftovers(&bare).unwrap(), 0);
+        assert_eq!(seal_leftovers(&bare).unwrap().0, 0);
         assert!(
             !bare.join("one").join(DEPENDS).exists(),
             "no context, no seal"
@@ -15508,7 +15620,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            seal_leftovers(&by_recorder).unwrap(),
+            seal_leftovers(&by_recorder).unwrap().0,
             1,
             "only the leftover"
         );
@@ -26918,7 +27030,7 @@ pub fn repo() -> u8 {{ scratch() }}
         )
         .unwrap();
         std::fs::write(context.root.join("lib.rs"), "fn replaced() {}").unwrap();
-        assert_eq!(seal_leftovers(&moved).unwrap(), 0, "the snapshot moved");
+        assert_eq!(seal_leftovers(&moved).unwrap().0, 0, "the snapshot moved");
         assert!(!moved.join("one").join(DEPENDS).exists());
         context.snapshot = None;
         let unnamed = crate::scratch::scratch("schema-seal-snapshot-unnamed");
@@ -26928,12 +27040,12 @@ pub fn repo() -> u8 {{ scratch() }}
             serde_json::to_string(&context).unwrap(),
         )
         .unwrap();
-        assert_eq!(seal_leftovers(&unnamed).unwrap(), 0, "no snapshot named");
+        assert_eq!(seal_leftovers(&unnamed).unwrap().0, 0, "no snapshot named");
         let held = crate::scratch::scratch("schema-seal-snapshot-held");
         context.snapshot = Some(tree_digest(&context.root).unwrap());
         record(&held, "one", "one", Some("0"), &[("100", "0\nf1\n")]);
         std::fs::write(held.join(CONTEXT), serde_json::to_string(&context).unwrap()).unwrap();
-        assert_eq!(seal_leftovers(&held).unwrap(), 1, "the snapshot held");
+        assert_eq!(seal_leftovers(&held).unwrap().0, 1, "the snapshot held");
         let stale = crate::scratch::scratch("schema-seal-snapshot-stale");
         record(
             &stale,
@@ -26949,13 +27061,13 @@ pub fn repo() -> u8 {{ scratch() }}
         )
         .unwrap();
         assert_eq!(
-            seal_leftovers(&stale).unwrap(),
+            seal_leftovers(&stale).unwrap().0,
             0,
             "a record made over another tree than the context's"
         );
         std::fs::write(stale.join(TREE), "t-old").unwrap();
         assert_eq!(
-            seal_leftovers(&stale).unwrap(),
+            seal_leftovers(&stale).unwrap().0,
             1,
             "over the context's tree"
         );
