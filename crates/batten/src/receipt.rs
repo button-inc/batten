@@ -928,12 +928,24 @@ pub fn record_sourced(
     named: Option<&str>,
     record: &crate::facts::Sourced,
 ) -> Result<()> {
-    let git_dir = git::git_dir(Path::new(".")).map_err(|_| {
+    record_sourced_in(Path::new("."), name, key, named, record)
+}
+
+/// [`record_sourced`] filed in the checkout at `here`, so a case writes into its
+/// own fixture repository and never into the suite's checkout (CLOUD-2904).
+fn record_sourced_in(
+    here: &Path,
+    name: &str,
+    key: ReceiptKey,
+    named: Option<&str>,
+    record: &crate::facts::Sourced,
+) -> Result<()> {
+    let git_dir = git::git_dir(here).map_err(|_| {
         UsageError::raise(
             "not a git repository, so there is nowhere an agent-sourced fact could be recorded",
         )
     })?;
-    let subject = sourced_subject(Path::new("."), key, named).ok_or_else(|| {
+    let subject = sourced_subject(here, key, named).ok_or_else(|| {
         UsageError::raise(
             "the declared key's subject does not resolve in this checkout, so there is no subject to file an agent-sourced record under",
         )
@@ -2691,6 +2703,10 @@ mod tests {
     /// The write files the record exactly where the store reads it.
     #[test]
     fn an_agent_sourced_record_is_written_where_the_store_reads_it() {
+        let root = crate::fixture_root::fixture_root(
+            "an_agent_sourced_record_is_written_where_the_store_reads_it",
+        );
+        crate::gitwrite::commit_paths(&root, &[], "fixture").unwrap();
         /// Removes the record this case writes into the checkout's own store,
         /// whether or not an assertion below fails first. The store reads the
         /// checkout it runs in, having no root to take (CLOUD-2475).
@@ -2707,11 +2723,21 @@ mod tests {
             std::process::id(),
             crate::clock::now_unix()
         );
-        let store = sourced_store(&[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
+        let store =
+            sourced_store_in(&root, &[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
         let _written = Removed(store.path(&name).unwrap());
-        record_sourced(&name, ReceiptKey::Named, Some("CLOUD-1"), &sourced(5)).unwrap();
+        record_sourced_in(
+            &root,
+            &name,
+            ReceiptKey::Named,
+            Some("CLOUD-1"),
+            &sourced(5),
+        )
+        .unwrap();
         assert_eq!(store.record(&name).map(|record| record.rows), Some(5));
-        assert!(record_sourced(&name, ReceiptKey::Named, Some("a/b"), &sourced(5)).is_err());
+        assert!(
+            record_sourced_in(&root, &name, ReceiptKey::Named, Some("a/b"), &sourced(5)).is_err()
+        );
     }
 
     // -- The predicate: all four verdicts, in the bash readers' order. --
