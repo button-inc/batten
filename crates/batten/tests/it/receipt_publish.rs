@@ -38,7 +38,7 @@ const BRANCH: &str = "work";
 /// Run git in `dir` with `input` on stdin, returning stdout.
 #[expect(
     clippy::disallowed_types,
-    reason = "test-only: the stand-in IS git's own server half over a local bare repository, which is what makes the CAS under test git's rather than a mock's"
+    reason = "stays, and test-only: the stand-in IS git's own server half over a local bare repository, which is what makes the CAS under test git's rather than a mock's"
 )]
 fn git_with(dir: &Path, args: &[&str], input: &[u8]) -> Vec<u8> {
     use std::io::Write as _;

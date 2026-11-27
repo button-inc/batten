@@ -1914,8 +1914,14 @@ fn a_running_suites_fixture_outlives_a_pass_that_keeps_every_running_program() {
         .expect("stdin is piped")
         .write_all(b"\n");
     let _ = running.wait();
-    assert!(done.is_some(), "the band is declared, so a pass ran");
-    assert!(!stale.exists(), "a fixture no running suite roots is taken");
+    // THE STALE FIXTURE GONE IS THE PROOF A PASS RAN, so nothing asserts on
+    // `done`: it is the result of a pass bounded by a clock read, and an
+    // assertion over it reads the clock (`wall_clock`), where the outcome it
+    // stood in for is already asserted here.
+    assert!(
+        !stale.exists(),
+        "a pass ran, and a fixture no running suite roots is taken: {done:?}"
+    );
     assert!(
         live.exists(),
         "the running suite's fixture is kept: {done:?}"
