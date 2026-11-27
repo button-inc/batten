@@ -2703,19 +2703,19 @@ mod tests {
     /// The write files the record exactly where the store reads it.
     #[test]
     fn an_agent_sourced_record_is_written_where_the_store_reads_it() {
-        let root = crate::fixture_root::fixture_root(
-            "an_agent_sourced_record_is_written_where_the_store_reads_it",
-        );
-        crate::gitwrite::commit_paths(&root, &[], "fixture").unwrap();
-        /// Removes the record this case writes into the checkout's own store,
-        /// whether or not an assertion below fails first. The store reads the
-        /// checkout it runs in, having no root to take (CLOUD-2475).
+        /// Removes the record this case writes into its fixture's store,
+        /// whether or not an assertion below fails first (CLOUD-2904: the store
+        /// and the writer take the fixture's root, never the checkout's).
         struct Removed(std::path::PathBuf);
         impl Drop for Removed {
             fn drop(&mut self) {
                 let _ = std::fs::remove_file(&self.0);
             }
         }
+        let root = crate::fixture_root::fixture_root(
+            "an_agent_sourced_record_is_written_where_the_store_reads_it",
+        );
+        crate::gitwrite::commit_paths(&root, &[], "fixture").unwrap();
         // UNIQUE TO THIS RUN, so no record an earlier run left behind can
         // answer the read-back for this one.
         let name = format!(
