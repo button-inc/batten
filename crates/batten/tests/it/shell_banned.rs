@@ -971,7 +971,7 @@ fn this_repositorys_ban_reads_every_declared_home() {
 /// ban that refused its own checkout would be switched off on the first run.
 #[test]
 fn this_repositorys_own_tree_passes() {
-    let root = common::at_root(".");
+    let root = common::committed_repo().to_path_buf();
     let authority: toml::Value =
         toml::from_str(&std::fs::read_to_string(root.join("batten.toml")).unwrap()).unwrap();
     let row = authority["rule"]

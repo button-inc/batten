@@ -4373,7 +4373,8 @@ fn this_repositorys_own_census_is_closed() {
     // its declaration arm never ran and the file-path gates (`action.yml`,
     // `hk.pkl`, the workflows) were swept but never censused: a new file with
     // rows that nobody enrolled read as nothing rather than `uncovered`.
-    let root = common::at_root(".")
+    let root = common::committed_repo_whole()
+        .to_path_buf()
         .canonicalize()
         .expect("this checkout is where the manifest says it is");
     let config: toml::Table = fs::read_to_string(root.join("batten.toml"))
