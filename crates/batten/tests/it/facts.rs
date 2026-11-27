@@ -39,8 +39,8 @@ use batten::facts::{
     GIT_INDEX, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_TAGS, GIT_WORKTREES,
     INSTALL_PENDING, INSTANT, INVOCATIONS, KEYS, LAND_LIVE, LANDING, LINES, Look, MINTED,
     PATHSPEC_STATUS, PINNED, PLAN, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED,
-    RED_HEAD, REVIEW, SHELL, SHELL_INTRODUCED, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS,
-    TOOL_VERDICT, TRACKED, TRAVERSALS, UNITS, USES, WAIVED,
+    RED_HEAD, REVIEW, SHELL, SHELL_INTRODUCED, STAGED, STATE, STATE_REPO, STOP, SYMBOLS, Surface,
+    TASKS, TOOL_VERDICT, TRACKED, TRAVERSALS, UNITS, USES, WAIVED,
 };
 
 #[test]
@@ -170,6 +170,7 @@ fn every_fact_returns_its_stated_const() {
             Fact::DispatchBrief => DISPATCH_BRIEF,
             Fact::LandLive => LAND_LIVE,
             Fact::InstallPending => INSTALL_PENDING,
+            Fact::StateRepo => STATE_REPO,
             // CLOUD-2270. One record read and a stat per failed run.
             Fact::RedHead => RED_HEAD,
             // CLOUD-2684. One index and status read, only on a checkout/restore.
