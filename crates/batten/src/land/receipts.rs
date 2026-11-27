@@ -229,11 +229,11 @@ pub fn state_remote(value: Option<&str>, origin: Option<&str>) -> Remote {
 /// [`UsageError`] when `branch` does not make a valid ref name.
 pub fn reference(branch: &str) -> Result<String> {
     let name = format!("{REF_PREFIX}{branch}");
-    gix::refs::FullName::try_from(name.as_str()).map_err(|_| {
-        UsageError::raise(format!(
+    if !lease::is_ref_name(&name) {
+        return Err(UsageError::raise(format!(
             "receipt: `{branch}` does not make a valid ref name for the receipt set"
-        ))
-    })?;
+        )));
+    }
     Ok(name)
 }
 
@@ -529,25 +529,13 @@ fn admissible_name(kind: &str, name: &str, claim: &str) -> bool {
 }
 
 /// Hash and serialise one object.
-fn object(kind: gix::object::Kind, body: Vec<u8>) -> Result<Object> {
-    let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, kind, &body)
-        .map_err(|err| anyhow::anyhow!("receipt: an object will not hash: {err}"))?;
-    Ok(Object {
-        id: id.to_string(),
-        kind,
-        body,
-    })
+fn object(kind: lease::ObjectKind, body: Vec<u8>) -> Result<Object> {
+    lease::hashed(kind, body).map_err(|err| anyhow::anyhow!("receipt: {err}"))
 }
 
 /// One tree over `entries`, already in git's order.
-fn tree(entries: Vec<gix::objs::tree::Entry>) -> Result<Object> {
-    use gix::objs::WriteTo as _;
-
-    let mut body = Vec::new();
-    gix::objs::Tree { entries }
-        .write_to(&mut body)
-        .map_err(|err| anyhow::anyhow!("receipt: a tree will not serialise: {err}"))?;
-    object(gix::object::Kind::Tree, body)
+fn tree(entries: &[lease::TreeEntry]) -> Result<Object> {
+    lease::tree_object(entries).map_err(|err| anyhow::anyhow!("receipt: {err}"))
 }
 
 /// The objects a set is published as: one blob per receipt, one tree per kind,
@@ -558,17 +546,16 @@ fn tree(entries: Vec<gix::objs::tree::Entry>) -> Result<Object> {
 /// An object that will not serialise or hash.
 pub fn tree_objects(set: &BTreeMap<String, Vec<u8>>) -> Result<Vec<Object>> {
     let mut objects = Vec::new();
-    let mut kinds: BTreeMap<&str, Vec<gix::objs::tree::Entry>> = BTreeMap::new();
+    let mut kinds: BTreeMap<&str, Vec<lease::TreeEntry>> = BTreeMap::new();
     for (path, bytes) in set {
         let Some((kind, name)) = path.split_once('/') else {
             continue;
         };
-        let blob = object(gix::object::Kind::Blob, bytes.clone())?;
-        kinds.entry(kind).or_default().push(gix::objs::tree::Entry {
-            mode: gix::objs::tree::EntryKind::Blob.into(),
-            filename: name.into(),
-            oid: gix::hash::ObjectId::from_hex(blob.id.as_bytes())?,
-        });
+        let blob = object(lease::ObjectKind::Blob, bytes.clone())?;
+        kinds
+            .entry(kind)
+            .or_default()
+            .push((name.to_owned(), blob.id.clone(), false));
         objects.push(blob);
     }
     let mut root = Vec::new();
@@ -576,15 +563,11 @@ pub fn tree_objects(set: &BTreeMap<String, Vec<u8>>) -> Result<Vec<Object>> {
     // byte order IS git's order at both levels: the `/` git appends to a tree's
     // name for sorting moves nothing among names that are all trees.
     for (kind, entries) in kinds {
-        let sub = tree(entries)?;
-        root.push(gix::objs::tree::Entry {
-            mode: gix::objs::tree::EntryKind::Tree.into(),
-            filename: kind.into(),
-            oid: gix::hash::ObjectId::from_hex(sub.id.as_bytes())?,
-        });
+        let sub = tree(&entries)?;
+        root.push((kind.to_owned(), sub.id.clone(), true));
         objects.push(sub);
     }
-    objects.push(tree(root)?);
+    objects.push(tree(&root)?);
     Ok(objects)
 }
 
@@ -606,27 +589,13 @@ const AUTHOR_EMAIL: &str = "batten@localhost";
 ///
 /// A commit that will not serialise or hash.
 pub fn commit_over(root: &Object, count: usize, observed: &str, seconds: i64) -> Result<Object> {
-    use gix::objs::WriteTo as _;
-
-    let who = gix::actor::Signature {
-        name: AUTHOR_NAME.into(),
-        email: AUTHOR_EMAIL.into(),
-        time: crate::git::utc_at(seconds),
-    };
-    let commit = gix::objs::Commit {
-        tree: gix::hash::ObjectId::from_hex(root.id.as_bytes())?,
-        parents: std::iter::empty().collect(),
-        author: who.clone(),
-        committer: who,
-        encoding: None,
-        message: format!("batten receipts: {count} published\n\nreplaces {observed}\n").into(),
-        extra_headers: Vec::new(),
-    };
-    let mut body = Vec::new();
-    commit
-        .write_to(&mut body)
-        .map_err(|err| anyhow::anyhow!("receipt: the commit will not serialise: {err}"))?;
-    object(gix::object::Kind::Commit, body)
+    lease::parentless_commit(
+        &root.id,
+        (AUTHOR_NAME, AUTHOR_EMAIL),
+        seconds,
+        &format!("batten receipts: {count} published\n\nreplaces {observed}\n"),
+    )
+    .map_err(|err| anyhow::anyhow!("receipt: {err}"))
 }
 
 /// What the remote's ref holds: its head and its set.
@@ -663,7 +632,7 @@ fn body_of(
     fetched: &BTreeMap<String, Object>,
     repo: &Path,
     id: &str,
-    kind: gix::object::Kind,
+    kind: lease::ObjectKind,
 ) -> Result<Vec<u8>> {
     if let Some(found) = fetched.get(id) {
         if found.kind != kind {
@@ -674,35 +643,20 @@ fn body_of(
         }
         return Ok(found.body.clone());
     }
-    let opened = crate::git::open_fresh(repo)?;
-    let oid = gix::hash::ObjectId::from_hex(id.as_bytes())?;
-    let found = opened.find_object(oid).map_err(|err| {
+    let (found, data) = lease::odb_object(repo, id).map_err(|err| {
         anyhow::anyhow!("receipt: {id} is in neither the answer nor the odb: {err}")
     })?;
-    if found.kind != kind {
+    if found != kind {
         return Err(anyhow::anyhow!(
-            "receipt: {id} is a {} where a {kind} was expected",
-            found.kind
+            "receipt: {id} is a {found} where a {kind} was expected"
         ));
     }
-    Ok(found.data.clone())
+    Ok(data)
 }
 
 /// The entries of a tree body, as `(name, id, is_tree)`.
-fn entries(body: &[u8]) -> Result<Vec<(String, String, bool)>> {
-    let tree = gix::objs::TreeRef::from_bytes(body, gix::hash::Kind::Sha1)
-        .map_err(|err| anyhow::anyhow!("receipt: a tree will not parse: {err}"))?;
-    Ok(tree
-        .entries
-        .iter()
-        .map(|entry| {
-            (
-                entry.filename.to_string(),
-                entry.oid.to_string(),
-                entry.mode.is_tree(),
-            )
-        })
-        .collect())
+fn entries(body: &[u8]) -> Result<Vec<lease::TreeEntry>> {
+    lease::tree_entries(body).map_err(|err| anyhow::anyhow!("receipt: {err}"))
 }
 
 /// Read what `remote` holds at `name`, fetching into `repo`'s transport, with
@@ -741,27 +695,25 @@ fn held_by(
         .into_iter()
         .map(|object| (object.id.clone(), object))
         .collect();
-    let commit = body_of(&objects, repo, &fetched.head, gix::object::Kind::Commit)?;
-    let root = gix::objs::CommitRef::from_bytes(&commit, gix::hash::Kind::Sha1)
-        .map_err(|err| anyhow::anyhow!("receipt: the published commit will not parse: {err}"))?
-        .tree()
-        .to_string();
+    let commit = body_of(&objects, repo, &fetched.head, lease::ObjectKind::Commit)?;
+    let root = lease::commit_tree(&commit)
+        .map_err(|err| anyhow::anyhow!("receipt: the published commit will not parse: {err}"))?;
     let mut set = BTreeMap::new();
     let mut known = std::collections::BTreeSet::from([fetched.head.clone(), root.clone()]);
-    for (kind, id, is_tree) in entries(&body_of(&objects, repo, &root, gix::object::Kind::Tree)?)? {
+    for (kind, id, is_tree) in entries(&body_of(&objects, repo, &root, lease::ObjectKind::Tree)?)? {
         if !is_tree {
             continue;
         }
         known.insert(id.clone());
         for (name, blob, nested) in
-            entries(&body_of(&objects, repo, &id, gix::object::Kind::Tree)?)?
+            entries(&body_of(&objects, repo, &id, lease::ObjectKind::Tree)?)?
         {
             if nested {
                 continue;
             }
             known.insert(blob.clone());
             let path = format!("{kind}/{name}");
-            let bytes = body_of(&objects, repo, &blob, gix::object::Kind::Blob)?;
+            let bytes = body_of(&objects, repo, &blob, lease::ObjectKind::Blob)?;
             if keep(&path, &bytes) {
                 set.insert(path, bytes);
             }
@@ -1085,11 +1037,11 @@ const KEPT_CHUNKS: usize = 32;
 /// [`UsageError`] when `branch` does not make a valid ref name.
 pub fn mutate_reference(branch: &str) -> Result<String> {
     let name = format!("{MUTATE_PREFIX}{branch}");
-    gix::refs::FullName::try_from(name.as_str()).map_err(|_| {
-        UsageError::raise(format!(
+    if !lease::is_ref_name(&name) {
+        return Err(UsageError::raise(format!(
             "receipt: `{branch}` does not make a valid ref name for the mutate carry"
-        ))
-    })?;
+        )));
+    }
     Ok(name)
 }
 
