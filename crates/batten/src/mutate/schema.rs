@@ -6482,6 +6482,9 @@ struct Carried {
     functions: BTreeSet<String>,
     sites: BTreeSet<String>,
     seconds: Option<f64>,
+    /// Who sealed it, with which engine, on which tree, in which run
+    /// (CLOUD-2904): a record naming none is never read back.
+    from: Option<Provenance>,
 }
 
 fn carried(text: &str) -> Option<Carried> {
@@ -6497,10 +6500,13 @@ fn carried(text: &str) -> Option<Carried> {
                 record.sites.insert(value.to_owned());
             }
             "T" => record.seconds = value.parse().ok(),
+            "P" => record.from = Some(Provenance::parse(value)?),
             _ => return None,
         }
     }
-    (!record.digest.is_empty()).then_some(record)
+    // NO PROVENANCE, NO RECORD (CLOUD-2904, owner ruling b1f42a48): a record
+    // that says nothing of who sealed it is recorded again, never carried.
+    (!record.digest.is_empty() && record.from.is_some()).then_some(record)
 }
 
 /// Each value's ids in `by_id`, inverted: one digest or key can name several.
@@ -6996,6 +7002,16 @@ fn seal_dir(
     if let Some(took) = seconds {
         let _ = writeln!(record, "T{took}");
     }
+    let from = Provenance {
+        writer: String::from("seal_dir"),
+        engine: engine_id().to_owned(),
+        tree: crate::fsio::read_to_string(dir.join(OVER))
+            .ok()
+            .filter(|over| !over.is_empty() && !over.contains(char::is_whitespace))
+            .unwrap_or_else(|| String::from("-")),
+        run: run_id().to_owned(),
+    };
+    let _ = writeln!(record, "P{}", from.field());
     crate::durable::replace(dir.join(DEPENDS), record)?;
     for file in std::fs::read_dir(dir)? {
         let path = file?.path();
