@@ -5651,6 +5651,7 @@ fn fact_value(
         | crate::facts::Fact::RedHead
         | crate::facts::Fact::LandLive
         | crate::facts::Fact::InstallPending
+        | crate::facts::Fact::StateRepo
         | crate::facts::Fact::PathspecStatus
         | crate::facts::Fact::Budgeted
         // CLOUD-2335: hook-surface; its question is about a write.

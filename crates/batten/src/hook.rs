@@ -3997,6 +3997,9 @@ pub struct Policy {
     /// The resolved `[budget]` sets, judged at a write that would change one
     /// (CLOUD-2661). `None` arms nothing.
     pub budget: Option<crate::config_model::Budget>,
+    /// `[receipt] state_repo_optional` (CLOUD-2939): a session that cannot read
+    /// the state repository proceeds unattached rather than being held.
+    pub state_repo_optional: bool,
     /// The ratchet rows a write can be judged against (CLOUD-2692), held apart
     /// from `shapes` because they are tree-scoped rows every `shapes` consumer
     /// would otherwise have to filter out.
@@ -4139,6 +4142,7 @@ impl Policy {
         Policy {
             commit: None,
             budget: None,
+            state_repo_optional: false,
             ratchets: Vec::new(),
             harness,
             shapes: Vec::new(),
@@ -4298,6 +4302,7 @@ impl Policy {
             facts: resolved.facts.clone(),
             commit: resolved.commit.clone(),
             budget: resolved.budget.clone(),
+            state_repo_optional: resolved.state_repo_optional,
             ratchets: resolved
                 .rules
                 .iter()
@@ -4999,6 +5004,7 @@ impl Policy {
         Policy {
             commit: self.commit.clone(),
             budget: self.budget.clone(),
+            state_repo_optional: self.state_repo_optional,
             ratchets: self.ratchets.clone(),
             shapes: self
                 .shapes
@@ -6345,6 +6351,11 @@ pub struct Facts<'a> {
     /// installing, or `None` where no setup task is recorded or no module on
     /// the call reads it (CLOUD-2840): [`crate::facts::Fact::InstallPending`].
     pub install_pending: &'a Option<Value>,
+    /// Whether this session can read the state repository it is configured to
+    /// share through, or `None` where it can, the variable is unset, the
+    /// config lets it proceed without, or no module on the call reads it
+    /// (CLOUD-2939): [`crate::facts::Fact::StateRepo`].
+    pub state_repo: &'a Option<Value>,
     /// Each of this call's writes that lands in the live lap's checkout
     /// ([`write_sites`] whose checkout root is [`Self::land_live`]), or `None`
     /// where no lap is live or the call's writes could not be placed
@@ -6476,6 +6487,7 @@ impl<'a> Facts<'a> {
             singleton: &None,
             land_live: &None,
             install_pending: &None,
+            state_repo: &None,
             lap_held: &None,
             // Could-not-look, never an empty list: "this reset discards nothing"
             // is a claim about a repository's remotes, and a caller that resolved
@@ -9463,6 +9475,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             crate::facts::Fact::InstallPending => Some(
                 facts
                     .install_pending
+                    .clone()
+                    .unwrap_or(serde_json::Value::Null),
+            ),
+            crate::facts::Fact::StateRepo => Some(
+                facts
+                    .state_repo
                     .clone()
                     .unwrap_or(serde_json::Value::Null),
             ),
@@ -14990,6 +15008,7 @@ mod tests {
                 singleton: &None,
                 land_live: &None,
                 install_pending: &None,
+                state_repo: &None,
                 lap_held: &None,
                 unread_history: &crate::facts::Look::CouldNotLook,
                 commit_subject: &crate::facts::Look::CouldNotLook,
@@ -18286,6 +18305,7 @@ deny contains "refused by themodule" if {
             budget: None,
             ratchets: Vec::new(),
             harness: Harness::ExitCode,
+            state_repo_optional: false,
             facts: Vec::new(),
             mints: Vec::new(),
             recorders: Vec::new(),
@@ -19864,6 +19884,7 @@ deny contains "refused by themodule" if {
             budget: None,
             ratchets: Vec::new(),
             harness: Harness::ExitCode,
+            state_repo_optional: false,
             facts: Vec::new(),
             mints: Vec::new(),
             recorders: Vec::new(),
@@ -19940,6 +19961,7 @@ deny contains "refused by themodule" if {
             budget: None,
             ratchets: Vec::new(),
             harness: Harness::ExitCode,
+            state_repo_optional: false,
             facts: Vec::new(),
             mints: Vec::new(),
             recorders: Vec::new(),
@@ -19963,6 +19985,7 @@ deny contains "refused by themodule" if {
             budget: None,
             ratchets: Vec::new(),
             harness: Harness::ExitCode,
+            state_repo_optional: false,
             facts: Vec::new(),
             mints: Vec::new(),
             recorders: Vec::new(),
