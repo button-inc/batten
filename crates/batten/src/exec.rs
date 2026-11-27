@@ -2804,7 +2804,9 @@ fn run_one(
         clippy::disallowed_types,
         reason = "stays: this is the verb's one spawn, and the child's argv, streams and exit code all pass through untouched — an in-process form would be a different verb (CLOUD-285)"
     )]
-    let spawned = crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
+    // THE PIN OF THE ROOT THIS RUN WAS HANDED (CLOUD-2904), never the working
+    // directory's: `"."` answered about whichever checkout the process stood in.
+    let spawned = crate::rules::spawn_resolving(Some(repo_root), program, |program, extra| {
         let mut builder = Command::new(OsString::from(program));
         builder
             .args(extra.iter().map(OsString::from))
