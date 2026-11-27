@@ -451,7 +451,13 @@ mod tests {
     /// forever rather than as unmeasured.
     #[test]
     fn an_undeclared_surface_is_could_not_look_rather_than_empty() {
-        let looked = surface(Path::new("."), &[]).unwrap();
+        let looked = surface(
+            &crate::fixture_root::fixture_root(
+                "an_undeclared_surface_is_could_not_look_rather_than_empty",
+            ),
+            &[],
+        )
+        .unwrap();
         assert!(matches!(looked, Look::CouldNotLook));
         assert_ne!(looked, Look::Is(Manifest::new()));
     }

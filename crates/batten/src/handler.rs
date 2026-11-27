@@ -1260,7 +1260,13 @@ mod tests {
         );
         let mut deaf = handler("deaf", "stop", &["sh", "-c", &spin]);
         deaf.timeout_ms = Some(300);
-        let outcome = run_one(Path::new("."), &deaf, &Payload::Text(oversized()));
+        let outcome = run_one(
+            &crate::fixture_root::fixture_root(
+                "a_handler_that_never_reads_stdin_cannot_wedge_the_parent",
+            ),
+            &deaf,
+            &Payload::Text(oversized()),
+        );
         assert_eq!(
             outcome,
             Outcome::Broke(Violation::TimedOut(Duration::from_millis(300))),
@@ -1284,7 +1290,9 @@ mod tests {
         let big = 200 * 1024;
         let script = format!("head -c {big} /dev/zero | tr '\\0' a");
         let outcome = run_one(
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "a_handler_that_floods_stdout_still_returns_its_verdict",
+            ),
             &handler("loud", "stop", &["sh", "-c", &script]),
             &Payload::from("{}"),
         );
@@ -1469,7 +1477,9 @@ mod tests {
         let mut row = handler("g", Event::PreTool.as_str(), &["sh", "-c", "echo granted"]);
 
         let dispatched = dispatch(
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "an_advisory_becomes_a_grant_only_where_the_row_declares_it",
+            ),
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
@@ -1489,7 +1499,9 @@ mod tests {
 
         row.preapproves = true;
         let dispatched = dispatch(
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "an_advisory_becomes_a_grant_only_where_the_row_declares_it",
+            ),
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
@@ -1521,7 +1533,7 @@ mod tests {
         );
         row.preapproves = true;
         let dispatched = dispatch(
-            Path::new("."),
+            &crate::fixture_root::fixture_root("a_declaring_row_may_still_report_and_refuse"),
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
@@ -1597,7 +1609,9 @@ mod tests {
         second.preapproves = true;
         let rows = vec![first, second.clone()];
         let dispatched = dispatch(
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "the_first_grant_wins_and_a_refusal_outranks_every_grant",
+            ),
             &rows,
             Event::PreTool,
             "mcp__x__y",
@@ -1613,7 +1627,9 @@ mod tests {
         );
         let rows = vec![second, denier];
         let dispatched = dispatch(
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "the_first_grant_wins_and_a_refusal_outranks_every_grant",
+            ),
             &rows,
             Event::PreTool,
             "mcp__x__y",
@@ -1646,7 +1662,9 @@ mod tests {
         );
         row.preapproves = true;
         let dispatched = dispatch(
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "a_declaring_row_that_writes_a_host_document_is_still_a_violation",
+            ),
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",

@@ -837,7 +837,9 @@ mod tests {
             mode: MintMode::Replace,
             body: "{id} {authority:ready}".to_owned(),
         };
-        let root = std::path::Path::new(".");
+        let root = &crate::fixture_root::fixture_root(
+            "an_unjudgeable_payload_renders_the_absent_token_rather_than_a_verdict",
+        );
         // The committed grammar, so this case asserts as a side effect that
         // `batten.toml` still declares the whole vocabulary the authority reads.
         let grammar = crate::ready::Grammar::committed();

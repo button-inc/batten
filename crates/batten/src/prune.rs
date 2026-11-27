@@ -1490,7 +1490,13 @@ mod tests {
             taken: 0,
         };
         let taken: Vec<u64> = (0..3)
-            .map(|_| readings.take(Path::new(".")).unwrap_or(0))
+            .map(|_| {
+                readings
+                    .take(&crate::fixture_root::fixture_root(
+                        "declared_readings_are_taken_in_order_and_the_last_repeats",
+                    ))
+                    .unwrap_or(0)
+            })
             .collect();
         assert_eq!(taken, [5, 3, 3]);
     }

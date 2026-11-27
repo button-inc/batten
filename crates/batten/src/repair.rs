@@ -277,7 +277,7 @@ mod tests {
         // `run` is what spawns, so `run` is what must refuse.
         assert_eq!(
             run(
-                Path::new("."),
+                &crate::fixture_root::fixture_root("an_advice_class_never_runs_a_repair"),
                 "definitely-not-a-program",
                 None,
                 Applicability::Advice
@@ -292,7 +292,9 @@ mod tests {
         // caller falls back to.
         assert_eq!(
             run(
-                Path::new("."),
+                &crate::fixture_root::fixture_root(
+                    "a_program_that_will_not_resolve_is_a_failed_repair"
+                ),
                 "batten-no-such-program-1639",
                 None,
                 Applicability::Retry
@@ -305,7 +307,9 @@ mod tests {
     /// repair that succeeded refuses and one that failed admits.
     #[test]
     fn a_repair_that_exits_zero_reports_its_posture_and_one_that_fails_does_not() {
-        let root = Path::new(".");
+        let root = &crate::fixture_root::fixture_root(
+            "a_repair_that_exits_zero_reports_its_posture_and_one_that_fails_does_not",
+        );
         assert_eq!(
             run(root, "true", None, Applicability::Silent),
             Outcome::Silent

@@ -34386,6 +34386,8 @@ pub fn land_ready_owes(
     }
 }
 
+#[cfg(test)]
+pub(crate) mod fixture_root;
 /// The build script's marker scanner, compiled here only so its own unit tests run.
 #[cfg(test)]
 mod mutation_markers;
@@ -35370,7 +35372,12 @@ mod tests {
     fn a_relative_root_is_resolved_before_the_manifest_is_compared() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         // A unit test runs from its crate's directory, which is the manifest's.
-        assert!(super::built_under(manifest, std::path::Path::new(".")));
+        assert!(super::built_under(
+            manifest,
+            &crate::fixture_root::fixture_root(
+                "a_relative_root_is_resolved_before_the_manifest_is_compared"
+            )
+        ));
         assert!(!super::built_under(manifest, &manifest.join("src")));
         assert!(!super::built_under(
             manifest,

@@ -1197,7 +1197,7 @@ mod tests {
             &test_columns(),
             &issues,
             &Request::default(),
-            Path::new("."),
+            &crate::fixture_root::fixture_root("a_status_that_is_not_todo_short_circuits_the_rest"),
             None,
         ) else {
             panic!("a non-Todo issue needs no body")
@@ -1227,7 +1227,9 @@ mod tests {
                 &test_columns(),
                 std::slice::from_ref(&held),
                 &request,
-                Path::new("."),
+                &crate::fixture_root::fixture_root(
+                    "a_row_held_only_by_this_branchs_own_pr_is_its_claim",
+                ),
                 None,
             )
         };
@@ -1279,7 +1281,9 @@ mod tests {
             &test_columns(),
             std::slice::from_ref(&parsed),
             &request,
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "a_rivals_live_pr_beside_this_branchs_own_keeps_the_row_a_competitor",
+            ),
             None,
         ) else {
             panic!("a competitor needs no body")
@@ -1301,7 +1305,9 @@ mod tests {
             &test_columns(),
             &issues,
             &Request::default(),
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "an_unrefusable_issue_with_no_body_is_a_usage_error_rather_than_a_pass",
+            ),
             None,
         );
         assert!(
@@ -1333,7 +1339,9 @@ mod tests {
             &test_columns(),
             &[todo],
             &Request::default(),
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "a_body_with_no_ready_block_is_refused_as_not_ready",
+            ),
             None,
         )
         .unwrap();

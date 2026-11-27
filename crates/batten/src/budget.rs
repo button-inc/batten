@@ -900,7 +900,16 @@ mod tests {
         // budget has no budget to fail. `policy budget` reads the same absence
         // as a usage error, because a report that measured nothing must not
         // print `0` — two callers, two honest readings.
-        assert!(measure_all(Path::new("."), None).unwrap().is_empty());
+        assert!(
+            measure_all(
+                &crate::fixture_root::fixture_root(
+                    "measuring_no_declared_budget_is_empty_for_check_and_never_an_error"
+                ),
+                None
+            )
+            .unwrap()
+            .is_empty()
+        );
     }
 
     /// The verdict `policy budget` reports is the total OR any one file.
