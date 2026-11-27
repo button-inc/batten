@@ -18,8 +18,8 @@
 #MUTANT-SUITE crates/batten/tests/it/dispatch_tier.rs
 #MUTANT model-unread|s@^\tnot allowed_model$@\tfalse@|a_dispatch_on_another_model_or_none_is_refused
 #MUTANT effort-unread|s@^\tnot allowed_effort$@\tfalse@|a_dispatch_at_another_effort_or_none_is_refused
-#MUTANT family-prefix-dropped|s@^\tstartswith\(model, "claude-opus-"\)$@\tfalse@|an_opus_dispatch_at_low_effort_is_not_refused
-#MUTANT every-call-judged|s@^\tendswith\(input.call.tool, "__create_session"\)$@\ttrue@|a_call_that_opens_no_session_is_not_judged
+#MUTANT family-prefix-dropped|s@^\tstartswith(model, "claude-opus-")$@\tfalse@|an_opus_dispatch_at_low_effort_is_not_refused
+#MUTANT every-call-judged|s@^\tendswith(input.call.tool, "__create_session")$@\ttrue@|a_call_that_opens_no_session_is_not_judged
 
 # METADATA
 # description: |
