@@ -6699,14 +6699,21 @@ fn retest_carried(
         .map(|(_, case, ran)| (case.clone(), ran.clone()))
         .collect();
     let digests = test_digests(root, &index, &format.dirs, &cases, resources);
+    let from = Provenance::taken("retest_carried", resources);
     for (dir, case, _) in due {
         let Some(Some(digest)) = digests.get(case) else {
             continue;
         };
-        let line = format!("{key}\t{digest}");
+        // THE WRITER THAT ESTABLISHED A DIGEST KEEPS ITS NAME: a line already
+        // holding this key and digest, with provenance, is left as it stands.
         let held = crate::fsio::read_to_string(dir.join(TESTED)).ok();
-        if held.as_deref().map(str::trim_end) != Some(line.as_str()) {
-            crate::durable::replace(dir.join(TESTED), &line)?;
+        let standing = held.as_deref().and_then(read_tested).is_some_and(
+            |(read_in, held_digest, provenance)| {
+                read_in == key && held_digest == digest && provenance.is_some()
+            },
+        );
+        if !standing {
+            crate::durable::replace(dir.join(TESTED), tested_line(&key, digest, &from))?;
         }
     }
     Ok(())
@@ -13319,6 +13326,104 @@ const TESTED: &str = "tested";
 /// it ([`sealed_cases`]).
 const UNTAKEN: &str = "-";
 
+/// Who took a stored selection digest ([`TESTED`]), with which engine, over
+/// which tree, in which run (CLOUD-2904).
+///
+/// EVERY STORED KEY CARRIES ITS PROVENANCE (owner ruling, CLOUD-2904
+/// b1f42a48): the line was `{format}\t{digest}` and two writers replaced it,
+/// one over a later tree than the record's own, so 11,659 digests dated one
+/// hour could be traced to no run and 64 of 300 recomputed. A line without
+/// this is never stood on ([`sealed_cases`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Provenance {
+    /// The writer: [`seal_tested`] or [`retest_carried`].
+    pub writer: String,
+    /// The running engine's image digest.
+    pub engine: String,
+    /// The content ids of the tree the digest was taken over
+    /// ([`tree_ids_digest`]).
+    pub tree: String,
+    /// The writing process and the second it started taking.
+    pub run: String,
+}
+
+/// The word that opens a [`TESTED`] line's provenance field.
+const FROM: &str = "from";
+
+impl Provenance {
+    /// The provenance of a digest `writer` takes now over a tree with content
+    /// ids `resources`.
+    fn taken(writer: &str, resources: &std::collections::BTreeMap<String, String>) -> Self {
+        Self {
+            writer: writer.to_owned(),
+            engine: engine_id().to_owned(),
+            tree: tree_ids_digest(resources),
+            run: run_id().to_owned(),
+        }
+    }
+
+    /// Its field in a [`TESTED`] line.
+    fn field(&self) -> String {
+        format!(
+            "{FROM} {} {} {} {}",
+            self.writer, self.engine, self.tree, self.run
+        )
+    }
+
+    /// The provenance a [`TESTED`] line's third field states, or `None` where
+    /// it states none or states it short.
+    #[must_use]
+    pub fn parse(field: &str) -> Option<Self> {
+        let mut words = field.split(' ');
+        if words.next() != Some(FROM) {
+            return None;
+        }
+        let mut next = || {
+            words
+                .next()
+                .filter(|word| !word.is_empty())
+                .map(str::to_owned)
+        };
+        let provenance = Self {
+            writer: next()?,
+            engine: next()?,
+            tree: next()?,
+            run: next()?,
+        };
+        words.next().is_none().then_some(provenance)
+    }
+}
+
+/// A [`TESTED`] line: the format's key, the digest, and who took it.
+fn tested_line(key: &str, digest: &str, from: &Provenance) -> String {
+    format!("{key}\t{digest}\t{}", from.field())
+}
+
+/// A [`TESTED`] line read back: its format key, its digest, and its
+/// provenance where it states one.
+fn read_tested(text: &str) -> Option<(&str, &str, Option<Provenance>)> {
+    let mut fields = text.trim_end().splitn(3, '\t');
+    let (key, digest) = (fields.next()?, fields.next()?);
+    Some((key, digest, fields.next().and_then(Provenance::parse)))
+}
+
+/// The running engine's image, digested once per process: what took a key.
+fn engine_id() -> &'static str {
+    static ENGINE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ENGINE.get_or_init(|| {
+        super::running_image().and_then(std::fs::read).map_or_else(
+            |_| String::from("unknown"),
+            |bytes| blake3::hash(&bytes).to_hex()[..16].to_owned(),
+        )
+    })
+}
+
+/// This process and the second it first took a key: the run a key names.
+fn run_id() -> &'static str {
+    static RUN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    RUN.get_or_init(|| format!("{}@{}", std::process::id(), batten_base::clock::now_unix()))
+}
+
 /// The file a case's record holds from its first moment: the reach
 /// directory's [`TREE`] as it read when the case was recorded, so a seal
 /// knows which records were made on the tree it seals over.
@@ -13992,10 +14097,12 @@ pub fn sealed_cases(base: &std::path::Path) -> Vec<Sealed> {
     for entry in entries.flatten() {
         let dir = entry.path();
         let read = |name: &str| crate::fsio::read_to_string(dir.join(name)).ok();
-        let Some(tested) = read(TESTED) else {
+        let Some(line) = read(TESTED) else {
             continue;
         };
-        let Some((format, tested)) = tested.trim_end().split_once('\t') else {
+        // NO PROVENANCE, NO SELECTION (CLOUD-2904): a digest no line says who
+        // took is never stood on; its case runs.
+        let Some((format, tested, Some(_))) = read_tested(&line) else {
             continue;
         };
         if tested == UNTAKEN {
@@ -14009,7 +14116,7 @@ pub fn sealed_cases(base: &std::path::Path) -> Vec<Sealed> {
             continue;
         };
         let touched = read(READ).map(|listing| listing.lines().map(str::to_owned).collect());
-        if read(TESTED).as_deref().map(str::trim_end) != Some(&format!("{format}\t{tested}")) {
+        if read(TESTED).as_deref() != Some(line.as_str()) {
             continue;
         }
         out.push(Sealed {
@@ -14077,6 +14184,7 @@ pub fn seal_tested(
         .map(|(_, case, ran)| (case.clone(), ran.clone()))
         .collect();
     let digests = test_digests(root, &index, &format.dirs, &cases, resources);
+    let from = Provenance::taken("seal_tested", resources);
     let mut sealed = 0;
     for (dir, case, _) in &todo {
         // TRIED ONCE OVER ITS TREE (CLOUD-2904): a record no digest can be
@@ -14087,7 +14195,7 @@ pub fn seal_tested(
         let digest = digests.get(case).cloned().flatten();
         crate::durable::replace(
             dir.join(TESTED),
-            format!("{key}\t{}", digest.as_deref().unwrap_or(UNTAKEN)),
+            tested_line(&key, digest.as_deref().unwrap_or(UNTAKEN), &from),
         )?;
         if digest.is_some() {
             sealed += 1;
