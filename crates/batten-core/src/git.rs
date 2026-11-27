@@ -1260,11 +1260,10 @@ fn rel_to_slash(rel: &Path) -> String {
 /// `git_exclude` loads the `info/exclude` of every repository above `root`, so a
 /// walk over a fixture under a checkout's `target/` read that checkout's `.git`
 /// — 2,112 cases of one suite — and a walk over a linked worktree nested in the
-/// main checkout read the main checkout's. Where those rules cannot decide a
-/// path (`parents(false)`), the read is waste; where they can, a per-clone file
-/// is shaping a walk, which `git_global(false)` refuses for the same reason. A
-/// walk that honours its OWN repository's exclude adds it ([`tree_files`]).
-/// `clippy.toml` denies `ignore::WalkBuilder::new` everywhere else.
+/// main checkout read the main checkout's. And the root's own is per-clone state
+/// shaping a walk, which `git_global(false)` refuses for the same reason, so no
+/// walk reads one. `clippy.toml` denies `ignore::WalkBuilder::new` everywhere
+/// else.
 #[must_use]
 #[expect(
     clippy::disallowed_methods,
@@ -1274,26 +1273,6 @@ pub fn walker(root: &Path) -> ignore::WalkBuilder {
     let mut walk = ignore::WalkBuilder::new(root);
     walk.git_exclude(false);
     walk
-}
-
-/// The `info/exclude` of the repository whose root `root` is, or `None` where
-/// `root` is not a repository's root or that repository has none. Read from
-/// `root`'s own `.git` alone — a directory, or a linked worktree's `gitdir:`
-/// file and its `commondir` — and never by discovery, which would climb to an
-/// enclosing checkout ([`tree_files`]).
-fn own_exclude(root: &Path) -> Option<PathBuf> {
-    let marker = root.join(NESTED_REPOSITORY_MARKER);
-    let git_dir = if marker.is_dir() {
-        marker
-    } else if marker.is_file() {
-        gix::discover::path::from_gitdir_file(&marker).ok()?
-    } else {
-        return None;
-    };
-    let common = gix::discover::path::from_plain_file(&git_dir.join("commondir"))
-        .and_then(Result::ok)
-        .map_or_else(|| git_dir.clone(), |common| git_dir.join(common));
-    Some(common.join("info").join("exclude")).filter(|path| path.is_file())
 }
 
 /// Every file under `root`, as sorted repo-relative `/`-separated paths — the
@@ -1309,8 +1288,11 @@ fn own_exclude(root: &Path) -> Option<PathBuf> {
 /// The walk is the [`ignore`] crate's — ripgrep's — so "which files does this
 /// repository consider its own" is answered by the `.gitignore` the contributors
 /// already maintain rather than by a second list here. Adopted, not rebuilt:
-/// nested `.gitignore` files, negations, and `.git/info/exclude` all come with
-/// it, and none of them is this crate's to re-implement.
+/// nested `.gitignore` files and negations come with it, and neither is this
+/// crate's to re-implement. `.git/info/exclude` does NOT (D3, CLOUD-2904): like a
+/// developer's global excludes it is per-clone state no commit carries, so a
+/// gate's file set would vary per clone, and every walk over a checkout read
+/// that checkout's `.git` for it ([`walker`]).
 ///
 /// The measurement that decided it, on this repository after one `cargo build`:
 /// the hand-rolled walk yielded **9221** paths, of which **8891 (96%)** were
@@ -1372,25 +1354,14 @@ pub fn tree_files(root: &Path) -> anyhow::Result<Vec<String>> {
         // a gate whose file set varies per workstation is not one gate.
         .git_global(false)
         .git_ignore(true)
-        // THE ROOT'S OWN EXCLUDE, AND NO ENCLOSING ONE (D3, CLOUD-2904):
-        // [`walker`] reads none, and this walk hands its own back as an
-        // explicit ignore rooted at the root, the walker's lowest-precedence
-        // source, below every `.gitignore`, which is git's own order for
-        // `info/exclude`.
+        // NO `info/exclude`, the root's own or an enclosing one (D3, CLOUD-2904):
+        // [`walker`] reads none. It is per-clone state, never committed, so the
+        // reason `git_global(false)` gives holds for it too.
         .parents(false)
         // One filesystem: a walk that follows a mount out of the repository is
         // measuring somebody else's disk.
         .same_file_system(true)
         .follow_links(false);
-    if let Some(exclude) = own_exclude(&root) {
-        walker.current_dir(&root);
-        if let Some(error) = walker.add_ignore(&exclude) {
-            return Err(anyhow::Error::new(error).context(format!(
-                "read {}, the repository's own exclude",
-                exclude.display()
-            )));
-        }
-    }
     // The CLOUD-328 boundary, restated on the adopted walker. `ignore` skips the
     // root's own `.git` but knows nothing about a nested repository, so the rule
     // this crate states has to be applied here or it would be silently dropped
@@ -3296,9 +3267,10 @@ pub fn subjects_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<Commi
 /// path ignored ONLY by a developer's global excludes now reads as not ignored,
 /// which is the judgeable direction and the same one the walk already took.
 ///
-/// The layering is the repository's own, applied in git's precedence order:
-/// `.git/info/exclude` first, then each `.gitignore` from the root down to the
-/// path's own directory, so a nearer file overrides a farther one.
+/// `.git/info/exclude` is out of it for the same reason and in the same
+/// direction (D3, CLOUD-2904): per-clone, never committed, and read by no walk.
+/// The layering is the committed one, each `.gitignore` from the root down to
+/// the path's own directory, so a nearer file overrides a farther one.
 ///
 /// # Errors
 ///
@@ -3307,17 +3279,11 @@ pub fn subjects_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<Commi
 /// "not ignored", which makes the path judgeable, so an unreadable ignore
 /// surface must never quietly produce one.
 pub fn check_ignore(dir: &Path, path: &str) -> Result<bool> {
-    let repo = open(dir)?;
     let root = repo_root(dir)?;
     let refusal = || UsageError::raise("cannot read the repository's ignore rules".to_owned());
     let mut builder = ignore::gitignore::GitignoreBuilder::new(&root);
-    // `.git/info/exclude` first: git's lowest-precedence repository source, and
+    // Root-down, so a `.gitignore` nearer the path overrides a farther one:
     // `ignore`'s builder takes later additions as higher precedence.
-    let excludes = repo.git_dir().join("info").join("exclude");
-    if excludes.is_file() {
-        builder.add(&excludes);
-    }
-    // Then root-down, so a `.gitignore` nearer the path overrides a farther one.
     let mut walked = root.clone();
     builder.add(walked.join(".gitignore"));
     for component in Path::new(path).parent().into_iter().flatten() {
@@ -7339,24 +7305,27 @@ mod tests {
 
     use super::*;
 
-    /// D3 (CLOUD-2904): a walk reads its own repository's ignore surface and no
-    /// enclosing one, under a nested repository and a nested plain directory.
+    /// D3 (CLOUD-2904): a walk reads no `info/exclude`, an enclosing
+    /// repository's or the root's own, under a nested repository and a nested
+    /// plain directory alike.
     ///
     /// THE READ IS THE SUBJECT, and the walker drops an exclude it cannot read,
     /// so an unreadable trap shows nothing. Read is observed by access time
-    /// instead: each exclude is stamped with an access time older than its
+    /// instead: each file is stamped with an access time older than its
     /// modification, which a read on a `relatime` or `strictatime` mount moves.
-    /// The root's OWN exclude is the control — it must be read — so on Linux a
-    /// blind instrument fails rather than passing on a read it could not see.
+    /// The root's `.gitignore` is the control — the walk must read it — so on
+    /// Linux a blind instrument fails rather than passing on a read it could
+    /// not see.
     ///
     /// Fails by: the walker loading the parents' excludes, which made every
     /// fixture under a checkout's `target/` read that checkout's `.git` — 2,112
-    /// of the 2,407 cases the reach recorder found reading it — though under
-    /// `parents(false)` the parents' rules never decide a path.
+    /// of the 2,407 cases the reach recorder found reading it — or the root's
+    /// own, which made every walk over a checkout read its `.git`.
     #[test]
-    fn an_enclosing_repositorys_exclude_is_never_read() {
+    fn no_walk_reads_an_info_exclude() {
         let stale = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
-        let stamp = |path: &Path| {
+        let stamped = |path: &Path, body: &str| {
+            fs::write(path, body).expect("write");
             fs::File::options()
                 .write(true)
                 .open(path)
@@ -7368,16 +7337,14 @@ mod tests {
                     )
                 })
                 .expect("stamp");
+            path.to_path_buf()
         };
         let read =
             |path: &Path| fs::metadata(path).and_then(|meta| meta.accessed()).ok() != Some(stale);
         let exclude = |repo: &Path| {
             let info = repo.join(".git").join("info");
             fs::create_dir_all(&info).expect("info");
-            let path = info.join("exclude");
-            fs::write(&path, "*.tmp\n").expect("exclude");
-            stamp(&path);
-            path
+            stamped(&info.join("exclude"), "*.tmp\n")
         };
         let outer = crate::scratch::scratch("git-tree-files-enclosing");
         crate::gitwrite::init_on_main(&outer).expect("init");
@@ -7388,47 +7355,54 @@ mod tests {
         let own = exclude(&inner);
         let plain = outer.join("plain");
         fs::create_dir_all(&plain).expect("the nested directory");
+        let mut controls = Vec::new();
         for root in [&inner, &plain] {
             fs::write(root.join("kept.txt"), "x").expect("a file");
+            controls.push(stamped(&root.join(".gitignore"), "*.log\n"));
             assert_eq!(
                 tree_files(root).expect("walk"),
-                vec![String::from("kept.txt")]
+                [".gitignore", "kept.txt"].map(String::from).to_vec()
             );
         }
         // LINUX'S DEFAULT MOUNT MOVES IT (`relatime`), so there a blind instrument
         // is a failure, never a pass; elsewhere the access time is not this
         // case's to rely on and only the walk's answer above is asserted.
         if cfg!(target_os = "linux") {
-            assert!(read(&own), "the control: the root's own exclude is read");
+            for control in &controls {
+                assert!(read(control), "the control: the root's .gitignore is read");
+            }
             assert!(
                 !read(&enclosing),
                 "the enclosing repository's exclude was read"
             );
+            assert!(!read(&own), "the root's own exclude was read");
         }
     }
 
-    /// The root's OWN `info/exclude` still hides what it names, as git's
-    /// lowest-precedence repository source: a `.gitignore` negation beats it.
+    /// An `info/exclude` hides nothing, in the walk or in [`check_ignore`],
+    /// while a committed `.gitignore` still does: the two agree, and neither
+    /// depends on per-clone state.
     ///
-    /// Fails by: the exclude dropped with the enclosing ones, or ranked above a
-    /// `.gitignore`.
+    /// Fails by: either honouring the exclude again, or the two disagreeing.
     #[test]
-    fn the_roots_own_exclude_hides_below_every_gitignore() {
+    fn an_info_exclude_hides_nothing_and_a_gitignore_still_does() {
         let root = crate::scratch::scratch("git-tree-files-own-exclude");
         crate::gitwrite::init_on_main(&root).expect("init");
         let info = root.join(".git").join("info");
         fs::create_dir_all(&info).expect("info");
-        fs::write(info.join("exclude"), "secret.txt\n*.log\n").expect("exclude");
-        fs::write(root.join(".gitignore"), "!keep.log\n").expect("gitignore");
-        for file in ["secret.txt", "a.log", "keep.log", "b.txt"] {
+        fs::write(info.join("exclude"), "secret.txt\n").expect("exclude");
+        fs::write(root.join(".gitignore"), "*.log\n").expect("gitignore");
+        for file in ["secret.txt", "a.log", "b.txt"] {
             fs::write(root.join(file), "x").expect("a file");
         }
         assert_eq!(
             tree_files(&root).expect("walk"),
-            [".gitignore", "b.txt", "keep.log"]
+            [".gitignore", "b.txt", "secret.txt"]
                 .map(String::from)
                 .to_vec()
         );
+        assert!(!check_ignore(&root, "secret.txt").expect("check"));
+        assert!(check_ignore(&root, "a.log").expect("check"));
     }
 
     /// CLOUD-2509: the execute bit is read where the platform has one, and the

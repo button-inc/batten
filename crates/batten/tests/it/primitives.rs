@@ -1811,10 +1811,9 @@ fn a_nested_change_is_recognised_when_it_lands_on_a_moved_base() {
 /// complete, empty directories survive it (`objects/info`, `objects/pack`,
 /// `refs/heads`, `refs/tags`, `branches` are all empty in a fresh init and a
 /// files-only copy would drop them silently), the template is not stale, and the
-/// hooks samples plus `description` and `info/exclude` are carried — the last
-/// mattering because the engine reads `.git/info/exclude` as git's
-/// lowest-precedence repository source, so a fixture missing it is a different
-/// input to the code under test.
+/// hooks samples plus `description` and `info/exclude` are carried, so the
+/// copy is what `git` itself, which reads `info/exclude`, would find. The engine
+/// reads none (CLOUD-2904).
 // needs-real-fixture: CLOUD-1419 this case's whole subject is whether the copy
 // equals the fork, so one arm has to BE a real `git init`. Declaring it is the
 // admission `policy/fixture-forks.rego` reserves for a case whose assertion is
