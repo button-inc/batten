@@ -95,7 +95,10 @@ const LIFECYCLE: [&str; 4] = [
 
 /// The repository root, whose committed `batten.toml` is the policy under test.
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // THE COMMITTED TREE IN A REPOSITORY OF ITS OWN (CLOUD-2904), never the
+    // checkout: the hook's verdict is about the committed config, not about the
+    // real checkout's HEAD, refs and receipts.
+    common::committed_repo().to_path_buf()
 }
 
 /// [`bash_payload`] with `run_in_background` stated true.

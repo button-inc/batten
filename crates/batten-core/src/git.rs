@@ -1369,6 +1369,13 @@ pub fn tree_files(root: &Path) -> anyhow::Result<Vec<String>> {
     // catches that, and it is why those assertions landed first.
     let boundary = root.clone();
     walker.filter_entry(move |entry| {
+        // A LINKED WORKTREE'S MARKER IS A FILE (CLOUD-2904), its `gitdir:`
+        // pointer, and it is no more policy input than the directory form:
+        // judged by name before the files pass-through below, which let it in.
+        if entry.depth() > 0 && entry.file_name() == std::ffi::OsStr::new(NESTED_REPOSITORY_MARKER)
+        {
+            return false;
+        }
         if entry.file_type().is_some_and(|kind| !kind.is_dir()) {
             return true;
         }
@@ -7377,6 +7384,24 @@ mod tests {
             );
             assert!(!read(&own), "the root's own exclude was read");
         }
+    }
+
+    /// A linked worktree's marker FILE is no tree file, as the directory form
+    /// is not.
+    ///
+    /// Fails by: the files pass-through admitting it, which put a worktree's
+    /// `gitdir:` pointer into every gate's file set and into every copy of the
+    /// committed tree.
+    #[test]
+    fn a_worktrees_marker_file_is_not_a_tree_file() {
+        let root = crate::scratch::scratch("git-tree-files-worktree-marker");
+        fs::write(root.join(NESTED_REPOSITORY_MARKER), "gitdir: /nowhere\n")
+            .expect("the marker file");
+        fs::write(root.join("kept.txt"), "x").expect("a file");
+        assert_eq!(
+            tree_files(&root).expect("walk"),
+            vec![String::from("kept.txt")]
+        );
     }
 
     /// An `info/exclude` hides nothing, in the walk or in [`check_ignore`],
