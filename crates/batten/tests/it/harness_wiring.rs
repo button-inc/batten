@@ -762,7 +762,7 @@ fn this_repository_is_wired_correctly() {
     // the real documents meet. It is also what would catch a `[[rule.external]]`
     // row a module reads and the config stops declaring.
     let output = batten()
-        .current_dir(at_root("."))
+        .current_dir(common::committed_repo().to_path_buf())
         .args(["check", "--rule", "hook wire missing"])
         .streamed_output()
         .expect("run batten check");
