@@ -870,6 +870,17 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["pad a section with prose to pass the lint"],
     },
     VendoredDoc {
+        id: "lease carry blocked",
+        why: Some(
+            "A session that cannot read its state repository carries no receipt, so every lap recomputes what another container proved",
+        ),
+        act: &[
+            "attach the state repository with the host's `add_repo`, access push",
+            "make the next call; a `200` lifts the hold with no command",
+        ],
+        dont: &["retry the held call before attaching"],
+    },
+    VendoredDoc {
         id: "plan check first",
         why: Some(
             "A first plan is built from reports nobody re-read, and only a pass that re-reads with tools corrects it",
