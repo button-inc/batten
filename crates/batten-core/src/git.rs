@@ -486,11 +486,9 @@ pub fn placement(target: &Path, file: &str) -> Placement {
     }
     match gix::discover::upwards_opts(&probe, discovery(&ceiling_dirs())) {
         Ok((found, _)) => {
-            if found
-                .into_repository_and_work_tree_directories()
-                .1
-                .is_none()
-            {
+            let (git_dir, worktree) = found.into_repository_and_work_tree_directories();
+            crate::testing::refuse_fall_through(&probe, &git_dir);
+            if worktree.is_none() {
                 return Placement::Unplaceable;
             }
             if probe.join(file).is_file() {
@@ -1054,8 +1052,10 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
     // NO SCOPE, NO MEMO WORK: outside a hook call this is the plain open, without
     // a second walk or the config reads a remembered entry would need.
     if !remember || !scope_open() {
-        return gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
-            .map_err(|_| refused());
+        let repo = gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
+            .map_err(|_| refused())?;
+        crate::testing::refuse_fall_through(start, repo.git_dir());
+        return Ok(repo);
     }
     // THE WALK IS REMEMBERED TOO (CLOUD-2840's perf-gate). One hook call walked
     // up from the same directory nine times, each walk a `statx` per level and
@@ -1072,6 +1072,7 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
         walked
     };
     let (git_dir, worktree) = found.into_repository_and_work_tree_directories();
+    crate::testing::refuse_fall_through(start, &git_dir);
     let key = OpenKey {
         git_dir,
         worktree,
