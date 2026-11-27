@@ -9938,6 +9938,90 @@ mod tests {
         );
     }
 
+    /// The lib cases that still hand the working directory to the code under
+    /// test as its root, `file::case`, sorted. A RATCHET, NOT AN ALLOWANCE
+    /// (D3, CLOUD-2904): each needs the function it calls to take a root first.
+    const CWD_CASE_RATCHET: &[&str] = &[
+        "crates/batten/src/lib.rs::a_relative_root_is_resolved_before_the_manifest_is_compared",
+        "crates/batten/src/receipt.rs::a_range_from_head_to_itself_counts_nothing",
+        "crates/batten/src/receipt.rs::the_agent_sourced_subject_is_resolved_from_the_checkout",
+    ];
+
+    /// D3 (CLOUD-2904), the rule's test half: a lib case runs against its own
+    /// fixture (`crate::fixture_root::fixture_root`), never `Path::new(".")`.
+    /// `cargo test` runs a lib case from its crate's directory inside the
+    /// checkout, so `"."` handed as a root answers about the checkout's `.git`,
+    /// HEAD and config instead of the case's fixture.
+    ///
+    /// Fails by: a new `#[test]` that hands `"."` (red first: it failed on the
+    /// 41 cases moved in the commit that added it), or a listed one that
+    /// stopped (the list only shrinks).
+    #[test]
+    fn no_lib_case_hands_the_cwd_as_a_root() {
+        use ra_ap_syntax::{AstNode as _, ast, ast::HasAttrs as _, ast::HasName as _};
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("the workspace root");
+        let mut found = std::collections::BTreeSet::new();
+        for (path, source) in workspace_sources("src") {
+            let relative = path
+                .strip_prefix(workspace)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if relative.contains("/mutate/") {
+                continue;
+            }
+            let root =
+                batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024)
+                    .syntax_node();
+            for function in root.descendants().filter_map(ast::Fn::cast) {
+                let is_case = function.attrs().any(|attr| {
+                    attr.syntax()
+                        .text()
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<String>()
+                        == "#[test]"
+                });
+                if !is_case {
+                    continue;
+                }
+                let asks_cwd = function.body().is_some_and(|body| {
+                    let text: String = body
+                        .syntax()
+                        .descendants_with_tokens()
+                        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+                        .filter(|token| token.kind() != ra_ap_syntax::SyntaxKind::COMMENT)
+                        .flat_map(|token| {
+                            token
+                                .text()
+                                .split_whitespace()
+                                .map(str::to_owned)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect();
+                    text.replace("unwrap_or(Path::new(\".\"))", "")
+                        .contains("Path::new(\".\")")
+                });
+                if asks_cwd && let Some(name) = function.name() {
+                    found.insert(format!("{relative}::{name}"));
+                }
+            }
+        }
+        let listed: std::collections::BTreeSet<String> = CWD_CASE_RATCHET
+            .iter()
+            .map(|entry| (*entry).to_owned())
+            .collect();
+        assert_eq!(
+            found, listed,
+            "a lib case hands the working directory as a root; give it \
+             `crate::fixture_root::fixture_root` (CLOUD-2904), or, for one that stopped, drop it \
+             from the ratchet"
+        );
+    }
+
     #[test]
     fn every_declared_git_module_exists_and_reaches_gix() {
         // ANTI-VACUITY, both directions. A name in the list that no file carries
