@@ -289,7 +289,10 @@ fn output_is_pointer_only() {
 #[test]
 fn this_repositorys_own_registrations_pass() {
     // The self-consumption case the retiring suite ended on.
-    let output = common::run(&common::at_root(""), &["check", "--rule", "hook pin stale"]);
+    let output = common::run(
+        &common::committed_repo().to_path_buf(),
+        &["check", "--rule", "hook pin stale"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),

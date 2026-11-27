@@ -354,7 +354,7 @@ fn the_committed_pair_covers_itself_today() {
     // this gate is worth having: the two committed files agree, checked rather
     // than asserted.
     let output = common::run(
-        &common::at_root(""),
+        &common::committed_repo().to_path_buf(),
         &["check", "--rule", "pattern reach other"],
     );
     assert_eq!(

@@ -278,7 +278,7 @@ fn a_fall_through_is_refused_before_the_child_runs() {
 fn a_spawn_in_its_own_repository_or_at_the_real_root_runs() {
     let owned = common::scratch("harness-isolation-owned");
     common::init_repo(&owned);
-    for dir in [owned, common::at_root("")] {
+    for dir in [owned, common::committed_repo().to_path_buf()] {
         let output = common::batten()
             .arg("--version")
             .current_dir(&dir)

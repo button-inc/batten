@@ -332,7 +332,7 @@ fn doctor_omits_the_epoch_when_the_surface_cannot_be_read() {
 fn this_repositorys_own_epoch_is_computable() {
     // Consumer #1: Batten's own `[epoch] tracked` list is a worked example of
     // the feature, in the config the feature reads — so it has to work.
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = common::committed_repo().to_path_buf();
     let output = batten()
         .args(["config", "epoch"])
         .current_dir(&root)

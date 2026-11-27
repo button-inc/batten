@@ -1654,7 +1654,7 @@ mod ready_cites {
         ))
         .expect("the fetched fixture");
         let output = common::run_with_stdin(
-            &common::at_root(""),
+            &common::committed_repo_whole().to_path_buf(),
             &["board", "check", "--cites"],
             &payload,
         );
@@ -1683,7 +1683,7 @@ mod ready_cites {
         ))
         .expect("the fetched fixture");
         let output = common::run_with_stdin(
-            &common::at_root(""),
+            &common::committed_repo_whole().to_path_buf(),
             &["board", "check", "--cites"],
             &payload,
         );
@@ -1698,7 +1698,7 @@ mod ready_cites {
         ))
         .expect("the fetched fixture");
         let output = common::run_with_stdin(
-            &common::at_root(""),
+            &common::committed_repo_whole().to_path_buf(),
             &["board", "check", "--cites"],
             &payload,
         );
