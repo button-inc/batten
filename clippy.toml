@@ -114,6 +114,7 @@ disallowed-methods = [
   { path = "std::process::Command::output", reason = "every child stream goes through `batten::stream` (#1276): call `Streamed::streamed_output`, or pump the pipes yourself with `stream::spawn_pump`" },
   { path = "std::process::Child::wait_with_output", reason = "every child stream goes through `batten::stream` (#1276): call `StreamedChild::streamed_wait`" },
   { path = "std::io::copy", reason = "the one copy loop is `batten::stream::pump` (#1276): it flushes each chunk to every sink before the next read, which `io::copy` does not" },
+  { path = "ignore::WalkBuilder::new", reason = "a walk built here loads the info/exclude of every repository above its root, so a fixture under a checkout reads that checkout's .git (CLOUD-2904): build it with `git::walker`" },
   { path = "std::thread::sleep", reason = "a delay is an inventory row (CLOUD-1177): a poll bounded by a real terminal state is legitimate, a timer standing in for an exit condition is not. Annotate the site with #[expect(clippy::disallowed_methods, reason = \"...\")] naming the bound the delay comes from, in backticks" },
   { path = "tokio::time::sleep", reason = "the async half of the same inventory (CLOUD-1177); it RESOLVES today, because the workspace tokio entry enables `time`" },
   # compio's timers resolve since the disk watcher enabled its `time` feature
