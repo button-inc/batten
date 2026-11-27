@@ -6293,7 +6293,7 @@ fn gather_evidence(
 ) -> Result<std::result::Result<Gathered, String>> {
     let mut gathered = Gathered::default();
     if ask.claimed.is_none() {
-        let config = resolve::resolve(Path::new("."), overrides)?;
+        let config = resolve::resolve(root, overrides)?;
         let Some(trunk) = worktree::land_target(root, config.must_land_on.as_deref())? else {
             return Ok(Err(
                 "no trunk to read: `must_land_on` is not declared and the remote records no \
@@ -7956,7 +7956,7 @@ fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
 /// when that file would not load, and ignoring `--config-in` because the read
 /// took no overrides.
 fn claim_base(repo: &Path, verb: &str, overrides: &Overrides) -> Result<String> {
-    let authority = config::authority_root(Path::new("."))?;
+    let authority = config::authority_root(repo)?;
     let Some(trunk) = worktree::committed_trunk(&authority, overrides)? else {
         return Err(UsageError::raise(format!(
             "{verb}: {} — no receipt minted",
@@ -12167,7 +12167,7 @@ fn run_perf_latency(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let config = resolve::resolve(Path::new("."), overrides)?;
+    let config = resolve::resolve(root, overrides)?;
     let Some(latency) = config.perf.and_then(|perf| perf.latency) else {
         writeln!(
             err,
@@ -30441,7 +30441,7 @@ fn register_transcript_detectors(
         .as_ref()
         .and_then(|declared| declared.path.as_deref());
     let capability = transcript::resolve(
-        Path::new("."),
+        repo,
         declared,
         config
             .transcript
