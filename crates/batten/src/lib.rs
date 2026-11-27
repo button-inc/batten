@@ -5049,6 +5049,9 @@ fn run_session(
     let cache = session_watch::Cache::new(dir.join("cache"));
     let mut source = session_watch::Mcp::new(wiring);
     let mut watch = session_watch::Watch::new(sessions.clone());
+    // The seen ring decides the watch's ending as it decides the event: an
+    // ending already dispatched does not end the next watch (CLOUD-2951).
+    watch.ring = Some(dir.join("seen"));
     // THE CRATE'S ONE CLOCK (`pr_watch::clock`), not a waived sleep: the poll is
     // bounded by each child's terminal state, and could-not-look ends it.
     let mut wait = |delay| pr_watch::clock::hold(delay, None);
@@ -5077,7 +5080,7 @@ fn run_session(
             ExitCode::Usage
         }
         session_watch::Ending::Done => ExitCode::Success,
-        session_watch::Ending::Dead => ExitCode::Violation,
+        session_watch::Ending::Blocked | session_watch::Ending::Dead => ExitCode::Violation,
     })
 }
 
