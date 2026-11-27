@@ -2203,7 +2203,12 @@ mod lint_tests {
     #[test]
     fn the_body_cites_its_keys_before_any_verdict() {
         let grammar = Grammar::committed();
-        let report = linted(&grammar, &format!("see {}", key(5)), None, Path::new("."));
+        let report = linted(
+            &grammar,
+            &format!("see {}", key(5)),
+            None,
+            &crate::fixture_root::fixture_root("the_body_cites_its_keys_before_any_verdict"),
+        );
         assert_eq!(
             report.emissions.first().map(String::as_str),
             Some(&*format!("cites-body {}", key(5)))
@@ -2214,7 +2219,8 @@ mod lint_tests {
     #[test]
     fn a_finding_points_at_its_line_in_the_description() {
         let grammar = Grammar::committed();
-        let root = Path::new(".");
+        let root =
+            &crate::fixture_root::fixture_root("a_finding_points_at_its_line_in_the_description");
         let report = linted(&grammar, &format!("intro\n\n{OPENER}\n"), None, root);
         assert_eq!(rules(&report), ["3:ready-block-without-clauses"]);
         let report = linted(
@@ -2241,7 +2247,9 @@ mod lint_tests {
     #[test]
     fn the_clause_floor_spares_a_parent_and_a_block_with_a_clause() {
         let grammar = Grammar::committed();
-        let root = Path::new(".");
+        let root = &crate::fixture_root::fixture_root(
+            "the_clause_floor_spares_a_parent_and_a_block_with_a_clause",
+        );
         assert_eq!(
             rules(&linted(&grammar, &format!("{OPENER}\n"), None, root)),
             ["1:ready-block-without-clauses"]
@@ -2354,7 +2362,8 @@ mod lint_tests {
     #[test]
     fn a_deny_gate_owes_its_replay_and_nothing_else_does() {
         let grammar = Grammar::committed();
-        let root = Path::new(".");
+        let root =
+            &crate::fixture_root::fixture_root("a_deny_gate_owes_its_replay_and_nothing_else_does");
         let gate = "* **Gate (§3).** `mise-tasks/thing-check.sh`, severity = deny.";
         let found = rules(&linted(
             &grammar,
@@ -2633,7 +2642,9 @@ mod lint_tests {
     #[test]
     fn a_deferral_is_held_to_the_relations_and_never_to_the_row_itself() {
         let grammar = Grammar::committed();
-        let root = Path::new(".");
+        let root = &crate::fixture_root::fixture_root(
+            "a_deferral_is_held_to_the_relations_and_never_to_the_row_itself",
+        );
         let body = format!(
             "{OPENER}\n{SOURCE}\nThe rest is deferred to {}.\nAnd {} is now mine.\n",
             key(2),
@@ -2658,7 +2669,9 @@ mod lint_tests {
     #[test]
     fn the_adjudication_answers_in_the_shell_programs_codes() {
         let grammar = Grammar::committed();
-        let root = Path::new(".");
+        let root = &crate::fixture_root::fixture_root(
+            "the_adjudication_answers_in_the_shell_programs_codes",
+        );
         let value = |body: &str, relations: Option<Value>| {
             let mut value = json!({"id": key(1), "description": body});
             if let Some(relations) = relations {

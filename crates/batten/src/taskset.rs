@@ -755,7 +755,15 @@ mod tests {
         // A repository that declares no manifest has not established that it
         // defines no tasks — and a guard comparing against an empty table permits
         // every substitution it exists to refuse.
-        assert!(matches!(refresh(Path::new("."), &[]), Look::CouldNotLook));
+        assert!(matches!(
+            refresh(
+                &crate::fixture_root::fixture_root(
+                    "no_declaration_is_could_not_look_rather_than_an_empty_table"
+                ),
+                &[]
+            ),
+            Look::CouldNotLook
+        ));
     }
 
     /// A one-task set whose record serializes to exactly `len` bytes over

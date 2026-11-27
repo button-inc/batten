@@ -5943,7 +5943,15 @@ mod tests {
     /// because a lap would report a gate as clean having run something else.
     #[test]
     fn an_unconfigured_verify_command_refuses_rather_than_guessing() {
-        let Err(problem) = verify(Path::new("."), "work", &[], &[], &[]) else {
+        let Err(problem) = verify(
+            &crate::fixture_root::fixture_root(
+                "an_unconfigured_verify_command_refuses_rather_than_guessing",
+            ),
+            "work",
+            &[],
+            &[],
+            &[],
+        ) else {
             panic!("an empty command must refuse rather than run something");
         };
         assert!(
