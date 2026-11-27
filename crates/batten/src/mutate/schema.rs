@@ -15006,7 +15006,7 @@ mod tests {
         std::fs::write(dir.join(OVER), "t1").unwrap();
         std::fs::write(dir.join(DONE), "0").unwrap();
         std::fs::write(dir.join(READ), "").unwrap();
-        std::fs::write(dir.join(DEPENDS), &functions).unwrap();
+        std::fs::write(dir.join(DEPENDS), format!("{functions}{FIXTURE_FROM}")).unwrap();
         let none = std::collections::BTreeMap::new();
         assert_eq!(seal_tested(&base, &root, &none, &format).unwrap().0, 0);
         let line = std::fs::read_to_string(dir.join(TESTED)).unwrap();
@@ -15054,7 +15054,7 @@ mod tests {
             std::fs::write(dir.join(DONE), done).unwrap();
             std::fs::write(dir.join(READ), "").unwrap();
             if depends {
-                std::fs::write(dir.join(DEPENDS), &functions).unwrap();
+                std::fs::write(dir.join(DEPENDS), format!("{functions}{FIXTURE_FROM}")).unwrap();
             }
         }
         let none = std::collections::BTreeMap::new();
@@ -15116,7 +15116,7 @@ mod tests {
         std::fs::write(dir.join(OVER), "t1").unwrap();
         std::fs::write(dir.join(DONE), "0").unwrap();
         std::fs::write(dir.join(READ), "").unwrap();
-        std::fs::write(dir.join(DEPENDS), &functions).unwrap();
+        std::fs::write(dir.join(DEPENDS), format!("{functions}{FIXTURE_FROM}")).unwrap();
         let ids: std::collections::BTreeMap<String, String> =
             [(String::from("src/lib.rs"), String::from("id-1"))].into();
         assert_eq!(seal_tested(&base, &root, &ids, &format).unwrap().0, 1);
@@ -15178,7 +15178,7 @@ mod tests {
             std::fs::write(dir.join(OVER), "t0").unwrap();
             std::fs::write(dir.join(DONE), "0").unwrap();
             std::fs::write(dir.join(READ), "").unwrap();
-            std::fs::write(dir.join(DEPENDS), &depends).unwrap();
+            std::fs::write(dir.join(DEPENDS), format!("{depends}{FIXTURE_FROM}")).unwrap();
             if let Some(tested) = tested {
                 std::fs::write(dir.join(TESTED), tested).unwrap();
             }
@@ -15335,6 +15335,19 @@ mod tests {
         );
     }
 
+    /// The provenance line a fixture's sealed record carries ([`carried`]
+    /// reads back no record without one, CLOUD-2904).
+    const FIXTURE_FROM: &str = "Pfrom fixture engine tree 1@1\n";
+
+    /// A sealed record's text without its provenance line, for comparing what
+    /// a seal wrote with what it was given.
+    fn unproven(text: &str) -> String {
+        text.lines()
+            .filter(|line| !line.starts_with('P'))
+            .map(|line| format!("{line}\n"))
+            .collect()
+    }
+
     fn no_identity() -> Identity<'static> {
         static FNS: std::collections::BTreeMap<u32, String> = std::collections::BTreeMap::new();
         static FILE_FNS: std::collections::BTreeMap<u32, BTreeSet<String>> =
@@ -15420,7 +15433,10 @@ mod tests {
                 "kept",
                 "kept",
                 Some("0"),
-                &[(DEPENDS, "Dsame\nFfa\nSkey-0\nT2.5\n")],
+                &[(
+                    DEPENDS,
+                    &format!("Dsame\nFfa\nSkey-0\nT2.5\n{FIXTURE_FROM}"),
+                )],
             );
             std::fs::write(base.join(LISTED), "key-0\n").unwrap();
             let probes = [String::from("fa")];
@@ -15506,8 +15522,9 @@ mod tests {
     #[test]
     fn a_sealed_reach_record_is_carried_only_when_nothing_it_depends_on_moved() {
         let base = crate::scratch::scratch("schema-reach-carry");
-        let sealed =
-            |digest: &str, function: &str| format!("D{digest}\nF{function}\nSkey-0\nT2.5\n");
+        let sealed = |digest: &str, function: &str| {
+            format!("D{digest}\nF{function}\nSkey-0\nT2.5\n{FIXTURE_FROM}")
+        };
         record(
             &base,
             "kept",
@@ -15709,7 +15726,7 @@ mod tests {
     /// records that could not have seen it.
     #[test]
     fn an_unplaced_mutant_clears_only_the_records_that_ran_its_file() {
-        let sealed = |function: &str| format!("Dsame\nF{function}\nSkey-0\nT1\n");
+        let sealed = |function: &str| format!("Dsame\nF{function}\nSkey-0\nT1\n{FIXTURE_FROM}");
         let fresh = |name: &str| {
             let base = crate::scratch::scratch(name);
             record(
@@ -15806,7 +15823,7 @@ mod tests {
         assert!(!base.join(SEALED).exists(), "the tree is not sealed");
         seal_reach(&base, &reach, &digests, &identity, &seconds, true).unwrap();
         assert_eq!(
-            std::fs::read_to_string(base.join("one").join(DEPENDS)).unwrap(),
+            unproven(&std::fs::read_to_string(base.join("one").join(DEPENDS)).unwrap()),
             "Dd1\nFfb\nSkey-0\nT1.5\n"
         );
         assert!(
@@ -15890,7 +15907,7 @@ mod tests {
             "kept",
             "kept",
             Some("0"),
-            &[(DEPENDS, "Dheld\n")],
+            &[(DEPENDS, &format!("Dheld\n{FIXTURE_FROM}"))],
         );
         std::fs::write(
             by_recorder.join(CONTEXT),
@@ -15907,7 +15924,7 @@ mod tests {
             "a failed case is not sealed"
         );
         assert_eq!(
-            std::fs::read_to_string(by_recorder.join("kept").join(DEPENDS)).unwrap(),
+            unproven(&std::fs::read_to_string(by_recorder.join("kept").join(DEPENDS)).unwrap()),
             "Dheld\n",
             "a sealed record is not rewritten"
         );
@@ -15938,7 +15955,7 @@ mod tests {
             std::fs::read_to_string(base.join("one").join(DEPENDS))
                 .unwrap()
                 .lines()
-                .filter(|line| !line.starts_with('T'))
+                .filter(|line| !line.starts_with('T') && !line.starts_with('P'))
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -16011,7 +16028,10 @@ mod tests {
             "carried",
             "carried",
             Some("0"),
-            &[(SKIPPED, ""), (DEPENDS, "Dd1\nT2.5\n")],
+            &[
+                (SKIPPED, ""),
+                (DEPENDS, &format!("Dd1\nT2.5\n{FIXTURE_FROM}")),
+            ],
         );
         record(&base, "resumed", "resumed", Some("0"), &[(SKIPPED, "")]);
         record(&base, "ran", "ran", Some("0"), &[]);
@@ -16040,7 +16060,8 @@ mod tests {
         ]
         .into();
         seal_reach(&base, &reach, &digests, &no_identity(), &seconds, false).unwrap();
-        let sealed = |dir: &str| std::fs::read_to_string(base.join(dir).join(DEPENDS)).unwrap();
+        let sealed =
+            |dir: &str| unproven(&std::fs::read_to_string(base.join(dir).join(DEPENDS)).unwrap());
         assert_eq!(sealed("carried"), "Dd1\nT2.5\n");
         assert_eq!(
             sealed("resumed"),
@@ -18647,7 +18668,7 @@ mod tests {
                 "{why}"
             );
             let base = crate::scratch::scratch("schema-build-key-carry");
-            let sealed = format!("D{}\n", held[&case]);
+            let sealed = format!("D{}\n{FIXTURE_FROM}", held[&case]);
             record(&base, "t", "t", Some("0"), &[(DEPENDS, sealed.as_str())]);
             let recompute =
                 |_: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
@@ -18672,7 +18693,7 @@ mod tests {
         );
         // AND THE CARRY ITSELF HOLDS when nothing it keys on moved.
         let base = crate::scratch::scratch("schema-build-key-held");
-        let sealed = format!("D{}\n", held[&case]);
+        let sealed = format!("D{}\n{FIXTURE_FROM}", held[&case]);
         record(&base, "t", "t", Some("0"), &[(DEPENDS, sealed.as_str())]);
         let recompute =
             |_: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
