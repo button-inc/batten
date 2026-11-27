@@ -52,7 +52,8 @@ fn bash_payload(command: &str) -> String {
 }
 
 fn decision(command: &str) -> String {
-    let root = common::at_root(".");
+    // THE COMMITTED POLICY IN ITS OWN REPOSITORY (CLOUD-2904), not the checkout.
+    let root = common::committed_repo().to_path_buf();
     common::stdout(&common::run_with_stdin(
         &root,
         &["adjudicate", "--harness", "claude-code"],
@@ -95,7 +96,8 @@ fn allowed_backgrounded(command: &str) {
         "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
          \"tool_input\":{{\"command\":{escaped},\"run_in_background\":true}}}}"
     );
-    let root = common::at_root(".");
+    // THE COMMITTED POLICY IN ITS OWN REPOSITORY (CLOUD-2904), not the checkout.
+    let root = common::committed_repo().to_path_buf();
     let out = common::stdout(&common::run_with_stdin(
         &root,
         &["adjudicate", "--harness", "claude-code"],
