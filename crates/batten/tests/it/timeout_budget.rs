@@ -422,7 +422,7 @@ fn output_is_pointer_only() {
 fn the_real_workflows_all_carry_a_justified_budget() {
     // The self-consumption case the retiring suite opened on.
     let output = common::run(
-        &common::committed_repo().to_path_buf(),
+        common::committed_repo(),
         &["check", "--rule", "job bind missing"],
     );
     assert_eq!(

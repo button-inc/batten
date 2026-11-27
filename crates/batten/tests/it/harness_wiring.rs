@@ -762,7 +762,7 @@ fn this_repository_is_wired_correctly() {
     // the real documents meet. It is also what would catch a `[[rule.external]]`
     // row a module reads and the config stops declaring.
     let output = batten()
-        .current_dir(common::committed_repo().to_path_buf())
+        .current_dir(common::committed_repo())
         .args(["check", "--rule", "hook wire missing"])
         .streamed_output()
         .expect("run batten check");
@@ -966,7 +966,7 @@ fn unregistered(row: &serde_json::Value) -> Vec<serde_json::Value> {
 fn a_flat_host_is_generated_flat() {
     let generate = |harness: &str| -> serde_json::Value {
         let output = common::batten()
-            .current_dir(common::committed_repo().to_path_buf())
+            .current_dir(common::committed_repo())
             .args(["generate", "hooks", "--harness", harness])
             .streamed_output()
             .expect("the binary runs");

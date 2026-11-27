@@ -153,7 +153,7 @@ fn this_repos_own_settings_pass_the_gate_today() {
     // project file together: the coverage this repository's denies rest on is
     // its own `mediated_call` rows.
     let output = common::run(
-        &common::committed_repo().to_path_buf(),
+        common::committed_repo(),
         &["check", "--rule", "grant check other"],
     );
     passes(&output);

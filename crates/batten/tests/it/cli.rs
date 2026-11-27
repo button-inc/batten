@@ -14074,7 +14074,7 @@ fn a_rule_selection_accepts_every_spelling_of_a_declared_id() {
         "branch_write_unsafe",
     ] {
         let output = batten()
-            .current_dir(common::committed_repo().to_path_buf())
+            .current_dir(common::committed_repo())
             .args(["check", "--rule", spelling])
             .streamed_output()
             .expect("run batten check");
@@ -14131,7 +14131,7 @@ scope = "tree"
 #[test]
 fn a_misspelled_rule_is_still_refused_under_the_spelling_it_was_given() {
     let output = batten()
-        .current_dir(common::committed_repo().to_path_buf())
+        .current_dir(common::committed_repo())
         .args(["check", "--rule", "branch-write-unsaef"])
         .streamed_output()
         .expect("run batten check");
