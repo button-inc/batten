@@ -115,7 +115,6 @@ budgets := {
 	"cargo-fmt": 100,
 	"taplo": 100,
 	"taplo-format": 100,
-	"merge-conflict-markers": 100,
 	"conventional-commit": 100,
 	"commit-attribution": 100,
 }
@@ -123,8 +122,8 @@ budgets := {
 # The commit-time steps among `budgets`, whose README row must publish a measured
 # p95 (CLOUD-2852).
 commit_steps := {
-	"cargo-fmt", "taplo", "taplo-format", "merge-conflict-markers",
-	"conventional-commit", "commit-attribution",
+	"cargo-fmt", "taplo", "taplo-format", "conventional-commit",
+	"commit-attribution",
 }
 
 # The record ids this module owns.
@@ -332,7 +331,6 @@ agreeing_readme := [
 	"| `cargo-fmt` | a commit-time hook step | 31.2 ms | 45.8 ms | ≤ 100 ms |",
 	"| `taplo` | a commit-time hook step | 20.9 ms | 30.3 ms | ≤ 100 ms |",
 	"| `taplo-format` | a commit-time hook step | 20.9 ms | 30.3 ms | ≤ 100 ms |",
-	"| `merge-conflict-markers` | a commit-time hook step | 50.0 ms | 60.0 ms | ≤ 100 ms |",
 	"| `conventional-commit` | a commit-time hook step | 50.0 ms | 60.0 ms | ≤ 100 ms |",
 	"| `commit-attribution` | a commit-time hook step | 29.3 ms | 42.9 ms | ≤ 100 ms |",
 ]
@@ -341,8 +339,8 @@ agreeing_readme := [
 # shape (`test_a_reordered_budget_column_is_still_found`).
 commit_rows := [sprintf("| `%s` | ≤ 100 ms | 9.0 ms | 12.0 ms |", [id]) |
 	some id in [
-		"cargo-fmt", "taplo", "taplo-format", "merge-conflict-markers",
-		"conventional-commit", "commit-attribution",
+		"cargo-fmt", "taplo", "taplo-format", "conventional-commit",
+		"commit-attribution",
 	]
 ]
 
@@ -358,7 +356,6 @@ clean_record := {
 	"cargo-fmt": "9.0",
 	"taplo": "9.0",
 	"taplo-format": "9.0",
-	"merge-conflict-markers": "9.0",
 	"conventional-commit": "9.0",
 	"commit-attribution": "9.0",
 }
@@ -466,10 +463,10 @@ test_a_readme_publishing_no_budget_for_a_gated_path_is_refused if {
 
 # A COMMIT STEP PUBLISHED UNMEASURED IS REFUSED, record or no record (CLOUD-2852):
 # the row the measurement half could never see, since it abstains wherever no
-# record resolves. Row 13 is `conventional-commit`.
+# record resolves. Row 12 is `conventional-commit`.
 test_a_commit_step_readme_publishes_unmeasured_is_refused if {
-	count(violation) == 1 with input as {"tree": {"lines": {"README.md": readme_with_row(13, "| `conventional-commit` | a commit-time hook step | — | — | ≤ 100 ms |")}}}
-	unpublished_measure == {"conventional-commit"} with input as {"tree": {"lines": {"README.md": readme_with_row(13, "| `conventional-commit` | a commit-time hook step | — | — | ≤ 100 ms |")}}}
+	count(violation) == 1 with input as {"tree": {"lines": {"README.md": readme_with_row(12,"| `conventional-commit` | a commit-time hook step | — | — | ≤ 100 ms |")}}}
+	unpublished_measure == {"conventional-commit"} with input as {"tree": {"lines": {"README.md": readme_with_row(12,"| `conventional-commit` | a commit-time hook step | — | — | ≤ 100 ms |")}}}
 }
 
 # THE COLUMN IS FOUND BY ITS HEADER, so a table that grows a column still compares
