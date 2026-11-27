@@ -961,6 +961,11 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
     // fails the fetch at once; a case that wants a release serves its own and
     // sets this after, as the engine suites do.
     command.env("BATTEN_RELEASES", "https://127.0.0.1:9/no-release-host");
+    // THE CASE'S OWN FIXTURE BY DEFAULT (D3, CLOUD-2904): a spawn given no
+    // directory inherited the case's, the crate directory inside the checkout,
+    // and read the real checkout's HEAD, refs and receipts — 181 cases of one
+    // suite. A case that names a directory replaces this one.
+    command.current_dir(case_fixture());
     Batten(command, batten::capture::Keep::NONE)
 }
 
@@ -1113,12 +1118,71 @@ fn refuse_fall_through_at(cwd: &Path) {
     );
 }
 
+/// The cases that still spawn the binary inside the checkout, one name a line,
+/// sorted: [`refuse_in_checkout`] refuses every other case.
+///
+/// A RATCHET, NOT AN ALLOWANCE (CLOUD-2904). Each is a case about the
+/// committed tree that runs at the real root rather than in a fixture carrying
+/// copies of what it reads; the list shrinks as each moves, and
+/// `harness_isolation` holds it to live cases in order, so a name cannot linger
+/// after its case moves or is renamed.
+pub(crate) const AT_ROOT_CASES: &str = include_str!("../at_root_cases.txt");
+
+/// Whether the case this process runs is one of [`AT_ROOT_CASES`]: nextest runs
+/// each case in its own process, named after `--exact`.
+fn this_case_runs_at_root() -> bool {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .position(|arg| arg == "--exact")
+        .and_then(|at| args.get(at + 1))
+        .is_some_and(|case| AT_ROOT_CASES.lines().any(|listed| listed == case))
+}
+
+/// The fixture repository a spawn runs in when its case names no directory:
+/// one per process, so a case's spawns share it as they shared a directory.
+pub(crate) fn case_fixture() -> &'static Path {
+    static FIXTURE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    // PER PROCESS BY NAME: the scratch root is the RUN's, shared by every case's
+    // process, so a fixed name would be wiped under a sibling mid-spawn.
+    FIXTURE.get_or_init(|| scratch_repo(&format!("case-cwd-{}", std::process::id())))
+}
+
+/// Panic if a spawn in `cwd` would run inside the checkout holding this build
+/// rather than in a fixture under its scratch root (D3, CLOUD-2904).
+///
+/// THE OTHER HALF OF THE DOOR. [`refuse_fall_through_at`] judges a cwd under
+/// the scratch root; a spawn given NO cwd inherits the case's own, the crate
+/// directory, and one given the root runs there on purpose — either way the
+/// child discovers the real checkout and its result depends on its HEAD, refs
+/// and receipts, not on the case's fixture. A case about the committed tree
+/// copies what it reads into a fixture repository.
+pub(crate) fn refuse_in_checkout(cwd: &Path) {
+    if this_case_runs_at_root() {
+        return;
+    }
+    let cwd =
+        batten::git::canonical(&std::path::absolute(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
+    let checkout = batten::git::canonical(&at_root("."));
+    let scratch = batten::git::canonical(&target_tmp());
+    assert!(
+        !cwd.starts_with(&checkout) || cwd.starts_with(&scratch),
+        "batten ran in {}, inside the checkout holding this build: run it in a fixture \
+         repository (`common::scratch_repo`), copying in what a case about the committed \
+         tree reads (CLOUD-2904)",
+        cwd.display()
+    );
+}
+
 impl Batten {
-    /// Panic if this command's working directory falls through to the checkout.
+    /// Panic if this command's working directory — its own, or the case's it
+    /// inherits — falls through to the checkout or runs inside it.
     fn refuse_fall_through(&self) {
-        if let Some(cwd) = self.0.get_current_dir() {
-            refuse_fall_through_at(cwd);
-        }
+        let cwd = self.0.get_current_dir().map_or_else(
+            || std::env::current_dir().expect("the case's working directory"),
+            Path::to_path_buf,
+        );
+        refuse_fall_through_at(&cwd);
+        refuse_in_checkout(&cwd);
     }
 
     /// [`std::process::Command::arg`], returning the door so a chain keeps its refusal.
@@ -2298,6 +2362,7 @@ pub(crate) fn stdin_run(command: &mut Command, dir: &Path, args: &[&str], input:
     // wrapper's own methods, and only the drop check would see a fall-through —
     // after the child had already run. `dir` is the directory set just below.
     refuse_fall_through_at(dir);
+    refuse_in_checkout(dir);
     let mut child = command
         .args(args)
         .current_dir(dir)

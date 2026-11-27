@@ -287,3 +287,71 @@ fn a_spawn_in_its_own_repository_or_at_the_real_root_runs() {
         assert!(output.status.success(), "{}", common::stderr(&output));
     }
 }
+
+/// D3 (CLOUD-2904): a spawn of the binary inside the checkout holding this
+/// build is refused before it runs, a spawn naming no directory runs in the
+/// case's own fixture repository rather than inheriting the crate directory,
+/// and a fixture repository under the scratch root runs.
+///
+/// Fails by: the door judging only a directory under the scratch root, which
+/// let a spawn with no `current_dir` run in the crate directory and read the
+/// real checkout's HEAD, refs and receipts.
+#[test]
+fn a_spawn_inside_the_checkout_is_refused() {
+    let unnamed = common::batten();
+    let cwd = unnamed
+        .get_current_dir()
+        .expect("a spawn always has a directory");
+    assert_eq!(
+        cwd,
+        common::case_fixture(),
+        "a spawn naming no directory runs in the case's own fixture, never the crate directory"
+    );
+    assert!(
+        cwd.join(".git").exists(),
+        "and that fixture is a repository"
+    );
+    let named = std::panic::catch_unwind(|| {
+        let _ = common::batten()
+            .arg("--version")
+            .current_dir(common::at_root("."))
+            .streamed_output();
+    })
+    .is_err();
+    assert!(named, "a spawn at the checkout's root");
+    let owned = common::scratch_repo("harness-isolation-owned-cwd");
+    let ran = common::batten()
+        .arg("--version")
+        .current_dir(&owned)
+        .streamed_output()
+        .expect("a fixture repository runs");
+    assert!(ran.status.success());
+}
+
+/// The at-root ratchet ([`common::AT_ROOT_CASES`]) names only live cases,
+/// sorted and once each, so it can only shrink.
+///
+/// Fails by: a name left behind after its case moved to a fixture or was
+/// renamed, a duplicate, or an unsorted insertion that hides one.
+#[test]
+fn the_at_root_list_only_names_live_cases_in_order() {
+    let listed: Vec<&str> = common::AT_ROOT_CASES.lines().collect();
+    let mut sorted = listed.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(listed, sorted, "sorted, and each case once");
+    let sources: String = std::fs::read_dir(common::at_root("crates/batten/tests/it"))
+        .expect("the suite's sources")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .map(|path| std::fs::read_to_string(path).expect("a source"))
+        .collect();
+    for case in listed {
+        let name = case.rsplit("::").next().expect("a case name");
+        assert!(
+            sources.contains(&format!("fn {name}(")),
+            "{case} is listed and no case of that name is left"
+        );
+    }
+}
