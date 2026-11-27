@@ -15,10 +15,10 @@ use crate::common;
 use std::path::{Path, PathBuf};
 
 const CONFIG: &str = "version = 1\n\n\
-     [[rule]]\nid = \"plan write refused\"\nkind = \"policy\"\n\
-     scope = \"mediated_call\"\npreset = \"claude-code-cloud\"\nseverity = \"deny\"\n";
+     [[rule]]\nid = \"lease carry blocked\"\nkind = \"policy\"\n\
+     scope = \"mediated_call\"\npreset = \"claude-code-state\"\nseverity = \"deny\"\n";
 
-/// A bench enabling the preset's mediated half, its origin on a forge, and
+/// A bench enabling the `claude-code-state` preset, its origin on a forge, and
 /// `extra` appended to its authority.
 fn bench(name: &str, extra: &str) -> PathBuf {
     let dir = common::Fixture::new(name)
