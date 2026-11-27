@@ -1157,6 +1157,7 @@ fn at_kill(repo: &std::path::Path) -> AtKill {
         .lines()
         .filter(|line| field(line).starts_with("control:"))
         .count();
+    // BY MUTANT, NEVER BY LINE: a kill pair is journaled beside its verdict.
     let verdicts = journal
         .lines()
         .filter(|line| {
@@ -1165,12 +1166,32 @@ fn at_kill(repo: &std::path::Path) -> AtKill {
                 "caught" | "missed" | "uncovered" | "timeout"
             )
         })
-        .count();
+        .filter_map(|line| line.split('\t').nth(2))
+        .collect::<std::collections::BTreeSet<&str>>()
+        .len();
     AtKill {
         finished,
         controls,
         verdicts,
     }
+}
+
+/// `line` with every ANSI escape sequence removed.
+fn uncoloured(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for end in chars.by_ref() {
+                if end.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Every process below `pid`, read from `/proc`, deepest last.
@@ -1197,7 +1218,7 @@ fn descendants(pid: i32) -> Vec<i32> {
     found
 }
 
-/// The schema sweep over `file` in `repo`, SIGKILLed with every process
+/// The schema sweep over `file` in `repo`, `SIGKILL`ed with every process
 /// below it, as a worker restart kills them, on the first line holding `at`
 /// once a line holding `after` has been said (at once where `after` is
 /// empty): whether the kill landed, and everything said until then.
@@ -1207,6 +1228,21 @@ fn sweep_killed_on(
     repo: &std::path::Path,
     file: &str,
     (after, at): (&str, &str),
+) -> (bool, String) {
+    let mut armed = after.is_empty();
+    sweep_killed_when(repo, file, |line| {
+        let now = armed && line.contains(at);
+        armed |= !after.is_empty() && line.contains(after);
+        now
+    })
+}
+
+/// [`sweep_killed_on`], killed on the first line `kill` answers true for,
+/// each line handed to it in the order said.
+fn sweep_killed_when(
+    repo: &std::path::Path,
+    file: &str,
+    mut kill: impl FnMut(&str) -> bool,
 ) -> (bool, String) {
     use std::io::BufRead as _;
     let mut command = common::batten();
@@ -1240,11 +1276,13 @@ fn sweep_killed_on(
         })
         .collect();
     drop(send);
-    let (mut said, mut armed, mut killed) = (String::new(), after.is_empty(), false);
+    let (mut said, mut killed) = (String::new(), false);
     for line in lines {
+        // NEXTEST COLOURS ITS CASE LINES: matched on the text, escapes off.
+        let line = uncoloured(&line);
         said.push_str(&line);
         said.push('\n');
-        if !killed && armed && line.contains(at) {
+        if !killed && kill(&line) {
             // EVERY PROCESS BELOW IT, STOPPED FIRST: a run that sets its own
             // group is no less killed by a restart.
             let mut tree = descendants(pid);
@@ -1261,7 +1299,6 @@ fn sweep_killed_on(
             }
             killed = true;
         }
-        armed |= !after.is_empty() && line.contains(after);
     }
     let _ = child.wait();
     for pump in pumps {
@@ -1274,6 +1311,16 @@ fn sweep_killed_on(
 /// case, killed at `point` and relaunched: what it had made durable at the
 /// kill, and what the relaunch said.
 fn killed_and_relaunched(name: &str, point: (&str, &str)) -> (AtKill, String) {
+    let (repo, file) = one_case_at_a_time(name);
+    let (killed, before) = sweep_killed_on(&repo, &file, point);
+    assert!(killed, "the sweep never said {point:?}:\n{before}");
+    let durable = at_kill(&repo);
+    (durable, relaunched(&repo, &file))
+}
+
+/// [`seeded`] under `name`, its cases run one at a time so a kill lands at
+/// one case, and its listing.
+fn one_case_at_a_time(name: &str) -> (std::path::PathBuf, String) {
     let _ = common::require_bin("nextest", "cargo-nextest");
     let _ = common::scratch_state_root();
     let repo = seeded(name);
@@ -1285,12 +1332,15 @@ fn killed_and_relaunched(name: &str, point: (&str, &str)) -> (AtKill, String) {
     );
     common::git_in(&repo, &["commit", "-qam", "one case at a time"]);
     let file = listing(&format!("{name}-listing"));
-    let (killed, before) = sweep_killed_on(&repo, &file, point);
-    assert!(killed, "the sweep never said {point:?}:\n{before}");
-    let durable = at_kill(&repo);
+    (repo, file)
+}
+
+/// The fixture sweep over `file` in `repo`, run to its end: what it said,
+/// once its exit and verdicts are checked.
+fn relaunched(repo: &std::path::Path, file: &str) -> String {
     let output = common::batten()
-        .args(["__mutate-schema", &file, "2"])
-        .current_dir(&repo)
+        .args(["__mutate-schema", file, "2"])
+        .current_dir(repo)
         .env_remove("CI")
         .streamed_output()
         .expect("relaunch the sweep");
@@ -1301,7 +1351,7 @@ fn killed_and_relaunched(name: &str, point: (&str, &str)) -> (AtKill, String) {
         said.contains(COUNTS),
         "the relaunch's verdicts: {said}\n{err}"
     );
-    (durable, said)
+    said
 }
 
 /// The number before `after` in the line of `said` that holds `holding`.
@@ -1324,11 +1374,15 @@ fn assert_nothing_finished_redone(durable: &AtKill, said: &str) {
             "{durable:?}: the relaunch held fewer finished cases than the kill left\n{said}"
         );
     }
-    let journaled = count_in(said, "control ran", "case(s) still to judge, ").unwrap_or(0);
-    assert!(
-        journaled >= durable.controls,
-        "{durable:?}: a control journaled before the kill ran again\n{said}"
-    );
+    // A CONTROL JOURNALED BEFORE THE KILL IS NEVER RUN AGAIN: where the killed
+    // run had controlled every case it recorded, the relaunch controls none.
+    let ran = count_in(said, "control ran", "control ran ").unwrap_or(0);
+    if durable.finished > 0 && durable.controls >= durable.finished {
+        assert_eq!(
+            ran, 0,
+            "{durable:?}: a control journaled before the kill ran again\n{said}"
+        );
+    }
     let reused = count_in(said, "mutate schema: reused", "reused ").unwrap_or(0);
     assert!(
         reused >= durable.verdicts,
@@ -1427,19 +1481,83 @@ fn a_sweep_killed_after_judging_or_run_again_redoes_nothing() {
         return;
     }
     let (durable, said) = killed_and_relaunched("mutate-crash-judged", ("", "stage judging took"));
-    assert_eq!(
-        durable.verdicts, 5,
+    assert!(
+        durable.verdicts == 5,
         "every verdict was journaled: {durable:?}"
     );
     for line in [
         "reused 5 of 5 verdict(s)",
         "control ran 0 of the 0 case(s) still to judge",
+        // NOTHING DERIVED AGAIN BEFORE IT JUDGES (CLOUD-2904): a finished
+        // run's unsealable records and untakeable selection digests were
+        // derived again on every relaunch, 837 s and 790 s on #1276.
+        ", 0 tried",
     ] {
         assert!(said.contains(line), "{line:?} in {said}");
     }
+    assert!(
+        !said.contains("leftovers derived"),
+        "no leftovers derived again: {said}"
+    );
     assert!(
         !said.contains("reach runs") || said.contains("reach runs 0 of"),
         "{said}"
     );
     assert_nothing_finished_redone(&durable, &said);
+}
+
+/// CRASH-ONLY, CONVERGING (CLOUD-2904): a reach killed again and again, each
+/// time just after a case it had not finished before finishes, keeps every
+/// finished case: each relaunch holds more finished than the one before, and
+/// the last starts only what no kill left finished.
+///
+/// Fails by: a finished case lost to a kill, or recorded again by the next
+/// run, so the finished count stalls and repeated preemptions never converge
+/// (a looping lap preempting a seed that never finished).
+#[test]
+fn a_reach_killed_again_and_again_converges() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (repo, file) = one_case_at_a_time("mutate-crash-converge");
+    let mut finished_before = Vec::new();
+    for _ in 0..2 {
+        let mut held: Option<usize> = None;
+        let mut passed = 0;
+        let (killed, said) = sweep_killed_when(&repo, &file, |line| {
+            if held.is_none() {
+                held = count_in(line, "reach runs", "case(s), ");
+                return false;
+            }
+            if line.contains("PASS [") {
+                passed += 1;
+            }
+            // THE FIRST CASE NO EARLIER RUN FINISHED: the finished ones run
+            // first, in name order, and pass at once.
+            held.is_some_and(|held| passed > held)
+        });
+        assert!(
+            killed,
+            "the reach passed a case it had not finished: {said}"
+        );
+        finished_before.push(held.expect("the reach line"));
+    }
+    assert!(
+        finished_before.windows(2).all(|pair| pair[1] > pair[0]),
+        "each relaunch holds more finished cases: {finished_before:?}"
+    );
+    let said = relaunched(&repo, &file);
+    let (Some(starts), Some(listed), Some(held)) = (
+        count_in(&said, "reach runs", "reach runs "),
+        count_in(&said, "reach runs", " of "),
+        count_in(&said, "reach runs", "case(s), "),
+    ) else {
+        panic!("the last relaunch's reach line: {said}");
+    };
+    assert!(held > *finished_before.last().unwrap(), "{said}");
+    assert_eq!(
+        starts,
+        listed - held,
+        "only what no kill left finished: {said}"
+    );
 }
