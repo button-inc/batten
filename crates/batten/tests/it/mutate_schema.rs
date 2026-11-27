@@ -1287,16 +1287,25 @@ fn sweep_killed_when(
             // group is no less killed by a restart.
             let mut tree = descendants(pid);
             tree.insert(0, pid);
-            for each in &tree {
-                if let Some(target) = rustix::process::Pid::from_raw(*each) {
-                    let _ = rustix::process::kill_process(target, rustix::process::Signal::STOP);
+            // UNIX ONLY, INSIDE THE BODY: `rustix` is a `cfg(unix)` dependency,
+            // and every case calling this returns early off Linux.
+            #[cfg(unix)]
+            {
+                for each in &tree {
+                    if let Some(target) = rustix::process::Pid::from_raw(*each) {
+                        let _ =
+                            rustix::process::kill_process(target, rustix::process::Signal::STOP);
+                    }
+                }
+                for each in &tree {
+                    if let Some(target) = rustix::process::Pid::from_raw(*each) {
+                        let _ =
+                            rustix::process::kill_process(target, rustix::process::Signal::KILL);
+                    }
                 }
             }
-            for each in &tree {
-                if let Some(target) = rustix::process::Pid::from_raw(*each) {
-                    let _ = rustix::process::kill_process(target, rustix::process::Signal::KILL);
-                }
-            }
+            #[cfg(not(unix))]
+            drop(tree);
             killed = true;
         }
     }
