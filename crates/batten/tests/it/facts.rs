@@ -187,7 +187,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        53,
+        54,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );
