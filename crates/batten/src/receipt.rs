@@ -2608,10 +2608,7 @@ mod tests {
     /// checkout: the head commit, or a named subject that is one safe component.
     #[test]
     fn the_agent_sourced_subject_is_resolved_from_the_checkout() {
-        let head = git::head_commit(&crate::fixture_root::fixture_root(
-            "the_agent_sourced_subject_is_resolved_from_the_checkout",
-        ))
-        .unwrap();
+        let head = git::head_commit(Path::new(".")).unwrap();
         assert_eq!(sourced_subject(ReceiptKey::Head, None), Some(head.clone()));
         assert_eq!(
             sourced_subject(ReceiptKey::Named, Some("CLOUD-1")).as_deref(),
@@ -3552,11 +3549,9 @@ mod tests {
         assert_eq!(moved_forward("HEAD", "HEAD"), Some(0));
         assert_eq!(
             branch_facts("HEAD"),
-            git::current_branch(&crate::fixture_root::fixture_root(
-                "a_range_from_head_to_itself_counts_nothing"
-            ))
-            .unwrap()
-            .map(|branch| (branch, 0))
+            git::current_branch(Path::new("."))
+                .unwrap()
+                .map(|branch| (branch, 0))
         );
     }
 
