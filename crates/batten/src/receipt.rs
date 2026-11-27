@@ -888,10 +888,10 @@ fn sourced_store_in(
 /// [`crate::config_check::rules::validate_keying`] refuses `named` for an agent-sourced
 /// check — this envelope carries no subject to project — so the third arm is
 /// unreachable through a loaded config and is written out rather than wildcarded.
-fn sourced_subject(key: ReceiptKey, named: Option<&str>) -> Option<String> {
+fn sourced_subject(here: &Path, key: ReceiptKey, named: Option<&str>) -> Option<String> {
     match key {
-        ReceiptKey::Head => git::head_commit(Path::new(".")).ok(),
-        ReceiptKey::Branch => git::current_branch(Path::new(".")).ok()?,
+        ReceiptKey::Head => git::head_commit(here).ok(),
+        ReceiptKey::Branch => git::current_branch(here).ok()?,
         ReceiptKey::Named => named
             .filter(|value| safe_subject(value))
             .map(ToOwned::to_owned),
@@ -933,7 +933,7 @@ pub fn record_sourced(
             "not a git repository, so there is nowhere an agent-sourced fact could be recorded",
         )
     })?;
-    let subject = sourced_subject(key, named).ok_or_else(|| {
+    let subject = sourced_subject(Path::new("."), key, named).ok_or_else(|| {
         UsageError::raise(
             "the declared key's subject does not resolve in this checkout, so there is no subject to file an agent-sourced record under",
         )
@@ -1061,7 +1061,7 @@ pub(crate) fn verdicts(
     let branch = checks
         .values()
         .any(|key| *key == ReceiptKey::Branch)
-        .then(|| branch_facts(&facts.main))
+        .then(|| branch_facts(Path::new(&facts.repo_root), &facts.main))
         .flatten();
     // The same shape one line up, and the same reason (CLOUD-987): resolved only
     // when a `named`-keyed row asked, and `None` is could-not-look for the
@@ -1116,7 +1116,14 @@ pub(crate) fn verdicts(
                     // `None` above is could-not-look for this check: allow it.
                     ReceiptKey::Branch => {
                         branch.as_ref().map_or(Validity::Valid, |(branch, own)| {
-                            branch_validity(&facts.git_dir, check, branch, &facts.head, *own)
+                            branch_validity(
+                                Path::new(&facts.repo_root),
+                                &facts.git_dir,
+                                check,
+                                branch,
+                                &facts.head,
+                                *own,
+                            )
                         })
                     }
                     ReceiptKey::Named => named.as_ref().map_or(Validity::Valid, |value| {
@@ -1208,9 +1215,9 @@ pub(crate) fn verdicts(
 /// rule is pinned to `RuleScope::MediatedCall`, so `verify` had re-implemented
 /// the branch-keyed question in shell as a presence test — strictly weaker than
 /// this, and green on the exact restart CLOUD-516 was filed for.
-fn branch_facts(main: &str) -> Option<(String, usize)> {
-    let branch = crate::git::current_branch(Path::new(".")).ok()??;
-    let own = own_commit_count(main)?;
+fn branch_facts(root: &Path, main: &str) -> Option<(String, usize)> {
+    let branch = crate::git::current_branch(root).ok()??;
+    let own = own_commit_count(root, main)?;
     Some((branch, own))
 }
 
@@ -1227,8 +1234,8 @@ fn branch_facts(main: &str) -> Option<(String, usize)> {
 /// legal precisely because selecting which commits to count is a different act
 /// from concluding one commit contains another. This counts; it concludes
 /// nothing about whether the branch landed.
-fn own_commit_count(main: &str) -> Option<usize> {
-    git::commit_count(Path::new("."), &format!("{main}..HEAD")).ok()
+fn own_commit_count(root: &Path, main: &str) -> Option<usize> {
+    git::commit_count(root, &format!("{main}..HEAD")).ok()
 }
 
 /// The filename a branch-keyed receipt takes: `<check>.<branch>`, with every
@@ -1347,8 +1354,17 @@ fn named_validity(git_dir: &str, check: &str, subject: &str) -> Validity {
 ///
 /// Read from `--git-dir`, so it resolves per worktree and one worktree's claim
 /// cannot vouch for another's.
-fn branch_validity(git_dir: &str, check: &str, branch: &str, head: &str, own: usize) -> Validity {
-    branch_validity_with(git_dir, check, branch, head, own, moved_forward)
+fn branch_validity(
+    root: &Path,
+    git_dir: &str,
+    check: &str,
+    branch: &str,
+    head: &str,
+    own: usize,
+) -> Validity {
+    branch_validity_with(git_dir, check, branch, head, own, |base, head| {
+        moved_forward(root, base, head)
+    })
 }
 
 /// How many commits `head` carries that `base` does not, or `None` for "could
@@ -1359,8 +1375,8 @@ fn branch_validity(git_dir: &str, check: &str, branch: &str, head: &str, own: us
 /// range forms alone because selecting which commits to count is a different act
 /// from drawing that conclusion. This counts; it concludes nothing about
 /// landing.
-fn moved_forward(base: &str, head: &str) -> Option<usize> {
-    git::commit_count(Path::new("."), &format!("{base}..{head}")).ok()
+fn moved_forward(root: &Path, base: &str, head: &str) -> Option<usize> {
+    git::commit_count(root, &format!("{base}..{head}")).ok()
 }
 
 /// [`branch_validity`] with the range reader injected, so the direction below is
@@ -2098,12 +2114,19 @@ pub fn run_status(
         }
         ReceiptKey::Head => (facts.head.clone(), head_validity(&facts, check)?),
         ReceiptKey::Branch => {
-            let Some((branch, own)) = branch_facts(&facts.main) else {
+            let Some((branch, own)) = branch_facts(Path::new(&facts.repo_root), &facts.main) else {
                 return Err(anyhow::anyhow!(
                     "receipt status --key branch: HEAD is detached, so there is no branch to key a receipt on. This is not a verdict about the receipt — a rebase detaches, and reporting one here would read as an unclaimed branch."
                 ));
             };
-            let verdict = branch_validity(&facts.git_dir, check, &branch, &facts.head, own);
+            let verdict = branch_validity(
+                Path::new(&facts.repo_root),
+                &facts.git_dir,
+                check,
+                &branch,
+                &facts.head,
+                own,
+            );
             (branch, verdict)
         }
     };
@@ -2608,27 +2631,35 @@ mod tests {
     /// checkout: the head commit, or a named subject that is one safe component.
     #[test]
     fn the_agent_sourced_subject_is_resolved_from_the_checkout() {
-        let head = git::head_commit(Path::new(".")).unwrap();
-        assert_eq!(sourced_subject(ReceiptKey::Head, None), Some(head.clone()));
+        let root = crate::fixture_root::fixture_root(
+            "the_agent_sourced_subject_is_resolved_from_the_checkout",
+        );
+        crate::gitwrite::commit_paths(&root, &[], "fixture").unwrap();
+        let head = git::head_commit(&root).unwrap();
         assert_eq!(
-            sourced_subject(ReceiptKey::Named, Some("CLOUD-1")).as_deref(),
+            sourced_subject(&root, ReceiptKey::Head, None),
+            Some(head.clone())
+        );
+        assert_eq!(
+            sourced_subject(&root, ReceiptKey::Named, Some("CLOUD-1")).as_deref(),
             Some("CLOUD-1")
         );
-        assert_eq!(sourced_subject(ReceiptKey::Named, Some("a/b")), None);
-        assert_eq!(sourced_subject(ReceiptKey::Delta, None), None);
+        assert_eq!(sourced_subject(&root, ReceiptKey::Named, Some("a/b")), None);
+        assert_eq!(sourced_subject(&root, ReceiptKey::Delta, None), None);
 
         let (open, closed) = (String::from("open"), String::from("closed"));
-        let empty = sourced_store(&[], None).unwrap();
+        let empty = sourced_store_in(&root, &[], None).unwrap();
         assert!(empty.subjects.is_empty());
-        let by_head = sourced_store(&[(&open, &ReceiptKey::Head)], None).unwrap();
+        let by_head = sourced_store_in(&root, &[(&open, &ReceiptKey::Head)], None).unwrap();
         assert_eq!(by_head.subjects.get("open"), Some(&head));
-        let by_name = sourced_store(&[(&closed, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
+        let by_name =
+            sourced_store_in(&root, &[(&closed, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
         assert_eq!(
             by_name.subjects.get("closed").map(String::as_str),
             Some("CLOUD-1")
         );
-        assert!(sourced_store(&[(&closed, &ReceiptKey::Named)], Some("../x")).is_none());
-        assert!(sourced_store(&[(&closed, &ReceiptKey::Delta)], None).is_none());
+        assert!(sourced_store_in(&root, &[(&closed, &ReceiptKey::Named)], Some("../x")).is_none());
+        assert!(sourced_store_in(&root, &[(&closed, &ReceiptKey::Delta)], None).is_none());
     }
 
     /// A branch-keyed record files under the checkout's branch, and a detached
@@ -3071,6 +3102,7 @@ mod tests {
         std::fs::create_dir_all(&receipts).expect("create the store");
         std::fs::write(receipts.join("claim.branch"), body).expect("mint");
         branch_validity(
+            &crate::fixture_root::fixture_root("receipt-branch-validity"),
             dir.to_str().expect("utf-8 scratch path"),
             "claim",
             "branch",
@@ -3192,6 +3224,7 @@ mod tests {
         let dir = tempdir("absent");
         assert_eq!(
             branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
                 dir.to_str().expect("utf-8 scratch path"),
                 "claim",
                 "branch",
@@ -3261,7 +3294,14 @@ mod tests {
         )
         .expect("mint twice");
         assert_eq!(
-            branch_validity(git_dir, "issue-search", "feature", "head", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "issue-search",
+                "feature",
+                "head",
+                0
+            ),
             Validity::Valid,
             "re-running the prescribed step must clear the refusal that prescribed it"
         );
@@ -3275,7 +3315,14 @@ mod tests {
         )
         .expect("mint twice, both before the restart");
         assert_eq!(
-            branch_validity(git_dir, "issue-search", "restarted", "head", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "issue-search",
+                "restarted",
+                "head",
+                0
+            ),
             Validity::StaleMain,
             "reading the newest base must not grandfather in a pre-restart receipt"
         );
@@ -3361,30 +3408,65 @@ mod tests {
         let dir = tempdir("addressing");
         let git_dir = dir.to_str().expect("utf-8 scratch path");
         assert_eq!(
-            branch_validity(git_dir, "claim", "feature", "aaa", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "claim",
+                "feature",
+                "aaa",
+                0
+            ),
             Validity::Missing
         );
         let receipts = dir.join("batten-receipts");
         std::fs::create_dir_all(&receipts).expect("create the store");
         std::fs::write(receipts.join("claim.feature"), "CLOUD-444\nbase aaa\n").expect("mint");
         assert_eq!(
-            branch_validity(git_dir, "claim", "feature", "aaa", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "claim",
+                "feature",
+                "aaa",
+                0
+            ),
             Validity::Valid
         );
         // A new commit still cannot invalidate it — the asymmetry the second
         // keying exists for, and the one thing CLOUD-516 did not change.
         assert_eq!(
-            branch_validity(git_dir, "claim", "feature", "aaa", 12),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "claim",
+                "feature",
+                "aaa",
+                12
+            ),
             Validity::Valid
         );
         // A receipt for another branch does not vouch for this one.
         assert_eq!(
-            branch_validity(git_dir, "claim", "other", "aaa", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "claim",
+                "other",
+                "aaa",
+                0
+            ),
             Validity::Missing
         );
         // Nor does another check's receipt on the same branch.
         assert_eq!(
-            branch_validity(git_dir, "verify", "feature", "aaa", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "verify",
+                "feature",
+                "aaa",
+                0
+            ),
             Validity::Missing
         );
         // A directory at the path is not a receipt: reading it fails, which is
@@ -3392,7 +3474,14 @@ mod tests {
         // nothing.
         std::fs::create_dir_all(receipts.join("claim.dir")).expect("create a directory");
         assert_eq!(
-            branch_validity(git_dir, "claim", "dir", "aaa", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "claim",
+                "dir",
+                "aaa",
+                0
+            ),
             Validity::Missing
         );
     }
@@ -3545,11 +3634,13 @@ mod tests {
     /// A range from HEAD to itself is empty, whatever the checkout.
     #[test]
     fn a_range_from_head_to_itself_counts_nothing() {
-        assert_eq!(own_commit_count("HEAD"), Some(0));
-        assert_eq!(moved_forward("HEAD", "HEAD"), Some(0));
+        let root = crate::fixture_root::fixture_root("a_range_from_head_to_itself_counts_nothing");
+        crate::gitwrite::commit_paths(&root, &[], "fixture").unwrap();
+        assert_eq!(own_commit_count(&root, "HEAD"), Some(0));
+        assert_eq!(moved_forward(&root, "HEAD", "HEAD"), Some(0));
         assert_eq!(
-            branch_facts("HEAD"),
-            git::current_branch(Path::new("."))
+            branch_facts(&root, "HEAD"),
+            git::current_branch(&root)
                 .unwrap()
                 .map(|branch| (branch, 0))
         );
